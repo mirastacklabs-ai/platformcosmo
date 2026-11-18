@@ -5,14 +5,14 @@
 #      package installed from the committed lockfile (npm ci) inside the container only
 # Usage:  tests/browser/run.sh [DIR_OF_SVGS]
 #   no argument: generated fixtures; with DIR_OF_SVGS: any *.svg there (e.g. real render() output)
-# Env:    PW_VERSION (default 1.64.0), PW_IMAGE, UPDATE_RESULTS=1 (copy RESULTS.md next to this file)
+# Env:    PW_IMAGE (full reference, same version as package.json), UPDATE_RESULTS=1 (copy RESULTS.md here)
 # Output: tests/browser/out/results.json and RESULTS.md
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-PW_VERSION="${PW_VERSION:-1.64.0}"
+PW_VERSION="1.64.0" # must match package.json / package-lock.json and the image tag
 PW_DIGEST="sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f"
-PW_IMAGE="${PW_IMAGE:-mcr.microsoft.com/playwright:v${PW_VERSION}-noble@${PW_DIGEST}}"
+PW_IMAGE="${PW_IMAGE:-mcr.microsoft.com/playwright:v${PW_VERSION}-noble@${PW_DIGEST}}" # override only with a full image reference of the same version
 OUT="tests/browser/out"
 
 rm -rf "$OUT"
@@ -27,7 +27,7 @@ else
 fi
 [ -d "$INPUT_DIR" ] || { echo "not a directory: $INPUT_DIR" >&2; exit 2; }
 
-GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+GIT_SHA="$(git describe --always --dirty 2>/dev/null || echo unknown)"
 rc=0
 docker run --rm --ipc=host --user "$(id -u):$(id -g)" \
   -v "$PWD/tests/browser":/t:ro \
@@ -46,5 +46,6 @@ docker run --rm --ipc=host --user "$(id -u):$(id -g)" \
 
 if [ "${UPDATE_RESULTS:-}" = 1 ] && [ -f "$OUT/RESULTS.md" ]; then
   cp "$OUT/RESULTS.md" tests/browser/RESULTS.md
+  scripts/pc exec prettier --write tests/browser/RESULTS.md >/dev/null
 fi
 exit "$rc"

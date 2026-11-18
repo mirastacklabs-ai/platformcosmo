@@ -316,7 +316,8 @@ async function checkDark(name, browser, blocked, file, mode) {
     withPage(browser, blocked, { colorScheme: scheme, reducedMotion: "reduce" }, async (page) => {
       const box = await open(page, mode, file);
       await sleep(200);
-      const px = await pixels(await scratchOf(page), await shot(page, box));
+      const img = await shot(page, box);
+      const px = await pixels(await scratchOf(page), img);
       let fill;
       if (mode === "inline" && info?.bg) {
         fill = await page.evaluate(
@@ -324,17 +325,22 @@ async function checkDark(name, browser, blocked, file, mode) {
           info.bg,
         );
       }
-      return { corner: px.corner.join(","), fill };
+      return { corner: px.corner.join(","), fill, img };
     });
   const light = await corner("light");
   const dark = await corner("dark");
+  // Whole frames, not a corner: a dark theme recolours most of the diagram, so a large share of
+  // pixels must change.
+  const frames = await withPage(browser, blocked, {}, async (page) =>
+    pixels(await scratchOf(page), light.img, dark.img),
+  );
   rec(
     name,
     file,
     mode,
-    "dark mode changes the rendering",
-    light.corner !== dark.corner ? "pass" : "fail",
-    `corner pixel light ${light.corner}, dark ${dark.corner}`,
+    "dark mode changes the rendering (whole-frame diff > 20% of pixels)",
+    frames.sameSize && frames.diff > 0.2 ? "pass" : "fail",
+    `${(frames.diff * 100).toFixed(1)}% of pixels differ; corner pixel light ${light.corner}, dark ${dark.corner}`,
   );
   if (info?.bg && mode === "inline") {
     rec(
@@ -511,7 +517,7 @@ writeFileSync(
   ),
 );
 const row = (r) =>
-  `| ${r.browser} | ${r.file} | ${r.mode} | ${r.check} | ${r.status} | ${r.detail.replaceAll("|", "/").slice(0, 160)} |`;
+  `| ${r.browser} | ${r.file} | ${r.mode} | ${r.check} | ${r.status} | ${r.detail.replaceAll("|", "/").slice(0, 400)} |`;
 writeFileSync(
   `${OUT}/RESULTS.md`,
   [
@@ -538,7 +544,11 @@ writeFileSync(
     "|---|---|---|---|---|---|",
     ...results.filter((r) => r.status !== "info").map(row),
     "",
-  ].join("\n"),
+  ]
+    .join("\n")
+    .replaceAll("<img>", "`<img>`")
+    .replaceAll("<object>", "`<object>`")
+    .replaceAll("<svg>", "`<svg>`"),
 );
 console.log(summary);
 process.exit(count("fail") === 0 ? 0 : 1);

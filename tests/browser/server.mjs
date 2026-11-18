@@ -141,7 +141,7 @@ export function startServer(dir) {
   });
 }
 
-/** SVG files of an input directory (not the `-noreduced` helpers), sorted. */
+/** SVG files of an input directory, sorted. */
 export function listSvgs(dir) {
   return readdirSync(dir)
     .filter((f) => f.endsWith(".svg"))
