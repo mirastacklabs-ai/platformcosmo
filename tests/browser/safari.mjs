@@ -94,7 +94,21 @@ try {
   };
 
   console.log("session capabilities:", JSON.stringify(session.capabilities));
-  await wd("POST", s("/window/rect"), { width: 1280, height: 900, x: 0, y: 0 }).catch((e) =>
+  // Root cause of the intermittent blank screenshots on the macOS runner: its display can be only
+  // 1024x768, and a Safari window larger than the screen is not painted (blank WebDriver
+  // screenshots). Size the window to the screen, never beyond.
+  await go("/blank");
+  const screenSize = await exec("return [screen.availWidth, screen.availHeight]").catch(() => [
+    1280, 900,
+  ]);
+  console.log("screen available size:", JSON.stringify(screenSize));
+  const rect = {
+    width: Math.min(1280, screenSize[0] - 20),
+    height: Math.min(900, screenSize[1] - 60),
+    x: 0,
+    y: 0,
+  };
+  await wd("POST", s("/window/rect"), rect).catch((e) =>
     console.log("window/rect failed:", e.message),
   );
   // Why a screenshot may be blank: what the page and window actually are.
