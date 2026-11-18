@@ -79,7 +79,18 @@ try {
   const s = (p) => `/session/${sid}${p}`;
   const go = (path) => wd("POST", s("/url"), { url: `${server.origin}${path}` });
   const exec = (script, args = []) => wd("POST", s("/execute/sync"), { script, args });
-  const shot = () => wd("GET", s("/screenshot"));
+  // Paint first (two animation frames), then screenshot: a screenshot taken before the first
+  // paint after navigation is a blank window.
+  const settle = () =>
+    wd("POST", s("/execute/async"), {
+      script:
+        "const done = arguments[arguments.length - 1]; requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 50)));",
+      args: [],
+    }).catch(() => undefined);
+  const shot = async () => {
+    await settle();
+    return wd("GET", s("/screenshot"));
+  };
 
   console.log("session capabilities:", JSON.stringify(session.capabilities));
   await wd("POST", s("/window/rect"), { width: 1280, height: 900, x: 0, y: 0 }).catch((e) =>
