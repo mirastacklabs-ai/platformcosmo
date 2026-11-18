@@ -60,10 +60,9 @@ jobs:
       - run: HOOK_BASH=/bin/bash bash scripts/test-container-hook.sh
 
   plugin-bundle:
-    # DECISIONS D19: the committed plugin bundle embeds core. Informational until the
-    # orchestrator flips it to strict at the end of integration.
+    # DECISIONS D19: the committed plugin bundle, gallery renders and docs must match the
+    # sources. Strict since the end of integration.
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -75,3 +74,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check:plugin
+      - run: pnpm run build
+      - run: pnpm run check:gallery
+      - run: pnpm run docs:build

@@ -30,7 +30,8 @@ export type ObjectState = SpecState;
 
 /**
  * An upright (never skewed) icon drawn flat on the object's front, centered at
- * `anchor` (PLAN §8 rule 2). `ref` is canonical `pack:id`.
+ * `anchor` (PLAN §8 rule 2). `ref` is canonical `pack:id`. On a front face too short even
+ * for a 0.75-size icon, the upright plate floats above the top-face centre instead (D28).
  */
 export interface IconPlacement {
   readonly ref: string;

@@ -220,7 +220,12 @@ export interface IdScheme {
   sel(id: string): string;
 }
 
-/** Drawing layers, bottom to top, inside `camera()`. Ground-level edges are drawn before objects so objects occlude them. */
+/**
+ * Drawing layers, bottom to top, inside `camera()`. Ground-level edges are drawn before
+ * objects so objects occlude them. DC exception (D31): floor-type DC objects draw in the
+ * ground layer after group slabs, DC cables are depth-sorted segments among objects, and
+ * DC particles (`dc_f_*`) draw in a group right after `objects`.
+ */
 export type Layer = "background" | "groups" | "edges" | "flows" | "objects" | "labels" | "overlay";
 
 export interface EdgePath {
