@@ -1,0 +1,386 @@
+{
+  "manifestVersion": 1,
+  "pack": {
+    "id": "cosmo",
+    "name": "PlatformCosmo base glyphs",
+    "version": "1.0.0",
+    "license": "Apache-2.0",
+    "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0",
+    "attribution": "Original PlatformCosmo glyphs, Apache-2.0.",
+    "source": "https://github.com/mirastacklabs-ai/platformcosmo/tree/main/packages/icons-base",
+    "redistributable": true
+  },
+  "icons": [
+    {
+      "id": "server",
+      "aliases": ["host", "machine", "bare-metal"],
+      "category": "compute",
+      "tags": ["compute", "rack"],
+      "file": "svg/server.svg",
+      "monochrome": true
+    },
+    {
+      "id": "vm",
+      "aliases": ["virtual-machine", "instance", "ec2"],
+      "category": "compute",
+      "tags": ["compute", "hypervisor"],
+      "file": "svg/vm.svg",
+      "monochrome": true
+    },
+    {
+      "id": "container",
+      "aliases": ["docker", "oci"],
+      "category": "compute",
+      "tags": ["compute", "image"],
+      "file": "svg/container.svg",
+      "monochrome": true
+    },
+    {
+      "id": "pod",
+      "aliases": ["k8s-pod", "kubernetes-pod"],
+      "category": "compute",
+      "tags": ["compute", "kubernetes"],
+      "file": "svg/pod.svg",
+      "monochrome": true
+    },
+    {
+      "id": "function",
+      "aliases": ["lambda", "serverless", "faas"],
+      "category": "compute",
+      "tags": ["compute", "serverless"],
+      "file": "svg/function.svg",
+      "monochrome": true
+    },
+    {
+      "id": "lb",
+      "aliases": ["load-balancer", "alb", "nlb", "elb"],
+      "category": "network",
+      "tags": ["network", "traffic"],
+      "file": "svg/lb.svg",
+      "monochrome": true
+    },
+    {
+      "id": "gateway",
+      "aliases": ["api-gateway", "ingress", "edge"],
+      "category": "network",
+      "tags": ["network", "api"],
+      "file": "svg/gateway.svg",
+      "monochrome": true
+    },
+    {
+      "id": "cdn",
+      "aliases": ["edge-cache", "content-delivery", "cloudfront"],
+      "category": "network",
+      "tags": ["network", "global"],
+      "file": "svg/cdn.svg",
+      "monochrome": true
+    },
+    {
+      "id": "dns",
+      "aliases": ["domain", "route53", "nameserver"],
+      "category": "network",
+      "tags": ["network", "naming"],
+      "file": "svg/dns.svg",
+      "monochrome": true
+    },
+    {
+      "id": "firewall",
+      "aliases": ["fw", "security-group", "acl"],
+      "category": "security",
+      "tags": ["network", "security"],
+      "file": "svg/firewall.svg",
+      "monochrome": true
+    },
+    {
+      "id": "vpc",
+      "aliases": ["vnet", "virtual-network", "subnet"],
+      "category": "network",
+      "tags": ["network", "isolation"],
+      "file": "svg/vpc.svg",
+      "monochrome": true
+    },
+    {
+      "id": "sql",
+      "aliases": ["database", "db", "rdbms", "postgres-like", "relational"],
+      "category": "data",
+      "tags": ["data", "storage"],
+      "file": "svg/sql.svg",
+      "monochrome": true
+    },
+    {
+      "id": "nosql",
+      "aliases": ["document-db", "key-value", "dynamodb"],
+      "category": "data",
+      "tags": ["data", "document"],
+      "file": "svg/nosql.svg",
+      "monochrome": true
+    },
+    {
+      "id": "cache",
+      "aliases": ["redis-like", "memcache", "in-memory"],
+      "category": "data",
+      "tags": ["data", "fast"],
+      "file": "svg/cache.svg",
+      "monochrome": true
+    },
+    {
+      "id": "object-store",
+      "aliases": ["bucket", "blob", "s3-like"],
+      "category": "data",
+      "tags": ["data", "storage"],
+      "file": "svg/object-store.svg",
+      "monochrome": true
+    },
+    {
+      "id": "warehouse",
+      "aliases": ["data-warehouse", "lakehouse", "olap"],
+      "category": "data",
+      "tags": ["data", "analytics"],
+      "file": "svg/warehouse.svg",
+      "monochrome": true
+    },
+    {
+      "id": "queue",
+      "aliases": ["message-queue", "sqs", "broker"],
+      "category": "data",
+      "tags": ["data", "messaging"],
+      "file": "svg/queue.svg",
+      "monochrome": true
+    },
+    {
+      "id": "stream",
+      "aliases": ["event-stream", "kafka-like", "kinesis"],
+      "category": "data",
+      "tags": ["data", "realtime"],
+      "file": "svg/stream.svg",
+      "monochrome": true
+    },
+    {
+      "id": "users",
+      "aliases": ["people", "customers", "audience"],
+      "category": "client",
+      "tags": ["client", "humans"],
+      "file": "svg/users.svg",
+      "monochrome": true
+    },
+    {
+      "id": "client",
+      "aliases": ["browser", "web-client", "desktop"],
+      "category": "client",
+      "tags": ["client", "frontend"],
+      "file": "svg/client.svg",
+      "monochrome": true
+    },
+    {
+      "id": "mobile",
+      "aliases": ["phone", "ios", "android"],
+      "category": "client",
+      "tags": ["client", "device"],
+      "file": "svg/mobile.svg",
+      "monochrome": true
+    },
+    {
+      "id": "metrics",
+      "aliases": ["monitoring", "prometheus-like", "chart"],
+      "category": "observability",
+      "tags": ["observability", "timeseries"],
+      "file": "svg/metrics.svg",
+      "monochrome": true
+    },
+    {
+      "id": "logs",
+      "aliases": ["logging", "log-stream"],
+      "category": "observability",
+      "tags": ["observability", "text"],
+      "file": "svg/logs.svg",
+      "monochrome": true
+    },
+    {
+      "id": "traces",
+      "aliases": ["tracing", "spans", "apm"],
+      "category": "observability",
+      "tags": ["observability", "latency"],
+      "file": "svg/traces.svg",
+      "monochrome": true
+    },
+    {
+      "id": "repo",
+      "aliases": ["repository", "git", "source"],
+      "category": "cicd",
+      "tags": ["cicd", "vcs"],
+      "file": "svg/repo.svg",
+      "monochrome": true
+    },
+    {
+      "id": "pipeline",
+      "aliases": ["ci", "cd", "workflow", "build"],
+      "category": "cicd",
+      "tags": ["cicd", "automation"],
+      "file": "svg/pipeline.svg",
+      "monochrome": true
+    },
+    {
+      "id": "registry",
+      "aliases": ["artifact-registry", "image-registry", "package-registry"],
+      "category": "cicd",
+      "tags": ["cicd", "artifacts"],
+      "file": "svg/registry.svg",
+      "monochrome": true
+    },
+    {
+      "id": "iam",
+      "aliases": ["identity", "rbac", "sso", "auth"],
+      "category": "security",
+      "tags": ["security", "identity"],
+      "file": "svg/iam.svg",
+      "monochrome": true
+    },
+    {
+      "id": "secrets",
+      "aliases": ["vault", "kms", "key", "lock"],
+      "category": "security",
+      "tags": ["security", "credentials"],
+      "file": "svg/secrets.svg",
+      "monochrome": true
+    },
+    {
+      "id": "waf",
+      "aliases": ["web-application-firewall", "shield"],
+      "category": "security",
+      "tags": ["security", "web"],
+      "file": "svg/waf.svg",
+      "monochrome": true
+    },
+    {
+      "id": "llm",
+      "aliases": ["language-model", "chatbot", "gpt", "foundation-model"],
+      "category": "ai",
+      "tags": ["ai", "generative"],
+      "file": "svg/llm.svg",
+      "monochrome": true
+    },
+    {
+      "id": "embedding",
+      "aliases": ["embeddings", "encoder", "vectorizer"],
+      "category": "ai",
+      "tags": ["ai", "vectors"],
+      "file": "svg/embedding.svg",
+      "monochrome": true
+    },
+    {
+      "id": "vector-db",
+      "aliases": ["vector-database", "pinecone-like", "ann-index"],
+      "category": "ai",
+      "tags": ["ai", "search"],
+      "file": "svg/vector-db.svg",
+      "monochrome": true
+    },
+    {
+      "id": "gpu",
+      "aliases": ["accelerator", "cuda", "tpu"],
+      "category": "ai",
+      "tags": ["ai", "hardware"],
+      "file": "svg/gpu.svg",
+      "monochrome": true
+    },
+    {
+      "id": "inference-server",
+      "aliases": ["model-server", "serving", "triton"],
+      "category": "ai",
+      "tags": ["ai", "serving"],
+      "file": "svg/inference-server.svg",
+      "monochrome": true
+    },
+    {
+      "id": "agent",
+      "aliases": ["ai-agent", "bot", "assistant"],
+      "category": "ai",
+      "tags": ["ai", "autonomous"],
+      "file": "svg/agent.svg",
+      "monochrome": true
+    },
+    {
+      "id": "tool",
+      "aliases": ["tool-call", "function-calling", "wrench"],
+      "category": "ai",
+      "tags": ["ai", "action"],
+      "file": "svg/tool.svg",
+      "monochrome": true
+    },
+    {
+      "id": "rag",
+      "aliases": ["retrieval", "retrieval-augmented-generation", "knowledge-base"],
+      "category": "ai",
+      "tags": ["ai", "retrieval"],
+      "file": "svg/rag.svg",
+      "monochrome": true
+    },
+    {
+      "id": "guardrail",
+      "aliases": ["safety", "content-filter", "policy"],
+      "category": "ai",
+      "tags": ["ai", "safety"],
+      "file": "svg/guardrail.svg",
+      "monochrome": true
+    },
+    {
+      "id": "feature-store",
+      "aliases": ["features", "feast-like"],
+      "category": "ai",
+      "tags": ["ai", "ml-data"],
+      "file": "svg/feature-store.svg",
+      "monochrome": true
+    },
+    {
+      "id": "training-job",
+      "aliases": ["training", "fine-tune", "batch-job"],
+      "category": "ai",
+      "tags": ["ai", "ml"],
+      "file": "svg/training-job.svg",
+      "monochrome": true
+    }
+  ],
+  "defaults": {
+    "server": "cosmo:server",
+    "vm": "cosmo:vm",
+    "container": "cosmo:container",
+    "pod": "cosmo:pod",
+    "function": "cosmo:function",
+    "lb": "cosmo:lb",
+    "gateway": "cosmo:gateway",
+    "cdn": "cosmo:cdn",
+    "dns": "cosmo:dns",
+    "firewall": "cosmo:firewall",
+    "vpc": "cosmo:vpc",
+    "sql": "cosmo:sql",
+    "nosql": "cosmo:nosql",
+    "cache": "cosmo:cache",
+    "object-store": "cosmo:object-store",
+    "warehouse": "cosmo:warehouse",
+    "queue": "cosmo:queue",
+    "stream": "cosmo:stream",
+    "users": "cosmo:users",
+    "client": "cosmo:client",
+    "mobile": "cosmo:mobile",
+    "metrics": "cosmo:metrics",
+    "logs": "cosmo:logs",
+    "traces": "cosmo:traces",
+    "repo": "cosmo:repo",
+    "pipeline": "cosmo:pipeline",
+    "registry": "cosmo:registry",
+    "iam": "cosmo:iam",
+    "secrets": "cosmo:secrets",
+    "waf": "cosmo:waf",
+    "llm": "cosmo:llm",
+    "embedding": "cosmo:embedding",
+    "vector-db": "cosmo:vector-db",
+    "gpu": "cosmo:gpu",
+    "inference-server": "cosmo:inference-server",
+    "agent": "cosmo:agent",
+    "tool": "cosmo:tool",
+    "rag": "cosmo:rag",
+    "guardrail": "cosmo:guardrail",
+    "feature-store": "cosmo:feature-store",
+    "training-job": "cosmo:training-job"
+  }
+}
