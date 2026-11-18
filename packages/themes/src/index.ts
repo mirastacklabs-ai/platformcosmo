@@ -5,12 +5,12 @@ import { builtinThemes } from "./themes.js";
 export { validateTheme } from "./validate.js";
 
 /** Names mirror the schema's canvas.theme enum. */
-export const themeNames = [
+export const themeNames = Object.freeze([
   "light",
   "dark",
   "blueprint",
   "mono",
-] as const satisfies readonly ThemeId[];
+] as const satisfies readonly ThemeId[]);
 export type ThemeName = (typeof themeNames)[number];
 
 export const themeRegistry: ThemeRegistry = {

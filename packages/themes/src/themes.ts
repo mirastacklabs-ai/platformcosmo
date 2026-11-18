@@ -75,7 +75,7 @@ function mapTones<K extends string>(
   return out;
 }
 
-const DASH = { solid: "", dashed: "6 4", dotted: "1.5 4" } as const;
+const DASH = Object.freeze({ solid: "", dashed: "6 4", dotted: "1.5 4" } as const);
 
 function build(s: Seed): ThemeTokens {
   const g = {
@@ -105,9 +105,9 @@ function build(s: Seed): ThemeTokens {
     parts: mapTones(s.parts, s.shade),
     groups: {
       zone: g,
-      vpc: { ...g, opacity: Math.min(1, s.groupOpacity + 0.04) },
-      cluster: { ...g, opacity: Math.min(1, s.groupOpacity + 0.08) },
-      platform: { ...g, opacity: Math.min(1, s.groupOpacity + 0.12) },
+      vpc: { ...g, opacity: Math.min(1, s.groupOpacity + 0.02) },
+      cluster: { ...g, opacity: Math.min(1, s.groupOpacity + 0.04) },
+      platform: { ...g, opacity: Math.min(1, s.groupOpacity + 0.06) },
     },
     edge: { ...s.edge, width: 1.6, dash: DASH },
     flows: s.flows,
@@ -162,7 +162,7 @@ const light: Seed = {
     dc: "#7d8ba1",
   },
   parts: {
-    base: "#c9d1dd",
+    base: "#47505f",
     accent: "#5b8def",
     muted: "#a3adbd",
     glass: "#bfe3f5",
@@ -195,7 +195,7 @@ const light: Seed = {
   badge: { fill: "#1f2937", text: "#ffffff" },
   icon: { color: "#1f2937", plate: "#ffffff" },
   dc: {
-    led: { ok: "#22c55e", warn: "#f59e0b", fail: "#ef4444" },
+    led: { ok: "#4ade80", warn: "#fbbf24", fail: "#ffa3a3" },
     cable: { power: "#e5484d", network: "#3b82f6", fiber: "#e6b800", management: "#8793a6" },
     coldAisle: "#7dd3fc",
     hotAisle: "#fdba74",
@@ -274,7 +274,7 @@ const dark: Seed = {
   },
   metric: { fill: "#182033", stroke: "#334158", label: "#a3aec2", value: "#f1f5f9" },
   caption: { fill: "#e6ebf4", text: "#0f1420" },
-  badge: { fill: "#e6ebf4", text: "#0f1420" },
+  badge: { fill: "#e6ebf4", text: "#0b0f17" },
   icon: { color: "#e6ebf4", plate: "#222c40" },
   dc: {
     led: { ok: "#4ade80", warn: "#fbbf24", fail: "#f87171" },
@@ -338,7 +338,7 @@ const blueprint: Seed = {
   groupFill: "#9cc8f5",
   groupStroke: "#8fbbe8",
   groupLabel: "#d6e8fb",
-  groupOpacity: 0.07,
+  groupOpacity: 0.05,
   edge: { stroke: "#cfe4fa", labelFill: "#08294d", labelText: "#eaf4ff" },
   flows: {
     normal: "#9fd0ff",
@@ -359,7 +359,7 @@ const blueprint: Seed = {
   badge: { fill: "#eaf4ff", text: "#08294d" },
   icon: { color: "#eaf4ff", plate: "#12497f" },
   dc: {
-    led: { ok: "#6ee7a8", warn: "#ffd366", fail: "#ff8a8a" },
+    led: { ok: "#6ee7a8", warn: "#ffd366", fail: "#ffa3a3" },
     cable: { power: "#ff9a9a", network: "#9fd0ff", fiber: "#ffe27a", management: "#b8c9dc" },
     coldAisle: "#7fd8ff",
     hotAisle: "#ffb27a",
@@ -408,7 +408,7 @@ const mono: Seed = {
     dc: "#bababa",
   },
   parts: {
-    base: "#cfcfcf",
+    base: "#e8e8e8",
     accent: "#7a7a7a",
     muted: "#e0e0e0",
     glass: "#ececec",
@@ -425,9 +425,9 @@ const mono: Seed = {
   flows: {
     normal: "#333333",
     heavy: "#000000",
-    health: "#666666",
-    failed: "#7a7a7a",
-    airflow: "#8f8f8f",
+    health: "#6e6e6e",
+    failed: "#7f7f7f",
+    airflow: "#919191",
     power: "#555555",
   },
   states: {
@@ -441,7 +441,7 @@ const mono: Seed = {
   badge: { fill: "#111111", text: "#ffffff" },
   icon: { color: "#111111", plate: "#ffffff" },
   dc: {
-    led: { ok: "#4d4d4d", warn: "#858585", fail: "#000000" },
+    led: { ok: "#595959", warn: "#333333", fail: "#000000" },
     cable: { power: "#1a1a1a", network: "#5c5c5c", fiber: "#999999", management: "#c2c2c2" },
     coldAisle: "#d9d9d9",
     hotAisle: "#a8a8a8",
@@ -450,9 +450,18 @@ const mono: Seed = {
   },
 };
 
-export const builtinThemes: Readonly<Record<ThemeId, ThemeTokens>> = {
+/** Recursively freezes plain data so shared themes cannot be mutated by consumers. */
+export function deepFreeze<T>(v: T): T {
+  if (typeof v === "object" && v !== null && !Object.isFrozen(v)) {
+    Object.freeze(v);
+    for (const x of Object.values(v)) deepFreeze(x);
+  }
+  return v;
+}
+
+export const builtinThemes: Readonly<Record<ThemeId, ThemeTokens>> = deepFreeze({
   light: build(light),
   dark: build(dark),
   blueprint: build(blueprint),
   mono: build(mono),
-};
+});
