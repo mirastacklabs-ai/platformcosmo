@@ -56,4 +56,65 @@ describe("sync-plugin-version", () => {
     expect(files.map(read)).toEqual(snapshot);
     expect(read(pluginFile)).toContain('"keywords": ["diagram"');
   });
+
+  test("marketplace entry with object source before name; no partial writes", () => {
+    const pkg = JSON.parse(read(pkgFile));
+    pkg.version = "4.5.6";
+    writeFileSync(join(tmp, pkgFile), JSON.stringify(pkg, null, 2) + "\n");
+    const market = `{
+  "name": "mk",
+  "plugins": [
+    {
+      "name": "other",
+      "version": "1.0.0"
+    },
+    {
+      "source": {
+        "source": "github",
+        "name": "decoy",
+        "version": "0.0.1"
+      },
+      "name": "platformcosmo",
+      "version": "0.0.0"
+    }
+  ]
+}
+`;
+    writeFileSync(join(tmp, marketFile), market);
+    expect(sync().status).toBe(0);
+    const m = JSON.parse(read(marketFile));
+    expect(m.plugins[1].version).toBe("4.5.6");
+    expect(m.plugins[1].source.version).toBe("0.0.1");
+    expect(m.plugins[0].version).toBe("1.0.0");
+
+    // No matching entry: nothing is written, not even plugin.json.
+    writeFileSync(join(tmp, marketFile), market.replace('"platformcosmo"', '"nope"'));
+    const plugin = JSON.parse(read(pluginFile));
+    plugin.version = "0.0.0";
+    writeFileSync(join(tmp, pluginFile), JSON.stringify(plugin, null, 2) + "\n");
+    const before = read(pluginFile);
+    expect(sync().status).not.toBe(0);
+    expect(read(pluginFile)).toBe(before);
+  });
+
+  test("--root without a value is a usage error (exit 2)", () => {
+    for (const a of [["--root"], ["--check", "--root"]]) {
+      const r = spawnSync(process.execPath, [script, ...a], { encoding: "utf8" });
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("--root requires");
+    }
+  });
+
+  test("unknown arguments (including --root=/x) are a usage error (exit 2)", () => {
+    for (const a of [["--root=/x"], ["--bogus"], ["--check", "extra"]]) {
+      const r = spawnSync(process.execPath, [script, ...a], { encoding: "utf8" });
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("unknown argument");
+    }
+  });
+
+  test("default root is the repo, independent of cwd", () => {
+    const r = spawnSync(process.execPath, [script, "--check"], { encoding: "utf8", cwd: tmp });
+    expect(r.status, r.stderr).toBe(0);
+  });
 });
