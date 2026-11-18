@@ -59,7 +59,10 @@ If `pcosmo` is not found, the plugin's `bin/` is not on PATH: run
 - Ids: lowercase kebab-case (`^[a-z][a-z0-9-]*$`), unique across nodes, groups and edges.
 - `nodes[].type` picks the glyph and default icon (full list in [node types](references/node-types.md)).
 - `icon: "pack:name"` overrides the glyph with a provider or brand icon; check `pcosmo icons search <term> --packs-dir "${CLAUDE_PLUGIN_DATA}/icons"`
-  first. Use an icon only if it is installed (the validator warns when it is not).
+  first. Use an icon only if it is installed (the validator warns when it is not). When the user asks for an icon
+  from a named set ("the Feather users icon"), get the exact ref instead of guessing it:
+  `pcosmo icons search <term> --pack <id> --packs-dir "${CLAUDE_PLUGIN_DATA}/icons"` (or `pcosmo icons list` to see
+  the installed pack ids), then use the printed ref such as `feather:users`.
 - Flows are the animated particles: `kind` is `normal | heavy | health | failed | airflow | power`.
 - Steps tell a story in order. `set` changes states (`healthy | degraded | down | highlighted`),
   `flows` replaces the active flows for that step, `metrics` updates tiles, `focus` zooms to an object.

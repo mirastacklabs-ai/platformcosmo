@@ -781,6 +781,100 @@ export const PROVIDER_TERMS: Readonly<Record<string, string>> = Object.fromEntri
 
 // --- entry point -------------------------------------------------------------------
 
+const GENERIC_SEGMENTS = new Set([
+  "icons",
+  "icon",
+  "svg",
+  "svgs",
+  "assets",
+  "asset",
+  "dist",
+  "src",
+  "lib",
+  "images",
+  "image",
+  "img",
+  "imgs",
+  "public",
+  "static",
+  "build",
+  "files",
+  "download",
+  "downloads",
+  "raw",
+  "archive",
+  "zip",
+  "release",
+  "releases",
+  "latest",
+  "main",
+  "master",
+  "head",
+  "tree",
+  "blob",
+  "refs",
+  "heads",
+  "tags",
+]);
+
+function packIdFrom(s: string): string | undefined {
+  const id = kebab(s);
+  if (!id) return undefined;
+  return (/^[a-z]/.test(id) ? id : `p-${id}`).slice(0, 31).replace(/-+$/, "");
+}
+
+/**
+ * Pack id and description for a URL source. GitHub-style URLs (tree/blob, raw, codeload,
+ * archive) use the repository name; otherwise the last path segment that is not generic
+ * (`icons`, `svg`, `dist`, ...), then the host's first label.
+ */
+export function derivePackSource(url: URL): { id: string; description: string } {
+  const segs = url.pathname
+    .split("/")
+    .filter(Boolean)
+    .map((s) => {
+      try {
+        return decodeURIComponent(s);
+      } catch {
+        return s;
+      }
+    });
+  const host = url.hostname.toLowerCase();
+  let owner: string | undefined;
+  let repo: string | undefined;
+  let rest: string[] = [];
+  if (
+    host === "github.com" ||
+    host === "raw.githubusercontent.com" ||
+    host === "codeload.github.com"
+  ) {
+    owner = segs[0];
+    repo = segs[1]?.replace(/\.git$/i, "");
+    rest =
+      host === "github.com"
+        ? segs.slice(4)
+        : host === "raw.githubusercontent.com"
+          ? segs.slice(3)
+          : [];
+    if (host === "github.com" && (segs[2] === "archive" || segs[2] === "releases")) rest = [];
+  }
+  if (owner && repo) {
+    const id = packIdFrom(repo);
+    if (id) {
+      const path = rest.join("/").replace(/\.(zip|svg)$/i, "");
+      return { id, description: `${owner}/${repo}${path ? ` (${path})` : ""}` };
+    }
+  }
+  const stripped = segs.map((s) => s.replace(/\.(zip|svg|tar|tgz|gz)$/i, ""));
+  for (let i = stripped.length - 1; i >= 0; i--) {
+    const s = stripped[i] as string;
+    if (GENERIC_SEGMENTS.has(s.toLowerCase())) continue;
+    const id = packIdFrom(s);
+    if (id) return { id, description: `${host}/${segs.slice(0, i + 1).join("/")}` };
+  }
+  return { id: packIdFrom(host.split(".")[0] ?? "") ?? "pack", description: host };
+}
+
 function deriveId(url: URL, fallback: string): string {
   const last = decodeURIComponent(url.pathname.split("/").filter(Boolean).pop() ?? "").replace(
     /\.(zip|svg)$/i,
@@ -831,12 +925,13 @@ export const fetchIconPack: FetchIconPackFn = async (source, options) => {
     const chk = checkHttpsUrl(source);
     if (!chk.ok) return fail("invalid-url", `${chk.reason}`);
     const gh = chk.url.hostname === "github.com" ? GITHUB_TREE_RE.exec(chk.url.pathname) : null;
-    const id = packId ?? deriveId(chk.url, "pack");
+    const derived = derivePackSource(chk.url);
+    const id = packId ?? derived.id;
     if (RESERVED_PACK_IDS.has(id))
       return fail("reserved-pack-id", `pack id "${id}" is reserved; pass --id`);
     const info = (version: string): IconPackInfo => ({
       id,
-      name: id,
+      name: derived.description.slice(0, 80),
       version,
       license: "LicenseRef-user-supplied",
       source,

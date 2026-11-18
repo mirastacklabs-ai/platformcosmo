@@ -493,7 +493,7 @@ describe("fetchIconPack: providers", () => {
     });
     const r = await fetchIconPack("https://github.com/acme/set/tree/v1/icons", { http });
     expect(r.pack?.manifest.icons.map((i) => i.id)).toEqual(["a", "b"]);
-    expect(r.pack?.manifest.pack.id).toBe("icons");
+    expect(r.pack?.manifest.pack.id).toBe("set");
   });
 });
 

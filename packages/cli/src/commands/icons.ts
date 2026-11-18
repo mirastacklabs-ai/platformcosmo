@@ -24,7 +24,9 @@ export const HELP = `Usage: pcosmo icons <add|list|search|remove> ...
   remove <pack-id>    Remove a user pack
 
 Options:
-  --id <pack-id>      Pack id to assign on add
+  --id <pack-id>      Pack id to assign on add (default: repository or file name, e.g. feather)
+  --json              Print the add result as JSON (pack id, icon count, example ref)
+  --pack <pack-id>    Restrict search to one pack
   --accept-terms      Accept the provider's terms (add)
   --force             Replace an already installed pack with the same id (add)
   --limit <n>         Max search results (default 20)
@@ -43,6 +45,8 @@ export async function iconsCommand(ctx: Ctx, args: string[]): Promise<number> {
     "accept-terms": { type: "boolean" },
     force: { type: "boolean" },
     limit: { type: "string" },
+    json: { type: "boolean" },
+    pack: { type: "string" },
   });
   const [sub, ...rest] = p.positionals;
   const dir = packsDirFor(ctx.deps, str(p, "packs-dir") ?? ctx.packsDir);
@@ -56,7 +60,14 @@ export async function iconsCommand(ctx: Ctx, args: string[]): Promise<number> {
         throw new UsageError("--limit must be an integer from 1 to 500");
       }
       const { resolver } = await makeResolver(ctx);
-      const hits = resolver.search(rest.join(" "), limit);
+      const only = str(p, "pack");
+      if (only !== undefined && !PACK_ID_RE.test(only)) {
+        throw new UsageError("--pack must match ^[a-z][a-z0-9-]{0,31}$");
+      }
+      const query = rest.join(" ");
+      const hits = resolver
+        .search(only ? `${only}:${query}` : query, limit)
+        .filter((h) => only === undefined || h.ref.startsWith(`${only}:`));
       if (hits.length === 0) ctx.out("no matches\n");
       for (const h of hits) ctx.out(`${h.ref.padEnd(40)} ${h.score.toFixed(2)}\n`);
       return EXIT.ok;
@@ -75,7 +86,15 @@ export async function iconsCommand(ctx: Ctx, args: string[]): Promise<number> {
     case "add": {
       if (rest.length !== 1) throw new UsageError("add needs exactly one source");
       return userError(() =>
-        add(ctx, dir, rest[0]!, str(p, "id"), flag(p, "accept-terms"), flag(p, "force")),
+        add(
+          ctx,
+          dir,
+          rest[0]!,
+          str(p, "id"),
+          flag(p, "accept-terms"),
+          flag(p, "force"),
+          flag(p, "json"),
+        ),
       );
     }
     default:
@@ -104,6 +123,7 @@ async function add(
   packId: string | undefined,
   acceptTerms: boolean,
   force: boolean,
+  json: boolean,
 ): Promise<number> {
   if (packId !== undefined && !PACK_ID_RE.test(packId)) {
     throw new UsageError("--id must match ^[a-z][a-z0-9-]{0,31}$");
@@ -160,7 +180,27 @@ async function add(
     },
     force,
   );
+  const first = pack.manifest.icons.map((i) => i.id).sort()[0];
+  const example = first ? `${id}:${first}` : undefined;
+  if (json) {
+    ctx.out(
+      `${JSON.stringify({
+        pack: id,
+        icons: entry.iconCount,
+        license: entry.license,
+        redistributable: entry.redistributable,
+        dir,
+        example,
+      })}\n`,
+    );
+    return EXIT.ok;
+  }
   ctx.out(`installed ${id} (${plural(entry.iconCount, "icon")}, ${entry.license}) in ${dir}\n`);
+  if (example) {
+    ctx.out(
+      `use icons as "${id}:<icon>" on a node, e.g. icon: "${example}"; find names with: pcosmo icons search <term> --pack ${id}\n`,
+    );
+  }
   if (!entry.redistributable) {
     ctx.out(
       "This pack is for your own diagrams on this machine; do not commit or redistribute it.\n",

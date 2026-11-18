@@ -5,6 +5,7 @@ export {
   fetchIconPack,
   checkHttpsUrl,
   readZipDirectory,
+  derivePackSource,
   FETCH_LIMITS,
   PROVIDER_IDS,
   PROVIDER_TERMS,

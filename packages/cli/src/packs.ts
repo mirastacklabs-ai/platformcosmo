@@ -228,7 +228,9 @@ export async function savePack(
       () => false,
     ));
   if (exists && !overwrite) {
-    throw new Error(`icon pack "${id}" is already installed (use --force to replace it)`);
+    throw new Error(
+      `icon pack "${id}" is already installed; choose another id with --id <name> (or pass --force to replace it)`,
+    );
   }
   await mkdir(dir, { recursive: true });
   const tmp = resolve(dir, `.tmp-${id}-${process.pid}-${Date.now()}`);

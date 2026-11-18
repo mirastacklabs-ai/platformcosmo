@@ -167,6 +167,95 @@ describe("icons add (remote)", () => {
   });
 });
 
+describe("icons add prints the pack id and an example ref", () => {
+  const feather: FetchIconPackFn = (source) =>
+    Promise.resolve({
+      pack: iconPack("feather"),
+      lock: {
+        source,
+        resolved: source,
+        integrity: "sha256-x",
+        license: "LicenseRef-user-supplied",
+        redistributable: false,
+        iconCount: 1,
+      },
+      diagnostics: [],
+    });
+  const url = "https://github.com/feathericons/feather/tree/main/icons";
+
+  test("text output names the pack and gives a ref and a search hint", async () => {
+    const dir = await tmp();
+    const r = await run(
+      ["icons", "add", url, "--packs-dir", join(dir, "p")],
+      makeDeps(dir, { core: makeCore({ fetchIconPack: feather }) }),
+    );
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("installed feather");
+    expect(r.stdout).toContain('icon: "feather:dot"');
+    expect(r.stdout).toContain("pcosmo icons search <term> --pack feather");
+  });
+
+  test("--json prints one machine-readable line", async () => {
+    const dir = await tmp();
+    const r = await run(
+      ["icons", "add", url, "--json", "--packs-dir", join(dir, "p")],
+      makeDeps(dir, { core: makeCore({ fetchIconPack: feather }) }),
+    );
+    expect(r.code).toBe(0);
+    const j = JSON.parse(r.stdout.trim());
+    expect(j).toMatchObject({
+      pack: "feather",
+      icons: 1,
+      example: "feather:dot",
+      redistributable: false,
+    });
+  });
+
+  test("an id collision is an error that suggests --id, never an overwrite", async () => {
+    const dir = await tmp();
+    const deps = makeDeps(dir, { core: makeCore({ fetchIconPack: feather }) });
+    const packs = join(dir, "p");
+    expect((await run(["icons", "add", url, "--packs-dir", packs], deps)).code).toBe(0);
+    const again = await run(["icons", "add", url, "--packs-dir", packs], deps);
+    expect(again.code).toBe(1);
+    expect(again.stderr).toContain("already installed");
+    expect(again.stderr).toContain("--id");
+  });
+
+  test("search --pack restricts results to one pack", async () => {
+    const dir = await tmp();
+    let seen = "";
+    const deps = makeDeps(dir, {
+      core: makeCore({
+        createIconResolver: () => ({
+          resolve: () => undefined,
+          defaultFor: () => undefined,
+          search: (q: string) => {
+            seen = q;
+            return [
+              { ref: "feather:dot", score: 1 },
+              { ref: "cosmo:dot", score: 0.5 },
+            ];
+          },
+          packs: () => [],
+        }),
+      }),
+    });
+    const packs = join(dir, "p");
+    const r = await run(
+      ["icons", "search", "dot", "--pack", "feather", "--packs-dir", packs],
+      deps,
+    );
+    expect(r.code).toBe(0);
+    expect(seen).toBe("feather:dot");
+    expect(r.stdout).toContain("feather:dot");
+    expect(r.stdout).not.toContain("cosmo:dot");
+    expect(
+      (await run(["icons", "search", "dot", "--pack", "Bad Id", "--packs-dir", packs], deps)).code,
+    ).toBe(2);
+  });
+});
+
 describe("icons search / usage", () => {
   test("search prints refs and scores", async () => {
     const deps = makeDeps(await tmp());
