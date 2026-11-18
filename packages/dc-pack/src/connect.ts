@@ -138,7 +138,7 @@ export function trayRoute(
   tray: { readonly spineX: number; readonly z: number },
   lane: number,
 ): Vec3[] {
-  const z = r4(tray.z + (lane % 5) * 0.025);
+  const z = r4(tray.z + (lane % 5) * 0.004); // max +0.016: stays inside the 0.05 rails
   const fan = ((lane % 3) - 1) * 0.08;
   const stepOut = 0.15 + (lane % 4) * 0.04;
   const a1 = topMounted(from, fromAt)
