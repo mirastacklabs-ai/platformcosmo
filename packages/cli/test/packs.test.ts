@@ -1,10 +1,10 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { computeIconIntegrity as computeIntegrity } from "@platformcosmo/core";
 import { describe, expect, test } from "vitest";
 import {
   LOCKFILE_NAME,
   checkManifest,
-  computeIntegrity,
   isSafeRelPath,
   loadUserPacks,
   packsDirFor,

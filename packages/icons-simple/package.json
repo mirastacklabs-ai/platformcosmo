@@ -1,0 +1,44 @@
+{
+  "name": "@platformcosmo/icons-simple",
+  "version": "0.0.0",
+  "description": "PlatformCosmo icon pack: Simple Icons filtered to icons with an explicit CC0-1.0, MIT or Apache-2.0 license.",
+  "license": "(CC0-1.0 AND MIT AND Apache-2.0)",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mirastacklabs-ai/platformcosmo.git",
+    "directory": "packages/icons-simple"
+  },
+  "homepage": "https://platformcosmo.io",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE",
+    "LICENSE-SIMPLE-ICONS.txt",
+    "DISCLAIMER-SIMPLE-ICONS.txt",
+    "NOTICE-SIMPLE-ICONS.txt"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@platformcosmo/core": "workspace:*"
+  }
+}
