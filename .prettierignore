@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+pnpm-lock.yaml
+*.gen.ts
+packages/*/LICENSE
+packages/*/NOTICE
+/LICENSE
+/NOTICE
+.changeset/*.md
+CHANGELOG.md
+docs/PLAN.md

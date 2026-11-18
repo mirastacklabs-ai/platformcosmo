@@ -1,0 +1,38 @@
+{
+  "name": "@platformcosmo/icons-base",
+  "version": "0.0.0",
+  "description": "PlatformCosmo icons-base package (pre-alpha).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mirastacklabs-ai/platformcosmo.git",
+    "directory": "packages/icons-base"
+  },
+  "homepage": "https://platformcosmo.io",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=20.19"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p ."
+  }
+}

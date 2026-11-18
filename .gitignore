@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.local
+.DS_Store
+# copied from repo root at build time (scripts/sync-legal.mjs)
+packages/*/LICENSE
+packages/*/NOTICE

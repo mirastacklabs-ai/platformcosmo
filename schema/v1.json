@@ -1,0 +1,374 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platformcosmo.io/schema/v1.json",
+  "title": "PlatformCosmoSpec",
+  "description": "Draft v1 schema (M0). Subject to change until v1.0.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["meta", "nodes"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version"],
+      "properties": {
+        "version": {
+          "const": "1"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      }
+    },
+    "canvas": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "theme": {
+          "enum": ["light", "dark", "blueprint", "mono"]
+        },
+        "grid": {
+          "type": "boolean"
+        },
+        "padding": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "aspect": {
+          "type": "string",
+          "pattern": "^(auto|[1-9][0-9]*:[1-9][0-9]*)$"
+        }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/node"
+      },
+      "minItems": 1
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/group"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/edge"
+      }
+    },
+    "flows": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/flow"
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/metric"
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/step"
+      }
+    },
+    "legend": {
+      "oneOf": [
+        {
+          "const": "auto"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label"],
+            "properties": {
+              "label": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "color": {
+                "$ref": "#/$defs/color"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "id": {
+      "title": "SpecId",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "maxLength": 64
+    },
+    "color": {
+      "title": "SpecColor",
+      "type": "string",
+      "pattern": "^(#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6}|[a-z][a-z0-9-]*)$"
+    },
+    "state": {
+      "title": "SpecState",
+      "enum": ["healthy", "degraded", "down", "highlighted"]
+    },
+    "nodeType": {
+      "title": "SpecNodeType",
+      "enum": [
+        "server",
+        "vm",
+        "container",
+        "pod",
+        "function",
+        "lb",
+        "gateway",
+        "cdn",
+        "dns",
+        "firewall",
+        "vpc",
+        "sql",
+        "nosql",
+        "cache",
+        "object-store",
+        "warehouse",
+        "queue",
+        "stream",
+        "users",
+        "client",
+        "mobile",
+        "metrics",
+        "logs",
+        "traces",
+        "repo",
+        "pipeline",
+        "registry",
+        "iam",
+        "secrets",
+        "waf",
+        "llm",
+        "embedding",
+        "vector-db",
+        "gpu",
+        "inference-server",
+        "agent",
+        "tool",
+        "rag",
+        "guardrail",
+        "feature-store",
+        "training-job"
+      ]
+    },
+    "node": {
+      "title": "SpecNode",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "$ref": "#/$defs/nodeType"
+        },
+        "icon": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[a-z0-9-]+$"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "badge": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "size": {
+          "enum": ["sm", "md", "lg"]
+        },
+        "pos": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": {
+            "x": {
+              "type": "integer"
+            },
+            "y": {
+              "type": "integer"
+            }
+          }
+        },
+        "group": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+    "group": {
+      "title": "SpecGroup",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "style": {
+          "enum": ["zone", "vpc", "cluster", "platform"]
+        }
+      }
+    },
+    "edge": {
+      "title": "SpecEdge",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "from": {
+          "$ref": "#/$defs/id"
+        },
+        "to": {
+          "$ref": "#/$defs/id"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "style": {
+          "enum": ["solid", "dashed", "dotted"]
+        },
+        "bidirectional": {
+          "type": "boolean"
+        }
+      }
+    },
+    "flow": {
+      "title": "SpecFlow",
+      "oneOf": [
+        {
+          "title": "SpecFlowByEdge",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["edge"],
+          "properties": {
+            "edge": {
+              "$ref": "#/$defs/id"
+            },
+            "kind": {
+              "enum": ["normal", "heavy", "health", "failed"]
+            },
+            "rate": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "color": {
+              "$ref": "#/$defs/color"
+            }
+          }
+        },
+        {
+          "title": "SpecFlowByEndpoints",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["from", "to"],
+          "properties": {
+            "from": {
+              "$ref": "#/$defs/id"
+            },
+            "to": {
+              "$ref": "#/$defs/id"
+            },
+            "kind": {
+              "enum": ["normal", "heavy", "health", "failed"]
+            },
+            "rate": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "color": {
+              "$ref": "#/$defs/color"
+            }
+          }
+        }
+      ]
+    },
+    "metric": {
+      "title": "SpecMetric",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "value"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "value": {
+          "type": ["string", "number"]
+        }
+      }
+    },
+    "step": {
+      "title": "SpecStep",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "caption": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "set": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/id"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/state"
+          }
+        },
+        "flows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/flow"
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/id"
+          },
+          "additionalProperties": {
+            "type": ["string", "number"]
+          }
+        },
+        "duration": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "minProperties": 1
+    }
+  }
+}
