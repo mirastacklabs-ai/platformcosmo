@@ -17,6 +17,7 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./schema/v1.json": "./dist/schema/v1.json",
     "./package.json": "./package.json"
   },
   "files": [
@@ -32,7 +33,7 @@
     "provenance": true
   },
   "scripts": {
-    "build": "tsup && mkdir -p dist/LICENSES && cp ../../LICENSES/Inter-OFL-1.1.txt dist/LICENSES/Inter-OFL-1.1.txt",
+    "build": "tsup && mkdir -p dist/LICENSES dist/schema && cp ../../LICENSES/Inter-OFL-1.1.txt dist/LICENSES/Inter-OFL-1.1.txt && cp ../../schema/v1.json dist/schema/v1.json",
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {

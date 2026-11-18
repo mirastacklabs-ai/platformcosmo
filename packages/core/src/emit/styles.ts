@@ -110,8 +110,6 @@ export function stripAtRules(css: string, names: readonly string[]): string {
   return out;
 }
 
-const FACES = ["top", "left", "right"] as const;
-
 /**
  * CSS rule for one A-owned class token (suffix after `${prefix}-`), or undefined when the token
  * is not one of ours. Tokens: `face`, `overlay`, `k-<category>-<face>`, `p-<tone>-<face>`,
@@ -172,7 +170,10 @@ export function classRules(prefix: string, usedClasses: ReadonlySet<string>): st
   const out: string[] = [];
   for (const t of tokens.sort()) {
     const r = ruleFor(t);
-    if (r) out.push(`.${lead}${t}{${r}}`);
+    // Modifier tokens that must beat their base class (`edge`, `grp-<style>`) get doubled specificity.
+    const sel =
+      t.startsWith("cable-") || t === "grp-contained" ? `.${lead}${t}.${lead}${t}` : `.${lead}${t}`;
+    if (r) out.push(`${sel}{${r}}`);
   }
   return out;
 }
@@ -193,5 +194,3 @@ export function stateRules(prefix: string, theme: ThemeTokens): string[] {
   }
   return out;
 }
-
-export { FACES };
