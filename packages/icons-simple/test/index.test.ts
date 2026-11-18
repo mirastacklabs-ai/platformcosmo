@@ -48,7 +48,7 @@ describe("icons-simple", () => {
     }
   });
 
-  test("every MIT/Apache icon has an entry and the full license texts are shipped", () => {
+  test("every Apache icon has an entry and the full license texts are shipped", () => {
     const notice = readFileSync(new URL("../NOTICE-SIMPLE-ICONS.txt", import.meta.url), "utf8");
     const mirror = readFileSync(
       new URL("../../../LICENSES/NOTICE-SIMPLE-ICONS.txt", import.meta.url),

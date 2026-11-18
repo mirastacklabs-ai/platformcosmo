@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { createIconResolver, iconRejections, sanitizeSvg } from "../src/icons/index.js";
 import type { LoadedIconPack } from "../src/index.js";
+import { expectLinear } from "./timing.js";
 
 const wrap = (inner: string) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${inner}</svg>`;
@@ -43,39 +44,43 @@ describe("nested <use> amplification", () => {
   });
 });
 
-describe("CSS worst cases are linear", () => {
-  const timeIt = (s: string): number => {
-    // Best of three: the bound is about algorithmic cost, not scheduler or JIT noise.
-    let best = Infinity;
-    for (let k = 0; k < 3; k++) {
-      const t = performance.now();
-      sanitizeSvg(s, { maxBytes: 70_000 });
-      best = Math.min(best, performance.now() - t);
-    }
-    return best;
-  };
-  const style = (css: string, extra = "") => wrap(`<style>${css}</style>${extra}`).slice(0, 60_000);
+describe("CSS worst cases scale linearly", () => {
+  const style = (css: string, extra = "") => wrap(`<style>${css}</style>${extra}`);
+  const P = '<path class="a" d="M0 0"/>';
 
-  test("60 KB of rules, comments and classes finish quickly", { timeout: 30_000 }, () => {
-    const cases = [
-      style(".a{fill:red}".repeat(5000), '<path class="a" d="M0 0"/>'),
-      style("/*".repeat(30000)),
-      style("/* x */".repeat(8000) + "a{fill:red}"),
-      style("a{".repeat(30000)),
-      style("}".repeat(60000)),
-      style(".a.a.a.a.a.a.a.a.a.a.a.a{fill:red}".repeat(1500), '<path class="a" d="M0 0"/>'),
-      style(`${"a,".repeat(25000)}b{fill:red}`),
-      style("a{fill:red !important   ".repeat(2000) + "}"),
-      wrap(`<path class="${"a ".repeat(25000)}" d="M0 0"/>`).slice(0, 60_000),
-      wrap(
-        "<style>.c0{fill:red}</style>" +
-          Array.from({ length: 1500 }, (_, i) => `<path class="c0 c${i}" d="M0 0"/>`).join(""),
-      ),
+  test("rules, comments, braces, selectors and classes", { timeout: 60_000 }, () => {
+    const cases: [string, (n: number) => string][] = [
+      ["many rules", (n) => style(".a{fill:red}".repeat(n), P)],
+      ["unterminated comments", (n) => style("/*".repeat(n))],
+      ["many comments", (n) => style("/* x */".repeat(n) + "a{fill:red}")],
+      ["open braces", (n) => style("a{".repeat(n))],
+      ["close braces", (n) => style("}".repeat(n))],
+      ["long class selectors", (n) => style(".a.a.a.a.a.a.a.a.a.a.a.a{fill:red}".repeat(n), P)],
+      ["selector list", (n) => style(`${"a,".repeat(n)}b{fill:red}`)],
+      ["!important runs", (n) => style("a{fill:red !important   ".repeat(n) + "}")],
+      ["class attribute", (n) => wrap(`<path class="${"a ".repeat(n)}" d="M0 0"/>`)],
+      [
+        "many nodes sharing a class",
+        (n) =>
+          wrap(
+            "<style>.c0{fill:red}</style>" +
+              Array.from({ length: n }, (_, i) => `<path class="c0 c${i}" d="M0 0"/>`).join(""),
+          ),
+      ],
     ];
-    for (const [i, c] of cases.entries()) {
-      const ms = timeIt(c);
-      expect(ms, `case ${i}`).toBeLessThan(200);
-    }
+    const sizes: Record<string, number> = {
+      "many rules": 2500,
+      "unterminated comments": 15000,
+      "many comments": 4000,
+      "open braces": 15000,
+      "close braces": 15000,
+      "long class selectors": 700,
+      "selector list": 12000,
+      "!important runs": 1000,
+      "class attribute": 12000,
+      "many nodes sharing a class": 700,
+    };
+    for (const [label, gen] of cases) expectLinear(label, gen, sizes[label] as number);
   });
 
   test("rule and selector caps apply", () => {

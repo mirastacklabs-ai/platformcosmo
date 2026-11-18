@@ -1,0 +1,32 @@
+Provider icon packs (NOT bundled or redistributed by PlatformCosmo)
+
+`pcosmo icons add aws|azure|gcp|cncf` downloads the official icon sets to the user's own
+machine, sanitizes them and records a lockfile entry. The icons are never committed to this
+repository, never shipped in a package and never uploaded anywhere. Each pack is marked
+`redistributable: false`.
+
+AWS Architecture Icons
+  Source: https://aws.amazon.com/architecture/icons/ (current zip resolved from that page)
+  Terms: AWS allows customers and partners to use these toolkits and assets to create
+  architecture diagrams. Review the current terms on the page above.
+
+Azure Architecture Icons
+  Source: https://arch-center.azureedge.net/icons/Azure_Public_Service_Icons_V25.zip
+  Terms: Microsoft permits use in architectural diagrams, training materials, or documentation,
+  and copying, distributing and displaying the icons only for that permitted use
+  (https://learn.microsoft.com/azure/architecture/icons/). The CLI shows the terms and
+  requires --accept-terms before downloading.
+
+Google Cloud icons
+  Source: https://services.google.com/fh/files/misc/core-products-icons.zip and category-icons.zip
+  Terms: check https://cloud.google.com/icons. No separate license text was found when this
+  was researched (2026-11-18); the CLI shows a notice.
+
+CNCF artwork
+  Source: https://github.com/cncf/artwork (project color icons)
+  Terms: no copyright license; made available under the Linux Foundation trademark usage
+  guidelines (https://www.linuxfoundation.org/legal/trademark-usage). Marks must not be
+  altered; PlatformCosmo normalizes SVG markup for safety but does not change the artwork.
+
+Rendered diagrams that contain provider icons are "use in diagrams"; committing such
+rendered examples is allowed, committing the packs is not (see DECISIONS.md D12).
