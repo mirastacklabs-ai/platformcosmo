@@ -93,7 +93,7 @@ describe("interactive mode", () => {
     const ids = findAll(layer.layers.overlay, "g").map((g) => g.attrs?.id);
     expect(ids).toContain("pc-test_btn_play");
     expect(ids).toContain("pc-test_btn_step");
-    expect(layer.css).toContain("#pc-test_controls{transform-origin:0 0;animation:");
+    expect(layer.css).toContain(",#pc-test_controls{transform-origin:0 0;animation:");
   });
   test("step starts and settle times embedded", () => {
     expect(layer.script).toContain("S=[0,3,6]");

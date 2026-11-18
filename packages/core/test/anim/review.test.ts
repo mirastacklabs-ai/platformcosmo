@@ -147,6 +147,34 @@ describe("robust input", () => {
   });
 });
 
+describe("overlay pinned against camera zoom", () => {
+  const loop = run({ mode: "loop" }).css.replace(/\n/g, "");
+  const inverse =
+    /@keyframes (\S+)\{0%\{transform:translate\(([\d.]+)px,([\d.]+)px\) scale\(0\.\d+\)/;
+
+  test("caption and metric tiles get the inverse of the camera keyframes", () => {
+    const m = inverse.exec(loop);
+    expect(m).not.toBeNull();
+    expect(loop).toContain(`#pc-test-cap,#pc-test-m-rps{transform-origin:0 0;animation:${m![1]} `);
+    // same stop positions as the camera keyframes
+    const stops = (name: string) =>
+      [
+        ...(new RegExp(`@keyframes ${name}\\{([^@]*?)\\}\\}`).exec(loop)?.[1] ?? "").matchAll(
+          /([\d.]+)%/g,
+        ),
+      ].map((x) => x[1]);
+    const camName = /#pc-test-camera\{transform-origin:0 0;animation:(\S+) /.exec(loop)![1]!;
+    expect(stops(m![1]!)).toEqual(stops(camName));
+  });
+
+  test("reduced motion pins them to step 1's inverse", () => {
+    const media = loop.slice(loop.indexOf("@media (prefers-reduced-motion"));
+    expect(media).toMatch(
+      /#pc-test-cap,#pc-test-m-rps\{transform:translate\([\d.]+px,[\d.]+px\) scale\(0\.\d+\)\}/,
+    );
+  });
+});
+
 describe("controls", () => {
   test("group and buttons are labelled", () => {
     const g = findAll(run({ mode: "interactive" }).layers.overlay, "g");

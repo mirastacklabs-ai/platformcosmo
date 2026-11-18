@@ -310,13 +310,21 @@ function loopLayer(
   const transforms = zooms.map(cameraTransform);
   const inverses = zooms.map(inverseCameraTransform);
   const cam = ids.sel(ids.camera());
-  const controlsSel = ids.sel(controlIds(ids.prefix, ids.root()).group);
+  // Everything in the overlay layer (caption box, metric tiles, interactive controls) sits inside
+  // the camera group; counter-transform it so it stays fixed on screen. (The legend has no id in
+  // IdScheme, so it cannot be targeted here: contract change request.)
+  const pinned = [
+    ids.caption(),
+    ...model.scene.metrics.map((m) => ids.metric(m.id)),
+    ...(interactive ? [controlIds(ids.prefix, ids.root()).group] : []),
+  ];
+  const controlsSel = pinned.map((id) => ids.sel(id)).join(",");
   const zoomed = transforms.some((t) => t !== IDENTITY_TRANSFORM);
   if (zoomed) {
     const anyDiffers = transforms.some((t) => t !== transforms[0]);
     if (!anyDiffers) {
       rules.push(`${cam}{transform-origin:0 0;transform:${transforms[0]}}`);
-      if (interactive) rules.push(`${controlsSel}{transform-origin:0 0;transform:${inverses[0]}}`);
+      rules.push(`${controlsSel}{transform-origin:0 0;transform:${inverses[0]}}`);
     } else {
       // 0% shows step 1's view; each transition fills the END of the previous step and lands
       // exactly on the next step's start, so every step starts at its own view.
@@ -334,14 +342,12 @@ function loopLayer(
       };
       const camName = kf.add(stops(transforms));
       rules.push(`${cam}{transform-origin:0 0;${loopAnim(camName, EASE)}}`);
-      if (interactive) {
-        const invName = kf.add(stops(inverses));
-        rules.push(`${controlsSel}{transform-origin:0 0;${loopAnim(invName, EASE)}}`);
-      }
+      const invName = kf.add(stops(inverses));
+      rules.push(`${controlsSel}{transform-origin:0 0;${loopAnim(invName, EASE)}}`);
     }
     // Reduced motion pauses at the static frame: step 1's view.
     reduced.push(`${cam}{transform:${transforms[0]}}`);
-    if (interactive) reduced.push(`${controlsSel}{transform:${inverses[0]}}`);
+    reduced.push(`${controlsSel}{transform:${inverses[0]}}`);
   }
 
   // Reduced motion: no CSS animation (static first frame), particles hidden (SMIL cannot be paused by CSS).
