@@ -8,8 +8,23 @@ import { join } from "node:path";
 const SCHEMA = "schema/v1.json";
 const OUT = "packages/core/src/schema/types.gen.ts";
 
+// json-schema-to-typescript names a $ref alias after its target; a description or
+// default beside $ref makes it emit duplicate aliases (SpecText1, ...). Strip those
+// siblings from a deep copy used only for generation, so the output stays the same.
+function stripRefSiblings(node) {
+  if (Array.isArray(node)) return node.map(stripRefSiblings);
+  if (node === null || typeof node !== "object") return node;
+  const hasRef = "$ref" in node;
+  const out = {};
+  for (const [k, v] of Object.entries(node)) {
+    if (hasRef && (k === "description" || k === "default")) continue;
+    out[k] = stripRefSiblings(v);
+  }
+  return out;
+}
+
 const schema = JSON.parse(readFileSync(SCHEMA, "utf8"));
-const ts = await compile(schema, "PlatformCosmoSpec", {
+const ts = await compile(stripRefSiblings(schema), "PlatformCosmoSpec", {
   bannerComment:
     "/* eslint-disable */\n/**\n * GENERATED from schema/v1.json by scripts/gen-types.mjs. Do not edit.\n * Run `pnpm gen:types` to regenerate.\n */",
   additionalProperties: false,

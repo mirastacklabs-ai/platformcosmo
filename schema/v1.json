@@ -86,7 +86,7 @@
         "$ref": "#/$defs/edge"
       },
       "maxItems": 1000,
-      "description": "Logical connections between nodes, drawn as lines with optional labels."
+      "description": "Connections between objects (nodes, racks, equipment, or rackId/slotId)."
     },
     "flows": {
       "type": "array",
@@ -130,7 +130,7 @@
               },
               "color": {
                 "$ref": "#/$defs/color",
-                "description": "Color swatch for the legend entry, as a hex value or palette name."
+                "description": "#rgb or #rrggbb hex, a palette name (blue, green, red, orange, yellow, purple, teal, pink, gray) or a flow kind name."
               }
             }
           },
@@ -179,7 +179,7 @@
         "$ref": "#/$defs/cable"
       },
       "maxItems": 2000,
-      "description": "Physical cables between endpoints, carrying power, network or fiber."
+      "description": "DC cables (power, network, fiber or management) between racks, slots and equipment."
     },
     "facility": {
       "$ref": "#/$defs/facility",
@@ -197,7 +197,7 @@
       "title": "SpecColor",
       "type": "string",
       "pattern": "^(#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6}|blue|green|red|orange|yellow|purple|teal|pink|gray|normal|heavy|health|failed|airflow|power)$",
-      "description": "Hex (#rgb/#rrggbb) or a theme palette name: blue, green, red, orange, yellow, purple, teal, pink, gray, or a flow kind (normal, heavy, health, failed, airflow, power)."
+      "description": "#rgb or #rrggbb hex, a palette name (blue, green, red, orange, yellow, purple, teal, pink, gray) or a flow kind name."
     },
     "state": {
       "title": "SpecState",
@@ -377,12 +377,12 @@
               "type": "number",
               "exclusiveMinimum": 0,
               "maximum": 20,
-              "description": "Relative speed of the flow animation, greater than 0 and at most 20.",
+              "description": "Particles emitted per second (0 < rate <= 20). Each flow costs ceil(rate x 2) particles; the total over base and all step flows must be <= 2000.",
               "default": 1
             },
             "color": {
               "$ref": "#/$defs/color",
-              "description": "Color of the flow animation, as a hex value or palette name."
+              "description": "#rgb or #rrggbb hex, a palette name (blue, green, red, orange, yellow, purple, teal, pink, gray) or a flow kind name."
             }
           }
         },
@@ -409,12 +409,12 @@
               "type": "number",
               "exclusiveMinimum": 0,
               "maximum": 20,
-              "description": "Relative speed of the flow animation, greater than 0 and at most 20.",
+              "description": "Particles emitted per second (0 < rate <= 20). Each flow costs ceil(rate x 2) particles; the total over base and all step flows must be <= 2000.",
               "default": 1
             },
             "color": {
               "$ref": "#/$defs/color",
-              "description": "Color of the flow animation, as a hex value or palette name."
+              "description": "#rgb or #rrggbb hex, a palette name (blue, green, red, orange, yellow, purple, teal, pink, gray) or a flow kind name."
             }
           }
         }
@@ -458,7 +458,7 @@
             "$ref": "#/$defs/state"
           },
           "maxProperties": 1000,
-          "description": "State changes applied during this step, keyed by endpoint id."
+          "description": "State changes from this step onward (cumulative), keyed by object id or rackId/slotId."
         },
         "flows": {
           "type": "array",
@@ -466,7 +466,7 @@
             "$ref": "#/$defs/flow"
           },
           "maxItems": 200,
-          "description": "Flows animated during this step."
+          "description": "If present (even []), replaces the base flows for this step only; omit to keep the base flows."
         },
         "metrics": {
           "type": "object",
@@ -477,18 +477,18 @@
             "$ref": "#/$defs/metricValue"
           },
           "maxProperties": 50,
-          "description": "Metric values set during this step, keyed by metric id."
+          "description": "Metric values from this step onward (cumulative), keyed by metric id."
         },
         "duration": {
           "type": "number",
           "exclusiveMinimum": 0,
           "maximum": 600,
-          "description": "Length of the step, greater than 0 and at most 600.",
+          "description": "Step length in seconds at speed 1 (> 0, <= 600).",
           "default": 3
         },
         "focus": {
           "$ref": "#/$defs/endpoint",
-          "description": "Endpoint that the view zooms to during this step."
+          "description": "Id to zoom to for this step only (object, rackId/slotId, group, row, aisle); omit for the full view."
         }
       },
       "minProperties": 1
@@ -546,7 +546,8 @@
         },
         "state": {
           "$ref": "#/$defs/state",
-          "description": "Operational state of the rack."
+          "description": "Operational state of the rack.",
+          "default": "healthy"
         },
         "pdu": {
           "enum": ["none", "single", "dual"],
@@ -582,7 +583,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 48,
-          "description": "Starting rack unit of the device within the rack."
+          "description": "Lowest rack unit the device occupies (1 = bottom)."
         },
         "size": {
           "type": "integer",
@@ -600,7 +601,8 @@
         },
         "state": {
           "$ref": "#/$defs/state",
-          "description": "Operational state of the device in the slot."
+          "description": "Operational state of the device in the slot.",
+          "default": "healthy"
         }
       }
     },
@@ -628,7 +630,8 @@
         },
         "state": {
           "$ref": "#/$defs/state",
-          "description": "Operational state of the equipment item."
+          "description": "Operational state of the equipment item.",
+          "default": "healthy"
         }
       }
     },
@@ -795,7 +798,7 @@
       ]
     }
   },
-  "x-revision": "1.1.0",
+  "x-revision": "1.1.1",
   "anyOf": [
     {
       "required": ["nodes"],
