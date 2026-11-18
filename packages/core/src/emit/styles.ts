@@ -132,11 +132,17 @@ export function ruleFor(token: string): string | undefined {
   if (token === "grp-hot-aisle") return `fill:${v("dc-hotAisle")};stroke:none`;
   if (token === "grp-hall") return `fill:${v("dc-hall")};stroke:${v("groups-zone-stroke")}`;
   if (token === "grp-contained") return `stroke:${v("dc-containment")};stroke-width:2`;
-  if (token === "glabel") return `fill:${v("groups-zone-label")}`;
-  if (token === "t-primary") return `fill:${v("text-primary")}`;
-  if (token === "t-secondary") return `fill:${v("text-secondary")}`;
+  if (token === "glabel")
+    return `fill:${v("groups-zone-label")};paint-order:stroke;stroke:var(--pc-background);stroke-width:3;stroke-linejoin:round`;
+  if (token === "gpill")
+    return `fill:${v("background")};fill-opacity:0.88;stroke:${v("groups-zone-stroke")};stroke-width:1`;
+  if (token === "t-primary")
+    return `fill:${v("text-primary")};paint-order:stroke;stroke:var(--pc-background);stroke-width:3;stroke-linejoin:round`;
+  if (token === "t-secondary")
+    return `fill:${v("text-secondary")};paint-order:stroke;stroke:var(--pc-background);stroke-width:3;stroke-linejoin:round`;
   if (token === "t-inverse") return `fill:${v("text-inverse")}`;
-  if (token === "t-edge") return `fill:${v("edge-labelText")}`;
+  if (token === "t-edge")
+    return `fill:${v("edge-labelText")};paint-order:stroke;stroke:var(--pc-background);stroke-width:3;stroke-linejoin:round`;
   if (token === "t-metric-label") return `fill:${v("metric-label")}`;
   if (token === "t-metric-value") return `fill:${v("metric-value")}`;
   if (token === "t-caption") return `fill:${v("caption-text")}`;
@@ -148,6 +154,8 @@ export function ruleFor(token: string): string | undefined {
     return `stroke-dasharray:${v(`edge-dash-${m[1]}`)}`;
   if ((m = /^cable-(power|network|fiber|management)$/.exec(token)))
     return `stroke:${v(`dc-cable-${m[1]}`)}`;
+  if (token === "leader")
+    return `fill:none;stroke:${v("edge-stroke")};stroke-width:1;stroke-dasharray:2 2`;
   if (token === "arrow") return `fill:${v("edge-stroke")};stroke:none`;
   if (token === "elabel") return `fill:${v("edge-labelFill")};stroke:none`;
   if (token === "bg") return `fill:${v("background")}`;

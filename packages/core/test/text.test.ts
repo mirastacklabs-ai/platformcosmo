@@ -12,6 +12,7 @@ import {
   weightFace,
 } from "../src/text/index.js";
 import { parseFont } from "../src/text/sfnt.js";
+import { decodeWoff2 } from "./fixtures/woff2.js";
 
 describe("measurement", () => {
   test("widths scale linearly with size and bold is wider", () => {
@@ -116,6 +117,35 @@ describe("subsetting", () => {
     for (const a of assets) {
       expect(a.family).toBe("Inter");
       expect(Buffer.from(a.sfnt.subarray(0, 4)).readUInt32BE(0)).toBe(0x00010000);
+    }
+  });
+});
+
+describe("glyph advances vs the font's hmtx", () => {
+  const sample = "Users Database 1200 roundrobin App pool Load balancer 3 / 3";
+
+  test("measureText is the sum of hmtx advances (no kerning, no rounding)", () => {
+    const full = getFont("regular").parsed;
+    for (const ch of new Set(sample)) {
+      const adv = full.advance(full.cmap.get(ch.codePointAt(0) as number) ?? 0);
+      expect(measureText(ch, 1000)).toBeCloseTo((adv * 1000) / full.unitsPerEm, 6);
+    }
+    let units = 0;
+    for (const ch of sample) units += full.advance(full.cmap.get(ch.codePointAt(0) as number) ?? 0);
+    expect(measureText(sample, 12)).toBeCloseTo((units * 12) / full.unitsPerEm, 6);
+  });
+
+  test("the embedded WOFF2 subset keeps every advance of the full face (regular and bold)", () => {
+    for (const face of ["regular", "bold"] as const) {
+      const full = getFont(face).parsed;
+      const sub = decodeWoff2(subsetWoff2Base64(sample, face));
+      expect(sub.unitsPerEm).toBe(full.unitsPerEm);
+      for (const ch of new Set(sample)) {
+        const cp = ch.codePointAt(0) as number;
+        const g = sub.cmap.get(cp);
+        expect(g, `glyph for ${ch}`).toBeDefined();
+        expect(sub.advance(g as number)).toBe(full.advance(full.cmap.get(cp) as number));
+      }
     }
   });
 });

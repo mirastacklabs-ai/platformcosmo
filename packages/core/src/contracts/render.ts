@@ -205,6 +205,8 @@ export interface IdScheme {
   /** `<symbol>` of an icon, by canonical ref. */
   icon(ref: string): string;
   caption(): string;
+  /** Legend group; pinned against camera zoom like caption/metrics. */
+  legend(): string;
   /** Caption text for one step (1-based). */
   captionStep(step: number): string;
   metric(id: string): string;

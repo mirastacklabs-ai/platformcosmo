@@ -104,6 +104,7 @@ describe("id scheme", () => {
       }
     }
     expect(new Set(out).size).toBe(out.length);
+    expect(ids.legend()).toBe("pc-t-legend");
     expect(ids.face("r_front", "top")).toBe("pc-t-f_r_5ffront__top");
     expect(ids.face("r", "top", "front")).toBe("pc-t-f_r__front__top");
   });
@@ -143,6 +144,10 @@ describe("emit structure", () => {
     expect(media?.[1]).toContain("--pc-background:#101418");
     expect(media?.[1]).not.toContain("--pc-font-");
     expect(svg).not.toContain(":root");
+  });
+
+  test("text uses geometric precision (no rounded advances at small sizes)", () => {
+    expect(svg).toMatch(/#pc-test\{[^}]*text-rendering:geometricPrecision\}/);
   });
 
   test("base state rules per contract", () => {
@@ -200,7 +205,9 @@ describe("rules for used classes only", () => {
     expect(out).toContain(
       ".pc-test-k-compute-top{fill:var(--pc-categories-compute-top);stroke:var(--pc-categories-compute-stroke)}",
     );
-    expect(out).toContain(".pc-test-t-primary{fill:var(--pc-text-primary)}");
+    expect(out).toContain(
+      ".pc-test-t-primary{fill:var(--pc-text-primary);paint-order:stroke;stroke:var(--pc-background);stroke-width:3;stroke-linejoin:round}",
+    );
     expect(out).not.toContain(".pc-test-k-network-top");
   });
 });

@@ -37,7 +37,7 @@ export function loadBalancerScene(): SceneGraph {
   ];
   return {
     meta: { title: "Load balancer", description: "Round robin with failover" },
-    canvas: { theme: "light", grid: true, padding: 2, aspect: "auto" },
+    canvas: { theme: "light", grid: true, padding: 32, aspect: "auto" },
     objects,
     groups: [
       {

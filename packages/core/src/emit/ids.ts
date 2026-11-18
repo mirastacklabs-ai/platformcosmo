@@ -66,6 +66,7 @@ export function createIds(prefix: string): IdScheme {
     flow: (id) => `${p}-fl_${seg(id)}`,
     icon: (ref) => `${p}-i_${encodeRef(ref)}`,
     caption: () => `${p}-cap`,
+    legend: () => `${p}-legend`,
     captionStep: (step) => `${p}-cap_${step}`,
     metric: (id) => `${p}-m_${seg(id)}`,
     metricValue: (id, step) => `${p}-mv_${seg(id)}__${step}`,

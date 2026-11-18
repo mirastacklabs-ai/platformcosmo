@@ -144,6 +144,7 @@ export function makeIds(prefix: string): IdScheme {
     flow: (id) => `${prefix}-fl-${enc(id)}`,
     icon: (ref) => `${prefix}-i-${ref.replace(":", "-")}`,
     caption: () => `${prefix}-cap`,
+    legend: () => `${prefix}-legend`,
     captionStep: (n) => `${prefix}-cap-${n}`,
     metric: (id) => `${prefix}-m-${enc(id)}`,
     metricValue: (id, n) => `${prefix}-mv-${enc(id)}-${n}`,

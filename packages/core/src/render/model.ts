@@ -133,6 +133,25 @@ export function inputsOf(model: RenderModel): ModelInputs | undefined {
   return registry.get(model);
 }
 
+/** Do two rectangles overlap (touching edges do not count)? */
+export function rectsOverlap(r: Rect, q: Rect): boolean {
+  return r.x < q.x + q.width && q.x < r.x + r.width && r.y < q.y + q.height && q.y < r.y + r.height;
+}
+
+/**
+ * Vertical nudge for a label box so it does not cover `placed` boxes: tries 0, -1, +1, -2, +2,
+ * -3, +3 label heights (+2px gap). When every position collides the label stays put
+ * (`collided: true`) rather than flying off its edge.
+ */
+export function nudgeLabel(box: Rect, placed: readonly Rect[]): { dy: number; collided: boolean } {
+  const step = box.height + 2;
+  for (const k of [0, -1, 1, -2, 2, -3, 3]) {
+    const cand = { ...box, y: box.y + k * step };
+    if (!placed.some((q) => rectsOverlap(cand, q))) return { dy: k * step, collided: false };
+  }
+  return { dy: 0, collided: true };
+}
+
 export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   const { scene, theme, prefix } = inputs;
   const projection = createProjection();
@@ -189,6 +208,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   const anchors: Record<string, ObjectAnchor> = {};
   const iconRefs = new Set<string>();
   const labelNodes: SvgNode[] = [];
+  const arrowNodes: SvgNode[] = [];
+  const placed: Rect[] = []; // label boxes, so edge labels can step aside
 
   for (const id of order) {
     const o = objectById.get(id) as SceneObject;
@@ -237,7 +258,16 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
           def = undefined; // body failed the emitter's trust check
         }
       }
-      if (!resolved || (!def && !iconRefs.has(resolved.ref))) {
+      // Too flat to show a legible icon on the front face: draw the solid without one.
+      const tooFlat = o.box.size.z * projection.zScale - 8 < 8;
+      if (tooFlat) {
+        diagnostics.push({
+          severity: "info",
+          code: "render/icon-too-flat",
+          path: "",
+          message: `"${o.id}" is too flat to show its icon legibly; drawn without one.`,
+        });
+      } else if (!resolved || (!def && !iconRefs.has(resolved.ref))) {
         diagnostics.push({
           severity: "warning",
           code: "render/icon-unavailable",
@@ -245,8 +275,15 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
           message: `Icon "${o.icon.ref}" for "${o.id}" could not be used; drawn without an icon.`,
         });
       } else {
-        const c = projection.project(o.icon.anchor);
-        const s = o.icon.size;
+        // Plate (icon + 2px each side) stays inside the visible front face / silhouette.
+        const frontH = o.box.size.z * projection.zScale;
+        const s = Math.min(o.icon.size, frontH - 8, bbox.width * 0.6);
+        const a = projection.project(o.icon.anchor);
+        const half = s / 2 + 2;
+        const c = {
+          x: Math.min(Math.max(a.x, bbox.x + half), bbox.x + bbox.width - half),
+          y: Math.min(Math.max(a.y, bbox.y + half), bbox.y + bbox.height - half),
+        };
         const iid = ids.icon(resolved.ref);
         if (def) {
           iconRefs.add(resolved.ref);
@@ -283,7 +320,9 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       ),
     );
 
-    if (o.label) {
+    // Devices inside a rack (`rack/slot`) stay unlabeled: their labels pile up over the rack.
+    const insideRack = o.source === "dc" && o.id.includes("/");
+    if (o.label && !insideRack) {
       const text = fit(o.label, labelSize, false, 150);
       const y = bbox.y + bbox.height + labelSize + 3;
       labelNodes.push(
@@ -297,7 +336,9 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
         }),
       );
       const w = measureText(text, labelSize);
-      extents.push({ x: center.x - w / 2, y: y - labelSize, width: w, height: labelSize + 4 });
+      const r = { x: center.x - w / 2, y: y - labelSize, width: w, height: labelSize + 4 };
+      extents.push(r);
+      placed.push(r);
     }
     if (o.badge) {
       const bs = theme.font.badge;
@@ -328,7 +369,9 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
           }),
         ),
       );
-      extents.push({ x: center.x - w / 2, y: by, width: w, height: bh });
+      const r = { x: center.x - w / 2, y: by, width: w, height: bh };
+      extents.push(r);
+      placed.push(r);
     }
   }
 
@@ -346,22 +389,41 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     const rect = projectBoxBounds(projection, g.box);
     extents.push(rect);
     if (g.label) {
+      // Outside the slab, left of its left corner, on a pill: members and the outline can't cover it.
       const corner = projection.project({
-        x: g.box.origin.x + 0.2,
-        y: g.box.origin.y + g.box.size.y - 0.2,
+        x: g.box.origin.x,
+        y: g.box.origin.y + g.box.size.y,
         z: g.box.origin.z + g.box.size.z,
       });
       const text = fit(g.label, labelSize, true, 160);
+      const w = measureText(text, labelSize, "bold");
+      const ph = labelSize + 8;
+      const pill = { x: corner.x - 10 - w - 12, y: corner.y - ph / 2, width: w + 12, height: ph };
       labelNodes.unshift(
-        textEl({
-          x: corner.x + 4,
-          y: corner.y - 4,
-          size: labelSize,
-          cls: "glabel",
-          bold: true,
-          content: text,
-        }),
+        h(
+          "g",
+          null,
+          h("rect", {
+            class: `${P}-gpill`,
+            x: pill.x,
+            y: pill.y,
+            width: pill.width,
+            height: pill.height,
+            rx: ph / 2,
+          }),
+          textEl({
+            x: pill.x + pill.width - 6,
+            y: corner.y + labelSize / 2 - 1,
+            size: labelSize,
+            anchor: "end",
+            cls: "glabel",
+            bold: true,
+            content: text,
+          }),
+        ),
       );
+      extents.push(pill);
+      placed.push(pill);
     }
   }
 
@@ -378,21 +440,38 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       const text = fit(e.label, labelSize - 1, false, 90);
       const w = measureText(text, labelSize - 1) + 8;
       const lh = labelSize + 4;
+      const { dy } = nudgeLabel(
+        { x: anchor.x - w / 2, y: anchor.y - lh / 2, width: w, height: lh },
+        placed,
+      );
+      const box = { x: anchor.x - w / 2, y: anchor.y - lh / 2 + dy, width: w, height: lh };
+      placed.push(box);
+      extents.push(box);
+      if (dy !== 0) {
+        // keep a shifted label tied to its edge
+        const edgeY = dy < 0 ? box.y + box.height : box.y;
+        labelNodes.push(
+          h("path", {
+            class: `${P}-leader`,
+            d: `M${fmt(anchor.x)} ${fmt(anchor.y)}L${fmt(anchor.x)} ${fmt(edgeY)}`,
+          }),
+        );
+      }
       labelNodes.push(
         h(
           "g",
           null,
           h("rect", {
             class: `${P}-elabel`,
-            x: anchor.x - w / 2,
-            y: anchor.y - lh / 2,
+            x: box.x,
+            y: box.y,
             width: w,
             height: lh,
             rx: 3,
           }),
           textEl({
             x: anchor.x,
-            y: anchor.y + (labelSize - 1) / 2 - 1,
+            y: anchor.y + dy + (labelSize - 1) / 2 - 1,
             size: labelSize - 1,
             anchor: "middle",
             cls: "t-edge",
@@ -413,20 +492,26 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     const prev = pts[pts.length - 2] as Vec2;
     const first = pts[0] as Vec2;
     const second = pts[1] as Vec2;
+    // Arrowheads are drawn in the labels layer so objects never cover them.
     if (e.arrow.end) {
-      const a = arrowHead(last, prev, 8);
-      if (a) kids.push(h("polygon", { class: `${P}-arrow`, points: pointsAttr(a) }));
+      const a = arrowHead(last, prev, 9);
+      if (a)
+        arrowNodes.push(
+          h("polygon", { class: `${P}-arrow ${ids.edge(e.id)}-arrow`, points: pointsAttr(a) }),
+        );
     }
     if (e.arrow.start) {
-      const a = arrowHead(first, second, 8);
-      if (a) kids.push(h("polygon", { class: `${P}-arrow`, points: pointsAttr(a) }));
+      const a = arrowHead(first, second, 9);
+      if (a)
+        arrowNodes.push(
+          h("polygon", { class: `${P}-arrow ${ids.edge(e.id)}-arrow`, points: pointsAttr(a) }),
+        );
     }
     return h("g", { id: ids.edge(e.id) }, ...kids);
   }
 
   // ---- Viewbox, overlays ---------------------------------------------------------------
-  const tile = projection.tileWidth;
-  const pad = Math.max(0.5, scene.canvas.padding) * (tile / 2);
+  const pad = Math.max(0, scene.canvas.padding); // pixels (schema: canvas.padding)
   let vb: Rect =
     extents.length > 0 ? unionRects(extents) : projectBoxBounds(projection, scene.bounds);
   vb = { x: vb.x - pad, y: vb.y - pad, width: vb.width + 2 * pad, height: vb.height + 2 * pad };
@@ -590,18 +675,18 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       );
       lx += 15 + measureText(text, labelSize) + 16;
     }
-    layers.overlay.push(h("g", { class: `${P}-legend` }, ...items));
+    layers.overlay.push(h("g", { id: ids.legend(), class: `${P}-legend` }, ...items));
   }
 
   // ---- Background and grid -------------------------------------------------------------
-  const big = 4;
+  // viewBox plus half its size on each side: the camera may briefly show beyond a zoomed view.
   layers.background.unshift(
     h("rect", {
       class: `${P}-bg`,
-      x: vb.x - big * vb.width,
-      y: vb.y - big * vb.height,
-      width: (2 * big + 1) * vb.width,
-      height: (2 * big + 1) * vb.height,
+      x: vb.x - vb.width / 2,
+      y: vb.y - vb.height / 2,
+      width: 2 * vb.width,
+      height: 2 * vb.height,
     }),
   );
   if (scene.canvas.grid) {
@@ -627,7 +712,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     }
   }
 
-  layers.labels.push(...labelNodes);
+  layers.labels.push(...arrowNodes, ...labelNodes);
 
   // ---- Focus rects, glyph coverage -----------------------------------------------------
   const focusRects: Record<string, Rect> = {};

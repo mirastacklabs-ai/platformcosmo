@@ -223,7 +223,7 @@ export const emit: EmitFn = (
   const embedding = options.font === "embed" && (regularText !== "" || boldText !== "");
   const rootFamily = embedding ? `"${embedFamily}",var(--pc-font-family)` : "var(--pc-font-family)";
   const rootRule = (v: ReadonlyMap<string, string>) =>
-    `#${ids.root()}{${declarations(v)};font-family:${rootFamily};font-weight:var(--pc-font-weightRegular)}`;
+    `#${ids.root()}{${declarations(v)};font-family:${rootFamily};font-weight:var(--pc-font-weightRegular);text-rendering:geometricPrecision}`;
   if (!raster) {
     css.push(rootRule(vars));
     if (model.darkTheme) {

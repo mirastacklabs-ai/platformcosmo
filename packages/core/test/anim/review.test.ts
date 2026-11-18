@@ -169,9 +169,9 @@ describe("overlay pinned against camera zoom", () => {
   test("caption, metric tiles and legend get the inverse of the camera keyframes", () => {
     const m = inverse.exec(loop);
     expect(m).not.toBeNull();
-    expect(loop).toContain(".pc-test-legend");
+    expect(loop).toContain("#pc-test-legend");
     expect(loop).toContain(
-      `#pc-test-cap,#pc-test-m-rps,.pc-test-legend{transform-origin:0 0;animation:${m![1]} `,
+      `#pc-test-cap,#pc-test-m-rps,#pc-test-legend{transform-origin:0 0;animation:${m![1]} `,
     );
     // same stop positions as the camera keyframes
     const stops = (name: string) =>
@@ -186,7 +186,7 @@ describe("overlay pinned against camera zoom", () => {
 
   test("reduced motion rests on the overview", () => {
     const media = loop.slice(loop.indexOf("@media (prefers-reduced-motion"));
-    expect(media).toContain("#pc-test-cap,#pc-test-m-rps,.pc-test-legend{transform:none}");
+    expect(media).toContain("#pc-test-cap,#pc-test-m-rps,#pc-test-legend{transform:none}");
   });
 });
 
