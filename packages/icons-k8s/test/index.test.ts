@@ -1,10 +1,15 @@
 import { existsSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { createIconResolver, sanitizeSvg } from "../../core/src/icons/index.js";
+import { expectNoDrift } from "../../icons-base/test/drift.js";
 import { pack } from "../src/index.js";
 
 describe("icons-k8s", () => {
   const resolver = createIconResolver([pack], sanitizeSvg);
+
+  test("generated module matches icons.json and svg/", () => {
+    expectNoDrift(pack, new URL("../", import.meta.url));
+  });
 
   test("metadata", () => {
     expect(pack.manifest.pack).toMatchObject({
