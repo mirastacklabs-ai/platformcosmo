@@ -267,7 +267,20 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
     for (const id of [...skip]) skip.add(`${id}_front`); // its front shell goes with it
     const obstacles: Box3[] = [];
     for (const o of solidObjects) if (!skip.has(o.id)) obstacles.push(o.box);
-    const extra = (win: Rect): Rect[] => keepouts.query(win, skip);
+    // Endpoint nodes keep their own occlusion shadow as an obstacle: terminals on the hidden
+    // (-x, -y) sides sit behind the object, so only viewer-facing sides stay usable and the final
+    // leg approaches from outside footprint and shadow. DC gear places its own ports, so its
+    // shadow (and a slot's rack) is exempt.
+    const shadowSkip = new Set<string>();
+    for (const e of [from, to]) {
+      if (objectById.get(e)?.ports || e.includes("/") || objectById.get(e)?.source === "dc") {
+        shadowSkip.add(e);
+        const slash = e.indexOf("/");
+        if (slash > 0) shadowSkip.add(e.slice(0, slash));
+      }
+    }
+    for (const id of [...shadowSkip]) shadowSkip.add(`${id}_front`);
+    const extra = (win: Rect): Rect[] => keepouts.query(win, shadowSkip);
     const portsOf = (id: string): Vec3[] | undefined => {
       const p = objectById.get(id)?.ports;
       if (!p) return undefined;
@@ -278,12 +291,19 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
     };
     const pf = portsOf(from);
     const pt = portsOf(to);
-    return routeEdge(
-      { box: a, ...(pf ? { ports: pf } : {}) },
-      { box: b, ...(pt ? { ports: pt } : {}) },
-      obstacles,
-      { extra, ...(visible ? { lanes, source: from } : {}) },
-    );
+    const attempt = (shadowExtra: (win: Rect) => Rect[]) =>
+      routeEdge(
+        { box: a, ...(pf ? { ports: pf } : {}) },
+        { box: b, ...(pt ? { ports: pt } : {}) },
+        obstacles,
+        { extra: shadowExtra, ...(visible ? { lanes, source: from } : {}) },
+      );
+    // Strict pass first (viewer-facing terminals only). In a cramped spot fall back to letting the
+    // endpoints' own shadows go, so an arrow may land on a hidden side rather than be unrouted.
+    const strict = attempt(extra);
+    if (!strict.blocked) return strict;
+    const relaxedSkip = new Set([...shadowSkip, from, to]);
+    return attempt((win) => keepouts.query(win, relaxedSkip));
   };
 
   const edges: SceneEdge[] = [];
