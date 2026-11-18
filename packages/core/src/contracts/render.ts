@@ -31,6 +31,8 @@
  *   In `frame` mode B's CSS uses only plain id/class selectors and plain properties.
  * - Selectors: B builds every id selector with `ids.sel(id)` (CSS-escapes `.` in slot ids).
  * - `<g id=camera()>` wrapping every layer in `Layer` order; B zooms by animating its `transform`.
+ * - Object groups are flat siblings in the `objects` layer, never nested (a rack and its slot
+ *   devices are separate groups ordered by depth).
  * - Each object: `<g id=object(id) class="<stateClass(initial state)>">` holding its faces
  *   (`face(id, f[, part])`) and an always-present `<path id=overlay(id)>` over its silhouette,
  *   so any object can change state by CSS alone (classes are never mutated; B overrides with
@@ -99,7 +101,7 @@ export interface RenderOptions {
   /**
    * Prefix for every SVG id; default `pc-` + the first 8 hex chars of SHA-256 over the
    * RFC 8785 (JCS) canonical JSON of `{ spec, options }` (render-affecting options only).
-   * Per-output variants are made by `EmitOptions.variant`.
+   * Per-output variants are made by `ExportFn` `deps.withVariant`.
    */
   readonly idPrefix?: string;
   /** Base output name, default `diagram`. */
@@ -359,7 +361,9 @@ export type ExportFn = (
  * Called only with a spec that passed `validate`. One id namespace spans nodes, groups, racks,
  * equipment, rows, aisles and cables (duplicates are a `semantic/duplicate-id` error); the DC
  * hall group is `dc_hall`. `validate` also enforces `budget/particles`: the estimated particle
- * element count of the looping output (Σ over steps of rate × path-traversal time) ≤ 2000.
+ * count: each flow contributes ceil(rate × 2) particles (fixed 2 s traversal at speed 1,
+ * independent of path length; Track B emits exactly that many); the sum over base flows and
+ * every step's flows must be ≤ 2000.
  * `buildModel` (scene → RenderModel) is A1-internal.
  */
 export type BuildSceneFn = (

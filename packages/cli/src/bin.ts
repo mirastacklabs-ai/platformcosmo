@@ -1,7 +1,16 @@
 #!/usr/bin/env node
-import { run } from "./index.js";
+import { defaultDeps, run } from "./index.js";
 
-const r = run(process.argv.slice(2));
-process.stdout.write(r.stdout);
-process.stderr.write(r.stderr);
+const ac = new AbortController();
+process.once("SIGINT", () => ac.abort());
+process.once("SIGTERM", () => ac.abort());
+
+const r = await run(process.argv.slice(2), {
+  ...defaultDeps(),
+  signal: ac.signal,
+  io: {
+    out: (t) => void process.stdout.write(t),
+    err: (t) => void process.stderr.write(t),
+  },
+});
 process.exitCode = r.code;

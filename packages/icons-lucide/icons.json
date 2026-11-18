@@ -1,0 +1,2243 @@
+{
+  "manifestVersion": 1,
+  "pack": {
+    "id": "lucide",
+    "name": "Lucide",
+    "version": "1.75.0",
+    "license": "ISC",
+    "licenseUrl": "https://lucide.dev/license",
+    "attribution": "Lucide Icons and Contributors (ISC). Icons derived from Feather are Copyright (c) 2013-present Cole Bemis (MIT).",
+    "source": "https://github.com/lucide-icons/lucide",
+    "redistributable": true
+  },
+  "icons": [
+    {
+      "id": "activity",
+      "aliases": [],
+      "category": "observability",
+      "tags": [
+        "pulse",
+        "action",
+        "motion",
+        "movement",
+        "exercise",
+        "fitness",
+        "healthcare",
+        "heart rate monitor"
+      ],
+      "file": "svg/activity.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/activity.svg",
+      "monochrome": true
+    },
+    {
+      "id": "antenna",
+      "aliases": [],
+      "category": "network",
+      "tags": [
+        "signal",
+        "connection",
+        "connectivity",
+        "tv",
+        "television",
+        "broadcast",
+        "live",
+        "frequency"
+      ],
+      "file": "svg/antenna.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/antenna.svg",
+      "monochrome": true
+    },
+    {
+      "id": "app-window",
+      "aliases": [],
+      "category": "client",
+      "tags": ["application", "menu bar", "pane", "executable"],
+      "file": "svg/app-window.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/app-window.svg",
+      "monochrome": true
+    },
+    {
+      "id": "archive",
+      "aliases": [],
+      "category": "data",
+      "tags": ["index", "backup", "box", "storage", "records"],
+      "file": "svg/archive.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/archive.svg",
+      "monochrome": true
+    },
+    {
+      "id": "arrow-down",
+      "aliases": [],
+      "category": "general",
+      "tags": [
+        "direction",
+        "movement",
+        "vertical",
+        "downward",
+        "downwards",
+        "south",
+        "descend",
+        "page down"
+      ],
+      "file": "svg/arrow-down.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/arrow-down.svg",
+      "monochrome": true
+    },
+    {
+      "id": "arrow-down-up",
+      "aliases": [],
+      "category": "data",
+      "tags": [
+        "direction",
+        "movement",
+        "vertical",
+        "downward",
+        "downwards",
+        "south",
+        "descend",
+        "page down"
+      ],
+      "file": "svg/arrow-down-up.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/arrow-down-up.svg",
+      "monochrome": true
+    },
+    {
+      "id": "arrow-left",
+      "aliases": [],
+      "category": "general",
+      "tags": [
+        "direction",
+        "movement",
+        "horizontal",
+        "leftward",
+        "leftwards",
+        "west",
+        "navigation",
+        "preceding"
+      ],
+      "file": "svg/arrow-left.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/arrow-left.svg",
+      "monochrome": true
+    },
+    {
+      "id": "arrow-left-right",
+      "aliases": [],
+      "category": "general",
+      "tags": [
+        "direction",
+        "movement",
+        "horizontal",
+        "leftward",
+        "leftwards",
+        "west",
+        "rightward",
+        "rightwards"
+      ],
+      "file": "svg/arrow-left-right.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/arrow-left-right.svg",
+      "monochrome": true
+    },
+    {
+      "id": "arrow-right",
+      "aliases": [],
+      "category": "general",
+      "tags": [
+        "direction",
+        "movement",
+        "horizontal",
+        "rightward",
+        "rightwards",
+        "east",
+        "navigation",
+        "following"
+      ],
+      "file": "svg/arrow-right.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/arrow-right.svg",
+      "monochrome": true
+    },
+    {
+      "id": "arrow-up",
+      "aliases": [],
+      "category": "general",
+      "tags": [
+        "direction",
+        "movement",
+        "vertical",
+        "upward",
+        "upwards",
+        "north",
+        "ascend",
+        "page up"
+      ],
+      "file": "svg/arrow-up.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/arrow-up.svg",
+      "monochrome": true
+    },
+    {
+      "id": "atom",
+      "aliases": [],
+      "category": "ai",
+      "tags": [
+        "atomic",
+        "nuclear",
+        "physics",
+        "particle",
+        "element",
+        "molecule",
+        "electricity",
+        "energy"
+      ],
+      "file": "svg/atom.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/atom.svg",
+      "monochrome": true
+    },
+    {
+      "id": "badge-check",
+      "aliases": ["verified"],
+      "category": "security",
+      "tags": ["seal", "emblem", "rosette", "insignia", "sticker", "stamp", "label", "award"],
+      "file": "svg/badge-check.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/badge-check.svg",
+      "monochrome": true
+    },
+    {
+      "id": "ban",
+      "aliases": [],
+      "category": "security",
+      "tags": ["cancel", "no", "stop", "forbidden", "prohibited", "error", "incorrect", "mistake"],
+      "file": "svg/ban.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/ban.svg",
+      "monochrome": true
+    },
+    {
+      "id": "banknote",
+      "aliases": [],
+      "category": "general",
+      "tags": ["currency", "money", "payment", "bill", "cash", "funds", "transaction", "finance"],
+      "file": "svg/banknote.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/banknote.svg",
+      "monochrome": true
+    },
+    {
+      "id": "battery",
+      "aliases": [],
+      "category": "general",
+      "tags": ["power", "electricity", "energy", "accumulator", "charge"],
+      "file": "svg/battery.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/battery.svg",
+      "monochrome": true
+    },
+    {
+      "id": "bell",
+      "aliases": [],
+      "category": "observability",
+      "tags": ["alarm", "notification", "sound", "reminder"],
+      "file": "svg/bell.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/bell.svg",
+      "monochrome": true
+    },
+    {
+      "id": "binary",
+      "aliases": [],
+      "category": "compute",
+      "tags": ["digit", "number", "numeral", "numeric", "numerical", "code", "digits", "computer"],
+      "file": "svg/binary.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/binary.svg",
+      "monochrome": true
+    },
+    {
+      "id": "book-open",
+      "aliases": [],
+      "category": "general",
+      "tags": [
+        "reading",
+        "paperback",
+        "booklet",
+        "magazine",
+        "leaflet",
+        "pamphlet",
+        "tome",
+        "library"
+      ],
+      "file": "svg/book-open.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/book-open.svg",
+      "monochrome": true
+    },
+    {
+      "id": "bookmark",
+      "aliases": [],
+      "category": "general",
+      "tags": ["save", "favorite", "favourite", "mark", "label", "attachment", "file", "stick"],
+      "file": "svg/bookmark.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/bookmark.svg",
+      "monochrome": true
+    },
+    {
+      "id": "bot",
+      "aliases": [],
+      "category": "ai",
+      "tags": [
+        "robot",
+        "ai",
+        "chat",
+        "assistant",
+        "chatbot",
+        "automation",
+        "machine-learning",
+        "ai-assistant"
+      ],
+      "file": "svg/bot.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/bot.svg",
+      "monochrome": true
+    },
+    {
+      "id": "bot-message-square",
+      "aliases": [],
+      "category": "ai",
+      "tags": [
+        "robot",
+        "ai",
+        "chat",
+        "assistant",
+        "chatbot",
+        "automation",
+        "machine-learning",
+        "ai-assistant"
+      ],
+      "file": "svg/bot-message-square.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/bot-message-square.svg",
+      "monochrome": true
+    },
+    {
+      "id": "box",
+      "aliases": [],
+      "category": "compute",
+      "tags": ["cube", "package", "container", "storage", "geometry", "3d", "isometric"],
+      "file": "svg/box.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/box.svg",
+      "monochrome": true
+    },
+    {
+      "id": "boxes",
+      "aliases": [],
+      "category": "compute",
+      "tags": ["cubes", "packages", "parts", "group", "units", "collection", "cluster", "geometry"],
+      "file": "svg/boxes.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/boxes.svg",
+      "monochrome": true
+    },
+    {
+      "id": "braces",
+      "aliases": ["curly-braces"],
+      "category": "compute",
+      "tags": ["json", "code", "token", "curly brackets", "curly braces", "data", "{", "}"],
+      "file": "svg/braces.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/braces.svg",
+      "monochrome": true
+    },
+    {
+      "id": "brain",
+      "aliases": [],
+      "category": "ai",
+      "tags": [
+        "medical",
+        "mind",
+        "mental",
+        "intellect",
+        "cerebral",
+        "consciousness",
+        "genius",
+        "artificial intelligence"
+      ],
+      "file": "svg/brain.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/brain.svg",
+      "monochrome": true
+    },
+    {
+      "id": "brain-circuit",
+      "aliases": [],
+      "category": "ai",
+      "tags": [
+        "medical",
+        "mind",
+        "mental",
+        "intellect",
+        "cerebral",
+        "consciousness",
+        "genius",
+        "artificial intelligence"
+      ],
+      "file": "svg/brain-circuit.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/brain-circuit.svg",
+      "monochrome": true
+    },
+    {
+      "id": "bug",
+      "aliases": [],
+      "category": "observability",
+      "tags": ["issue", "error", "defect", "testing", "troubleshoot", "problem", "report", "debug"],
+      "file": "svg/bug.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/bug.svg",
+      "monochrome": true
+    },
+    {
+      "id": "building",
+      "aliases": [],
+      "category": "general",
+      "tags": ["organisation", "organization"],
+      "file": "svg/building.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/building.svg",
+      "monochrome": true
+    },
+    {
+      "id": "building-2",
+      "aliases": ["building-complex"],
+      "category": "general",
+      "tags": [],
+      "file": "svg/building-2.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/building-2.svg",
+      "monochrome": true
+    },
+    {
+      "id": "cable",
+      "aliases": [],
+      "category": "network",
+      "tags": ["cord", "wire", "connector", "connection", "link", "signal", "console", "computer"],
+      "file": "svg/cable.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/cable.svg",
+      "monochrome": true
+    },
+    {
+      "id": "calendar",
+      "aliases": [],
+      "category": "general",
+      "tags": ["day", "date", "month", "year", "timestamp", "event", "birthday", "birthdate"],
+      "file": "svg/calendar.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/calendar.svg",
+      "monochrome": true
+    },
+    {
+      "id": "chart-area",
+      "aliases": ["area-chart"],
+      "category": "observability",
+      "tags": [
+        "diagram",
+        "graph",
+        "visualization",
+        "data",
+        "analytics",
+        "analysis",
+        "statistics",
+        "presentation"
+      ],
+      "file": "svg/chart-area.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/chart-area.svg",
+      "monochrome": true
+    },
+    {
+      "id": "chart-bar",
+      "aliases": ["bar-chart-horizontal"],
+      "category": "observability",
+      "tags": [
+        "diagram",
+        "graph",
+        "visualization",
+        "data",
+        "analytics",
+        "analysis",
+        "statistics",
+        "presentation"
+      ],
+      "file": "svg/chart-bar.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/chart-bar.svg",
+      "monochrome": true
+    },
+    {
+      "id": "chart-line",
+      "aliases": ["line-chart"],
+      "category": "observability",
+      "tags": [
+        "diagram",
+        "graph",
+        "visualization",
+        "data",
+        "analytics",
+        "analysis",
+        "statistics",
+        "presentation"
+      ],
+      "file": "svg/chart-line.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/chart-line.svg",
+      "monochrome": true
+    },
+    {
+      "id": "chart-pie",
+      "aliases": ["pie-chart"],
+      "category": "observability",
+      "tags": [
+        "diagram",
+        "graph",
+        "visualization",
+        "data",
+        "analytics",
+        "analysis",
+        "statistics",
+        "presentation"
+      ],
+      "file": "svg/chart-pie.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/chart-pie.svg",
+      "monochrome": true
+    },
+    {
+      "id": "check",
+      "aliases": [],
+      "category": "general",
+      "tags": [
+        "checkmark",
+        "done",
+        "completed",
+        "finished",
+        "successful",
+        "confirmed",
+        "verified",
+        "validated"
+      ],
+      "file": "svg/check.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/check.svg",
+      "monochrome": true
+    },
+    {
+      "id": "circle-alert",
+      "aliases": ["alert-circle", "circle-exclamation-point"],
+      "category": "general",
+      "tags": [],
+      "file": "svg/circle-alert.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/circle-alert.svg",
+      "monochrome": true
+    },
+    {
+      "id": "circle-check",
+      "aliases": ["check-circle-2"],
+      "category": "cicd",
+      "tags": [
+        "checkmark",
+        "done",
+        "completed",
+        "finished",
+        "successful",
+        "confirmed",
+        "verified",
+        "validated"
+      ],
+      "file": "svg/circle-check.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/circle-check.svg",
+      "monochrome": true
+    },
+    {
+      "id": "circle-help",
+      "aliases": ["circle-question-mark", "help-circle"],
+      "category": "general",
+      "tags": [],
+      "file": "svg/circle-help.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/circle-help.svg",
+      "monochrome": true
+    },
+    {
+      "id": "clock",
+      "aliases": ["clock-4"],
+      "category": "observability",
+      "tags": ["clock", "time", "hour", "minute", "second", "timestamp", "timer", "duration"],
+      "file": "svg/clock.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/clock.svg",
+      "monochrome": true
+    },
+    {
+      "id": "cloud",
+      "aliases": [],
+      "category": "network",
+      "tags": ["weather"],
+      "file": "svg/cloud.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/cloud.svg",
+      "monochrome": true
+    },
+    {
+      "id": "cloud-cog",
+      "aliases": [],
+      "category": "network",
+      "tags": [
+        "cog",
+        "cogwheel",
+        "gear",
+        "pinion",
+        "sprocket",
+        "settings",
+        "configuration",
+        "preferences"
+      ],
+      "file": "svg/cloud-cog.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/cloud-cog.svg",
+      "monochrome": true
+    },
+    {
+      "id": "cloud-download",
+      "aliases": ["download-cloud"],
+      "category": "network",
+      "tags": ["import", "install", "installation"],
+      "file": "svg/cloud-download.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/cloud-download.svg",
+      "monochrome": true
+    },
+    {
+      "id": "cloud-off",
+      "aliases": [],
+      "category": "network",
+      "tags": ["off", "disable", "hide", "restricted", "turn off", "block", "/", "cancel"],
+      "file": "svg/cloud-off.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/cloud-off.svg",
+      "monochrome": true
+    },
+    {
+      "id": "cloud-upload",
+      "aliases": ["upload-cloud"],
+      "category": "network",
+      "tags": ["file", "deploy", "deployment"],
+      "file": "svg/cloud-upload.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/cloud-upload.svg",
+      "monochrome": true
+    },
+    {
+      "id": "code",
+      "aliases": [],
+      "category": "compute",
+      "tags": ["coding", "programming", "development", "developer", "dev", "source", "html", "xml"],
+      "file": "svg/code.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/code.svg",
+      "monochrome": true
+    },
+    {
+      "id": "cog",
+      "aliases": [],
+      "category": "compute",
+      "tags": [
+        "cog",
+        "cogwheel",
+        "gear",
+        "pinion",
+        "sprocket",
+        "settings",
+        "configuration",
+        "preferences"
+      ],
+      "file": "svg/cog.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/cog.svg",
+      "monochrome": true
+    },
+    {
+      "id": "container",
+      "aliases": [],
+      "category": "compute",
+      "tags": [
+        "storage",
+        "shipping",
+        "freight",
+        "supply chain",
+        "environment",
+        "devops",
+        "code",
+        "coding"
+      ],
+      "file": "svg/container.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/container.svg",
+      "monochrome": true
+    },
+    {
+      "id": "cpu",
+      "aliases": [],
+      "category": "compute",
+      "tags": ["processor", "cores", "technology", "computer", "chip", "circuit", "memory", "ram"],
+      "file": "svg/cpu.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/cpu.svg",
+      "monochrome": true
+    },
+    {
+      "id": "credit-card",
+      "aliases": [],
+      "category": "general",
+      "tags": ["bank", "purchase", "payment", "cc", "cashier", "merchant"],
+      "file": "svg/credit-card.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/credit-card.svg",
+      "monochrome": true
+    },
+    {
+      "id": "database",
+      "aliases": [],
+      "category": "data",
+      "tags": ["storage", "memory", "container", "tin", "pot", "bytes", "servers", "sql"],
+      "file": "svg/database.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/database.svg",
+      "monochrome": true
+    },
+    {
+      "id": "database-backup",
+      "aliases": [],
+      "category": "data",
+      "tags": ["storage", "memory", "container", "tin", "pot", "bytes", "servers", "sql"],
+      "file": "svg/database-backup.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/database-backup.svg",
+      "monochrome": true
+    },
+    {
+      "id": "database-zap",
+      "aliases": [],
+      "category": "data",
+      "tags": ["storage", "memory", "container", "tin", "pot", "bytes", "servers", "sql"],
+      "file": "svg/database-zap.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/database-zap.svg",
+      "monochrome": true
+    },
+    {
+      "id": "download",
+      "aliases": [],
+      "category": "general",
+      "tags": ["import", "export", "save", "pull", "install", "installation"],
+      "file": "svg/download.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/download.svg",
+      "monochrome": true
+    },
+    {
+      "id": "earth",
+      "aliases": ["globe-2"],
+      "category": "network",
+      "tags": ["world", "browser", "language", "translate", "globe", "www", "http", "https"],
+      "file": "svg/earth.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/earth.svg",
+      "monochrome": true
+    },
+    {
+      "id": "ethernet-port",
+      "aliases": [],
+      "category": "network",
+      "tags": ["internet", "network", "connection", "cable", "lan", "port", "router", "switch"],
+      "file": "svg/ethernet-port.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/ethernet-port.svg",
+      "monochrome": true
+    },
+    {
+      "id": "external-link",
+      "aliases": [],
+      "category": "general",
+      "tags": ["outbound", "open", "share", "redirect"],
+      "file": "svg/external-link.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/external-link.svg",
+      "monochrome": true
+    },
+    {
+      "id": "eye",
+      "aliases": [],
+      "category": "observability",
+      "tags": ["view", "watch", "see", "show", "expose", "reveal", "display", "visible"],
+      "file": "svg/eye.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/eye.svg",
+      "monochrome": true
+    },
+    {
+      "id": "eye-off",
+      "aliases": [],
+      "category": "security",
+      "tags": ["view", "watch", "see", "show", "expose", "reveal", "display", "visible"],
+      "file": "svg/eye-off.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/eye-off.svg",
+      "monochrome": true
+    },
+    {
+      "id": "factory",
+      "aliases": [],
+      "category": "general",
+      "tags": ["building", "business", "energy", "industry", "manufacture", "sector"],
+      "file": "svg/factory.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/factory.svg",
+      "monochrome": true
+    },
+    {
+      "id": "file",
+      "aliases": [],
+      "category": "data",
+      "tags": ["document"],
+      "file": "svg/file.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/file.svg",
+      "monochrome": true
+    },
+    {
+      "id": "file-code",
+      "aliases": [],
+      "category": "data",
+      "tags": [
+        "document",
+        "coding",
+        "programming",
+        "development",
+        "developer",
+        "dev",
+        "script",
+        "gist"
+      ],
+      "file": "svg/file-code.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/file-code.svg",
+      "monochrome": true
+    },
+    {
+      "id": "file-json",
+      "aliases": ["file-braces"],
+      "category": "data",
+      "tags": [],
+      "file": "svg/file-json.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/file-json.svg",
+      "monochrome": true
+    },
+    {
+      "id": "file-text",
+      "aliases": [],
+      "category": "data",
+      "tags": ["document", "data", "txt", "pdf", "doc", "docx", "word", "docs"],
+      "file": "svg/file-text.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/file-text.svg",
+      "monochrome": true
+    },
+    {
+      "id": "fingerprint-pattern",
+      "aliases": ["fingerprint"],
+      "category": "security",
+      "tags": ["2fa", "authentication", "biometric", "identity", "security"],
+      "file": "svg/fingerprint-pattern.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/fingerprint-pattern.svg",
+      "monochrome": true
+    },
+    {
+      "id": "flag",
+      "aliases": [],
+      "category": "cicd",
+      "tags": [
+        "report",
+        "marker",
+        "notification",
+        "warning",
+        "milestone",
+        "goal",
+        "notice",
+        "signal"
+      ],
+      "file": "svg/flag.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/flag.svg",
+      "monochrome": true
+    },
+    {
+      "id": "flame",
+      "aliases": [],
+      "category": "general",
+      "tags": ["heat", "burn", "light", "glow", "ignite", "passion", "ember", "fire"],
+      "file": "svg/flame.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/flame.svg",
+      "monochrome": true
+    },
+    {
+      "id": "flask-conical",
+      "aliases": [],
+      "category": "cicd",
+      "tags": ["beaker", "erlenmeyer", "lab", "chemistry", "experiment", "test"],
+      "file": "svg/flask-conical.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/flask-conical.svg",
+      "monochrome": true
+    },
+    {
+      "id": "folder",
+      "aliases": [],
+      "category": "data",
+      "tags": ["directory"],
+      "file": "svg/folder.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/folder.svg",
+      "monochrome": true
+    },
+    {
+      "id": "folder-open",
+      "aliases": [],
+      "category": "data",
+      "tags": ["directory"],
+      "file": "svg/folder-open.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/folder-open.svg",
+      "monochrome": true
+    },
+    {
+      "id": "funnel",
+      "aliases": ["filter"],
+      "category": "data",
+      "tags": ["filter", "hopper"],
+      "file": "svg/funnel.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/funnel.svg",
+      "monochrome": true
+    },
+    {
+      "id": "gauge",
+      "aliases": [],
+      "category": "observability",
+      "tags": ["dashboard", "dial", "meter", "speed", "pressure", "measure", "level"],
+      "file": "svg/gauge.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/gauge.svg",
+      "monochrome": true
+    },
+    {
+      "id": "git-branch",
+      "aliases": [],
+      "category": "cicd",
+      "tags": ["code", "version control", "vcs", "repository"],
+      "file": "svg/git-branch.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/git-branch.svg",
+      "monochrome": true
+    },
+    {
+      "id": "git-commit-horizontal",
+      "aliases": ["git-commit"],
+      "category": "cicd",
+      "tags": ["code", "version control", "waypoint", "stop", "station"],
+      "file": "svg/git-commit-horizontal.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/git-commit-horizontal.svg",
+      "monochrome": true
+    },
+    {
+      "id": "git-fork",
+      "aliases": [],
+      "category": "cicd",
+      "tags": ["code", "version control"],
+      "file": "svg/git-fork.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/git-fork.svg",
+      "monochrome": true
+    },
+    {
+      "id": "git-merge",
+      "aliases": [],
+      "category": "cicd",
+      "tags": ["code", "version control", "ci/cd", "cicd"],
+      "file": "svg/git-merge.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/git-merge.svg",
+      "monochrome": true
+    },
+    {
+      "id": "git-pull-request",
+      "aliases": [],
+      "category": "cicd",
+      "tags": ["code", "version control", "open"],
+      "file": "svg/git-pull-request.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/git-pull-request.svg",
+      "monochrome": true
+    },
+    {
+      "id": "globe",
+      "aliases": [],
+      "category": "network",
+      "tags": [
+        "world",
+        "browser",
+        "language",
+        "translate",
+        "location",
+        "country",
+        "coverage",
+        "publish"
+      ],
+      "file": "svg/globe.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/globe.svg",
+      "monochrome": true
+    },
+    {
+      "id": "hammer",
+      "aliases": [],
+      "category": "cicd",
+      "tags": ["mallet", "nails", "diy", "toolbox", "build", "construction"],
+      "file": "svg/hammer.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/hammer.svg",
+      "monochrome": true
+    },
+    {
+      "id": "hard-drive",
+      "aliases": [],
+      "category": "compute",
+      "tags": ["computer", "server", "memory", "data", "ssd", "disk", "hard disk", "storage"],
+      "file": "svg/hard-drive.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/hard-drive.svg",
+      "monochrome": true
+    },
+    {
+      "id": "hard-drive-download",
+      "aliases": [],
+      "category": "compute",
+      "tags": ["computer", "server", "memory", "data", "ssd", "disk", "hard disk", "storage"],
+      "file": "svg/hard-drive-download.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/hard-drive-download.svg",
+      "monochrome": true
+    },
+    {
+      "id": "hard-drive-upload",
+      "aliases": [],
+      "category": "compute",
+      "tags": ["computer", "server", "memory", "data", "ssd", "disk", "hard disk", "storage"],
+      "file": "svg/hard-drive-upload.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/hard-drive-upload.svg",
+      "monochrome": true
+    },
+    {
+      "id": "hash",
+      "aliases": [],
+      "category": "data",
+      "tags": ["hashtag", "number", "pound"],
+      "file": "svg/hash.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/hash.svg",
+      "monochrome": true
+    },
+    {
+      "id": "headphones",
+      "aliases": [],
+      "category": "client",
+      "tags": ["music", "audio", "sound"],
+      "file": "svg/headphones.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/headphones.svg",
+      "monochrome": true
+    },
+    {
+      "id": "heart",
+      "aliases": [],
+      "category": "general",
+      "tags": ["favorite", "favourite", "like", "love", "save", "wishlist", "reaction", "health"],
+      "file": "svg/heart.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/heart.svg",
+      "monochrome": true
+    },
+    {
+      "id": "history",
+      "aliases": ["rotate-ccw-clock"],
+      "category": "observability",
+      "tags": [],
+      "file": "svg/history.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/history.svg",
+      "monochrome": true
+    },
+    {
+      "id": "house",
+      "aliases": ["home"],
+      "category": "general",
+      "tags": ["home", "living", "building", "residence", "architecture", "homepage"],
+      "file": "svg/house.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/house.svg",
+      "monochrome": true
+    },
+    {
+      "id": "id-card",
+      "aliases": [],
+      "category": "security",
+      "tags": ["card", "badge", "identity", "authentication", "secure"],
+      "file": "svg/id-card.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/id-card.svg",
+      "monochrome": true
+    },
+    {
+      "id": "import",
+      "aliases": [],
+      "category": "data",
+      "tags": ["save"],
+      "file": "svg/import.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/import.svg",
+      "monochrome": true
+    },
+    {
+      "id": "info",
+      "aliases": [],
+      "category": "general",
+      "tags": ["alphabet", "character", "text", "font", "typography", "about", "advice", "clue"],
+      "file": "svg/info.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/info.svg",
+      "monochrome": true
+    },
+    {
+      "id": "key",
+      "aliases": [],
+      "category": "security",
+      "tags": [
+        "key",
+        "password",
+        "security",
+        "secure",
+        "keychain",
+        "key ring",
+        "access",
+        "credentials"
+      ],
+      "file": "svg/key.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/key.svg",
+      "monochrome": true
+    },
+    {
+      "id": "key-round",
+      "aliases": [],
+      "category": "security",
+      "tags": [
+        "key",
+        "password",
+        "security",
+        "secure",
+        "keychain",
+        "key ring",
+        "access",
+        "credentials"
+      ],
+      "file": "svg/key-round.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/key-round.svg",
+      "monochrome": true
+    },
+    {
+      "id": "keyboard",
+      "aliases": [],
+      "category": "client",
+      "tags": ["layout", "spell", "settings", "mouse"],
+      "file": "svg/keyboard.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/keyboard.svg",
+      "monochrome": true
+    },
+    {
+      "id": "laptop",
+      "aliases": [],
+      "category": "client",
+      "tags": ["computer", "screen", "remote"],
+      "file": "svg/laptop.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/laptop.svg",
+      "monochrome": true
+    },
+    {
+      "id": "layers",
+      "aliases": ["layers-3"],
+      "category": "compute",
+      "tags": ["stack", "pile", "pages", "sheets", "paperwork", "copies", "copy"],
+      "file": "svg/layers.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/layers.svg",
+      "monochrome": true
+    },
+    {
+      "id": "layout-grid",
+      "aliases": [],
+      "category": "data",
+      "tags": ["app", "home", "start", "apps", "menu", "block", "applications", "collection"],
+      "file": "svg/layout-grid.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/layout-grid.svg",
+      "monochrome": true
+    },
+    {
+      "id": "lightbulb",
+      "aliases": [],
+      "category": "general",
+      "tags": ["idea", "bright", "lights", "suggest", "suggestion"],
+      "file": "svg/lightbulb.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/lightbulb.svg",
+      "monochrome": true
+    },
+    {
+      "id": "link",
+      "aliases": [],
+      "category": "network",
+      "tags": ["chain", "url", "www", "http", "https", "website"],
+      "file": "svg/link.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/link.svg",
+      "monochrome": true
+    },
+    {
+      "id": "list-checks",
+      "aliases": [],
+      "category": "observability",
+      "tags": [
+        "checkmark",
+        "done",
+        "completed",
+        "finished",
+        "successful",
+        "confirmed",
+        "verified",
+        "validated"
+      ],
+      "file": "svg/list-checks.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/list-checks.svg",
+      "monochrome": true
+    },
+    {
+      "id": "list-ordered",
+      "aliases": [],
+      "category": "data",
+      "tags": ["digit", "number", "numeral", "numeric", "numerical", "order", "queue"],
+      "file": "svg/list-ordered.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/list-ordered.svg",
+      "monochrome": true
+    },
+    {
+      "id": "lock",
+      "aliases": [],
+      "category": "security",
+      "tags": [
+        "lock",
+        "padlock",
+        "private",
+        "privacy",
+        "protection",
+        "password",
+        "secure",
+        "security"
+      ],
+      "file": "svg/lock.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/lock.svg",
+      "monochrome": true
+    },
+    {
+      "id": "lock-open",
+      "aliases": ["unlock"],
+      "category": "security",
+      "tags": [
+        "lock",
+        "padlock",
+        "private",
+        "privacy",
+        "protection",
+        "password",
+        "secure",
+        "security"
+      ],
+      "file": "svg/lock-open.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/lock-open.svg",
+      "monochrome": true
+    },
+    {
+      "id": "mail",
+      "aliases": [],
+      "category": "general",
+      "tags": ["email", "message", "letter", "unread"],
+      "file": "svg/mail.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/mail.svg",
+      "monochrome": true
+    },
+    {
+      "id": "map",
+      "aliases": [],
+      "category": "general",
+      "tags": ["location", "navigation", "travel"],
+      "file": "svg/map.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/map.svg",
+      "monochrome": true
+    },
+    {
+      "id": "map-pin",
+      "aliases": [],
+      "category": "general",
+      "tags": ["location", "waypoint", "marker", "drop"],
+      "file": "svg/map-pin.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/map-pin.svg",
+      "monochrome": true
+    },
+    {
+      "id": "memory-stick",
+      "aliases": [],
+      "category": "compute",
+      "tags": [
+        "ram",
+        "random access",
+        "technology",
+        "computer",
+        "chip",
+        "circuit",
+        "specs",
+        "capacity"
+      ],
+      "file": "svg/memory-stick.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/memory-stick.svg",
+      "monochrome": true
+    },
+    {
+      "id": "merge",
+      "aliases": [],
+      "category": "network",
+      "tags": ["combine", "join", "unite"],
+      "file": "svg/merge.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/merge.svg",
+      "monochrome": true
+    },
+    {
+      "id": "message-circle",
+      "aliases": [],
+      "category": "ai",
+      "tags": ["comment", "chat", "conversation", "dialog", "feedback", "speech bubble"],
+      "file": "svg/message-circle.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/message-circle.svg",
+      "monochrome": true
+    },
+    {
+      "id": "message-square",
+      "aliases": [],
+      "category": "ai",
+      "tags": ["comment", "chat", "conversation", "dialog", "feedback", "speech bubble"],
+      "file": "svg/message-square.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/message-square.svg",
+      "monochrome": true
+    },
+    {
+      "id": "microchip",
+      "aliases": [],
+      "category": "compute",
+      "tags": [
+        "processor",
+        "cores",
+        "technology",
+        "computer",
+        "chip",
+        "integrated circuit",
+        "memory",
+        "ram"
+      ],
+      "file": "svg/microchip.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/microchip.svg",
+      "monochrome": true
+    },
+    {
+      "id": "minus",
+      "aliases": [],
+      "category": "general",
+      "tags": ["minus", "remove", "delete", "cancel", "erase", "subtract", "reduce", "clear"],
+      "file": "svg/minus.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/minus.svg",
+      "monochrome": true
+    },
+    {
+      "id": "monitor",
+      "aliases": [],
+      "category": "client",
+      "tags": [
+        "tv",
+        "computer",
+        "desktop",
+        "screen",
+        "display",
+        "external display",
+        "screen sharing",
+        "virtual machine"
+      ],
+      "file": "svg/monitor.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/monitor.svg",
+      "monochrome": true
+    },
+    {
+      "id": "mouse-pointer",
+      "aliases": [],
+      "category": "client",
+      "tags": ["click", "select"],
+      "file": "svg/mouse-pointer.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/mouse-pointer.svg",
+      "monochrome": true
+    },
+    {
+      "id": "network",
+      "aliases": [],
+      "category": "network",
+      "tags": [
+        "network",
+        "nodes",
+        "edges",
+        "links",
+        "connections",
+        "relationships",
+        "structure",
+        "topology"
+      ],
+      "file": "svg/network.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/network.svg",
+      "monochrome": true
+    },
+    {
+      "id": "package",
+      "aliases": [],
+      "category": "compute",
+      "tags": [
+        "box",
+        "container",
+        "storage",
+        "sealed",
+        "delivery",
+        "undelivered",
+        "unopened",
+        "packed"
+      ],
+      "file": "svg/package.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/package.svg",
+      "monochrome": true
+    },
+    {
+      "id": "package-check",
+      "aliases": [],
+      "category": "cicd",
+      "tags": [
+        "box",
+        "container",
+        "storage",
+        "sealed",
+        "delivery",
+        "undelivered",
+        "unopened",
+        "packed"
+      ],
+      "file": "svg/package-check.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/package-check.svg",
+      "monochrome": true
+    },
+    {
+      "id": "package-open",
+      "aliases": [],
+      "category": "cicd",
+      "tags": [
+        "box",
+        "container",
+        "storage",
+        "unpack",
+        "unarchive",
+        "unzip",
+        "opened",
+        "delivered"
+      ],
+      "file": "svg/package-open.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/package-open.svg",
+      "monochrome": true
+    },
+    {
+      "id": "phone",
+      "aliases": [],
+      "category": "general",
+      "tags": ["call"],
+      "file": "svg/phone.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/phone.svg",
+      "monochrome": true
+    },
+    {
+      "id": "play",
+      "aliases": [],
+      "category": "cicd",
+      "tags": ["start", "run", "running", "execute", "launch", "resume", "preview", "begin"],
+      "file": "svg/play.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/play.svg",
+      "monochrome": true
+    },
+    {
+      "id": "plug",
+      "aliases": [],
+      "category": "network",
+      "tags": [
+        "electricity",
+        "energy",
+        "electronics",
+        "socket",
+        "outlet",
+        "power",
+        "voltage",
+        "current"
+      ],
+      "file": "svg/plug.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/plug.svg",
+      "monochrome": true
+    },
+    {
+      "id": "plus",
+      "aliases": [],
+      "category": "general",
+      "tags": ["plus", "add", "new", "create", "+", "increase", "increment", "extra"],
+      "file": "svg/plus.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/plus.svg",
+      "monochrome": true
+    },
+    {
+      "id": "power",
+      "aliases": [],
+      "category": "general",
+      "tags": ["on", "off", "device", "switch", "toggle", "binary", "boolean", "reboot"],
+      "file": "svg/power.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/power.svg",
+      "monochrome": true
+    },
+    {
+      "id": "radar",
+      "aliases": [],
+      "category": "observability",
+      "tags": ["scan", "sonar", "detect", "find", "locate"],
+      "file": "svg/radar.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/radar.svg",
+      "monochrome": true
+    },
+    {
+      "id": "radio-tower",
+      "aliases": [],
+      "category": "network",
+      "tags": ["signal", "broadcast", "connectivity", "live", "frequency"],
+      "file": "svg/radio-tower.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/radio-tower.svg",
+      "monochrome": true
+    },
+    {
+      "id": "refresh-cw",
+      "aliases": [],
+      "category": "cicd",
+      "tags": [
+        "synchronize",
+        "synchronise",
+        "refresh",
+        "reload",
+        "update",
+        "reconnect",
+        "retry",
+        "renew"
+      ],
+      "file": "svg/refresh-cw.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/refresh-cw.svg",
+      "monochrome": true
+    },
+    {
+      "id": "repeat",
+      "aliases": [],
+      "category": "cicd",
+      "tags": ["loop", "arrows"],
+      "file": "svg/repeat.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/repeat.svg",
+      "monochrome": true
+    },
+    {
+      "id": "rocket",
+      "aliases": [],
+      "category": "cicd",
+      "tags": ["release", "boost", "launch", "space", "version", "deploy", "deployment"],
+      "file": "svg/rocket.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/rocket.svg",
+      "monochrome": true
+    },
+    {
+      "id": "route",
+      "aliases": [],
+      "category": "network",
+      "tags": ["path", "journey", "planner", "points", "stops", "stations", "direction", "right"],
+      "file": "svg/route.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/route.svg",
+      "monochrome": true
+    },
+    {
+      "id": "router",
+      "aliases": [],
+      "category": "network",
+      "tags": ["computer", "server", "cloud"],
+      "file": "svg/router.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/router.svg",
+      "monochrome": true
+    },
+    {
+      "id": "satellite-dish",
+      "aliases": [],
+      "category": "network",
+      "tags": [
+        "antenna",
+        "receiver",
+        "dish aerial",
+        "saucer",
+        "communication",
+        "broadcast",
+        "signal"
+      ],
+      "file": "svg/satellite-dish.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/satellite-dish.svg",
+      "monochrome": true
+    },
+    {
+      "id": "scan-face",
+      "aliases": [],
+      "category": "security",
+      "tags": [
+        "qr-code",
+        "barcode",
+        "checkout",
+        "augmented reality",
+        "ar",
+        "target",
+        "surveillance",
+        "camera"
+      ],
+      "file": "svg/scan-face.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/scan-face.svg",
+      "monochrome": true
+    },
+    {
+      "id": "scan-search",
+      "aliases": [],
+      "category": "ai",
+      "tags": [
+        "qr-code",
+        "barcode",
+        "checkout",
+        "augmented reality",
+        "ar",
+        "target",
+        "surveillance",
+        "camera"
+      ],
+      "file": "svg/scan-search.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/scan-search.svg",
+      "monochrome": true
+    },
+    {
+      "id": "scroll-text",
+      "aliases": [],
+      "category": "observability",
+      "tags": ["paper", "log", "scripture", "document", "notes", "parchment", "list", "long"],
+      "file": "svg/scroll-text.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/scroll-text.svg",
+      "monochrome": true
+    },
+    {
+      "id": "search",
+      "aliases": [],
+      "category": "observability",
+      "tags": ["search", "magnifier", "scan", "scanning", "browsing", "finding", "find", "lookup"],
+      "file": "svg/search.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/search.svg",
+      "monochrome": true
+    },
+    {
+      "id": "send",
+      "aliases": [],
+      "category": "general",
+      "tags": [
+        "email",
+        "message",
+        "mail",
+        "paper airplane",
+        "paper aeroplane",
+        "submit",
+        "invite",
+        "invitation"
+      ],
+      "file": "svg/send.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/send.svg",
+      "monochrome": true
+    },
+    {
+      "id": "server",
+      "aliases": [],
+      "category": "compute",
+      "tags": ["cloud", "storage"],
+      "file": "svg/server.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/server.svg",
+      "monochrome": true
+    },
+    {
+      "id": "server-cog",
+      "aliases": [],
+      "category": "compute",
+      "tags": ["cloud", "storage", "cog", "cogwheel", "gear", "pinion", "sprocket", "settings"],
+      "file": "svg/server-cog.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/server-cog.svg",
+      "monochrome": true
+    },
+    {
+      "id": "server-crash",
+      "aliases": [],
+      "category": "compute",
+      "tags": ["cloud", "storage", "problem", "error"],
+      "file": "svg/server-crash.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/server-crash.svg",
+      "monochrome": true
+    },
+    {
+      "id": "settings",
+      "aliases": [],
+      "category": "compute",
+      "tags": [
+        "cog",
+        "cogwheel",
+        "gear",
+        "pinion",
+        "sprocket",
+        "settings",
+        "configuration",
+        "preferences"
+      ],
+      "file": "svg/settings.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/settings.svg",
+      "monochrome": true
+    },
+    {
+      "id": "share-2",
+      "aliases": [],
+      "category": "network",
+      "tags": ["network", "connections"],
+      "file": "svg/share-2.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/share-2.svg",
+      "monochrome": true
+    },
+    {
+      "id": "sheet",
+      "aliases": [],
+      "category": "data",
+      "tags": ["spreadsheets", "table", "excel", "csv", "xls", "xlsx"],
+      "file": "svg/sheet.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/sheet.svg",
+      "monochrome": true
+    },
+    {
+      "id": "shield",
+      "aliases": [],
+      "category": "security",
+      "tags": [
+        "shield",
+        "privacy",
+        "safeguard",
+        "security",
+        "cybersecurity",
+        "secure",
+        "safety",
+        "protection"
+      ],
+      "file": "svg/shield.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/shield.svg",
+      "monochrome": true
+    },
+    {
+      "id": "shield-alert",
+      "aliases": ["shield-exclamation-point"],
+      "category": "security",
+      "tags": [],
+      "file": "svg/shield-alert.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/shield-alert.svg",
+      "monochrome": true
+    },
+    {
+      "id": "shield-check",
+      "aliases": [],
+      "category": "security",
+      "tags": [
+        "shield",
+        "privacy",
+        "safeguard",
+        "security",
+        "cybersecurity",
+        "secure",
+        "safety",
+        "protection"
+      ],
+      "file": "svg/shield-check.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/shield-check.svg",
+      "monochrome": true
+    },
+    {
+      "id": "shield-off",
+      "aliases": [],
+      "category": "security",
+      "tags": [
+        "shield",
+        "privacy",
+        "safeguard",
+        "security",
+        "cybersecurity",
+        "secure",
+        "safety",
+        "protection"
+      ],
+      "file": "svg/shield-off.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/shield-off.svg",
+      "monochrome": true
+    },
+    {
+      "id": "shopping-cart",
+      "aliases": [],
+      "category": "general",
+      "tags": ["trolley", "cart", "basket", "e-commerce", "store", "purchase", "products", "items"],
+      "file": "svg/shopping-cart.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/shopping-cart.svg",
+      "monochrome": true
+    },
+    {
+      "id": "shuffle",
+      "aliases": [],
+      "category": "data",
+      "tags": ["music", "random", "reorder"],
+      "file": "svg/shuffle.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/shuffle.svg",
+      "monochrome": true
+    },
+    {
+      "id": "signal",
+      "aliases": [],
+      "category": "network",
+      "tags": ["connection", "wireless", "gsm", "phone", "2g", "3g", "4g", "5g"],
+      "file": "svg/signal.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/signal.svg",
+      "monochrome": true
+    },
+    {
+      "id": "siren",
+      "aliases": [],
+      "category": "observability",
+      "tags": ["police", "ambulance", "emergency", "security", "alert", "alarm", "light"],
+      "file": "svg/siren.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/siren.svg",
+      "monochrome": true
+    },
+    {
+      "id": "smartphone",
+      "aliases": [],
+      "category": "client",
+      "tags": [
+        "phone",
+        "cellphone",
+        "device",
+        "mobile",
+        "screen",
+        "display",
+        "touchscreen",
+        "portable"
+      ],
+      "file": "svg/smartphone.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/smartphone.svg",
+      "monochrome": true
+    },
+    {
+      "id": "sparkles",
+      "aliases": ["stars"],
+      "category": "ai",
+      "tags": ["sparkle", "magic", "ai", "stars", "glitter", "shimmer", "twinkle", "shine"],
+      "file": "svg/sparkles.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/sparkles.svg",
+      "monochrome": true
+    },
+    {
+      "id": "split",
+      "aliases": [],
+      "category": "network",
+      "tags": ["break", "disband", "divide", "separate", "branch", "disunite"],
+      "file": "svg/split.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/split.svg",
+      "monochrome": true
+    },
+    {
+      "id": "square-terminal",
+      "aliases": ["terminal-square"],
+      "category": "compute",
+      "tags": [
+        "coding",
+        "programming",
+        "development",
+        "developer",
+        "dev",
+        "code",
+        "command line",
+        "prompt"
+      ],
+      "file": "svg/square-terminal.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/square-terminal.svg",
+      "monochrome": true
+    },
+    {
+      "id": "star",
+      "aliases": [],
+      "category": "general",
+      "tags": [
+        "starred",
+        "featured",
+        "favorite",
+        "favourite",
+        "save",
+        "wishlist",
+        "bookmark",
+        "highlight"
+      ],
+      "file": "svg/star.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/star.svg",
+      "monochrome": true
+    },
+    {
+      "id": "store",
+      "aliases": [],
+      "category": "general",
+      "tags": [
+        "shop",
+        "supermarket",
+        "stand",
+        "boutique",
+        "building",
+        "sell",
+        "selling",
+        "merchant"
+      ],
+      "file": "svg/store.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/store.svg",
+      "monochrome": true
+    },
+    {
+      "id": "table",
+      "aliases": [],
+      "category": "data",
+      "tags": ["spreadsheet", "grid", "csv", "xls", "xlsx", "excel"],
+      "file": "svg/table.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/table.svg",
+      "monochrome": true
+    },
+    {
+      "id": "table-2",
+      "aliases": [],
+      "category": "data",
+      "tags": ["spreadsheet", "grid", "csv", "xls", "xlsx", "excel"],
+      "file": "svg/table-2.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/table-2.svg",
+      "monochrome": true
+    },
+    {
+      "id": "tablet",
+      "aliases": [],
+      "category": "client",
+      "tags": ["device", "mobile", "screen", "display", "touchscreen", "portable", "responsive"],
+      "file": "svg/tablet.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/tablet.svg",
+      "monochrome": true
+    },
+    {
+      "id": "tag",
+      "aliases": [],
+      "category": "cicd",
+      "tags": ["label", "badge", "ticket", "mark", "sell", "selling", "promotion", "promo"],
+      "file": "svg/tag.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/tag.svg",
+      "monochrome": true
+    },
+    {
+      "id": "telescope",
+      "aliases": [],
+      "category": "observability",
+      "tags": [
+        "astronomy",
+        "space",
+        "discovery",
+        "exploration",
+        "explore",
+        "vision",
+        "perspective",
+        "focus"
+      ],
+      "file": "svg/telescope.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/telescope.svg",
+      "monochrome": true
+    },
+    {
+      "id": "terminal",
+      "aliases": [],
+      "category": "compute",
+      "tags": [
+        "coding",
+        "programming",
+        "development",
+        "developer",
+        "dev",
+        "code",
+        "command line",
+        "prompt"
+      ],
+      "file": "svg/terminal.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/terminal.svg",
+      "monochrome": true
+    },
+    {
+      "id": "test-tube",
+      "aliases": [],
+      "category": "cicd",
+      "tags": ["tube", "vial", "phial", "flask", "ampoule", "ampule", "lab", "chemistry"],
+      "file": "svg/test-tube.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/test-tube.svg",
+      "monochrome": true
+    },
+    {
+      "id": "timer",
+      "aliases": [],
+      "category": "observability",
+      "tags": ["clock", "time", "hour", "minute", "second", "timestamp", "timer", "duration"],
+      "file": "svg/timer.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/timer.svg",
+      "monochrome": true
+    },
+    {
+      "id": "triangle-alert",
+      "aliases": ["alert-triangle", "triangle-exclamation-point"],
+      "category": "general",
+      "tags": [],
+      "file": "svg/triangle-alert.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/triangle-alert.svg",
+      "monochrome": true
+    },
+    {
+      "id": "truck",
+      "aliases": [],
+      "category": "general",
+      "tags": ["delivery", "van", "shipping", "haulage", "lorry"],
+      "file": "svg/truck.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/truck.svg",
+      "monochrome": true
+    },
+    {
+      "id": "tv",
+      "aliases": [],
+      "category": "client",
+      "tags": [
+        "television",
+        "stream",
+        "display",
+        "widescreen",
+        "high-definition",
+        "hd",
+        "1080p",
+        "4k"
+      ],
+      "file": "svg/tv.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/tv.svg",
+      "monochrome": true
+    },
+    {
+      "id": "unplug",
+      "aliases": [],
+      "category": "network",
+      "tags": ["electricity", "energy", "electronics", "socket", "outlet", "disconnect"],
+      "file": "svg/unplug.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/unplug.svg",
+      "monochrome": true
+    },
+    {
+      "id": "upload",
+      "aliases": [],
+      "category": "general",
+      "tags": ["file"],
+      "file": "svg/upload.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/upload.svg",
+      "monochrome": true
+    },
+    {
+      "id": "user",
+      "aliases": [],
+      "category": "client",
+      "tags": [
+        "user",
+        "people",
+        "identity",
+        "individual",
+        "personal",
+        "person",
+        "account",
+        "contact"
+      ],
+      "file": "svg/user.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/user.svg",
+      "monochrome": true
+    },
+    {
+      "id": "user-check",
+      "aliases": [],
+      "category": "client",
+      "tags": [
+        "user",
+        "people",
+        "identity",
+        "individual",
+        "personal",
+        "person",
+        "account",
+        "contact"
+      ],
+      "file": "svg/user-check.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/user-check.svg",
+      "monochrome": true
+    },
+    {
+      "id": "user-round",
+      "aliases": ["user-2"],
+      "category": "client",
+      "tags": [
+        "user",
+        "people",
+        "identity",
+        "individual",
+        "personal",
+        "person",
+        "account",
+        "contact"
+      ],
+      "file": "svg/user-round.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/user-round.svg",
+      "monochrome": true
+    },
+    {
+      "id": "users",
+      "aliases": [],
+      "category": "client",
+      "tags": [
+        "user",
+        "people",
+        "identity",
+        "individual",
+        "personal",
+        "person",
+        "account",
+        "contact"
+      ],
+      "file": "svg/users.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/users.svg",
+      "monochrome": true
+    },
+    {
+      "id": "vault",
+      "aliases": [],
+      "category": "security",
+      "tags": ["safe", "lockbox", "deposit", "locker", "coffer", "strongbox", "safety", "secure"],
+      "file": "svg/vault.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/vault.svg",
+      "monochrome": true
+    },
+    {
+      "id": "wallet",
+      "aliases": [],
+      "category": "general",
+      "tags": ["money", "finance", "pocket", "budget"],
+      "file": "svg/wallet.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/wallet.svg",
+      "monochrome": true
+    },
+    {
+      "id": "wand-sparkles",
+      "aliases": ["wand-2"],
+      "category": "ai",
+      "tags": ["sparkle", "magic", "ai", "stars", "glitter", "shimmer", "twinkle", "shine"],
+      "file": "svg/wand-sparkles.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/wand-sparkles.svg",
+      "monochrome": true
+    },
+    {
+      "id": "watch",
+      "aliases": [],
+      "category": "client",
+      "tags": ["clock", "time", "hour", "minute", "second", "timestamp", "timer", "duration"],
+      "file": "svg/watch.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/watch.svg",
+      "monochrome": true
+    },
+    {
+      "id": "waypoints",
+      "aliases": [],
+      "category": "network",
+      "tags": [
+        "network",
+        "nodes",
+        "edges",
+        "links",
+        "connections",
+        "relationships",
+        "structure",
+        "topology"
+      ],
+      "file": "svg/waypoints.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/waypoints.svg",
+      "monochrome": true
+    },
+    {
+      "id": "wifi",
+      "aliases": [],
+      "category": "network",
+      "tags": ["connection", "signal", "wireless", "network"],
+      "file": "svg/wifi.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/wifi.svg",
+      "monochrome": true
+    },
+    {
+      "id": "workflow",
+      "aliases": [],
+      "category": "compute",
+      "tags": [
+        "network",
+        "nodes",
+        "edges",
+        "links",
+        "connections",
+        "relationships",
+        "structure",
+        "topology"
+      ],
+      "file": "svg/workflow.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/workflow.svg",
+      "monochrome": true
+    },
+    {
+      "id": "wrench",
+      "aliases": [],
+      "category": "cicd",
+      "tags": ["account", "settings", "spanner", "diy", "toolbox", "build", "construction"],
+      "file": "svg/wrench.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/wrench.svg",
+      "monochrome": true
+    },
+    {
+      "id": "x",
+      "aliases": [],
+      "category": "general",
+      "tags": ["alphabet", "character", "text", "font", "typography", "x", "remove", "delete"],
+      "file": "svg/x.svg",
+      "license": "MIT",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/x.svg",
+      "monochrome": true
+    },
+    {
+      "id": "zap",
+      "aliases": [],
+      "category": "general",
+      "tags": [
+        "flash",
+        "camera",
+        "lightning",
+        "electricity",
+        "energy",
+        "power",
+        "quick",
+        "thunder"
+      ],
+      "file": "svg/zap.svg",
+      "sourceUrl": "https://unpkg.com/lucide-static@1.75.0/icons/zap.svg",
+      "monochrome": true
+    }
+  ]
+}

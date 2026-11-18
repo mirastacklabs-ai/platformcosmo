@@ -8,7 +8,8 @@
   "required": ["meta"],
   "properties": {
     "$schema": {
-      "type": "string"
+      "type": "string",
+      "description": "Schema URL that editors use for completion, normally https://platformcosmo.io/schema/v1.json."
     },
     "meta": {
       "type": "object",
@@ -16,38 +17,51 @@
       "required": ["version"],
       "properties": {
         "version": {
-          "const": "1"
+          "const": "1",
+          "description": "Spec format major version, always the string \"1\"."
         },
         "title": {
-          "$ref": "#/$defs/text"
+          "$ref": "#/$defs/text",
+          "description": "Short title of the spec, used as the SVG title element."
         },
         "description": {
           "type": "string",
           "maxLength": 2000,
-          "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]*$"
+          "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]*$",
+          "description": "Longer description of the spec, used as the SVG desc element."
         }
-      }
+      },
+      "description": "Spec metadata: format version, title and description."
     },
     "canvas": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "theme": {
-          "enum": ["light", "dark", "blueprint", "mono"]
+          "enum": ["light", "dark", "blueprint", "mono"],
+          "description": "Color theme for the diagram: light, dark, blueprint or mono.",
+          "default": "light"
         },
         "grid": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Whether to draw a background grid behind the diagram.",
+          "default": false
         },
         "padding": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 1000
+          "maximum": 1000,
+          "description": "Empty space around the diagram in pixels, from 0 to 1000.",
+          "default": 32
         },
         "aspect": {
           "type": "string",
-          "pattern": "^(auto|[1-9][0-9]*:[1-9][0-9]*)$"
+          "pattern": "^(auto|[1-9][0-9]*:[1-9][0-9]*)$",
+          "description": "Output aspect ratio: \"auto\" or \"width:height\" such as 16:9.",
+          "default": "auto"
         }
-      }
+      },
+      "description": "Canvas appearance: theme, background grid, padding and aspect ratio."
     },
     "nodes": {
       "type": "array",
@@ -55,42 +69,48 @@
         "$ref": "#/$defs/node"
       },
       "minItems": 1,
-      "maxItems": 500
+      "maxItems": 500,
+      "description": "Components to draw, each with a semantic type and an optional icon."
     },
     "groups": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/group"
       },
-      "maxItems": 200
+      "maxItems": 200,
+      "description": "Zones, VPCs, clusters or platforms that group nodes, optionally nested."
     },
     "edges": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/edge"
       },
-      "maxItems": 1000
+      "maxItems": 1000,
+      "description": "Connections between objects (nodes, racks, equipment, or rackId/slotId)."
     },
     "flows": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/flow"
       },
-      "maxItems": 200
+      "maxItems": 200,
+      "description": "Animated flows of traffic or power along an edge, a cable or a pair of endpoints."
     },
     "metrics": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/metric"
       },
-      "maxItems": 50
+      "maxItems": 50,
+      "description": "Headline metric tiles shown with the diagram."
     },
     "steps": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/step"
       },
-      "maxItems": 99
+      "maxItems": 99,
+      "description": "Animation steps, each with a caption, state changes, flows, metrics and a focus target."
     },
     "legend": {
       "oneOf": [
@@ -105,16 +125,19 @@
             "required": ["label"],
             "properties": {
               "label": {
-                "$ref": "#/$defs/text"
+                "$ref": "#/$defs/text",
+                "description": "Text shown for the legend entry."
               },
               "color": {
-                "$ref": "#/$defs/color"
+                "$ref": "#/$defs/color",
+                "description": "#rgb or #rrggbb hex, a palette name (blue, green, red, orange, yellow, purple, teal, pink, gray) or a flow kind name."
               }
             }
           },
           "maxItems": 50
         }
-      ]
+      ],
+      "description": "Legend mode: \"auto\" to derive entries from the diagram, or a manual list of label and color pairs."
     },
     "racks": {
       "type": "array",
@@ -122,7 +145,8 @@
         "$ref": "#/$defs/rack"
       },
       "minItems": 1,
-      "maxItems": 500
+      "maxItems": 500,
+      "description": "Equipment racks, each with a height in rack units and optional slots."
     },
     "equipment": {
       "type": "array",
@@ -130,31 +154,36 @@
         "$ref": "#/$defs/equipment"
       },
       "minItems": 1,
-      "maxItems": 200
+      "maxItems": 200,
+      "description": "Data-center equipment items (UPS, CRAH, CDU and similar) placed on the floor."
     },
     "rows": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/row"
       },
-      "maxItems": 100
+      "maxItems": 100,
+      "description": "Ordered rows of racks or equipment on the floor, with a facing direction."
     },
     "aisles": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/aisle"
       },
-      "maxItems": 100
+      "maxItems": 100,
+      "description": "Cold or hot aisles, each grouping rows of racks."
     },
     "cables": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/cable"
       },
-      "maxItems": 2000
+      "maxItems": 2000,
+      "description": "DC cables (power, network, fiber or management) between racks, slots and equipment."
     },
     "facility": {
-      "$ref": "#/$defs/facility"
+      "$ref": "#/$defs/facility",
+      "description": "Facility-wide settings: raised floor, perforated tiles and cable trays."
     }
   },
   "$defs": {
@@ -168,7 +197,7 @@
       "title": "SpecColor",
       "type": "string",
       "pattern": "^(#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6}|blue|green|red|orange|yellow|purple|teal|pink|gray|normal|heavy|health|failed|airflow|power)$",
-      "description": "Hex (#rgb/#rrggbb) or a theme palette name: blue, green, red, orange, yellow, purple, teal, pink, gray, or a flow kind (normal, heavy, health, failed, airflow, power)."
+      "description": "#rgb or #rrggbb hex, a palette name (blue, green, red, orange, yellow, purple, teal, pink, gray) or a flow kind name. Flow kind names: normal, heavy, health, failed, airflow, power."
     },
     "state": {
       "title": "SpecState",
@@ -227,32 +256,43 @@
       "required": ["id", "type"],
       "properties": {
         "id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/id",
+          "description": "Unique identifier of the node, used by edges, flows and steps."
         },
         "type": {
-          "$ref": "#/$defs/nodeType"
+          "$ref": "#/$defs/nodeType",
+          "description": "Semantic component type, such as lb, sql or queue."
         },
         "icon": {
           "type": "string",
-          "pattern": "^[a-z0-9-]+:[a-z0-9-]+$"
+          "pattern": "^[a-z0-9-]+:[a-z0-9-]+$",
+          "description": "Icon name to draw, such as aws:rds, which must be installed."
         },
         "label": {
-          "$ref": "#/$defs/text"
+          "$ref": "#/$defs/text",
+          "description": "Text label shown for the node."
         },
         "badge": {
-          "$ref": "#/$defs/text"
+          "$ref": "#/$defs/text",
+          "description": "Short badge text shown on the node."
         },
         "size": {
-          "enum": ["sm", "md", "lg"]
+          "enum": ["sm", "md", "lg"],
+          "description": "Node size: sm, md or lg.",
+          "default": "md"
         },
         "pos": {
-          "$ref": "#/$defs/gridPos"
+          "$ref": "#/$defs/gridPos",
+          "description": "Optional manual grid position that overrides automatic layout."
         },
         "group": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/id",
+          "description": "Id of the group that contains the node."
         },
         "state": {
-          "$ref": "#/$defs/state"
+          "$ref": "#/$defs/state",
+          "description": "Initial operational state of the node: healthy, degraded, down or highlighted.",
+          "default": "healthy"
         }
       }
     },
@@ -263,16 +303,21 @@
       "required": ["id"],
       "properties": {
         "id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/id",
+          "description": "Unique identifier of the group."
         },
         "label": {
-          "$ref": "#/$defs/text"
+          "$ref": "#/$defs/text",
+          "description": "Text label shown for the group."
         },
         "style": {
-          "enum": ["zone", "vpc", "cluster", "platform"]
+          "enum": ["zone", "vpc", "cluster", "platform"],
+          "description": "Visual style of the group: zone, vpc, cluster or platform.",
+          "default": "zone"
         },
         "parent": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/id",
+          "description": "Id of the enclosing group, used for nesting."
         }
       }
     },
@@ -283,22 +328,30 @@
       "required": ["from", "to"],
       "properties": {
         "id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/id",
+          "description": "Optional unique identifier of the edge, used to reference it from flows."
         },
         "from": {
-          "$ref": "#/$defs/endpoint"
+          "$ref": "#/$defs/endpoint",
+          "description": "Source endpoint of the edge, as an object id or a rackId/slotId pair."
         },
         "to": {
-          "$ref": "#/$defs/endpoint"
+          "$ref": "#/$defs/endpoint",
+          "description": "Destination endpoint of the edge, as an object id or a rackId/slotId pair."
         },
         "label": {
-          "$ref": "#/$defs/text"
+          "$ref": "#/$defs/text",
+          "description": "Text label shown on the edge."
         },
         "style": {
-          "enum": ["solid", "dashed", "dotted"]
+          "enum": ["solid", "dashed", "dotted"],
+          "description": "Line style of the edge: solid, dashed or dotted.",
+          "default": "solid"
         },
         "bidirectional": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Whether the edge is drawn as two-way rather than one-way.",
+          "default": false
         }
       }
     },
@@ -312,18 +365,24 @@
           "required": ["edge"],
           "properties": {
             "edge": {
-              "$ref": "#/$defs/id"
+              "$ref": "#/$defs/id",
+              "description": "Id of the edge or cable that the flow travels along."
             },
             "kind": {
-              "$ref": "#/$defs/flowKind"
+              "$ref": "#/$defs/flowKind",
+              "description": "Flow kind that sets the default look: normal, heavy, health, failed, airflow or power.",
+              "default": "normal"
             },
             "rate": {
               "type": "number",
               "exclusiveMinimum": 0,
-              "maximum": 20
+              "maximum": 20,
+              "description": "Particles emitted per second (0 < rate <= 20). Each flow costs ceil(rate x 2) particles; the total over base and all step flows must be <= 2000.",
+              "default": 1
             },
             "color": {
-              "$ref": "#/$defs/color"
+              "$ref": "#/$defs/color",
+              "description": "#rgb or #rrggbb hex, a palette name (blue, green, red, orange, yellow, purple, teal, pink, gray) or a flow kind name."
             }
           }
         },
@@ -334,21 +393,28 @@
           "required": ["from", "to"],
           "properties": {
             "from": {
-              "$ref": "#/$defs/endpoint"
+              "$ref": "#/$defs/endpoint",
+              "description": "Source endpoint of the flow, as an object id or a rackId/slotId pair."
             },
             "to": {
-              "$ref": "#/$defs/endpoint"
+              "$ref": "#/$defs/endpoint",
+              "description": "Destination endpoint of the flow, as an object id or a rackId/slotId pair."
             },
             "kind": {
-              "$ref": "#/$defs/flowKind"
+              "$ref": "#/$defs/flowKind",
+              "description": "Flow kind that sets the default look: normal, heavy, health, failed, airflow or power.",
+              "default": "normal"
             },
             "rate": {
               "type": "number",
               "exclusiveMinimum": 0,
-              "maximum": 20
+              "maximum": 20,
+              "description": "Particles emitted per second (0 < rate <= 20). Each flow costs ceil(rate x 2) particles; the total over base and all step flows must be <= 2000.",
+              "default": 1
             },
             "color": {
-              "$ref": "#/$defs/color"
+              "$ref": "#/$defs/color",
+              "description": "#rgb or #rrggbb hex, a palette name (blue, green, red, orange, yellow, purple, teal, pink, gray) or a flow kind name."
             }
           }
         }
@@ -361,13 +427,16 @@
       "required": ["id", "label", "value"],
       "properties": {
         "id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/id",
+          "description": "Unique identifier of the metric tile."
         },
         "label": {
-          "$ref": "#/$defs/text"
+          "$ref": "#/$defs/text",
+          "description": "Text label shown on the metric tile."
         },
         "value": {
-          "$ref": "#/$defs/metricValue"
+          "$ref": "#/$defs/metricValue",
+          "description": "Value shown on the metric tile, as text or a number."
         }
       }
     },
@@ -377,7 +446,8 @@
       "additionalProperties": false,
       "properties": {
         "caption": {
-          "$ref": "#/$defs/text"
+          "$ref": "#/$defs/text",
+          "description": "Text caption shown while the step plays."
         },
         "set": {
           "type": "object",
@@ -387,14 +457,16 @@
           "additionalProperties": {
             "$ref": "#/$defs/state"
           },
-          "maxProperties": 1000
+          "maxProperties": 1000,
+          "description": "State changes from this step onward (cumulative), keyed by object id or rackId/slotId."
         },
         "flows": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/flow"
           },
-          "maxItems": 200
+          "maxItems": 200,
+          "description": "If present (even []), replaces the base flows for this step only; omit to keep the base flows."
         },
         "metrics": {
           "type": "object",
@@ -404,15 +476,19 @@
           "additionalProperties": {
             "$ref": "#/$defs/metricValue"
           },
-          "maxProperties": 50
+          "maxProperties": 50,
+          "description": "Metric values from this step onward (cumulative), keyed by metric id."
         },
         "duration": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "maximum": 600
+          "maximum": 600,
+          "description": "Step length in seconds at speed 1 (> 0, <= 600).",
+          "default": 3
         },
         "focus": {
-          "$ref": "#/$defs/endpoint"
+          "$ref": "#/$defs/endpoint",
+          "description": "Id to zoom to for this step only (object, rackId/slotId, group, row, aisle); omit for the full view."
         }
       },
       "minProperties": 1
@@ -452,32 +528,44 @@
       "required": ["id"],
       "properties": {
         "id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/id",
+          "description": "Unique identifier of the rack."
         },
         "label": {
-          "$ref": "#/$defs/text"
+          "$ref": "#/$defs/text",
+          "description": "Text label shown for the rack."
         },
         "u": {
-          "enum": [42, 45, 48]
+          "enum": [42, 45, 48],
+          "description": "Rack height in rack units: 42, 45 or 48.",
+          "default": 42
         },
         "pos": {
-          "$ref": "#/$defs/gridPos"
+          "$ref": "#/$defs/gridPos",
+          "description": "Optional manual grid position that overrides automatic placement."
         },
         "state": {
-          "$ref": "#/$defs/state"
+          "$ref": "#/$defs/state",
+          "description": "Operational state of the rack.",
+          "default": "healthy"
         },
         "pdu": {
-          "enum": ["none", "single", "dual"]
+          "enum": ["none", "single", "dual"],
+          "description": "PDU redundancy for the rack: none, single or dual.",
+          "default": "dual"
         },
         "rearDoorHeatExchanger": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Whether the rack has a rear-door heat exchanger.",
+          "default": false
         },
         "slots": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/rackSlot"
           },
-          "maxItems": 48
+          "maxItems": 48,
+          "description": "Devices placed in the rack's rack units."
         }
       }
     },
@@ -494,7 +582,8 @@
         "at": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 48
+          "maximum": 48,
+          "description": "Lowest rack unit the device occupies (1 = bottom)."
         },
         "size": {
           "type": "integer",
@@ -503,13 +592,16 @@
           "description": "Rack units; defaults to the device type height."
         },
         "type": {
-          "$ref": "#/$defs/dcSlotType"
+          "$ref": "#/$defs/dcSlotType",
+          "description": "Device type placed in the slot, such as server-1u or switch-tor."
         },
         "label": {
-          "$ref": "#/$defs/text"
+          "$ref": "#/$defs/text",
+          "description": "Text label shown for the device in the slot."
         },
         "state": {
-          "$ref": "#/$defs/state"
+          "$ref": "#/$defs/state",
+          "description": "Device state. Omit to inherit the rack state."
         }
       }
     },
@@ -520,19 +612,25 @@
       "required": ["id", "type"],
       "properties": {
         "id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/id",
+          "description": "Unique identifier of the equipment item."
         },
         "type": {
-          "$ref": "#/$defs/dcEquipmentType"
+          "$ref": "#/$defs/dcEquipmentType",
+          "description": "Kind of data-center equipment, such as ups, crah or cdu."
         },
         "label": {
-          "$ref": "#/$defs/text"
+          "$ref": "#/$defs/text",
+          "description": "Text label shown for the equipment item."
         },
         "pos": {
-          "$ref": "#/$defs/gridPos"
+          "$ref": "#/$defs/gridPos",
+          "description": "Optional manual grid position that overrides automatic placement."
         },
         "state": {
-          "$ref": "#/$defs/state"
+          "$ref": "#/$defs/state",
+          "description": "Operational state of the equipment item.",
+          "default": "healthy"
         }
       }
     },
@@ -543,10 +641,12 @@
       "required": ["id", "members"],
       "properties": {
         "id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/id",
+          "description": "Unique identifier of the row."
         },
         "label": {
-          "$ref": "#/$defs/text"
+          "$ref": "#/$defs/text",
+          "description": "Text label shown for the row."
         },
         "members": {
           "type": "array",
@@ -554,10 +654,12 @@
             "$ref": "#/$defs/id"
           },
           "minItems": 1,
-          "maxItems": 100
+          "maxItems": 100,
+          "description": "Ids of the racks or equipment items in the row, in order."
         },
         "facing": {
-          "enum": ["front", "back"]
+          "enum": ["front", "back"],
+          "description": "Which side of the rack faces the row front. Omit to derive it from the aisles: rows face their cold aisle and turn their backs to their hot aisle."
         }
       }
     },
@@ -568,13 +670,16 @@
       "required": ["id", "kind", "rows"],
       "properties": {
         "id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/id",
+          "description": "Unique identifier of the aisle."
         },
         "label": {
-          "$ref": "#/$defs/text"
+          "$ref": "#/$defs/text",
+          "description": "Text label shown for the aisle."
         },
         "kind": {
-          "enum": ["cold", "hot"]
+          "enum": ["cold", "hot"],
+          "description": "Whether the aisle is a cold aisle or a hot aisle."
         },
         "rows": {
           "type": "array",
@@ -586,7 +691,9 @@
           "description": "The one or two rows bounding the aisle."
         },
         "contained": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Whether the aisle is enclosed by doors or containment.",
+          "default": false
         }
       }
     },
@@ -597,19 +704,25 @@
       "required": ["from", "to"],
       "properties": {
         "id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/id",
+          "description": "Unique identifier of the cable."
         },
         "from": {
-          "$ref": "#/$defs/endpoint"
+          "$ref": "#/$defs/endpoint",
+          "description": "Source endpoint of the cable, as an object id or a rackId/slotId pair."
         },
         "to": {
-          "$ref": "#/$defs/endpoint"
+          "$ref": "#/$defs/endpoint",
+          "description": "Destination endpoint of the cable, as an object id or a rackId/slotId pair."
         },
         "kind": {
-          "enum": ["power", "network", "fiber", "management"]
+          "enum": ["power", "network", "fiber", "management"],
+          "description": "Cable type: power, network, fiber or management.",
+          "default": "network"
         },
         "label": {
-          "$ref": "#/$defs/text"
+          "$ref": "#/$defs/text",
+          "description": "Text label shown on the cable."
         }
       }
     },
@@ -626,13 +739,19 @@
       "additionalProperties": false,
       "properties": {
         "raisedFloor": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Whether the room has a raised floor.",
+          "default": true
         },
         "perforatedTiles": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Whether the raised floor uses perforated airflow tiles.",
+          "default": true
         },
         "cableTrays": {
-          "enum": ["none", "overhead", "underfloor"]
+          "enum": ["none", "overhead", "underfloor"],
+          "description": "Where cable trays run: none, overhead or underfloor.",
+          "default": "overhead"
         }
       }
     },
@@ -652,12 +771,14 @@
         "x": {
           "type": "integer",
           "minimum": -1000,
-          "maximum": 1000
+          "maximum": 1000,
+          "description": "Horizontal grid tile coordinate, from -1000 to 1000."
         },
         "y": {
           "type": "integer",
           "minimum": -1000,
-          "maximum": 1000
+          "maximum": 1000,
+          "description": "Vertical grid tile coordinate, from -1000 to 1000."
         }
       }
     },
@@ -675,7 +796,7 @@
       ]
     }
   },
-  "x-revision": "1.1.0",
+  "x-revision": "1.1.2",
   "anyOf": [
     {
       "required": ["nodes"],
