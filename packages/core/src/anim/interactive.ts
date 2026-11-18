@@ -70,10 +70,15 @@ export function controlCss(prefix: string): string {
   ].join("\n");
 }
 
-/** `starts` are per-step start seconds (the camera has already settled on each step's view there); `total` the loop length. */
+/**
+ * `starts` are per-step start seconds; `targets` where Step pauses for each step: its start, except
+ * step 1, whose view is reached only after the opening ease (the loop starts on the overview).
+ * `total` is the loop length.
+ */
 export function interactiveScript(
   ids: ControlIds,
   starts: readonly number[],
+  targets: readonly number[],
 
   total: number,
 ): string {
@@ -83,7 +88,7 @@ var svg=document.getElementById(${JSON.stringify(ids.root)});
 var play=document.getElementById(${JSON.stringify(ids.play)});
 var step=document.getElementById(${JSON.stringify(ids.step)});
 if(!svg||!play||!step||!svg.getAnimations)return;
-var S=${nums(starts)},T=${t4(total)},playing=true;
+var S=${nums(starts)},G=${nums(targets)},T=${t4(total)},playing=true;
 var label=play.getElementsByTagName("text")[0];
 function anims(){return svg.getAnimations({subtree:true}).filter(function(a){return a.animationName!==undefined;});}
 function now(){var a=anims()[0];return a&&T>0?((a.currentTime/1000)%T+T)%T:0;}
@@ -99,7 +104,7 @@ play.setAttribute("aria-label",p?"Pause":"Play");
 function onStep(){
 if(!S.length)return;
 set(false);
-seek(S[(index()+1)%S.length]);
+seek(G[(index()+1)%S.length]);
 }
 function bind(node,fn){
 node.addEventListener("click",fn);
