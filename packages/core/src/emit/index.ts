@@ -74,7 +74,10 @@ function without(
   return out;
 }
 
-/** Plain text of a `<text>` element; child elements (tspan) are not supported. */
+/**
+ * Plain text of a `<text>` element. `<text>` must contain only string children (no `tspan`):
+ * emit rejects anything else in every font mode, and the animator relies on this.
+ */
 function textOf(el: SvgElement): string {
   let out = "";
   for (const c of el.children ?? []) {
@@ -293,7 +296,19 @@ export const emit: EmitFn = (
     camera,
     animation.script && !raster ? h("script", null, cdata(animation.script)) : null,
   );
-  if (raster && cssText.includes("var(")) throw new Error("raster CSS still contains var()");
+  if (raster) {
+    if (cssText.includes("var(")) throw new Error("raster CSS still contains var()");
+    const left = (n: SvgNode): void =>
+      walk(n, (el) => {
+        for (const [k, v] of Object.entries(el.attrs ?? {})) {
+          if (typeof v === "string" && v.includes("var(")) {
+            throw new Error(`raster attribute ${k} still contains var()`);
+          }
+        }
+      });
+    for (const nodes of layers.values()) nodes.forEach(left);
+    defsExtra.forEach(left);
+  }
   return serialize(root);
 };
 

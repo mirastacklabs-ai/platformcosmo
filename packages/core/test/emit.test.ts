@@ -89,6 +89,26 @@ const label = (extra: Record<string, string | number> = {}) =>
     "Load <balancer> & co",
   );
 
+describe("id scheme", () => {
+  test("rack, slot devices, _front shell and parts never collide", () => {
+    const ids = createIds("pc-t");
+    const objects = ["r", "r_front", "r/u1", "r/u1_front", "r_5ffront"];
+    const parts = ["front", "front_top", "5ffront", "a_b", "a", "b"];
+    const out: string[] = [];
+    for (const o of objects) {
+      out.push(ids.object(o), ids.overlay(o), ids.group(o), ids.edge(o), ids.edgePath(o));
+      out.push(ids.metric(o), ids.metricValue(o, 0), ids.metricValue(o, 1));
+      for (const f of ["top", "left", "right"] as const) {
+        out.push(ids.face(o, f));
+        for (const part of parts) out.push(ids.face(o, f, part));
+      }
+    }
+    expect(new Set(out).size).toBe(out.length);
+    expect(ids.face("r_front", "top")).toBe("pc-t-f_r_5ffront__top");
+    expect(ids.face("r", "top", "front")).toBe("pc-t-f_r__front__top");
+  });
+});
+
 describe("emit structure", () => {
   const svg = emit(model(), noAnim, browser);
 
@@ -135,7 +155,7 @@ describe("emit structure", () => {
   });
 
   test("hidden edges become paths in defs", () => {
-    expect(svg).toContain('<defs><path id="pc-test-ep_e_a_b" d="M0 0L10 10"/></defs>');
+    expect(svg).toContain('<defs><path id="pc-test-ep_e_5fa_5fb" d="M0 0L10 10"/></defs>');
   });
 
   test("no darkTheme means no media query", () => {
@@ -279,6 +299,15 @@ describe("raster target", () => {
     anim,
     { font: "embed", target: "raster" },
   );
+
+  test("attributes are checked for leftover var() too", () => {
+    const m = model({ objects: [h("rect", { fill: "var(--other)" })] });
+    expect(() => emit(m, anim, { font: "embed", target: "raster" })).toThrow(/still contains var/);
+    const nested = model({
+      objects: [h("rect", { style: "fill:var(--pc-palette-blue,var(--pc-palette-red))" })],
+    });
+    expect(() => emit(nested, anim, { font: "embed", target: "raster" })).not.toThrow();
+  });
 
   test("literal values only: no var(), media, keyframes or font-face", () => {
     expect(out).not.toContain("var(");

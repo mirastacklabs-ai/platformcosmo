@@ -94,15 +94,18 @@ function cmpStr(a: string, b: string): number {
  * first, its slot devices `R/<slot>` next, and its viewer-side shell `R_front` last.
  * Returns -1 when `a` must precede `b`, 1 when after, 0 when no rule applies.
  */
-function forcedRelation(a: string, b: string): -1 | 0 | 1 {
-  const rank = (id: string, base: string): number =>
-    id === base ? 0 : id.startsWith(`${base}/`) ? 1 : id === `${base}_front` ? 2 : -1;
-  const baseOf = (id: string): string | undefined =>
-    id.endsWith("_front") ? id.slice(0, -"_front".length) : id.split("/")[0];
-  for (const base of new Set([baseOf(a), baseOf(b)])) {
-    if (base === undefined) continue;
-    const ra = rank(a, base);
-    const rb = rank(b, base);
+function rackBase(id: string): string {
+  return id.endsWith("_front") ? id.slice(0, -"_front".length) : (id.split("/")[0] as string);
+}
+
+function rackRank(id: string, base: string): number {
+  return id === base ? 0 : id.startsWith(`${base}/`) ? 1 : id === `${base}_front` ? 2 : -1;
+}
+
+function forcedRelation(a: string, b: string, baseA: string, baseB: string): -1 | 0 | 1 {
+  for (const base of baseA === baseB ? [baseA] : [baseA, baseB]) {
+    const ra = rackRank(a, base);
+    const rb = rackRank(b, base);
     if (ra >= 0 && rb >= 0 && ra !== rb) return ra < rb ? -1 : 1;
   }
   return 0;
@@ -126,10 +129,16 @@ export function depthOrder(items: readonly DepthItem[], projection: Projection):
   const out: number[][] = items.map(() => []);
   const indeg = new Array<number>(n).fill(0);
   const forcedPred: number[][] = items.map(() => []);
+  const bases = items.map((it) => rackBase(it.id)); // computed once, outside the O(n^2) loop
 
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      const forced = forcedRelation((items[i] as DepthItem).id, (items[j] as DepthItem).id);
+      const forced = forcedRelation(
+        (items[i] as DepthItem).id,
+        (items[j] as DepthItem).id,
+        bases[i] as string,
+        bases[j] as string,
+      );
       if (forced !== 0) {
         const [a, b] = forced < 0 ? [i, j] : [j, i];
         (out[a] as number[]).push(b);
