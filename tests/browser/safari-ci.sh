@@ -37,16 +37,28 @@ stop_driver() {
 rc=0
 run_pass() { # pass-name reduced(0|1)
   local pass="$1" reduced="$2" input name
-  for input in out/fixtures real; do
+  for input in ${SAFARI_INPUTS:-out/fixtures real}; do
     name="${input##*/}"
     [ -d "tests/browser/$input" ] || { echo "missing tests/browser/$input" >&2; rc=1; continue; }
     echo "=== Safari $pass: $input"
     mkdir -p "tests/browser/out-safari/$pass/$name"
     # evidence: what the display itself shows while the session runs
     (sleep 12; screencapture -x "tests/browser/out-safari/$pass/$name/screen.png" || true) &
-    SAFARI_REDUCED="$reduced" INPUT_DIR="tests/browser/$input" \
-      OUT_DIR="tests/browser/out-safari/$pass/$name" GIT_SHA="$(git describe --always --dirty)" \
-      node tests/browser/safari.mjs || rc=1
+    # Exit 3 = blank WebDriver screenshots (an unpainted window): retry with a fresh Safari
+    # session, at most twice; the attempt number is kept in the output directory.
+    local attempt code=0
+    for attempt in 1 2 3; do
+      SAFARI_REDUCED="$reduced" INPUT_DIR="tests/browser/$input" \
+        OUT_DIR="tests/browser/out-safari/$pass/$name" GIT_SHA="$(git describe --always --dirty)" \
+        node tests/browser/safari.mjs && { code=0; break; } || code=$?
+      echo "Safari $pass/$input attempt $attempt exited $code"
+      [ "$code" = 3 ] || break
+      mkdir -p "tests/browser/out-safari/$pass/$name/blank-attempt-$attempt"
+      cp tests/browser/out-safari/"$pass/$name"/*.png "tests/browser/out-safari/$pass/$name/blank-attempt-$attempt/" 2>/dev/null || true
+      stop_driver
+      start_driver || break
+    done
+    [ "$code" = 0 ] || rc=1
   done
 }
 

@@ -70,6 +70,7 @@ function writeResults() {
 let server;
 let sid;
 let exitCode;
+let blankRun = false; // WebDriver screenshots were blank: the caller may retry with a fresh session
 try {
   server = await startServer(IN);
   const session = await wd("POST", "/session", {
@@ -182,6 +183,11 @@ try {
       ? ""
       : `identical: ${pairs.map((p) => `${p[0]}=${p[1]}`).join(", ")} (window not rendering?)`,
   );
+  if (pairs.length > 0) {
+    // Nothing below can be judged on blank screenshots: stop and let the caller retry once.
+    blankRun = true;
+    throw new Error("blank WebDriver screenshots (window not painted)");
+  }
   const host = await exec(
     "return {reduce: matchMedia('(prefers-reduced-motion: reduce)').matches, dark: matchMedia('(prefers-color-scheme: dark)').matches}",
   );
@@ -368,6 +374,6 @@ try {
 } finally {
   if (sid) await wd("DELETE", `/session/${sid}`).catch(() => undefined);
   if (server) await server.close();
-  exitCode = writeResults() === 0 ? 0 : 1;
+  exitCode = writeResults() === 0 ? 0 : blankRun ? 3 : 1;
 }
 process.exit(exitCode);

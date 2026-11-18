@@ -8,6 +8,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      safari_only:
+        description: "Run only the Safari job, rendering its own inputs on macOS (fast loop)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -18,6 +23,7 @@ concurrency:
 
 jobs:
   browser-check:
+    if: ${{ !inputs.safari_only }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -61,11 +67,24 @@ jobs:
         with:
           node-version: 24
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: ${{ !inputs.safari_only }}
         with:
           name: browser-check
           path: tests/browser
+      - name: Render the examples on macOS (safari_only fast loop)
+        if: ${{ inputs.safari_only }}
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm build
+          mkdir -p tests/browser/real
+          for f in load-balancing rag-pipeline kubernetes-deployment cdn-cache gpu-inference-cluster dc-hall; do
+            node packages/cli/dist/bin.js build "examples/$f.cosmo.json" -o tests/browser/real --interactive
+          done
       - run: sudo safaridriver --enable
       - name: Safari checks (Reduce Motion off, then on) on fixtures and real output
+        env:
+          SAFARI_INPUTS: ${{ inputs.safari_only && 'real' || 'out/fixtures real' }}
         run: tests/browser/safari-ci.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
