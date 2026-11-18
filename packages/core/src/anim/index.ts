@@ -126,9 +126,14 @@ function staticStepCss(model: RenderModel, k: number): string {
   return out.join("\n");
 }
 
+/** DC flows (`dc_f_*`) belong to the DC pack: always on, in every step, frame and loop. */
+const isDcFlow = (f: SceneFlow): boolean => f.id.startsWith("dc_f_");
+
+/** Flows shown in step `k`: all DC flows plus the step's flows (the base flows without steps). */
 function flowsOfStep(model: RenderModel, k: number): readonly SceneFlow[] {
-  const tl = model.scene.timeline;
-  return tl.length === 0 ? model.scene.flows : (tl[k]?.flows ?? []);
+  const { flows, timeline: tl } = model.scene;
+  if (tl.length === 0) return flows;
+  return [...(tl[k]?.flows.filter((f) => !isDcFlow(f)) ?? []), ...flows.filter(isDcFlow)];
 }
 
 function wrap(model: RenderModel, flowGroups: SvgElement[]): AnimationLayer["layers"] {
@@ -228,8 +233,8 @@ function loopLayer(
   if (n === 0) {
     for (const f of model.scene.flows) flowById.set(f.id, { flow: f, steps: [] });
   } else {
-    tl.forEach((s, i) => {
-      for (const f of s.flows) {
+    tl.forEach((_, i) => {
+      for (const f of flowsOfStep(model, i)) {
         const e = flowById.get(f.id) ?? { flow: f, steps: [] };
         e.steps.push(i);
         flowById.set(f.id, e);
