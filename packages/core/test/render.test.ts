@@ -11,7 +11,7 @@ import type {
   Rect,
   ThemeRegistry,
 } from "../src/contracts/index.js";
-import { emit } from "../src/emit/index.js";
+import { emit, h } from "../src/emit/index.js";
 import { optimize } from "../src/optimize/index.js";
 import { buildModelWithDiagnostics, nudgeLabel, rectsOverlap } from "../src/render/model.js";
 import {
@@ -482,6 +482,119 @@ describe("label and overlay polish", () => {
       expect(svg).toMatch(/<ellipse class="pc-test-shadow" cx="[-\d.]+" cy="[-\d.]+"/);
       expect(svg).not.toMatch(/<use[^>]*transform/);
     }
+  });
+});
+
+describe("DC layering (D31): floors flat, cables depth-sorted, particles on top", () => {
+  const dcScene = () => {
+    const scene = loadBalancerScene();
+    const base = scene.objects[0]!;
+    const mk = (
+      id: string,
+      type: string,
+      x: number,
+      y: number,
+      z: number,
+      w: number,
+      d: number,
+      hh: number,
+    ) => ({
+      ...base,
+      id,
+      type,
+      source: "dc" as const,
+      label: undefined,
+      icon: undefined,
+      box: { origin: { x, y, z }, size: { x: w, y: d, z: hh } },
+    });
+    const objects = [
+      mk("floor", "floor-grid", 0, 0, 0, 8, 6, 0.05),
+      mk("tiles", "perforated-tiles", 1, 4, 0.05, 2, 1, 0.02),
+      mk("tray", "cable-tray", 1, 2, 0.5, 5, 0.4, 0.1),
+      mk("back", "rack", 3, 0, 0, 1, 1, 2),
+      mk("front", "rack", 3, 3.5, 0, 1, 1, 2),
+    ];
+    const cable = {
+      id: "c1",
+      from: "back",
+      to: "front",
+      kind: "cable" as const,
+      cableKind: "power" as const,
+      style: "solid" as const,
+      bidirectional: false,
+      hidden: false,
+      path: [
+        { x: 1, y: 2.2, z: 0.62 },
+        { x: 6, y: 2.2, z: 0.62 },
+      ],
+      arrow: { start: false, end: false },
+    };
+    const air = { ...cable, id: "a1", kind: "edge" as const, cableKind: undefined, hidden: true };
+    return {
+      ...scene,
+      objects,
+      groups: [],
+      edges: [cable, air],
+      flows: [{ id: "dc_f_1", edge: "a1", kind: "airflow" as const, rate: 2, reverse: false }],
+      timeline: [],
+      metrics: [],
+      legend: [],
+      focusTargets: {},
+      bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 8, y: 6, z: 2 } },
+    } as ReturnType<typeof loadBalancerScene>;
+  };
+  const particles: AnimationLayer = {
+    css: "",
+    defs: [],
+    layers: {
+      flows: [h("g", { id: "pc-test-particles" }, h("g", { id: "pc-test-fl_dc_5ff_5f1" }))],
+    },
+    duration: 1,
+  };
+
+  test("cable segments come after floors, trays and tiles and before objects in front", () => {
+    const svg = emit(buildModel({ ...inputs(), scene: dcScene() }), particles, { font: "system" });
+    const at = (needle: string) => {
+      const i = svg.indexOf(needle);
+      expect(i, needle).toBeGreaterThan(-1);
+      return i;
+    };
+    const edgesLayer = at('id="pc-test-ly_edges"');
+    // floor objects are flat ground: inside the groups layer, before the edges layer
+    expect(at('id="pc-test-o_floor"')).toBeLessThan(edgesLayer);
+    expect(at('id="pc-test-o_tiles"')).toBeLessThan(edgesLayer);
+    expect(at('id="pc-test-ly_groups"')).toBeLessThan(at('id="pc-test-o_floor"'));
+    // trays and racks stay in the objects layer; the cable segment is sorted among them
+    const seg = at('id="pc-test-e_c1__s0"');
+    expect(at('id="pc-test-ly_objects"')).toBeLessThan(seg);
+    expect(at('id="pc-test-o_tray"')).toBeLessThan(seg);
+    expect(seg).toBeLessThan(at('id="pc-test-o_front"'));
+    expect(at('id="pc-test-o_floor"')).toBeLessThan(seg);
+    expect(at('id="pc-test-o_tiles"')).toBeLessThan(seg);
+    // the segment is a painted cable path; the single particle path is not painted
+    expect(svg).toMatch(
+      /<path id="pc-test-e_c1__s0" class="pc-test-edge pc-test-edge-solid pc-test-cable-power" d="M/,
+    );
+    expect(svg).toMatch(/<path id="pc-test-ep_c1" fill="none" stroke="none" d="M/);
+    // the objects layer holds the segment, not the edges layer
+    const edgesBlock = svg.slice(edgesLayer, at('id="pc-test-ly_objects"'));
+    expect(edgesBlock).not.toContain("pc-test-cable-power");
+  });
+
+  test("DC particles are drawn above the objects layer (everything else keeps D6 order)", () => {
+    const dc = emit(buildModel({ ...inputs(), scene: dcScene() }), particles, { font: "system" });
+    expect(dc.indexOf('id="pc-test-ly_objects"')).toBeLessThan(dc.indexOf('id="pc-test-ly_flows"'));
+    expect(dc.indexOf('id="pc-test-ly_flows"')).toBeLessThan(dc.indexOf('id="pc-test-ly_labels"'));
+    const plain = emit(buildModel(inputs()), particles, { font: "system" });
+    expect(plain.indexOf('id="pc-test-ly_flows"')).toBeLessThan(
+      plain.indexOf('id="pc-test-ly_objects"'),
+    );
+  });
+
+  test("cable segment ids cannot collide with other ids", () => {
+    const svg = emit(buildModel({ ...inputs(), scene: dcScene() }), particles, { font: "system" });
+    const found = [...svg.matchAll(/ id="([^"]+)"/g)].map((m) => m[1] as string);
+    expect(new Set(found).size).toBe(found.length);
   });
 });
 

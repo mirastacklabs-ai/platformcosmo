@@ -14,6 +14,7 @@ import type {
   SvgNode,
   ThemeTokens,
   Vec2,
+  Vec3,
 } from "../contracts/index.js";
 import { depthOrder, orderGroups } from "../depth/index.js";
 import { createIds, iconDef } from "../emit/index.js";
@@ -47,6 +48,9 @@ export interface BuiltModel {
 }
 
 const MARGIN_FOCUS = 12;
+/** DC floor objects drawn flat with the ground, before edges. */
+const FLOOR_TYPES: ReadonlySet<string> = new Set(["floor-grid", "perforated-tiles"]);
+const CABLE_PREFIX = "\u0001cable:";
 const METRIC_H = 38;
 const CAPTION_H = 30;
 const LEGEND_H = 22;
@@ -212,8 +216,45 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
 
   // ---- Objects -------------------------------------------------------------------------
   const objectById = new Map<string, SceneObject>(scene.objects.map((o) => [o.id, o]));
+  // Flat DC floor objects are drawn with the ground (groups layer), before every edge.
+  const floorIds = scene.objects
+    .filter((o) => FLOOR_TYPES.has(o.type))
+    .map((o) => o.id)
+    .sort();
+  // Cables are elevated (PLAN §6 exception to D6): each segment is a thin world-space item
+  // depth-sorted together with the objects, so trays, racks and floors occlude them correctly.
+  const cableSegments = new Map<string, { edge: SceneEdge; a: Vec3; b: Vec3 }>();
+  for (const e of scene.edges) {
+    if (e.kind !== "cable" || e.hidden) continue;
+    for (let i = 0; i + 1 < e.path.length; i++) {
+      cableSegments.set(`${CABLE_PREFIX}${e.id}#${i}`, {
+        edge: e,
+        a: e.path[i] as Vec3,
+        b: e.path[i + 1] as Vec3,
+      });
+    }
+  }
+  const segBox = (a: Vec3, b: Vec3) => {
+    const t = 0.04; // thickness so zero-extent axes still take part in overlap tests
+    const lo = {
+      x: Math.min(a.x, b.x) - t / 2,
+      y: Math.min(a.y, b.y) - t / 2,
+      z: Math.min(a.z, b.z) - t / 2,
+    };
+    const hi = {
+      x: Math.max(a.x, b.x) + t / 2,
+      y: Math.max(a.y, b.y) + t / 2,
+      z: Math.max(a.z, b.z) + t / 2,
+    };
+    return { origin: lo, size: { x: hi.x - lo.x, y: hi.y - lo.y, z: hi.z - lo.z } };
+  };
   const order = depthOrder(
-    scene.objects.map((o) => ({ id: o.id, box: o.box })),
+    [
+      ...scene.objects
+        .filter((o) => !FLOOR_TYPES.has(o.type))
+        .map((o) => ({ id: o.id, box: o.box })),
+      ...[...cableSegments].map(([id, seg]) => ({ id, box: segBox(seg.a, seg.b) })),
+    ],
     projection,
   );
   const anchors: Record<string, ObjectAnchor> = {};
@@ -222,8 +263,25 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   const arrowNodes: SvgNode[] = [];
   const placed: Rect[] = []; // label boxes, so edge labels can step aside
 
-  for (const id of order) {
+  for (const id of [...floorIds, ...order]) {
+    const seg = cableSegments.get(id);
+    if (seg) {
+      const [i] = id.split("#").slice(-1);
+      const cls = [`${P}-edge`, `${P}-edge-${seg.edge.style}`];
+      if (seg.edge.cableKind) cls.push(`${P}-cable-${seg.edge.cableKind}`);
+      const pa = projection.project(seg.a);
+      const pb = projection.project(seg.b);
+      layers.objects.push(
+        h("path", {
+          id: `${ids.edge(seg.edge.id)}__s${i}`,
+          class: cls.join(" "),
+          d: polylinePath([pa, pb]),
+        }),
+      );
+      continue;
+    }
     const o = objectById.get(id) as SceneObject;
+    const target = FLOOR_TYPES.has(o.type) ? layers.groups : layers.objects;
     const faceNodes: SvgNode[] = [];
     if (o.parts && o.parts.length > 0) {
       for (const part of o.parts) {
@@ -340,7 +398,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       }
     }
 
-    layers.objects.push(
+    target.push(
       h(
         "g",
         { id: ids.object(o.id), class: ids.stateClass(o.state) },
@@ -515,8 +573,12 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   function edgeNode(e: SceneEdge, pts: readonly Vec2[]): SvgNode {
     const cls = [`${P}-edge`, `${P}-edge-${e.style}`];
     if (e.kind === "cable" && e.cableKind) cls.push(`${P}-cable-${e.cableKind}`);
+    // Cables are drawn as depth-sorted segments in the objects layer; this path only carries
+    // particles (`<mpath>`), so it is not painted.
     const kids: SvgNode[] = [
-      h("path", { id: ids.edgePath(e.id), class: cls.join(" "), d: polylinePath(pts) }),
+      e.kind === "cable"
+        ? h("path", { id: ids.edgePath(e.id), fill: "none", stroke: "none", d: polylinePath(pts) })
+        : h("path", { id: ids.edgePath(e.id), class: cls.join(" "), d: polylinePath(pts) }),
     ];
     // Arrowheads are drawn in the labels layer so objects never cover them.
     if (e.arrow.end) {
