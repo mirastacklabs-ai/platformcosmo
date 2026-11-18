@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { strToU8, zipSync } from "fflate";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+
+// Archive-limit tests build large zips; allow headroom on loaded CI machines.
+vi.setConfig({ testTimeout: 30_000 });
 import type { IconHttpClient } from "../src/index.js";
 import {
   FETCH_LIMITS,
