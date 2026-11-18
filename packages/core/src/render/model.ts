@@ -14,6 +14,7 @@ import type {
   SvgNode,
   ThemeTokens,
   Vec2,
+  Vec3,
 } from "../contracts/index.js";
 import { depthOrder, orderGroups } from "../depth/index.js";
 import { createIds, iconDef } from "../emit/index.js";
@@ -47,6 +48,9 @@ export interface BuiltModel {
 }
 
 const MARGIN_FOCUS = 12;
+/** DC floor objects drawn flat with the ground, before edges. */
+const FLOOR_TYPES: ReadonlySet<string> = new Set(["floor-grid", "perforated-tiles"]);
+const CABLE_PREFIX = "\u0001cable:";
 const METRIC_H = 38;
 const CAPTION_H = 30;
 const LEGEND_H = 22;
@@ -144,6 +148,37 @@ export function inputsOf(model: RenderModel): ModelInputs | undefined {
   return registry.get(model);
 }
 
+/**
+ * Splits a segment where it crosses integer x or y coordinates (floor tile boundaries), so a
+ * long run is depth-sorted piece by piece against the tiles, trays and racks it passes.
+ */
+export function splitAtTiles(a: Vec3, b: Vec3): [Vec3, Vec3][] {
+  const ts = new Set<number>([0, 1]);
+  for (const axis of ["x", "y"] as const) {
+    const lo = Math.min(a[axis], b[axis]);
+    const hi = Math.max(a[axis], b[axis]);
+    if (hi - lo < 1e-9) continue;
+    for (let v = Math.floor(lo) + 1; v < hi - 1e-9; v++) {
+      const t = (v - a[axis]) / (b[axis] - a[axis]);
+      if (t > 1e-9 && t < 1 - 1e-9) ts.add(Number(t.toFixed(9)));
+    }
+  }
+  const sorted = [...ts].sort((p, q) => p - q);
+  const at = (t: number): Vec3 => ({
+    x: round2(a.x + (b.x - a.x) * t),
+    y: round2(a.y + (b.y - a.y) * t),
+    z: round2(a.z + (b.z - a.z) * t),
+  });
+  const out: [Vec3, Vec3][] = [];
+  for (let i = 0; i + 1 < sorted.length; i++) {
+    out.push([
+      i === 0 ? a : at(sorted[i] as number),
+      i + 2 === sorted.length ? b : at(sorted[i + 1] as number),
+    ]);
+  }
+  return out;
+}
+
 /** Do two rectangles overlap (touching edges do not count)? */
 export function rectsOverlap(r: Rect, q: Rect): boolean {
   return r.x < q.x + q.width && q.x < r.x + r.width && r.y < q.y + q.height && q.y < r.y + r.height;
@@ -212,18 +247,90 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
 
   // ---- Objects -------------------------------------------------------------------------
   const objectById = new Map<string, SceneObject>(scene.objects.map((o) => [o.id, o]));
+  // Flat DC floor objects are drawn with the ground (groups layer), before every edge.
+  const floorIds = scene.objects
+    .filter((o) => FLOOR_TYPES.has(o.type))
+    .map((o) => o.id)
+    .sort();
+  // Cables are elevated (PLAN §6 exception to D6): each segment is a thin world-space item
+  // depth-sorted together with the objects, so trays, racks and floors occlude them correctly.
+  const cableSegments = new Map<string, { edge: SceneEdge; a: Vec3; b: Vec3 }>();
+  for (const e of scene.edges) {
+    if (e.kind !== "cable" || e.hidden) continue;
+    let n = 0;
+    for (let i = 0; i + 1 < e.path.length; i++) {
+      for (const [a, b] of splitAtTiles(e.path[i] as Vec3, e.path[i + 1] as Vec3)) {
+        cableSegments.set(`${CABLE_PREFIX}${e.id}#${n++}`, { edge: e, a, b });
+      }
+    }
+  }
+  const segBox = (a: Vec3, b: Vec3) => {
+    const t = 0.04; // thickness so zero-extent axes still take part in overlap tests
+    const lo = {
+      x: Math.min(a.x, b.x) - t / 2,
+      y: Math.min(a.y, b.y) - t / 2,
+      z: Math.min(a.z, b.z) - t / 2,
+    };
+    const hi = {
+      x: Math.max(a.x, b.x) + t / 2,
+      y: Math.max(a.y, b.y) + t / 2,
+      z: Math.max(a.z, b.z) + t / 2,
+    };
+    return { origin: lo, size: { x: hi.x - lo.x, y: hi.y - lo.y, z: hi.z - lo.z } };
+  };
   const order = depthOrder(
-    scene.objects.map((o) => ({ id: o.id, box: o.box })),
+    [
+      ...scene.objects
+        .filter((o) => !FLOOR_TYPES.has(o.type))
+        .map((o) => ({ id: o.id, box: o.box })),
+      ...[...cableSegments].map(([id, seg]) => ({ id, box: segBox(seg.a, seg.b) })),
+    ],
     projection,
   );
   const anchors: Record<string, ObjectAnchor> = {};
   const iconRefs = new Set<string>();
   const labelNodes: SvgNode[] = [];
+  const floorNodes: SvgNode[] = []; // appended after the group slabs, so slabs never cover them
   const arrowNodes: SvgNode[] = [];
   const placed: Rect[] = []; // label boxes, so edge labels can step aside
 
-  for (const id of order) {
+  let openSeg: { edgeId: string; id: string; cls: string; pts: Vec2[] } | undefined;
+  const flushSeg = () => {
+    if (!openSeg) return;
+    layers.objects.push(
+      h("path", { id: openSeg.id, class: openSeg.cls, d: polylinePath(openSeg.pts) }),
+    );
+    openSeg = undefined;
+  };
+  for (const id of [...floorIds, ...order]) {
+    const seg = cableSegments.get(id);
+    if (seg) {
+      const [i] = id.split("#").slice(-1);
+      const pa = projection.project(seg.a);
+      const pb = projection.project(seg.b);
+      // Pieces of one cable that stay adjacent after sorting merge back into one path.
+      if (openSeg && openSeg.edgeId === seg.edge.id) {
+        const last = openSeg.pts[openSeg.pts.length - 1] as Vec2;
+        if (last.x === pa.x && last.y === pa.y) {
+          openSeg.pts.push(pb);
+          continue;
+        }
+      }
+      flushSeg();
+      const cls = [`${P}-edge`, `${P}-edge-${seg.edge.style}`];
+      if (seg.edge.cableKind) cls.push(`${P}-cable-${seg.edge.cableKind}`);
+      cls.push(`${ids.edge(seg.edge.id)}-seg`);
+      openSeg = {
+        edgeId: seg.edge.id,
+        id: `${ids.edge(seg.edge.id)}__s${i}`,
+        cls: cls.join(" "),
+        pts: [pa, pb],
+      };
+      continue;
+    }
+    flushSeg();
     const o = objectById.get(id) as SceneObject;
+    const target = FLOOR_TYPES.has(o.type) ? floorNodes : layers.objects;
     const faceNodes: SvgNode[] = [];
     if (o.parts && o.parts.length > 0) {
       for (const part of o.parts) {
@@ -340,7 +447,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       }
     }
 
-    layers.objects.push(
+    target.push(
       h(
         "g",
         { id: ids.object(o.id), class: ids.stateClass(o.state) },
@@ -405,6 +512,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     }
   }
 
+  flushSeg();
+
   // ---- Groups --------------------------------------------------------------------------
   for (const g of orderGroups(scene.groups)) {
     const kindClass =
@@ -456,6 +565,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       placed.push(pill);
     }
   }
+
+  layers.groups.push(...floorNodes);
 
   // ---- Edges ---------------------------------------------------------------------------
   const edgePaths: Record<string, EdgePath> = {};
@@ -515,8 +626,12 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   function edgeNode(e: SceneEdge, pts: readonly Vec2[]): SvgNode {
     const cls = [`${P}-edge`, `${P}-edge-${e.style}`];
     if (e.kind === "cable" && e.cableKind) cls.push(`${P}-cable-${e.cableKind}`);
+    // Cables are drawn as depth-sorted segments in the objects layer; this path only carries
+    // particles (`<mpath>`), so it is not painted.
     const kids: SvgNode[] = [
-      h("path", { id: ids.edgePath(e.id), class: cls.join(" "), d: polylinePath(pts) }),
+      e.kind === "cable"
+        ? h("path", { id: ids.edgePath(e.id), fill: "none", stroke: "none", d: polylinePath(pts) })
+        : h("path", { id: ids.edgePath(e.id), class: cls.join(" "), d: polylinePath(pts) }),
     ];
     // Arrowheads are drawn in the labels layer so objects never cover them.
     if (e.arrow.end) {
