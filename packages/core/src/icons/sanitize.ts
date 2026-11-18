@@ -247,7 +247,7 @@ const GEOMETRY = new Set([
 const ROOT_IGNORED = new Set(["viewBox", "width", "height", "version", "preserveAspectRatio"]);
 const PATH_RE = /^[MmLlHhVvCcSsQqTtAaZz0-9eE+\-.,\s]*$/;
 const GENERIC_RE = /^[#\w(),.%\s\-+/:]*$/;
-const URL_REF_RE = /url\(\s*(['"]?)#([^)'"\s]+)\1\s*\)/gi;
+const URL_REF_RE = /url\(\s*(['"]?)#([\w.:/-]+)\1\s*\)/gi;
 const DATA_IMG_RE = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=\s]*$/;
 const ID_RE = /^[A-Za-z0-9_][\w.:/-]*$/;
 const FORBIDDEN_RE = /javascript:|vbscript:|data:|expression\s*\(|@import|<|\\/i;
@@ -515,15 +515,68 @@ function sanitizeNode(node: XNode, ctx: Ctx): KNode | undefined {
   return { name: node.name, attrs, children };
 }
 
+/** Expanded element count per sanitized icon (local; no contract change). */
+const costs = new WeakMap<object, number>();
+
+/** Elements one placement of this sanitized icon renders (with `<use>` expanded). */
+export function sanitizedCost(svg: object): number | undefined {
+  return costs.get(svg);
+}
+
+const REF_CONTAINERS = new Set(["mask", "clipPath", "pattern"]);
+
+/**
+ * Reference depth 1: inside a mask, clipPath or pattern, `url(#x)` / `href` references that point
+ * at another mask, clipPath or pattern are dropped, so those cannot chain or nest.
+ */
+function limitRefDepth(kept: KNode[], removed: Set<string>): void {
+  const byId = new Map<string, KNode>();
+  const index = (ns: readonly KNode[]): void => {
+    for (const n of ns) {
+      for (const [k, v] of n.attrs) if (k === "id") byId.set(v, n);
+      index(n.children);
+    }
+  };
+  index(kept);
+  const visit = (ns: readonly KNode[], inside: boolean): void => {
+    for (const n of ns) {
+      const here = inside || REF_CONTAINERS.has(n.name);
+      if (here) {
+        for (let i = n.attrs.length - 1; i >= 0; i--) {
+          const [k, v] = n.attrs[i] as [string, string];
+          let targets: string[] = [];
+          if (k === "href") targets = [v.slice(1)];
+          else for (const m of v.matchAll(URL_REF_RE)) targets.push(m[2] as string);
+          if (targets.some((t) => REF_CONTAINERS.has(byId.get(t)?.name ?? ""))) {
+            n.attrs.splice(i, 1);
+            removed.add("ref-depth");
+          }
+        }
+      }
+      if (here) {
+        // `<use>` is not allowed anywhere inside a mask, clipPath or pattern.
+        for (let i = n.children.length - 1; i >= 0; i--) {
+          if ((n.children[i] as KNode).name === "use") {
+            n.children.splice(i, 1);
+            removed.add("element:use-in-ref");
+          }
+        }
+      }
+      visit(n.children, here);
+    }
+  };
+  visit(kept, false);
+}
+
 /** Upper bound on rendered instances once every `<use>` is expanded. */
-const MAX_EXPANDED = 20_000;
+const MAX_EXPANDED = 2000;
 
 /**
  * Defeats `<use>` amplification: a `<use>` whose target is (or contains) another `<use>` or a
  * `<pattern>` is dropped, so nesting cannot multiply; the expanded node count is then capped by
  * dropping the last remaining `<use>` elements.
  */
-function pruneUses(kept: KNode[], removed: Set<string>): KNode[] {
+function pruneUses(kept: KNode[], removed: Set<string>): { kept: KNode[]; total: number } {
   const byId = new Map<string, KNode>();
   const uses: KNode[] = [];
   const walk = (ns: readonly KNode[]): void => {
@@ -534,12 +587,19 @@ function pruneUses(kept: KNode[], removed: Set<string>): KNode[] {
     }
   };
   walk(kept);
-  if (uses.length === 0) return kept;
   const risky = new Map<KNode, boolean>();
   const isRisky = (n: KNode): boolean => {
     const c = risky.get(n);
     if (c !== undefined) return c;
-    const r = n.name === "use" || n.name === "pattern" || n.children.some(isRisky);
+    // Risky: another <use>, a <pattern>, or any url()/href reference to a mask, clipPath or
+    // pattern (such references multiply rendering work when the target is instantiated per <use>).
+    const refsContainer = n.attrs.some(([k, v]) => {
+      if (k === "id") return false;
+      const ids =
+        k === "href" ? [v.slice(1)] : [...v.matchAll(URL_REF_RE)].map((m) => m[2] as string);
+      return ids.some((id) => REF_CONTAINERS.has(byId.get(id)?.name ?? ""));
+    });
+    const r = n.name === "use" || n.name === "pattern" || refsContainer || n.children.some(isRisky);
     risky.set(n, r);
     return r;
   };
@@ -573,11 +633,11 @@ function pruneUses(kept: KNode[], removed: Set<string>): KNode[] {
     total -= cost(u);
     drop.add(u);
   }
-  if (drop.size === 0) return kept;
+  if (drop.size === 0) return { kept, total };
   removed.add("element:use-limit");
   const filter = (ns: readonly KNode[]): KNode[] =>
     ns.filter((n) => !drop.has(n)).map((n) => ({ ...n, children: filter(n.children) }));
-  return filter(kept);
+  return { kept: filter(kept), total };
 }
 
 // --- serialization ---------------------------------------------------------------
@@ -706,7 +766,9 @@ export const sanitizeSvg: SvgSanitizer = (input, options): SanitizeResult => {
       const k = sanitizeNode(c, ctx);
       if (k) built.push(k);
     }
-    const kept = pruneUses(built, removed);
+    limitRefDepth(built, removed);
+    const pruned = pruneUses(built, removed);
+    const kept = pruned.kept;
     const order: string[] = [];
     collectIds(kept, order);
     const ids = new Map<string, string>();
@@ -720,7 +782,9 @@ export const sanitizeSvg: SvgSanitizer = (input, options): SanitizeResult => {
       }
       body = `<g${wa}>${body}</g>`;
     }
-    return { ok: true, svg: { viewBox, body, monochrome: ctx.monochrome }, removed: [...removed] };
+    const svg = { viewBox, body, monochrome: ctx.monochrome };
+    costs.set(svg, pruned.total);
+    return { ok: true, svg, removed: [...removed] };
   } catch (e) {
     if (e instanceof Reject) return { ok: false, reason: e.message };
     return { ok: false, reason: "unparseable SVG" };

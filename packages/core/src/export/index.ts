@@ -23,6 +23,7 @@ export { validateRenderOptions } from "./options.js";
 /** frames x width x height x 4 may not exceed this (PLAN: memory cap). */
 export const MAX_RASTER_BYTES = 1024 ** 3;
 const MAX_VIDEO_SECONDS = 120;
+const MAX_GIF_FPS = 50;
 const SVG_MIME = "image/svg+xml";
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");
@@ -36,10 +37,14 @@ function withRootSize(
   svg: string,
   vb: { readonly width: number; readonly height: number },
 ): string {
-  return svg.replace(/^(\s*)<svg\b([^>]*)>/, (_m, ws: string, attrs: string) => {
+  let replaced = false;
+  const out = svg.replace(/<svg\b([^>]*)>/, (_m, attrs: string) => {
+    replaced = true;
     const rest = attrs.replace(/\s(?:width|height)="[^"]*"/g, "");
-    return `${ws}<svg width="${vb.width}" height="${vb.height}"${rest}>`;
+    return `<svg width="${vb.width}" height="${vb.height}"${rest}>`;
   });
+  if (!replaced) throw new Error("raster emit produced no root <svg> element");
+  return out;
 }
 
 /**
@@ -189,25 +194,51 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
   if (videoKinds.length > 0) {
     const fps = options.video?.fps ?? 24;
     const loop = deps.animator.animate(model, { speed, mode: "loop" }).duration;
-    const seconds = Math.min(options.video?.durationSec ?? loop, MAX_VIDEO_SECONDS);
-    const count = seconds > 0 ? Math.max(1, Math.round(seconds * fps)) : 1;
-    // Frames are rasterized once and shared by gif and mp4.
-    let frames: Promise<Uint8Array[]> | undefined;
-    const getFrames = (): Promise<Uint8Array[]> =>
-      (frames ??= (async () => {
-        const list: Uint8Array[] = [];
-        for (let i = 0; i < count; i++) list.push(await renderFrame(i / fps, 1));
-        return list;
-      })());
+    const wantedSeconds = options.video?.durationSec ?? loop;
+    const seconds = Math.min(wantedSeconds, MAX_VIDEO_SECONDS);
+    if (options.video?.durationSec === undefined && wantedSeconds > MAX_VIDEO_SECONDS) {
+      diagnostics.push({
+        severity: "info",
+        code: "export/video-capped",
+        path: "",
+        message: `The timeline loop is ${Math.round(wantedSeconds)} s; the video was capped at ${MAX_VIDEO_SECONDS} s.`,
+      });
+    }
+    // GIF delays are whole centiseconds: above 50 fps they would round to 1 cs or 0, so the GIF
+    // is sampled at most 50 fps. Frames are rasterized once per rate and shared by gif and mp4.
+    const gifFps = Math.min(fps, MAX_GIF_FPS);
+    if (wanted.has("gif") && gifFps < fps) {
+      diagnostics.push({
+        severity: "warning",
+        code: "export/gif-fps-lowered",
+        path: "/video/fps",
+        message: `GIF frame delays are whole centiseconds, so the GIF uses ${gifFps} fps instead of ${fps}.`,
+      });
+    }
+    const cache = new Map<number, Promise<Uint8Array[]>>();
+    const getFrames = (rate: number, count: number): Promise<Uint8Array[]> => {
+      let p = cache.get(rate);
+      if (!p) {
+        p = (async () => {
+          const list: Uint8Array[] = [];
+          for (let i = 0; i < count; i++) list.push(await renderFrame(i / rate, 1));
+          return list;
+        })();
+        cache.set(rate, p);
+      }
+      return p;
+    };
     for (const kind of videoKinds) {
+      const rate = kind === "gif" ? gifFps : fps;
+      const count = seconds > 0 ? Math.max(1, Math.round(seconds * rate)) : 1;
       if (tooLarge(kind, 1, count)) continue;
       try {
-        const list = await getFrames();
+        const list = await getFrames(rate, count);
         const first = list[0];
         if (!first) continue;
         const { width, height } = pngSize(first);
         const encoder = kind === "mp4" ? options.video?.encoder : gifEncoder;
-        const data = await encoder!.encode(list, { fps, width, height, format: kind });
+        const data = await encoder!.encode(list, { fps: rate, width, height, format: kind });
         outputs.push({
           kind,
           path: `${name}.${kind}`,

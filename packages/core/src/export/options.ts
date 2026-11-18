@@ -26,6 +26,9 @@ function err(code: string, path: string, message: string, suggestion?: string): 
   };
 }
 
+/** Code-point order (locale independent, deterministic). */
+const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 /** `options/*` error diagnostics, sorted by (path, code); empty when the options are valid. */
@@ -81,7 +84,5 @@ export function validateRenderOptions(options: RenderOptions | undefined): Diagn
       out.push(err("options/invalid-output", "/outputs", `Unknown output kind "${String(k)}".`));
     }
   }
-  return out.sort((a, b) =>
-    a.path === b.path ? a.code.localeCompare(b.code) : a.path.localeCompare(b.path),
-  );
+  return out.sort((a, b) => (a.path === b.path ? cmp(a.code, b.code) : cmp(a.path, b.path)));
 }

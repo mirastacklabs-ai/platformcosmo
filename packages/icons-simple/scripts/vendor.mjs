@@ -4,7 +4,7 @@
 // package, e.g. `curl -sL https://registry.npmjs.org/simple-icons/-/simple-icons-16.38.0.tgz | tar xz`
 // into a scratch dir (creates ./package), then from the repo root (Node 24 strips the TS types):
 //   docker run --rm -v "$PWD":/work -w /work node:24.21-bookworm-slim \
-//     node packages/icons-simple/scripts/vendor.mjs <scratch>/package packages/icons-simple
+//     node packages/icons-simple/scripts/vendor.mjs <scratch>/package packages/icons-simple 2026-11-18
 // then regenerate the embedded module:
 //   docker run --rm -v "$PWD":/work -w /work node:24.21-bookworm-slim \
 //     node packages/icons-base/scripts/gen-pack.mjs packages/icons-simple
@@ -23,7 +23,11 @@ const data = JSON.parse(readFileSync(`${up}/data/simple-icons.json`, "utf8"));
 // data carries no holder). Apache-2.0 icons are kept only when the upstream repository at the
 // pinned commit is verified (below) to have no NOTICE file, or its NOTICE is shipped verbatim.
 const ALLOWED = new Set(["CC0-1.0", "Apache-2.0"]);
-const CHECKED_ON = new Date().toISOString().slice(0, 10);
+// The date of the upstream check is an explicit argument (YYYY-MM-DD) so reruns are reproducible.
+const CHECKED_ON = process.argv[4];
+if (!/^\d{4}-\d{2}-\d{2}$/.test(CHECKED_ON ?? "")) {
+  throw new Error("usage: vendor.mjs <simple-icons package dir> <out dir> <check date YYYY-MM-DD>");
+}
 const gh = (url) =>
   fetch(url, {
     headers: {
@@ -40,20 +44,24 @@ async function upstreamNotice(source) {
   const listing = `https://api.github.com/repos/${owner}/${repo}/contents/?ref=${sha}`;
   if (upstreamCache.has(listing)) return upstreamCache.get(listing);
   let result;
-  try {
-    const res = await gh(listing);
-    if (res.ok) {
-      const files = await res.json();
-      const n = files.find((f) => f.type === "file" && /^NOTICE(\.|$)/i.test(f.name));
-      if (n) {
-        const t = await gh(n.download_url);
-        if (t.ok) result = { checked: listing, notice: { name: n.name, text: await t.text() } };
-      } else {
-        result = { checked: listing, notice: null };
-      }
-    }
-  } catch {
+  // Only a 404 (repo or commit gone) means "unverifiable, drop the icon". Rate limits, other
+  // client errors, server errors and network failures abort the run so a flaky check can never
+  // silently change the bundled set.
+  const res = await gh(listing);
+  if (res.status === 404) {
     result = undefined;
+  } else if (!res.ok) {
+    throw new Error(`upstream check failed (${res.status}) for ${listing}`);
+  } else {
+    const files = await res.json();
+    const n = files.find((f) => f.type === "file" && /^NOTICE(\.|$)/i.test(f.name));
+    if (n) {
+      const t = await gh(n.download_url);
+      if (!t.ok) throw new Error(`could not read ${n.name} (${t.status}) for ${listing}`);
+      result = { checked: listing, notice: { name: n.name, text: await t.text() } };
+    } else {
+      result = { checked: listing, notice: null };
+    }
   }
   upstreamCache.set(listing, result);
   return result;
@@ -127,7 +135,7 @@ const manifest = {
     attribution:
       "Simple Icons contributors. Only icons whose data entry declares CC0-1.0, or Apache-2.0 with a verified upstream NOTICE status, are included (MIT icons are excluded); each icon's license is recorded in icons.json.",
     trademarkNotice:
-      "All brand names, logos and marks are trademarks of their respective owners. Their inclusion implies no affiliation or endorsement. See https://github.com/simple-icons/simple-icons/blob/develop/DISCLAIMER.md. Marks of projects hosted by the CNCF or the Linux Foundation (for example Fluentd and Rook) are also subject to the Linux Foundation trademark usage guidelines (https://www.linuxfoundation.org/legal/trademark-usage).",
+      "All brand names, logos and marks are trademarks of their respective owners. Their inclusion implies no affiliation or endorsement. See https://github.com/simple-icons/simple-icons/blob/develop/DISCLAIMER.md. Marks of projects hosted by the CNCF or the Linux Foundation (for example Rook) are also subject to the Linux Foundation trademark usage guidelines (https://www.linuxfoundation.org/legal/trademark-usage).",
     source: "https://github.com/simple-icons/simple-icons",
     redistributable: true,
   },

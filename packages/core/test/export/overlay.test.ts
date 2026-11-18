@@ -55,8 +55,10 @@ describe("overlay under zoom", () => {
     expect(t[2]).toBeCloseTo(vb[2]! / 560, 2);
   });
 
-  test("static output (frame at t=0) is pinned too", async () => {
+  test("static output (frame at t=0) is the full overview: no zoom, no wrapper (D27)", async () => {
     const { outputs } = await exportOutputs(model(), ["static"], deps, {});
-    expect(outputs[0]!.data as string).toContain('<g transform="translate(');
+    const svg = outputs[0]!.data as string;
+    expect(svg).not.toContain('<g transform="translate(');
+    expect(svg).toContain('viewBox="0 0 560 320"');
   });
 });

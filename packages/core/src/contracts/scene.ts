@@ -155,7 +155,10 @@ export interface SceneMetric {
  *   only; a step without `flows` shows the base flows. Step flows never carry over.
  * - `focus` applies to that step only; absent = full view (the whole diagram / hall).
  * - The looping timeline plays steps 1..n; the base state is shown only when there are no steps.
- * - Time 0 (static frame, default PNG) = the start of step 1, or the base state.
+ * - Rest frame (static, poster, default PNG, reduced motion, interactive before Play) = step-1
+ *   states (or base) at full view, no focus. Focus zoom applies only during playback
+ *   (loop/interactive for t > 0, zooming in during step 1; `frame` mode with time > 0, i.e.
+ *   GIF/MP4 frames and png.time > 0) and in per-step outputs (DECISIONS D27).
  */
 export interface SceneStep {
   readonly index: number;

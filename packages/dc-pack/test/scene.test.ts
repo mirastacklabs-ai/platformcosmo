@@ -9,6 +9,7 @@ import type {
 import schema from "../../../schema/v1.json" with { type: "json" };
 import { DC_DEFAULTS } from "../src/defaults.js";
 import { dcPack } from "../src/index.js";
+import { compareBoxes, createProjection, depthOrder } from "@platformcosmo/core";
 import { specFlowCost } from "../src/scene.js";
 
 const EPS = 1e-3;
@@ -300,19 +301,21 @@ describe("buildScene: hall, rows, aisles", () => {
     expect(roof.box.origin.z).toBeGreaterThan(1);
   });
 
-  it("overhead cable trays run above each row", () => {
+  it("overhead trays share one height above the racks (never on equipment tops)", () => {
     const trays = f.objects.filter((o) => o.type === "cable-tray");
     expect(trays.map((t) => t.id).sort()).toEqual([
+      "dc_tray_crah1",
       "dc_tray_loose",
       "dc_tray_row-a",
       "dc_tray_row-b",
+      "dc_tray_spine",
     ]);
-    const rackTop = Math.max(
-      ...f.objects.filter((o) => o.type === "rack").map((o) => o.box.origin.z + o.box.size.z),
-    );
-    for (const t of trays.filter((x) => x.id !== "dc_tray_loose"))
-      expect(t.box.origin.z).toBeGreaterThan(1.5);
-    expect(rackTop).toBeGreaterThan(1.5);
+    const racks = f.objects.filter((o) => o.type === "rack");
+    const rackTop = Math.max(...racks.map((o) => o.box.origin.z + o.box.size.z));
+    for (const t of trays) {
+      expect(t.box.origin.z).toBeGreaterThan(rackTop);
+      expect(t.box.origin.z).toBeCloseTo(trays[0]!.box.origin.z, 3);
+    }
   });
 
   it("loose items form a strip after the rows", () => {
@@ -822,5 +825,218 @@ describe("review fixes", () => {
       }),
     );
     expect(s.diagnostics.some((d) => d.code === "dc/facing-conflict")).toBe(true);
+  });
+});
+
+describe("integration fixes", () => {
+  const f = build(hall());
+  const box = (id: string): Box3 => f.objects.find((o) => o.id === id)!.box;
+  const gap = (a: Box3, b: Box3): number => {
+    const dx = Math.max(
+      0,
+      a.origin.x - (b.origin.x + b.size.x),
+      b.origin.x - (a.origin.x + a.size.x),
+    );
+    const dy = Math.max(
+      0,
+      a.origin.y - (b.origin.y + b.size.y),
+      b.origin.y - (a.origin.y + a.size.y),
+    );
+    return Math.max(dx, dy);
+  };
+
+  it("CRAH stands at the aisle end with >= 1 tile clearance from every rack", () => {
+    const crah = box("crah1");
+    const rackIds = ["a1", "a2", "b1", "b2"];
+    for (const id of rackIds) expect(gap(crah, box(id)), id).toBeGreaterThanOrEqual(1 - EPS);
+    const aisle = f.groups.find((g) => g.id === "cold-1")!.box;
+    const maxRackX = Math.max(...rackIds.map((id) => box(id).origin.x + box(id).size.x));
+    expect(crah.origin.x).toBeGreaterThanOrEqual(maxRackX + 1 - EPS);
+    expect(crah.origin.y).toBeGreaterThanOrEqual(aisle.origin.y - EPS);
+  });
+
+  it("UPS and PDU sit in a service strip 3 tiles behind the last row, never flush", () => {
+    const rowsMaxY = Math.max(
+      ...["a1", "a2", "b1", "b2"].map((id) => box(id).origin.y + box(id).size.y),
+    );
+    for (const id of ["ups1", "pdu1"]) {
+      expect(box(id).origin.y).toBeGreaterThanOrEqual(rowsMaxY + 3 - EPS);
+      for (const r of ["a1", "a2", "b1", "b2"])
+        expect(gap(box(id), box(r))).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("row labels sit in a one-tile end cap, not on the racks", () => {
+    const row = f.groups.find((g) => g.id === "row-a")!.box;
+    const minRackX = Math.min(box("a1").origin.x, box("a2").origin.x);
+    expect(row.origin.x).toBeCloseTo(minRackX - 1, 3);
+    expect(f.focusTargets["row-a"]!.origin.x).toBeCloseTo(minRackX, 3); // focus stays the members
+  });
+
+  it("power cables ride the overhead tray: up to tray height, orthogonal, drop into the rack top", () => {
+    const trayZ = f.objects.find((o) => o.id === "dc_tray_row-a")!.box.origin.z + 0.05;
+    const power = f.edges.find(
+      (e) => e.id === "feed" || (e.cableKind === "power" && e.to === "a1"),
+    )!;
+    const cable = f.edges.find((e) => e.cableKind === "power" && e.to === "a1")!;
+    expect(power).toBeDefined();
+    const mids = cable.path.slice(1, -1);
+    expect(Math.max(...cable.path.map((p) => p.z))).toBeGreaterThanOrEqual(trayZ - EPS);
+    // every long horizontal run is at tray height (only short port stubs are low)
+    for (let i = 1; i < cable.path.length; i++) {
+      const p = cable.path[i - 1]!;
+      const q = cable.path[i]!;
+      if (p.z === q.z && Math.hypot(q.x - p.x, q.y - p.y) > 0.5) {
+        expect(p.z).toBeGreaterThanOrEqual(trayZ - EPS);
+      }
+    }
+    expect(mids.length).toBeGreaterThan(0);
+    const a1 = box("a1");
+    const end = cable.path[cable.path.length - 1]!;
+    const before = cable.path[cable.path.length - 2]!;
+    expect(end.z).toBeCloseTo(a1.origin.z + a1.size.z, 3); // rack-top feed
+    expect(before.x).toBeCloseTo(end.x, 3);
+    expect(before.y).toBeCloseTo(end.y, 3);
+    expect(before.z).toBeGreaterThan(end.z);
+  });
+
+  it("airflow paths run just above the floor through the rack", () => {
+    const air = f.edges.find((e) => e.id === "dc_air_a1")!;
+    const floorZ = box("a1").origin.z;
+    for (const p of air.path) expect(p.z).toBeLessThan(floorZ + 0.2);
+  });
+
+  it("a raised floor gets a one-object tile grid; huge halls skip it", () => {
+    const grid = f.objects.find((o) => o.id === "dc_floor_grid")!;
+    const hallBox = f.groups.find((g) => g.id === "dc_hall")!.box;
+    expect(grid.parts!.length).toBe(Math.round(hallBox.size.x) * Math.round(hallBox.size.y));
+    expect(
+      build(spec({ racks: [{ id: "r" }], facility: { raisedFloor: false } })).objects.some(
+        (o) => o.id === "dc_floor_grid",
+      ),
+    ).toBe(false);
+    const wide = build(spec({ racks: Array.from({ length: 400 }, (_, i) => ({ id: `r${i}` })) }));
+    expect(wide.objects.some((o) => o.id === "dc_floor_grid")).toBe(false);
+    expect(wide.diagnostics.map((d) => d.code)).toContain("dc/floor-grid-skipped");
+  });
+});
+
+describe("review round 2", () => {
+  const f = build(hall());
+
+  it("the floor grid sits strictly below every DC object it overlaps (depth -1)", () => {
+    const grid = f.objects.find((o) => o.id === "dc_floor_grid")!;
+    const floorZ = f.groups.find((g) => g.id === "dc_hall")!.box.size.z;
+    expect(grid.box.origin.z + grid.box.size.z).toBeLessThanOrEqual(floorZ + 1e-9);
+    for (const p of grid.parts!)
+      expect(p.box.origin.z + p.box.size.z).toBeLessThanOrEqual(floorZ + 1e-9);
+    const overlaps = (a: Box3, b: Box3): boolean =>
+      a.origin.x < b.origin.x + b.size.x &&
+      b.origin.x < a.origin.x + a.size.x &&
+      a.origin.y < b.origin.y + b.size.y &&
+      b.origin.y < a.origin.y + a.size.y;
+    let n = 0;
+    for (const o of f.objects.filter(
+      (x) => x.id !== "dc_floor_grid" && overlaps(grid.box, x.box),
+    )) {
+      expect(compareBoxes(grid.box, o.box), o.id).toBe(-1);
+      n++;
+    }
+    expect(n).toBeGreaterThan(5);
+  });
+
+  it("depth order is rack < its slots < rack_front", () => {
+    const items = f.objects
+      .filter((o) => o.id === "a1" || o.id.startsWith("a1/") || o.id === "a1_front")
+      .map((o) => ({ id: o.id, box: o.box }));
+    expect(items.length).toBeGreaterThan(3);
+    const order = depthOrder(items, createProjection());
+    const at = (id: string): number => order.indexOf(id);
+    for (const o of items.filter((x) => x.id.includes("/"))) {
+      expect(at("a1")).toBeLessThan(at(o.id));
+      expect(at(o.id)).toBeLessThan(at("a1_front"));
+    }
+  });
+
+  it("several CRAHs stack at the aisle end, each clear of the racks and with its own tray", () => {
+    const s = build(
+      spec({
+        racks: [
+          { id: "r1", slots: [server(1)] },
+          { id: "r2", slots: [server(1)] },
+        ],
+        equipment: [
+          { id: "c1", type: "crah" },
+          { id: "c2", type: "crah" },
+        ],
+        rows: [
+          { id: "ra", members: ["r1"] },
+          { id: "rb", members: ["r2"] },
+        ],
+        aisles: [{ id: "cold", kind: "cold", rows: ["ra", "rb"] }],
+        cables: [{ from: "c1", to: "r1", kind: "power" }],
+      }),
+    );
+    const b = (id: string): Box3 => s.objects.find((o) => o.id === id)!.box;
+    expect(b("c2").origin.y).toBeGreaterThanOrEqual(b("c1").origin.y + b("c1").size.y - EPS);
+    for (const c of ["c1", "c2"]) {
+      expect(b(c).origin.x).toBeGreaterThanOrEqual(b("r1").origin.x + b("r1").size.x + 1 - EPS);
+      expect(s.objects.some((o) => o.id === `dc_tray_${c}`)).toBe(true);
+    }
+  });
+
+  it("a single lane has no spine tray", () => {
+    const s = build(
+      spec({ racks: [{ id: "r1" }, { id: "r2" }], rows: [{ id: "ra", members: ["r1", "r2"] }] }),
+    );
+    expect(s.objects.filter((o) => o.type === "cable-tray").map((o) => o.id)).toEqual([
+      "dc_tray_ra",
+    ]);
+  });
+
+  it("manually placed strip items use their own centre as the lane", () => {
+    const s = build(
+      spec({
+        racks: [{ id: "r1", slots: [server(1)] }],
+        equipment: [{ id: "u", type: "ups", pos: { x: 8, y: 9 } }],
+        rows: [{ id: "ra", members: ["r1"] }],
+        cables: [{ from: "u", to: "r1", kind: "power" }],
+      }),
+    );
+    const tray = s.objects.find((o) => o.id === "dc_tray_u")!;
+    const ups = s.objects.find((o) => o.id === "u")!;
+    expect(
+      Math.abs(tray.box.origin.y + tray.box.size.y / 2 - (ups.box.origin.y + ups.box.size.y / 2)),
+    ).toBeLessThan(0.25); // lane is the cell centre; the UPS is front-aligned in its cell
+  });
+
+  it("cableTrays none: no tray objects; cables stay orthogonal at the default overhead lane", () => {
+    const base = hall();
+    const s = build({
+      ...base,
+      facility: { raisedFloor: true, cableTrays: "none" },
+    } as PlatformCosmoSpec);
+    expect(s.objects.some((o) => o.type === "cable-tray")).toBe(false);
+    for (const e of s.edges.filter((x) => x.kind === "cable")) {
+      for (let i = 1; i < e.path.length; i++) {
+        const p = e.path[i - 1]!;
+        const q = e.path[i]!;
+        expect(Number(p.x !== q.x) + Number(p.y !== q.y) + Number(p.z !== q.z)).toBe(1);
+      }
+    }
+  });
+
+  it("underfloor trays sit below the floor level and need a raised floor", () => {
+    const s = build({
+      ...hall(),
+      facility: { raisedFloor: true, cableTrays: "underfloor" },
+    } as PlatformCosmoSpec);
+    const trays = s.objects.filter((o) => o.type === "cable-tray");
+    expect(trays.length).toBeGreaterThan(0);
+    const floor = s.groups.find((g) => g.id === "dc_hall")!.box.size.z;
+    for (const t of trays) expect(t.box.origin.z).toBeLessThan(floor);
+    for (const e of s.edges.filter((x) => x.kind === "cable")) {
+      expect(Math.min(...e.path.map((p) => p.z))).toBeGreaterThanOrEqual(0);
+    }
   });
 });
