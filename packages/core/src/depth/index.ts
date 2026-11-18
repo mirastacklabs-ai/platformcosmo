@@ -6,6 +6,10 @@ import { projectBoxBounds } from "../geometry/index.js";
  * topological sort. The viewer looks from +x, +y, +z, so a box that lies entirely at smaller
  * x, y or z than another can never occlude it.
  *
+ * Edges are not split: they are routed on the ground/platform plane and drawn in their own
+ * layer below all objects (DECISIONS D6). Elevated edges are not split into depth-sorted
+ * segments either, so they can be occluded by objects they should pass in front of.
+ *
  * Deterministic: every tie is broken by the center depth key, then by id (code-unit order).
  */
 

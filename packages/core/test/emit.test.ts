@@ -7,7 +7,20 @@ import type {
   SceneGraph,
   SvgNode,
 } from "../src/contracts/index.js";
-import { ICON_DEF_TAG, countElements, createIds, emit, h, serialize } from "../src/emit/index.js";
+import {
+  ICON_DEF_TAG,
+  countElements,
+  createIds,
+  emit,
+  h,
+  iconDef,
+  serialize,
+} from "../src/emit/index.js";
+import { inlineVars, stripAtRules } from "../src/emit/styles.js";
+import { fontAssets, subsetTtf, subsetWoff2Base64 } from "../src/text/index.js";
+import { parseFont } from "../src/text/sfnt.js";
+import { decodeWoff2 } from "./fixtures/woff2.js";
+import { createHash } from "node:crypto";
 import { createProjection } from "../src/geometry/index.js";
 import { fixtureTheme } from "./fixtures/theme.js";
 
@@ -173,9 +186,18 @@ describe("rules for used classes only", () => {
 });
 
 describe("fonts", () => {
-  test("embed adds a WOFF2 @font-face named Inter only when text is present", () => {
+  const faceB64 = (svg: string, weight: number) =>
+    new RegExp(`font-weight:${weight};src:url\\(data:font/woff2;base64,([A-Za-z0-9+/=]+)\\)`).exec(
+      svg,
+    )?.[1] as string;
+
+  test("embed adds a diagram-scoped WOFF2 face only when text is present", () => {
     const withText = emit(model({ labels: [label()] }), noAnim, browser);
-    expect(withText).toMatch(/@font-face\{font-family:"Inter";[^}]*data:font\/woff2;base64,/);
+    expect(withText).toMatch(
+      /@font-face\{font-family:"pc-test-inter";[^}]*data:font\/woff2;base64,/,
+    );
+    expect(withText).not.toContain('font-family:"Inter"');
+    expect(withText).toContain('font-family:"pc-test-inter",var(--pc-font-family)');
     expect(withText).not.toContain("font-weight:700;src");
     const bold = emit(
       model({ labels: [label({ class: "pc-test-t-primary pc-test-tb" })] }),
@@ -184,6 +206,42 @@ describe("fonts", () => {
     );
     expect(bold).toContain("font-weight:700;src");
     expect(emit(model(), noAnim, browser)).not.toContain("@font-face");
+    expect(emit(model(), noAnim, browser)).toContain("font-family:var(--pc-font-family)");
+  });
+
+  test("the embedded face covers exactly the glyphs used; two prefixes give two families", () => {
+    const m = model({ labels: [h("text", { x: 0, y: 0, "font-size": 12 }, "abc ab")] });
+    const woff = decodeWoff2(faceB64(emit(m, noAnim, browser), 400));
+    const cmap = [...woff.cmap.keys()].sort((a, b) => a - b);
+    expect(cmap).toEqual([0x20, 0x61, 0x62, 0x63]);
+    const other = { ...m, ids: createIds("pc-other") };
+    const a = emit(m, noAnim, browser);
+    const b = emit(other, noAnim, browser);
+    expect(a).toContain('"pc-test-inter"');
+    expect(b).toContain('"pc-other-inter"');
+    expect(b).not.toContain("pc-test-inter");
+  });
+
+  test("font-weight >= 600 counts as bold; tspans are rejected", () => {
+    const out = emit(model({ labels: [label({ "font-weight": 700 })] }), noAnim, browser);
+    expect(out).toContain("font-weight:700;src");
+    expect(() =>
+      emit(model({ labels: [h("text", { x: 0, y: 0 }, "a", h("tspan", null, "b"))] }), noAnim, {
+        font: "outline",
+      }),
+    ).toThrow(/plain text/);
+  });
+
+  test("vendored TTFs are named Inter / Bold", () => {
+    const utf16 = (s: string) => Buffer.from(s, "utf16le").swap16();
+    for (const [a, sub] of [
+      [fontAssets()[0], "Regular"],
+      [fontAssets()[1], "Bold"],
+    ] as const) {
+      const name = Buffer.from(parseFont(a?.sfnt as Uint8Array).tables.get("name") as Uint8Array);
+      expect(name.includes(utf16("Inter"))).toBe(true);
+      expect(name.includes(utf16(sub))).toBe(true);
+    }
   });
 
   test("system mode embeds nothing; text content is escaped", () => {
@@ -235,7 +293,7 @@ describe("raster target", () => {
 });
 
 describe("icons", () => {
-  const def = (ref: string, body: string) => h(ICON_DEF_TAG, { ref, viewBox: "0 0 24 24" }, body);
+  const def = (ref: string, body: string) => iconDef(ref, "0 0 24 24", body);
   const body =
     '<defs><linearGradient id="__PCID__-0"/></defs><path fill="url(#__PCID__-0)" d="M0 0h1"/><use href="#__PCID__"/>';
 
@@ -260,6 +318,52 @@ describe("icons", () => {
     expect(out).not.toContain("__PCID__");
     expect(out).not.toContain(ICON_DEF_TAG);
     expect(out.indexOf("<symbol")).toBeLessThan(out.indexOf("<style>"));
+  });
+
+  test("astral ref characters get a six-digit escape", () => {
+    expect(createIds("pc-test").icon("a:\u{1F600}")).toBe("pc-test-i_a_3a_U01f600");
+  });
+
+  test("bodies must be sanitizer output; icon defs only come from model layers", () => {
+    expect(() => iconDef("a:b", "0 0 1 1", "<script>x()</script>")).toThrow(/sanitizer/);
+    expect(() => iconDef("a:b", "0 0 1 1", '<path onload="x()"/>')).toThrow();
+    expect(() => iconDef("a:b", "0 0 1 1", '<image href="https://x/y.png"/>')).toThrow();
+    expect(() => iconDef("a:b", "0 0 1 1", '<path fill="url(http://x)"/>')).toThrow();
+    // a plain string body is not accepted by emit
+    const bad = h(ICON_DEF_TAG, { ref: "a:b", viewBox: "0 0 1 1" }, "<path/>");
+    expect(() => emit(model({ background: [bad] }), noAnim, browser)).toThrow(/SvgRaw/);
+    // animation output may not smuggle icon defs
+    const anim: AnimationLayer = { ...noAnim, layers: { flows: [def("a:b", "<path/>")] } };
+    expect(() => emit(model(), anim, browser)).toThrow(/icon defs/);
+    expect(() => emit(model(), { ...noAnim, defs: [def("a:b", "<path/>")] }, browser)).toThrow();
+  });
+});
+
+describe("css helpers", () => {
+  const vars = new Map([["--pc-a", "#111"]]);
+  test("inlineVars handles whitespace, fallbacks and nesting", () => {
+    expect(inlineVars("x{fill:var( --pc-a )}", vars)).toBe("x{fill:#111}");
+    expect(inlineVars("x{fill:var(--pc-zz, #222)}", vars)).toBe("x{fill:#222}");
+    expect(inlineVars("x{fill:var(--pc-zz,var(--pc-a))}", vars)).toBe("x{fill:#111}");
+    expect(() => inlineVars("x{fill:var(--pc-zz)}", vars)).toThrow(/unknown theme variable/);
+  });
+
+  test("stripAtRules respects word boundaries and nested braces", () => {
+    const css = "@media (x){a{b:c}}@mediafoo{d:e}@keyframes k{0%{a:b}}f{g:h}";
+    expect(stripAtRules(css, ["media", "keyframes"])).toBe("@mediafoo{d:e}f{g:h}");
+  });
+
+  test("countElements ignores CDATA text", () => {
+    expect(countElements("<svg><style><![CDATA[a<b{}]]></style><g/></svg>")).toBe(3);
+  });
+});
+
+describe("embedded font determinism", () => {
+  test("golden hashes of the subset font bytes (Node 22 and 24)", () => {
+    const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
+    const text = "Load balancer 99.9%";
+    expect(sha(subsetTtf(text))).toMatchInlineSnapshot(`"75d7ed2d51a32fc6a345db328348da7fb8e7e8cbbcaf2f68c1fa1eaa67ca9639"`);
+    expect(sha(Buffer.from(subsetWoff2Base64(text), "base64"))).toMatchInlineSnapshot(`"dc222d46bca318138795eaf0ecb471e2fd8411ccfcb625c6237fad0a8a20f63c"`);
   });
 });
 

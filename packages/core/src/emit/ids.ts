@@ -8,7 +8,7 @@ import type { FaceName, IdScheme } from "../contracts/index.js";
  * multi-part ids (object ids and face names never contain `_`), so no two ids collide.
  * Spec ids are used verbatim except `/` (slot refs), which becomes `.`.
  * Icon refs (`pack:id`) are encoded bijectively: every character outside `[A-Za-z0-9-]`
- * becomes `_` + two hex digits of its code unit (or `_u` + four for non-ASCII).
+ * becomes `_` + two hex digits of its code unit (`_u` + four for the rest of the BMP, `_U` + six for astral code points).
  */
 
 const PREFIX_RE = /^[a-z][a-z0-9-]*$/;
@@ -31,7 +31,9 @@ function encodeRef(ref: string): string {
     out +=
       code < 0x100
         ? `_${code.toString(16).padStart(2, "0")}`
-        : `_u${code.toString(16).padStart(4, "0")}`;
+        : code < 0x10000
+          ? `_u${code.toString(16).padStart(4, "0")}`
+          : `_U${code.toString(16).padStart(6, "0")}`;
   }
   return out;
 }

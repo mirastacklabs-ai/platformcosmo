@@ -155,20 +155,6 @@ export function subsetWoff2Base64(text: string, weight: TextWeight = "regular"):
   return Buffer.from(woff2).toString("base64");
 }
 
-const fullWoff2 = new Map<TextWeight, string>();
-
-/**
- * Base64 WOFF2 of the whole vendored Latin face. Identical for every diagram, so several
- * inlined diagrams that each declare `@font-face { font-family: "Inter" }` never clash.
- */
-export function fullWoff2Base64(weight: TextWeight = "regular"): string {
-  const hit = fullWoff2.get(weight);
-  if (hit) return hit;
-  const out = Buffer.from(sfntToWoff2(load(weight).ttf)).toString("base64");
-  fullWoff2.set(weight, out);
-  return out;
-}
-
 /** Subset TrueType bytes (used by tests; rasterization takes the full Latin faces). */
 export function subsetTtf(text: string, weight: TextWeight = "regular"): Uint8Array {
   const cps = new Set(codePoints(text));
@@ -179,7 +165,7 @@ export function subsetTtf(text: string, weight: TextWeight = "regular"): Uint8Ar
 /** Fonts for `rasterize` (resvg wants TTF/OTF): the full vendored Latin faces. */
 export function fontAssets(): readonly FontAsset[] {
   return [
-    { family: EMBED_FAMILY, weight: WEIGHT_REGULAR, sfnt: load("regular").ttf },
-    { family: EMBED_FAMILY, weight: WEIGHT_BOLD, sfnt: load("bold").ttf },
+    { family: EMBED_FAMILY, weight: WEIGHT_REGULAR, sfnt: new Uint8Array(load("regular").ttf) },
+    { family: EMBED_FAMILY, weight: WEIGHT_BOLD, sfnt: new Uint8Array(load("bold").ttf) },
   ];
 }

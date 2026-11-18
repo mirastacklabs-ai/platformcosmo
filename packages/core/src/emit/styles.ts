@@ -64,13 +64,24 @@ export function varDiff(
   return out;
 }
 
-/** Replace `var(--pc-x)` with literal values (raster target). Unknown variables throw. */
+/**
+ * Replace `var(--pc-x)` (whitespace allowed, optional fallback `var(--pc-x, fb)`) with literal
+ * values (raster target). An unknown variable uses its fallback, or throws without one.
+ */
 export function inlineVars(css: string, vars: ReadonlyMap<string, string>): string {
-  return css.replace(/var\((--pc-[A-Za-z0-9-]+)\)/g, (_m, name: string) => {
-    const v = vars.get(name);
-    if (v === undefined) throw new Error(`unknown theme variable ${name}`);
-    return v;
-  });
+  const re = /var\(\s*(--pc-[A-Za-z0-9-]+)\s*(?:,\s*([^()]*?)\s*)?\)/g;
+  let out = css;
+  // Repeat so a variable nested in a fallback is resolved too.
+  for (let i = 0; i < 4; i++) {
+    const next = out.replace(re, (_m, name: string, fallback: string | undefined) => {
+      const v = vars.get(name) ?? fallback;
+      if (v === undefined) throw new Error(`unknown theme variable ${name}`);
+      return v;
+    });
+    if (next === out) break;
+    out = next;
+  }
+  return out;
 }
 
 /** Remove whole at-rule blocks (`@media {…}`, `@font-face {…}`, `@keyframes x {…}`). */
@@ -78,7 +89,10 @@ export function stripAtRules(css: string, names: readonly string[]): string {
   let out = "";
   let i = 0;
   while (i < css.length) {
-    if (css[i] === "@" && names.some((n) => css.startsWith(`@${n}`, i))) {
+    if (
+      css[i] === "@" &&
+      names.some((n) => css.startsWith(`@${n}`, i) && !/[\w-]/.test(css[i + 1 + n.length] ?? " "))
+    ) {
       const open = css.indexOf("{", i);
       if (open < 0) break;
       let depth = 0;

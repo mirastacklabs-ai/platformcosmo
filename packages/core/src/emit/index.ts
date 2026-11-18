@@ -6,9 +6,10 @@ import type {
   RenderModel,
   SvgElement,
   SvgNode,
+  SvgRaw,
 } from "../contracts/index.js";
 import { fmt } from "../geometry/index.js";
-import { fullWoff2Base64, textToPath, type TextAnchor } from "../text/index.js";
+import { subsetWoff2Base64, textToPath, type TextAnchor } from "../text/index.js";
 import {
   classRules,
   declarations,
@@ -72,15 +73,47 @@ function without(
   return out;
 }
 
+/** Plain text of a `<text>` element; child elements (tspan) are not supported. */
+function textOf(el: SvgElement): string {
+  let out = "";
+  for (const c of el.children ?? []) {
+    if (typeof c !== "string") throw new Error("text elements may only contain plain text");
+    out += c;
+  }
+  return out;
+}
+
+function isBold(el: SvgElement, prefix: string): boolean {
+  const w = Number(el.attrs?.["font-weight"]);
+  return classesOf(el).includes(`${prefix}-tb`) || (Number.isFinite(w) && w >= 600);
+}
+
 function rect(r: { x: number; y: number; width: number; height: number }): string {
   return `${fmt(r.x)} ${fmt(r.y)} ${fmt(r.width)} ${fmt(r.height)}`;
+}
+
+const UNSAFE_ICON =
+  /<\s*(?:script|foreignObject|iframe|object|embed)\b|\son[a-z]+\s*=|javascript:|(?:href|src)\s*=\s*["'](?!#)|url\(\s*["']?(?!#)/i;
+
+/**
+ * Placeholder for an icon `<symbol>`: `body` must be a sanitizer-produced inner body (ids use
+ * `__PCID__`). Defense in depth: bodies with scripts, handlers or non-fragment references are
+ * rejected here even though the sanitizer already removes them.
+ */
+export function iconDef(ref: string, viewBox: string, body: string): SvgElement {
+  if (UNSAFE_ICON.test(body)) throw new Error(`icon ${ref}: body is not sanitizer output`);
+  return h(ICON_DEF_TAG, { ref, viewBox }, raw(body));
 }
 
 function iconSymbol(el: SvgElement, ids: RenderModel["ids"]): SvgElement {
   const ref = String(el.attrs?.ref ?? "");
   const viewBox = String(el.attrs?.viewBox ?? "0 0 24 24");
-  const body = (el.children ?? []).filter((c): c is string => typeof c === "string").join("");
+  const kid = el.children?.[0];
+  if (!kid || typeof kid === "string" || !("raw" in kid) || el.children?.length !== 1) {
+    throw new Error(`icon ${ref}: pc-icon-def must hold exactly one SvgRaw body (use iconDef)`);
+  }
   const id = ids.icon(ref);
+  const body = (kid as SvgRaw).raw;
   const resolved = body.replaceAll("__PCID__-", `${id}_`).replaceAll("__PCID__", id);
   return h("symbol", { id, viewBox }, raw(resolved));
 }
@@ -102,16 +135,22 @@ export const emit: EmitFn = (
     if (!symbols.has(ref)) symbols.set(ref, iconSymbol(el, ids));
     return null;
   };
+  const noIcons: Mapper = (el) => {
+    if (el.tag === ICON_DEF_TAG) throw new Error("animation output must not contain icon defs");
+    return el;
+  };
   const layerNodes = new Map<Layer, SvgNode[]>();
   for (const layer of LAYERS) {
-    const nodes = [...model.layers[layer], ...(animation.layers[layer] ?? [])];
-    layerNodes.set(
-      layer,
-      nodes.map((n) => mapTree(n, hoist)).filter((n): n is SvgNode => n !== null),
-    );
+    const own = model.layers[layer]
+      .map((n) => mapTree(n, hoist))
+      .filter((n): n is SvgNode => n !== null);
+    const extra = (animation.layers[layer] ?? [])
+      .map((n) => mapTree(n, noIcons))
+      .filter((n): n is SvgNode => n !== null);
+    layerNodes.set(layer, [...own, ...extra]);
   }
   const animDefs = animation.defs
-    .map((n) => mapTree(n, hoist))
+    .map((n) => mapTree(n, noIcons))
     .filter((n): n is SvgNode => n !== null);
 
   const vars = themeVars(model.theme);
@@ -132,8 +171,8 @@ export const emit: EmitFn = (
   const outline: Mapper = (el) => {
     if (options.font !== "outline" || el.tag !== "text") return el;
     const a = el.attrs ?? {};
-    const text = (el.children ?? []).filter((c): c is string => typeof c === "string").join("");
-    const bold = classesOf(el).includes(`${prefix}-tb`);
+    const text = textOf(el);
+    const bold = isBold(el, prefix);
     const { d } = textToPath(text, {
       x: Number(a.x ?? 0),
       y: Number(a.y ?? 0),
@@ -158,14 +197,14 @@ export const emit: EmitFn = (
 
   // 3. Used classes and text, for rules and fonts.
   const used = new Set<string>();
-  let usesText = false;
-  let usesBold = false;
+  let regularText = "";
+  let boldText = "";
   const scan = (n: SvgNode): void =>
     walk(n, (el) => {
       for (const c of classesOf(el)) used.add(c);
       if (el.tag === "text") {
-        usesText = true;
-        if (classesOf(el).includes(`${prefix}-tb`)) usesBold = true;
+        if (isBold(el, prefix)) boldText += textOf(el);
+        else regularText += textOf(el);
       }
     });
   for (const nodes of layers.values()) nodes.forEach(scan);
@@ -174,8 +213,13 @@ export const emit: EmitFn = (
   // 4. CSS.
   const css: string[] = [];
   const family = vars.get("--pc-font-family") ?? "sans-serif";
+  // Embedded faces are scoped to this diagram (`<prefix>-inter`, first in the list) so several
+  // inlined diagrams with different glyph subsets never share a global family name.
+  const embedFamily = `${prefix}-inter`;
+  const embedding = options.font === "embed" && (regularText !== "" || boldText !== "");
+  const rootFamily = embedding ? `"${embedFamily}",var(--pc-font-family)` : "var(--pc-font-family)";
   const rootRule = (v: ReadonlyMap<string, string>) =>
-    `#${ids.root()}{${declarations(v)};font-family:var(--pc-font-family);font-weight:var(--pc-font-weightRegular)}`;
+    `#${ids.root()}{${declarations(v)};font-family:${rootFamily};font-weight:var(--pc-font-weightRegular)}`;
   if (!raster) {
     css.push(rootRule(vars));
     if (model.darkTheme) {
@@ -184,11 +228,11 @@ export const emit: EmitFn = (
         css.push(`@media (prefers-color-scheme:dark){#${ids.root()}{${declarations(diff)}}}`);
       }
     }
-    if (options.font === "embed" && usesText) {
-      const face = (w: number, kind: "regular" | "bold") =>
-        `@font-face{font-family:"Inter";font-style:normal;font-weight:${w};src:url(data:font/woff2;base64,${fullWoff2Base64(kind)}) format("woff2")}`;
-      css.push(face(400, "regular"));
-      if (usesBold) css.push(face(700, "bold"));
+    if (embedding) {
+      const face = (w: number, text: string, kind: "regular" | "bold") =>
+        `@font-face{font-family:"${embedFamily}";font-style:normal;font-weight:${w};src:url(data:font/woff2;base64,${subsetWoff2Base64(text, kind)}) format("woff2")}`;
+      if (regularText !== "") css.push(face(400, regularText, "regular"));
+      if (boldText !== "") css.push(face(700, boldText, "bold"));
     }
   } else {
     css.push(
@@ -248,10 +292,12 @@ export const emit: EmitFn = (
     camera,
     animation.script && !raster ? h("script", null, cdata(animation.script)) : null,
   );
+  if (raster && cssText.includes("var(")) throw new Error("raster CSS still contains var()");
   return serialize(root);
 };
 
 /** Number of SVG elements (start tags) in a serialized document. */
 export function countElements(svg: string): number {
-  return svg.match(/<[A-Za-z]/g)?.length ?? 0;
+  // CDATA sections hold CSS/script text, not elements.
+  return svg.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "").match(/<[A-Za-z]/g)?.length ?? 0;
 }
