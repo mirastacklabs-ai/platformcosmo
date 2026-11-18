@@ -13,3 +13,4 @@ docs/PLAN.md
 plugin/bin/pcosmo.mjs
 plugin/THIRD_PARTY_NOTICES.md
 packages/cli/scripts/licenses
+tests/**/out

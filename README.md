@@ -51,6 +51,9 @@ You need [Claude Code](https://code.claude.com) and Node.js >= 22.12 on your `PA
    /platformcosmo:icons add https://github.com/feathericons/feather/tree/main/icons
    ```
 
+   The second adds a pack named `feather`; then ask for, say, "the Feather users icon for
+   the users node" and Claude uses `feather:users`.
+
    Provider packs (AWS, Azure, Google Cloud) are downloaded from the official source on
    your machine and never redistributed. Azure requires accepting its terms.
 
