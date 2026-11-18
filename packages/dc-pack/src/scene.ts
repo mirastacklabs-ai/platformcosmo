@@ -46,6 +46,7 @@ const RAISED_FLOOR_H = 0.3;
 const SLAB_H = 0.04;
 const GROUP_H = 0.02;
 const MAX_GRID_TILES = 500;
+const MAX_VENT_TILES = 100;
 /** The tile grid sits strictly below the floor surface so it never competes with objects in depth. */
 const GRID_H = 0.004;
 
@@ -533,7 +534,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
   };
   for (const it of placedItems) grow(it.cx, it.cy, it.cx + it.w, it.cy + it.d);
   for (const a of aisleBoxes) grow(a.x0, a.y0, a.x1, a.y1);
-  for (const r of active) grow(r.x1 + 0.5, r.y, r.x1 + 1.5, r.y + r.d);
+  for (const r of active) grow(r.x1 + 1, r.y, r.x1 + 2, r.y + r.d);
   if (!Number.isFinite(minX)) {
     return {
       objects: [],
@@ -749,7 +750,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     // A's group label sits at the group box's low-x/high-y corner. The row group is therefore
     // the one-tile end cap on the viewer (+x) side of the row, which puts the label at the row
     // end in the aisle, never on equipment. Focus still covers the member boxes.
-    const rb = slab(r.x1 + 0.5, r.y, r.x1 + 1.5, r.y + r.d);
+    const rb = slab(r.x1 + 0.5, r.y, r.x1 + 1.5, r.y + r.d); // label clear of rack labels; hall grows by whole tiles
     groups.push({
       id: r.spec.id,
       kind: "row",
@@ -813,6 +814,8 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     } else {
       for (const a of aisleBoxes.filter((x) => x.spec.kind === "cold")) {
         const tiles: ScenePart[] = [];
+        // Slits are decoration: skip them on big aisles to keep the part count down.
+        const ventSlits = Math.round((a.x1 - a.x0) * (a.y1 - a.y0)) <= MAX_VENT_TILES;
         for (let x = a.x0; x < a.x1; x++) {
           for (let y = a.y0; y < a.y1; y++) {
             const n = tiles.length + 1;
@@ -823,12 +826,12 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
               box: box(x + sx, y + sy, zBase, 1, 1, 0.01),
             });
             // Vent slits so the tile reads as perforated at a glance.
-            for (let k = 0; k < 5; k++) {
+            for (let k = 0; k < (ventSlits ? 3 : 0); k++) {
               tiles.push({
                 id: `vent-${n}-${k}`,
                 primitive: "slab",
                 tone: "base",
-                box: box(x + sx + 0.15, y + sy + 0.12 + k * 0.17, zBase + 0.01, 0.7, 0.05, 0.004),
+                box: box(x + sx + 0.15, y + sy + 0.2 + k * 0.28, zBase + 0.01, 0.7, 0.06, 0.004),
               });
             }
           }
@@ -898,10 +901,23 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     // racks); trays exist only over rows and on the way to cabled equipment.
     const spineX =
       (active.length > 0 ? rowsMinX : Math.min(...placedItems.map((i) => i.cx))) + sx - 0.5;
+    // Equipment that really gets a cable: accepted spec cables (endpoints known, no self-loop,
+    // unique id), plus the UPS/PDUs the automatic power flows will route to.
     const cabled = new Set<string>();
-    for (const c of spec.cables ?? []) {
+    const cableIds = new Set<string>();
+    let hasPowerCable = false;
+    (spec.cables ?? []).forEach((c, ci) => {
+      const id = c.id ?? `dc_cable_${ci + 1}`;
+      if (cableIds.has(id) || !refs.has(c.from) || !refs.has(c.to) || c.from === c.to) return;
+      cableIds.add(id);
       cabled.add(c.from.split("/")[0]!);
       cabled.add(c.to.split("/")[0]!);
+      if (c.kind === "power") hasPowerCable = true;
+    });
+    if (!hasPowerCable) {
+      for (const r of refs.values()) {
+        if (r.type === "ups" || r.type === "pdu-floor") cabled.add(r.id);
+      }
     }
     const lanes: { id: string; xa: number; xb: number; y: number; group: string }[] = active.map(
       (r) => ({

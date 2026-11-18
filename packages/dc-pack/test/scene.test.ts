@@ -296,7 +296,7 @@ describe("buildScene: hall, rows, aisles", () => {
     const tiles = floor[0]!.parts!.filter((p) => p.id.startsWith("tile-"));
     const vents = floor[0]!.parts!.filter((p) => p.id.startsWith("vent-"));
     expect(tiles.length).toBe(Math.round(c.size.x) * Math.round(c.size.y));
-    expect(vents.length).toBe(tiles.length * 5);
+    expect(vents.length).toBe(tiles.length * 3);
     for (const t of tiles) expect(t.tone).toBe("perforated");
     for (const v of vents) expect(v.tone).toBe("base");
     const roof = f.objects.find((o) => o.id === "dc_roof_cold-1")!;
@@ -1051,5 +1051,65 @@ describe("review round 2", () => {
     for (const e of s.edges.filter((x) => x.kind === "cable")) {
       expect(Math.min(...e.path.map((p) => p.z))).toBeGreaterThanOrEqual(0);
     }
+  });
+});
+
+describe("round 2 follow-ups", () => {
+  it("the hall grows by whole tiles (grid tiles equal the hall size)", () => {
+    for (const s of [
+      build(hall()),
+      build(spec({ racks: [{ id: "r" }, { id: "q" }], rows: [{ id: "ra", members: ["r", "q"] }] })),
+    ]) {
+      const hall = s.groups.find((g) => g.id === "dc_hall")!.box;
+      expect(Math.abs(hall.size.x - Math.round(hall.size.x))).toBeLessThan(1e-9);
+      expect(Math.abs(hall.size.y - Math.round(hall.size.y))).toBeLessThan(1e-9);
+      const grid = s.objects.find((o) => o.id === "dc_floor_grid")!;
+      expect(grid.parts!.length).toBe(Math.round(hall.size.x) * Math.round(hall.size.y));
+    }
+  });
+
+  it("vent slits are skipped on aisles above 100 tiles", () => {
+    const racks = Array.from({ length: 60 }, (_, i) => ({ id: `a${i}` }));
+    const racksB = Array.from({ length: 60 }, (_, i) => ({ id: `b${i}` }));
+    const s = build(
+      spec({
+        racks: [...racks, ...racksB],
+        rows: [
+          { id: "ra", members: racks.map((r) => r.id) },
+          { id: "rb", members: racksB.map((r) => r.id) },
+        ],
+        aisles: [{ id: "cold", kind: "cold", rows: ["ra", "rb"] }],
+      }),
+    );
+    const floor = s.objects.find((o) => o.id === "dc_tiles_cold")!;
+    expect(floor.parts!.length).toBe(120); // 60 x 2 tiles, no slits
+    expect(floor.parts!.every((p) => p.id.startsWith("tile-"))).toBe(true);
+  });
+
+  it("only accepted cables, and UPS/PDUs on automatic power flows, get lane trays", () => {
+    const base = {
+      racks: [{ id: "r1", slots: [server(1)] }],
+      equipment: [
+        { id: "u", type: "ups" },
+        { id: "p", type: "pdu-floor" },
+      ],
+      rows: [{ id: "ra", members: ["r1"] }],
+    };
+    // no cables: the automatic UPS -> PDU -> rack flows need lanes for both
+    const auto = build(spec(base));
+    expect(auto.objects.some((o) => o.id === "dc_tray_u")).toBe(true);
+    expect(auto.objects.some((o) => o.id === "dc_tray_p")).toBe(true);
+    // a rejected cable (unknown endpoint) does not create a tray; an accepted power cable does
+    const s = build(
+      spec({
+        ...base,
+        cables: [
+          { from: "u", to: "ghost", kind: "power" },
+          { from: "p", to: "r1", kind: "power" },
+        ],
+      }),
+    );
+    expect(s.objects.some((o) => o.id === "dc_tray_u")).toBe(false);
+    expect(s.objects.some((o) => o.id === "dc_tray_p")).toBe(true);
   });
 });
