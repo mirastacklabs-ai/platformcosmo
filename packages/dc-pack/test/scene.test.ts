@@ -9,6 +9,7 @@ import type {
 import schema from "../../../schema/v1.json" with { type: "json" };
 import { DC_DEFAULTS } from "../src/defaults.js";
 import { dcPack } from "../src/index.js";
+import { specFlowCost } from "../src/scene.js";
 
 const EPS = 1e-3;
 
@@ -680,6 +681,30 @@ describe("flow particle budget", () => {
     expect(f.flows.every((x) => edgeIds.has(x.edge))).toBe(true);
     expect(f.edges.some((e) => e.hidden)).toBe(false);
     expect(JSON.stringify(f)).toBe(JSON.stringify(build(spec({ racks, cables }))));
+  });
+
+  it("DC cap is min(1000, 2000 - spec flow cost): cost 1800 leaves at most 200", () => {
+    const racks = Array.from({ length: 150 }, (_, i) => ({ id: `r${i}`, slots: [server(1)] }));
+    const base = {
+      racks,
+      // 100 base flows at 9 particles, plus 100 step flows at 9: cost 1800
+      flows: Array.from({ length: 100 }, () => ({ from: "r0", to: "r1", rate: 4.5 })),
+      steps: [{ flows: Array.from({ length: 100 }, () => ({ from: "r0", to: "r1", rate: 4.5 })) }],
+    };
+    const s = spec(base);
+    expect(specFlowCost(s)).toBe(1800);
+    const f = build(s);
+    const used = f.flows.reduce((n, x) => n + Math.ceil(x.rate * 2), 0);
+    expect(used).toBeLessThanOrEqual(200);
+    expect(used).toBeGreaterThan(0);
+    expect(f.flows.every((x) => x.id.startsWith("dc_f_"))).toBe(true);
+    expect(f.diagnostics.filter((d) => d.code === "dc/flow-budget")).toHaveLength(1);
+    // a spec that already uses the whole budget leaves nothing for the DC
+    const full = build(spec({ ...base, flows: [...base.flows, ...base.flows] }));
+    expect(full.flows).toEqual([]);
+    // no spec flows: the flat 1000 cap applies
+    const none = build(spec({ racks }));
+    expect(none.flows.reduce((n, x) => n + Math.ceil(x.rate * 2), 0)).toBeLessThanOrEqual(1000);
   });
 
   it("small halls are not truncated", () => {

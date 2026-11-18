@@ -136,6 +136,8 @@ export interface ConnectInput {
   readonly cables: readonly SpecCable[];
   /** Height of the cable lane (tray or default overhead / underfloor). */
   readonly laneZ: number;
+  /** Particle budget for all DC flows (global budget minus the spec's own flow cost). */
+  readonly particleBudget: number;
   /** Rack ids in spec order with airflow inputs. */
   readonly airflow: readonly {
     readonly rack: string;
@@ -178,6 +180,7 @@ function nearest(from: Ref, cands: readonly Ref[]): Ref | undefined {
 
 export function connect(input: ConnectInput): Connections {
   const { refs, cables, laneZ } = input;
+  const budget = Math.max(0, Math.min(MAX_DC_PARTICLES, input.particleBudget));
   const edges: SceneEdge[] = [];
   const hidden: SceneEdge[] = [];
   const diagnostics: Diagnostic[] = [];
@@ -363,7 +366,7 @@ export function connect(input: ConnectInput): Connections {
   for (const group of [cableFlows, airflowFlows, synthFlows]) {
     for (const f of group) {
       const n = Math.ceil(f.rate * 2);
-      if (used + n <= MAX_DC_PARTICLES) {
+      if (used + n <= budget) {
         used += n;
         keep.add(f);
       } else {
@@ -382,8 +385,8 @@ export function connect(input: ConnectInput): Connections {
       severity: "warning",
       code: "dc/flow-budget",
       path: "",
-      message: `${dropped} DC flows were dropped to stay within the ${MAX_DC_PARTICLES}-particle budget (cables first, then airflow, then automatic flows).`,
-      params: { dropped, budget: MAX_DC_PARTICLES },
+      message: `${dropped} DC flows were dropped to stay within the ${budget}-particle budget (cables first, then airflow, then automatic flows).`,
+      params: { dropped, budget },
     });
   }
 

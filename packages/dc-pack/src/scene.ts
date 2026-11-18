@@ -844,7 +844,13 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
         ...(hot ? { hot: hot.spec.id } : {}),
       };
     });
-  const conn = connect({ refs, cables: spec.cables ?? [], laneZ, airflow });
+  const conn = connect({
+    refs,
+    cables: spec.cables ?? [],
+    laneZ,
+    airflow,
+    particleBudget: GLOBAL_PARTICLES - specFlowCost(spec),
+  });
   diags.push(...conn.diagnostics);
 
   objects.sort((a, b) => cmp(a.id, b.id));
@@ -868,6 +874,16 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     bounds,
     diagnostics: sortDiags(diags),
   };
+}
+
+/** Global particle budget shared by spec flows and DC flows. */
+const GLOBAL_PARTICLES = 2000;
+
+/** Particles used by the spec's base flows plus every step's flows: sum of ceil(rate x 2). */
+export function specFlowCost(spec: PlatformCosmoSpec): number {
+  const cost = (fs: readonly { rate?: number }[] | undefined): number =>
+    (fs ?? []).reduce((n, f) => n + Math.ceil((f.rate ?? 1) * 2), 0);
+  return cost(spec.flows) + (spec.steps ?? []).reduce((n, st) => n + cost(st.flows), 0);
 }
 
 function portMap(ports: readonly RefPort[]): Record<string, Vec3> {
