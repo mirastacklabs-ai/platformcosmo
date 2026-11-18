@@ -13,7 +13,12 @@ import type {
 } from "../src/contracts/index.js";
 import { emit, h } from "../src/emit/index.js";
 import { optimize } from "../src/optimize/index.js";
-import { buildModelWithDiagnostics, nudgeLabel, rectsOverlap } from "../src/render/model.js";
+import {
+  buildModelWithDiagnostics,
+  nudgeLabel,
+  rectsOverlap,
+  splitAtTiles,
+} from "../src/render/model.js";
 import {
   buildModel,
   canonicalJson,
@@ -533,7 +538,22 @@ describe("DC layering (D31): floors flat, cables depth-sorted, particles on top"
     return {
       ...scene,
       objects,
-      groups: [],
+      groups: [
+        {
+          id: "dc_hall",
+          kind: "hall" as const,
+          style: "zone" as const,
+          box: { origin: { x: -1, y: -1, z: 0 }, size: { x: 10, y: 8, z: 0.05 } },
+          level: 0,
+        },
+        {
+          id: "cold-1",
+          kind: "cold-aisle" as const,
+          style: "zone" as const,
+          box: { origin: { x: 1, y: 3.5, z: 0.05 }, size: { x: 4, y: 2, z: 0.02 } },
+          level: 1,
+        },
+      ],
       edges: [cable, air],
       flows: [{ id: "dc_f_1", edge: "a1", kind: "airflow" as const, rate: 2, reverse: false }],
       timeline: [],
@@ -562,6 +582,10 @@ describe("DC layering (D31): floors flat, cables depth-sorted, particles on top"
     const edgesLayer = at('id="pc-test-ly_edges"');
     // floor objects are flat ground: inside the groups layer, before the edges layer
     expect(at('id="pc-test-o_floor"')).toBeLessThan(edgesLayer);
+    // ...and after the opaque hall and aisle slabs that would otherwise paint over them
+    expect(at('id="pc-test-g_dc_5fhall"')).toBeLessThan(at('id="pc-test-o_floor"'));
+    expect(at('id="pc-test-g_cold-1"')).toBeLessThan(at('id="pc-test-o_tiles"'));
+    expect(at('id="pc-test-g_cold-1"')).toBeLessThan(at('id="pc-test-o_floor"'));
     expect(at('id="pc-test-o_tiles"')).toBeLessThan(edgesLayer);
     expect(at('id="pc-test-ly_groups"')).toBeLessThan(at('id="pc-test-o_floor"'));
     // trays and racks stay in the objects layer; the cable segment is sorted among them
@@ -573,7 +597,7 @@ describe("DC layering (D31): floors flat, cables depth-sorted, particles on top"
     expect(at('id="pc-test-o_tiles"')).toBeLessThan(seg);
     // the segment is a painted cable path; the single particle path is not painted
     expect(svg).toMatch(
-      /<path id="pc-test-e_c1__s0" class="pc-test-edge pc-test-edge-solid pc-test-cable-power" d="M/,
+      /<path id="pc-test-e_c1__s0" class="pc-test-edge pc-test-edge-solid pc-test-cable-power pc-test-e_c1-seg" d="M/,
     );
     expect(svg).toMatch(/<path id="pc-test-ep_c1" fill="none" stroke="none" d="M/);
     // the objects layer holds the segment, not the edges layer
@@ -581,14 +605,28 @@ describe("DC layering (D31): floors flat, cables depth-sorted, particles on top"
     expect(edgesBlock).not.toContain("pc-test-cable-power");
   });
 
-  test("DC particles are drawn above the objects layer (everything else keeps D6 order)", () => {
+  test("layer order stays the contract order, also for DC scenes", () => {
     const dc = emit(buildModel({ ...inputs(), scene: dcScene() }), particles, { font: "system" });
-    expect(dc.indexOf('id="pc-test-ly_objects"')).toBeLessThan(dc.indexOf('id="pc-test-ly_flows"'));
-    expect(dc.indexOf('id="pc-test-ly_flows"')).toBeLessThan(dc.indexOf('id="pc-test-ly_labels"'));
-    const plain = emit(buildModel(inputs()), particles, { font: "system" });
-    expect(plain.indexOf('id="pc-test-ly_flows"')).toBeLessThan(
-      plain.indexOf('id="pc-test-ly_objects"'),
+    const order = ["background", "groups", "edges", "flows", "objects", "labels", "overlay"].map(
+      (l) => dc.indexOf(`id="pc-test-ly_${l}"`),
     );
+    expect(order.every((i, k) => i > 0 && (k === 0 || i > (order[k - 1] as number)))).toBe(true);
+  });
+
+  test("painted cable segments share a per-edge class", () => {
+    const svg = emit(buildModel({ ...inputs(), scene: dcScene() }), particles, { font: "system" });
+    const segs = [...svg.matchAll(/<path id="pc-test-e_c1__s(\d+)" class="([^"]*)"/g)];
+    expect(segs.length).toBeGreaterThan(1);
+    for (const m of segs) expect(m[2]).toContain("pc-test-e_c1-seg");
+  });
+
+  test("long cable runs are split at tile boundaries before depth sorting", () => {
+    expect(splitAtTiles({ x: 1, y: 2.2, z: 0.6 }, { x: 6, y: 2.2, z: 0.6 })).toHaveLength(5);
+    const parts = splitAtTiles({ x: 0.5, y: 0.5, z: 0 }, { x: 2.5, y: 3.5, z: 0 });
+    expect(parts[0]![0]).toEqual({ x: 0.5, y: 0.5, z: 0 });
+    expect(parts[parts.length - 1]![1]).toEqual({ x: 2.5, y: 3.5, z: 0 });
+    for (let i = 1; i < parts.length; i++) expect(parts[i]![0]).toEqual(parts[i - 1]![1]);
+    expect(splitAtTiles({ x: 1.2, y: 1.2, z: 0 }, { x: 1.2, y: 1.2, z: 2 })).toHaveLength(1);
   });
 
   test("cable segment ids cannot collide with other ids", () => {

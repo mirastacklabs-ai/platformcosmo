@@ -44,18 +44,6 @@ const LAYERS: readonly Layer[] = [
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-/**
- * Layer order for a diagram. Normally the `Layer` order; when the scene has DC flows
- * (`dc_f_*`) the `flows` layer is drawn right after `objects`, so airflow/power/network
- * particles are not covered by the floor tiles and trays they travel over (D31).
- */
-function layerOrder(model: RenderModel): readonly Layer[] {
-  const dc =
-    model.scene.flows.some((f) => f.id.startsWith("dc_f_")) ||
-    model.scene.timeline.some((s) => s.flows.some((f) => f.id.startsWith("dc_f_")));
-  return dc ? ["background", "groups", "edges", "objects", "flows", "labels", "overlay"] : LAYERS;
-}
-
 type Mapper = (el: SvgElement) => SvgNode | null;
 
 /** Depth-first rewrite; the mapper sees each element after its children were rewritten. */
@@ -288,7 +276,7 @@ export const emit: EmitFn = (
   const camera = h(
     "g",
     { id: ids.camera() },
-    ...layerOrder(model).map((l) =>
+    ...LAYERS.map((l) =>
       h("g", { id: `${prefix}-ly_${l}`, class: `${prefix}-layer` }, ...(layers.get(l) ?? [])),
     ),
   );

@@ -148,6 +148,37 @@ export function inputsOf(model: RenderModel): ModelInputs | undefined {
   return registry.get(model);
 }
 
+/**
+ * Splits a segment where it crosses integer x or y coordinates (floor tile boundaries), so a
+ * long run is depth-sorted piece by piece against the tiles, trays and racks it passes.
+ */
+export function splitAtTiles(a: Vec3, b: Vec3): [Vec3, Vec3][] {
+  const ts = new Set<number>([0, 1]);
+  for (const axis of ["x", "y"] as const) {
+    const lo = Math.min(a[axis], b[axis]);
+    const hi = Math.max(a[axis], b[axis]);
+    if (hi - lo < 1e-9) continue;
+    for (let v = Math.floor(lo) + 1; v < hi - 1e-9; v++) {
+      const t = (v - a[axis]) / (b[axis] - a[axis]);
+      if (t > 1e-9 && t < 1 - 1e-9) ts.add(Number(t.toFixed(9)));
+    }
+  }
+  const sorted = [...ts].sort((p, q) => p - q);
+  const at = (t: number): Vec3 => ({
+    x: round2(a.x + (b.x - a.x) * t),
+    y: round2(a.y + (b.y - a.y) * t),
+    z: round2(a.z + (b.z - a.z) * t),
+  });
+  const out: [Vec3, Vec3][] = [];
+  for (let i = 0; i + 1 < sorted.length; i++) {
+    out.push([
+      i === 0 ? a : at(sorted[i] as number),
+      i + 2 === sorted.length ? b : at(sorted[i + 1] as number),
+    ]);
+  }
+  return out;
+}
+
 /** Do two rectangles overlap (touching edges do not count)? */
 export function rectsOverlap(r: Rect, q: Rect): boolean {
   return r.x < q.x + q.width && q.x < r.x + r.width && r.y < q.y + q.height && q.y < r.y + r.height;
@@ -226,12 +257,11 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   const cableSegments = new Map<string, { edge: SceneEdge; a: Vec3; b: Vec3 }>();
   for (const e of scene.edges) {
     if (e.kind !== "cable" || e.hidden) continue;
+    let n = 0;
     for (let i = 0; i + 1 < e.path.length; i++) {
-      cableSegments.set(`${CABLE_PREFIX}${e.id}#${i}`, {
-        edge: e,
-        a: e.path[i] as Vec3,
-        b: e.path[i + 1] as Vec3,
-      });
+      for (const [a, b] of splitAtTiles(e.path[i] as Vec3, e.path[i + 1] as Vec3)) {
+        cableSegments.set(`${CABLE_PREFIX}${e.id}#${n++}`, { edge: e, a, b });
+      }
     }
   }
   const segBox = (a: Vec3, b: Vec3) => {
@@ -260,6 +290,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   const anchors: Record<string, ObjectAnchor> = {};
   const iconRefs = new Set<string>();
   const labelNodes: SvgNode[] = [];
+  const floorNodes: SvgNode[] = []; // appended after the group slabs, so slabs never cover them
   const arrowNodes: SvgNode[] = [];
   const placed: Rect[] = []; // label boxes, so edge labels can step aside
 
@@ -269,6 +300,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       const [i] = id.split("#").slice(-1);
       const cls = [`${P}-edge`, `${P}-edge-${seg.edge.style}`];
       if (seg.edge.cableKind) cls.push(`${P}-cable-${seg.edge.cableKind}`);
+      cls.push(`${ids.edge(seg.edge.id)}-seg`);
       const pa = projection.project(seg.a);
       const pb = projection.project(seg.b);
       layers.objects.push(
@@ -281,7 +313,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       continue;
     }
     const o = objectById.get(id) as SceneObject;
-    const target = FLOOR_TYPES.has(o.type) ? layers.groups : layers.objects;
+    const target = FLOOR_TYPES.has(o.type) ? floorNodes : layers.objects;
     const faceNodes: SvgNode[] = [];
     if (o.parts && o.parts.length > 0) {
       for (const part of o.parts) {
@@ -514,6 +546,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       placed.push(pill);
     }
   }
+
+  layers.groups.push(...floorNodes);
 
   // ---- Edges ---------------------------------------------------------------------------
   const edgePaths: Record<string, EdgePath> = {};
