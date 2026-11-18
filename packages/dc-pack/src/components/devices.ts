@@ -1,9 +1,12 @@
-/** Rack-mounted devices (the 15 slot types): generic 19-inch shapes, vendor-neutral. */
+/** Rack-mounted devices (the 15 slot types): generic rack-mount shapes, vendor-neutral. */
 import type { DcBuildResult, DcCategory, DcComponentDef } from "@platformcosmo/core";
 import { U_MM } from "../units.js";
 import { Kit } from "./kit.js";
 
-/** Device width: fills the rack between its posts (slight inset), for legibility at overview. */
+/**
+ * Device width (wider than a real 19-inch 482 mm unit): fills the 600 mm rack between its 30 mm
+ * posts, leaving a 30 mm inset each side, so devices read at overview zoom.
+ */
 export const DEVICE_WIDTH_MM = 540;
 /** Visual gap between stacked devices. */
 const GAP_MM = 1.5;
@@ -94,7 +97,7 @@ const devices: readonly Dev[] = [
     depthMm: 820,
     detail(k, h) {
       face(k, h, "accent");
-      k.row("gpu", 8, "accent", 30, 452, 10, 38, h - 20, 6);
+      k.row("gpu", 8, "accent", 60, 500, 10, 38, h - 20, 6);
       leds(k, h);
       netPorts(k, h, 4);
       psuPorts(k, h);

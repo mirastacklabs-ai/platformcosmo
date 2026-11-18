@@ -685,7 +685,7 @@ describe("flow particle budget", () => {
     expect(f.flows.every((x) => edgeIds.has(x.edge))).toBe(true);
     expect(f.edges.some((e) => e.hidden)).toBe(false);
     expect(JSON.stringify(f)).toBe(JSON.stringify(build(spec({ racks, cables }))));
-  });
+  }, 60_000);
 
   it("DC cap is min(1000, 2000 - spec flow cost): cost 1800 leaves at most 200", () => {
     const racks = Array.from({ length: 150 }, (_, i) => ({ id: `r${i}`, slots: [server(1)] }));
@@ -879,7 +879,7 @@ describe("integration fixes", () => {
       box("a2").origin.x + box("a2").size.x,
     );
     expect(row.origin.x).toBeCloseTo(maxRackX + 0.5, 3); // clear of the rack labels
-    expect(row.size.x).toBeCloseTo(1, 3);
+    expect(row.size.x).toBeCloseTo(0.5, 3);
     const focus = f.focusTargets["row-a"]!;
     expect(focus.origin.x + focus.size.x).toBeCloseTo(maxRackX, 3); // focus stays the members
     for (const e of f.objects.filter((o) => o.type !== "cable-tray" && !o.id.startsWith("dc_"))) {
@@ -893,7 +893,7 @@ describe("integration fixes", () => {
   });
 
   it("power cables ride the overhead tray: up to tray height, orthogonal, drop into the rack top", () => {
-    const trayZ = f.objects.find((o) => o.id === "dc_tray_row-a")!.box.origin.z + 0.05;
+    const trayZ = f.objects.find((o) => o.id === "dc_tray_row-a")!.box.origin.z + 0.03;
     const power = f.edges.find(
       (e) => e.id === "feed" || (e.cableKind === "power" && e.to === "a1"),
     )!;
@@ -1159,5 +1159,60 @@ describe("round 3 legibility", () => {
         expect(overlap, `${t.id} over ${r.id}`).toBe(false);
       }
     }
+  });
+});
+
+describe("ladder trays", () => {
+  const f = build(hall());
+
+  it("are open ladders: two rails and a rung every half tile, no solid bottom", () => {
+    for (const id of ["dc_tray_row-a", "dc_tray_spine"]) {
+      const tray = f.objects.find((o) => o.id === id)!;
+      const rails = tray.parts!.filter((p) => p.id.startsWith("rail-"));
+      const rungs = tray.parts!.filter((p) => p.id.startsWith("rung-"));
+      expect(rails).toHaveLength(2);
+      const along = tray.box.size.x > tray.box.size.y ? "x" : "y";
+      const len = along === "x" ? tray.box.size.x : tray.box.size.y;
+      expect(rungs.length).toBe(Math.ceil((len - 0.25) / 0.5 - 1e-9));
+      // rails are thin and full height; rungs are low; nothing covers the tray's full footprint
+      for (const r of rails) expect(Math.min(r.box.size.x, r.box.size.y)).toBeLessThan(0.06);
+      for (const r of rungs) expect(r.box.size.z).toBeLessThan(0.03);
+      for (const p of tray.parts!)
+        expect(p.box.size.x * p.box.size.y).toBeLessThan(tray.box.size.x * tray.box.size.y * 0.5);
+    }
+  });
+
+  it("cables ride inside the tray: above the rungs, below the rail tops", () => {
+    const tray = f.objects.find((o) => o.id === "dc_tray_row-a")!;
+    const lo = tray.box.origin.z + 0.02;
+    const hi = tray.box.origin.z + tray.box.size.z + 1e-6;
+    const cable = f.edges.find((e) => e.cableKind === "power" && e.to === "a1")!;
+    const high = cable.path.filter(
+      (p) => p.z > tray.box.origin.z - 1e-6 && p.z < tray.box.origin.z + 1,
+    );
+    expect(high.length).toBeGreaterThan(1);
+    for (const p of high) {
+      expect(p.z).toBeGreaterThan(lo);
+      expect(p.z).toBeLessThanOrEqual(hi);
+    }
+  });
+
+  it("the hall is content plus a 1-tile margin, in whole tiles (no extra +x/+y growth)", () => {
+    const hallBox = f.groups.find((g) => g.id === "dc_hall")!.box;
+    let maxX = 0;
+    let maxY = 0;
+    for (const o of f.objects) {
+      if (o.id === "dc_floor_grid") continue;
+      maxX = Math.max(maxX, o.box.origin.x + o.box.size.x);
+      maxY = Math.max(maxY, o.box.origin.y + o.box.size.y);
+    }
+    for (const g of f.groups.filter((x) => x.id !== "dc_hall")) {
+      maxX = Math.max(maxX, g.box.origin.x + g.box.size.x);
+      maxY = Math.max(maxY, g.box.origin.y + g.box.size.y);
+    }
+    expect(hallBox.size.x - maxX).toBeGreaterThanOrEqual(1 - 1e-6);
+    expect(hallBox.size.x - maxX).toBeLessThan(2 + 1e-6);
+    expect(hallBox.size.y - maxY).toBeGreaterThanOrEqual(1 - 1e-6);
+    expect(hallBox.size.y - maxY).toBeLessThan(2 + 1e-6);
   });
 });

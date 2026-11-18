@@ -534,7 +534,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
   };
   for (const it of placedItems) grow(it.cx, it.cy, it.cx + it.w, it.cy + it.d);
   for (const a of aisleBoxes) grow(a.x0, a.y0, a.x1, a.y1);
-  for (const r of active) grow(r.x1 + 1, r.y, r.x1 + 2, r.y + r.d);
+  for (const r of active) grow(r.x1 + 0.5, r.y, r.x1 + 1, r.y + r.d + 0.5);
   if (!Number.isFinite(minX)) {
     return {
       objects: [],
@@ -555,8 +555,9 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     0,
     0,
     0,
-    maxX - minX + 2 * HALL_MARGIN,
-    maxY - minY + 2 * HALL_MARGIN,
+    // content + 1-tile margin, rounded up to whole tiles (the floor grid is tile-based)
+    Math.ceil(maxX - minX + 2 * HALL_MARGIN - 1e-9),
+    Math.ceil(maxY - minY + 2 * HALL_MARGIN - 1e-9),
     floorH,
   );
 
@@ -751,7 +752,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     // A's group label sits at the group box's low-x/high-y corner. The row group is therefore
     // the one-tile end cap on the viewer (+x) side of the row, which puts the label at the row
     // end in the aisle, never on equipment. Focus still covers the member boxes.
-    const rb = slab(r.x1 + 0.5, r.y, r.x1 + 1.5, r.y + r.d + 0.5); // label clear of rack labels; hall grows by whole tiles
+    const rb = slab(r.x1 + 0.5, r.y, r.x1 + 1, r.y + r.d + 0.5); // label clear of rack labels; hall grows by whole tiles
     groups.push({
       id: r.spec.id,
       kind: "row",
@@ -979,32 +980,32 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     }
     for (const l of lanes) {
       const b = box(l.xa, l.y - 0.25, trayZ, l.xb - l.xa, 0.5, 0.05);
-      objects.push(facilityObject(`dc_tray_${l.id}`, "cable-tray", b, "metal", l.group));
+      objects.push(trayObject(`dc_tray_${l.id}`, b, "x", l.group));
     }
     const laneYs = lanes.map((l) => l.y);
     if (new Set(laneYs.map(r4)).size > 1) {
       const y0 = Math.min(...laneYs) - 0.25;
       const y1 = Math.max(...laneYs) + 0.25;
       objects.push(
-        facilityObject(
+        trayObject(
           "dc_tray_spine",
-          "cable-tray",
           box(spineX - 0.25, y0, trayZ, 0.5, y1 - y0, 0.05),
-          "metal",
+          "y",
           "dc_hall",
         ),
       );
     }
     top = Math.max(top, trayZ + 0.05);
-    laneZ = r4(trayZ + 0.05);
+    // Cables ride inside the ladder, just above the rungs (rails are 0.05 high).
+    laneZ = r4(trayZ + 0.03);
     tray = { spineX, z: laneZ };
   } else if (trays === "underfloor" && raised) {
     for (const r of active) {
       const z = r4(zBase * 0.4);
       const b = box(r.x0 + sx, r.y + r.d / 2 + sy - 0.25, z, r.x1 - r.x0, 0.5, 0.05);
-      objects.push(facilityObject(`dc_tray_${r.spec.id}`, "cable-tray", b, "metal", r.spec.id));
+      objects.push(trayObject(`dc_tray_${r.spec.id}`, b, "x", r.spec.id));
     }
-    laneZ = r4(zBase * 0.4 + 0.05);
+    laneZ = r4(zBase * 0.4 + 0.03);
   }
 
   // ---- cables and flows ----
@@ -1070,6 +1071,43 @@ export function specFlowCost(spec: PlatformCosmoSpec): number {
   const cost = (fs: readonly { rate?: number }[] | undefined): number =>
     (fs ?? []).reduce((n, f) => n + Math.ceil((f.rate ?? 1) * 2), 0);
   return cost(spec.flows) + (spec.steps ?? []).reduce((n, st) => n + cost(st.flows), 0);
+}
+
+/**
+ * An open ladder tray: two thin side rails and a rung every half tile, no solid bottom, so cables
+ * riding inside stay visible. `along` is the run direction of the tray.
+ */
+export function trayObject(id: string, b: Box3, along: "x" | "y", group: string): SceneObject {
+  const rail = 0.04;
+  const rungW = 0.04;
+  const rungH = 0.02;
+  const len = along === "x" ? b.size.x : b.size.y;
+  const wid = along === "x" ? b.size.y : b.size.x;
+  const o = b.origin;
+  const parts: ScenePart[] = [];
+  const mk = (pid: string, ox: number, oy: number, sx: number, sy: number, sz: number): void => {
+    parts.push({
+      id: pid,
+      primitive: "slab",
+      tone: "metal",
+      box: box(o.x + ox, o.y + oy, o.z, sx, sy, sz),
+    });
+  };
+  if (along === "x") {
+    mk("rail-a", 0, 0, len, rail, b.size.z);
+    mk("rail-b", 0, wid - rail, len, rail, b.size.z);
+    for (let t = 0.25, n = 1; t < len; t += 0.5, n++)
+      mk(`rung-${n}`, t - rungW / 2, rail, rungW, wid - 2 * rail, rungH);
+  } else {
+    mk("rail-a", 0, 0, rail, len, b.size.z);
+    mk("rail-b", wid - rail, 0, rail, len, b.size.z);
+    for (let t = 0.25, n = 1; t < len; t += 0.5, n++)
+      mk(`rung-${n}`, rail, t - rungW / 2, wid - 2 * rail, rungW, rungH);
+  }
+  return {
+    ...facilityObject(id, "cable-tray", b, "metal", group),
+    parts: depthSort(parts),
+  };
 }
 
 function portMap(ports: readonly RefPort[]): Record<string, Vec3> {
