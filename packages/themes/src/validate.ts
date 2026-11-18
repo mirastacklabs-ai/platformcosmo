@@ -7,16 +7,7 @@
 import type { Diagnostic, ThemeTokens, ValidateThemeFn } from "@platformcosmo/core";
 
 type Kind =
-  | "color"
-  | "font-family"
-  | "dash"
-  | "id"
-  | "text"
-  | "scheme"
-  | "opacity"
-  | "size"
-  | "weight"
-  | "number";
+  "color" | "font-family" | "dash" | "id" | "text" | "scheme" | "opacity" | "size" | "weight";
 
 interface ObjShape {
   readonly [key: string]: Kind | ObjShape;
@@ -102,16 +93,28 @@ const hasControl = (s: string): boolean =>
 
 const MAX_STRING = 200;
 
-/** True when every quote opened is closed by the same kind, with no nesting of the other kind. */
+/**
+ * True when every quote opened is closed by the same kind. A quote of the other kind inside
+ * an open string is rejected (no nesting, no escapes), so quoted names are always simple.
+ */
 function balancedQuotes(s: string): boolean {
   let open: string | undefined;
   for (const ch of s) {
     if (ch !== "'" && ch !== '"') continue;
     if (open === undefined) open = ch;
     else if (open === ch) open = undefined;
+    else return false;
   }
   return open === undefined;
 }
+
+/** Untrusted keys never reach diagnostics verbatim: printable-safe characters only, truncated. */
+const safeKey = (k: string): string => {
+  const t = k.length > 40 ? `${k.slice(0, 40)}...` : k;
+  return t.replace(/[^A-Za-z0-9_$.-]/g, "?");
+};
+
+const MAX_UNKNOWN_KEYS = 50;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
@@ -120,7 +123,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 const ptr = (path: string, key: string): string =>
-  `${path}/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`;
+  `${path}/${safeKey(key).replaceAll("~", "~0").replaceAll("/", "~1")}`;
 
 function checkLeaf(
   kind: Kind,
@@ -205,16 +208,16 @@ function checkLeaf(
       }
       return { ok: true, value: v };
     }
-    case "number": {
-      if (typeof v !== "number" || !Number.isFinite(v)) {
-        return bad("theme/invalid-number", "Expected a finite number.");
-      }
-      return { ok: true, value: v };
-    }
   }
 }
 
-function walk(shape: ObjShape, input: unknown, path: string, diags: Diagnostic[]): unknown {
+interface Ctx {
+  readonly diags: Diagnostic[];
+  unknown: number;
+}
+
+function walk(shape: ObjShape, input: unknown, path: string, ctx: Ctx): unknown {
+  const diags = ctx.diags;
   if (!isPlainObject(input)) {
     diags.push({
       severity: "error",
@@ -227,12 +230,15 @@ function walk(shape: ObjShape, input: unknown, path: string, diags: Diagnostic[]
   const out: Record<string, unknown> = {};
   for (const k of Object.keys(input).sort()) {
     if (!Object.hasOwn(shape, k)) {
-      diags.push({
-        severity: "error",
-        code: "theme/unknown-key",
-        path: ptr(path, k),
-        message: `Unknown theme key "${k.slice(0, 40)}".`,
-      });
+      ctx.unknown++;
+      if (ctx.unknown <= MAX_UNKNOWN_KEYS) {
+        diags.push({
+          severity: "error",
+          code: "theme/unknown-key",
+          path: ptr(path, k),
+          message: `Unknown theme key "${safeKey(k)}".`,
+        });
+      }
     }
   }
   for (const k of Object.keys(shape)) {
@@ -253,7 +259,7 @@ function walk(shape: ObjShape, input: unknown, path: string, diags: Diagnostic[]
       if (r.ok) out[k] = r.value;
       else diags.push({ severity: "error", code: r.code, path: p, message: r.message });
     } else {
-      out[k] = walk(sub, v, p, diags);
+      out[k] = walk(sub, v, p, ctx);
     }
   }
   return out;
@@ -261,7 +267,30 @@ function walk(shape: ObjShape, input: unknown, path: string, diags: Diagnostic[]
 
 export const validateTheme: ValidateThemeFn = (input) => {
   const diagnostics: Diagnostic[] = [];
-  const copy = walk(SHAPE, input, "", diagnostics);
+  const ctx: Ctx = { diags: diagnostics, unknown: 0 };
+  let copy: unknown;
+  try {
+    copy = walk(SHAPE, input, "", ctx);
+  } catch {
+    return {
+      diagnostics: [
+        {
+          severity: "error",
+          code: "theme/invalid-type",
+          path: "",
+          message: "Theme object could not be read safely.",
+        },
+      ],
+    };
+  }
+  if (ctx.unknown > MAX_UNKNOWN_KEYS) {
+    diagnostics.push({
+      severity: "error",
+      code: "theme/unknown-key-overflow",
+      path: "",
+      message: `${ctx.unknown - MAX_UNKNOWN_KEYS} more unknown keys were not listed.`,
+    });
+  }
   diagnostics.sort((a, b) =>
     a.path === b.path ? (a.code < b.code ? -1 : a.code > b.code ? 1 : 0) : a.path < b.path ? -1 : 1,
   );
