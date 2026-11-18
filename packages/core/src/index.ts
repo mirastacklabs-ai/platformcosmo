@@ -44,3 +44,6 @@ export {
   fontAssets,
 } from "./text/index.js";
 export type { TextAnchor, TextWeight, TextPathOptions } from "./text/index.js";
+
+// Emit helpers (Track A1).
+export { ICON_DEF_TAG, createIds, countElements } from "./emit/index.js";
