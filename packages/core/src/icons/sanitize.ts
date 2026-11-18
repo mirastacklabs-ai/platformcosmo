@@ -553,6 +553,15 @@ function limitRefDepth(kept: KNode[], removed: Set<string>): void {
           }
         }
       }
+      if (here) {
+        // `<use>` is not allowed anywhere inside a mask, clipPath or pattern.
+        for (let i = n.children.length - 1; i >= 0; i--) {
+          if ((n.children[i] as KNode).name === "use") {
+            n.children.splice(i, 1);
+            removed.add("element:use-in-ref");
+          }
+        }
+      }
       visit(n.children, here);
     }
   };
@@ -582,7 +591,15 @@ function pruneUses(kept: KNode[], removed: Set<string>): { kept: KNode[]; total:
   const isRisky = (n: KNode): boolean => {
     const c = risky.get(n);
     if (c !== undefined) return c;
-    const r = n.name === "use" || n.name === "pattern" || n.children.some(isRisky);
+    // Risky: another <use>, a <pattern>, or any url()/href reference to a mask, clipPath or
+    // pattern (such references multiply rendering work when the target is instantiated per <use>).
+    const refsContainer = n.attrs.some(([k, v]) => {
+      if (k === "id") return false;
+      const ids =
+        k === "href" ? [v.slice(1)] : [...v.matchAll(URL_REF_RE)].map((m) => m[2] as string);
+      return ids.some((id) => REF_CONTAINERS.has(byId.get(id)?.name ?? ""));
+    });
+    const r = n.name === "use" || n.name === "pattern" || refsContainer || n.children.some(isRisky);
     risky.set(n, r);
     return r;
   };
