@@ -232,14 +232,14 @@ try {
       script: `const x = arguments[0], y = arguments[1], done = arguments[arguments.length - 1];
         const load = (v) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('decode')); i.src = 'data:image/png;base64,' + v; });
         Promise.all([load(x), load(y)]).then(([A, B]) => {
-          if (A.naturalWidth !== B.naturalWidth || A.naturalHeight !== B.naturalHeight) return done(1);
+          if (A.naturalWidth !== B.naturalWidth || A.naturalHeight !== B.naturalHeight) return done("size " + A.naturalWidth + "x" + A.naturalHeight + " vs " + B.naturalWidth + "x" + B.naturalHeight);
           const px = (i) => { const c = document.createElement('canvas'); c.width = i.naturalWidth; c.height = i.naturalHeight; const g = c.getContext('2d'); g.drawImage(i, 0, 0); return g.getImageData(0, 0, c.width, c.height).data; };
           const p = px(A), q = px(B); let n = 0;
           for (let k = 0; k < p.length; k += 4) {
             if (Math.max(Math.abs(p[k] - q[k]), Math.abs(p[k + 1] - q[k + 1]), Math.abs(p[k + 2] - q[k + 2])) > 64) n++;
           }
           done(n / (p.length / 4));
-        }).catch((e) => done(1));`,
+        }).catch((e) => done("error " + (e && e.message)));`,
       args: [a, b],
     });
     return r;
@@ -278,7 +278,10 @@ try {
             // Evidence of what moves: the first and last frame, and how much differs.
             const last = frames[frames.length - 1];
             const d = await diffFraction(frames[0], last);
-            moved = `${(d * 100).toFixed(3)}% of pixels differ between the first and last frame`;
+            moved =
+              typeof d === "number"
+                ? `${(d * 100).toFixed(3)}% of pixels differ between the first and last frame`
+                : String(d);
             for (const [n, f] of [
               ["a", frames[0]],
               ["b", last],
@@ -301,8 +304,8 @@ try {
               file,
               mode,
               "matches the inline rest frame (<4% of pixels differ)",
-              d < 0.04 ? "pass" : "fail",
-              `${(d * 100).toFixed(2)}% differ`,
+              typeof d === "number" && d < 0.04 ? "pass" : "fail",
+              typeof d === "number" ? `${(d * 100).toFixed(2)}% differ` : String(d),
             );
           }
         } catch (e) {
