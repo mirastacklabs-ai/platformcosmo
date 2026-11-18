@@ -19,7 +19,7 @@ import type {
   BuildSceneFn,
 } from "../contracts/index.js";
 import { createAnimator } from "../anim/index.js";
-import { countElements, emit } from "../emit/index.js";
+import { countElements, emit, themeVars } from "../emit/index.js";
 import { exportOutputs, rasterize } from "../export/index.js";
 import { optimize } from "../optimize/index.js";
 import { buildScene } from "../scene/index.js";
@@ -39,6 +39,8 @@ export interface RenderDeps {
   readonly rasterize: RasterizeFn;
   readonly emit: EmitFn;
   readonly optimize: OptimizeFn;
+  /** Option checks; defaults to the local `validateOptions` (to be replaced by Track B's `validateRenderOptions`). */
+  readonly validateOptions?: (options: RenderOptions) => readonly Diagnostic[];
 }
 
 const PREFIX_RE = /^[a-z][a-z0-9-]{0,31}$/;
@@ -197,7 +199,9 @@ export function createRender(deps: RenderDeps): RenderFn {
       ...(scene ? { scene } : {}),
     });
 
-    const optionErrors = validateOptions(options);
+    const optionErrors = (deps.validateOptions ?? validateOptions)(options).filter(
+      (d) => d.severity === "error",
+    );
     if (optionErrors.length > 0) return fail(optionErrors);
     const kinds: readonly OutputKind[] = options.outputs ?? ["animated"];
     if (kinds.includes("mp4") && !options.video?.encoder) {
@@ -244,6 +248,21 @@ export function createRender(deps: RenderDeps): RenderFn {
         ? undefined
         : (options.darkTheme ??
           (theme.colorScheme === "light" ? options.themes?.get("dark") : undefined));
+
+    // Custom themes are untrusted: reject bad values here so emit never throws on user input.
+    try {
+      themeVars(theme);
+      if (darkTheme) themeVars(darkTheme);
+    } catch (e) {
+      return fail([
+        ...diagnostics,
+        err(
+          "render/invalid-theme",
+          "/canvas/theme",
+          `The theme is invalid: ${(e as Error).message}.`,
+        ),
+      ]);
+    }
 
     const scene = deps.buildScene(parsed, {
       ...(options.icons ? { icons: options.icons } : {}),

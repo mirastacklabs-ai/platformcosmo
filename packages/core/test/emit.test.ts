@@ -362,8 +362,12 @@ describe("embedded font determinism", () => {
   test("golden hashes of the subset font bytes (Node 22 and 24)", () => {
     const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
     const text = "Load balancer 99.9%";
-    expect(sha(subsetTtf(text))).toMatchInlineSnapshot(`"75d7ed2d51a32fc6a345db328348da7fb8e7e8cbbcaf2f68c1fa1eaa67ca9639"`);
-    expect(sha(Buffer.from(subsetWoff2Base64(text), "base64"))).toMatchInlineSnapshot(`"dc222d46bca318138795eaf0ecb471e2fd8411ccfcb625c6237fad0a8a20f63c"`);
+    expect(sha(subsetTtf(text))).toMatchInlineSnapshot(
+      `"75d7ed2d51a32fc6a345db328348da7fb8e7e8cbbcaf2f68c1fa1eaa67ca9639"`,
+    );
+    expect(sha(Buffer.from(subsetWoff2Base64(text), "base64"))).toMatchInlineSnapshot(
+      `"dc222d46bca318138795eaf0ecb471e2fd8411ccfcb625c6237fad0a8a20f63c"`,
+    );
   });
 });
 

@@ -16,7 +16,7 @@ import type {
   Vec2,
 } from "../contracts/index.js";
 import { depthOrder, orderGroups } from "../depth/index.js";
-import { ICON_DEF_TAG, createIds } from "../emit/index.js";
+import { createIds, iconDef } from "../emit/index.js";
 import { h } from "../emit/xml.js";
 import {
   boundsOfPoints,
@@ -221,26 +221,28 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     const iconNodes: SvgNode[] = [];
     if (o.icon) {
       const resolved = inputs.icons?.resolve(o.icon.ref);
-      if (!resolved) {
+      let def: SvgNode | undefined;
+      if (resolved && !iconRefs.has(resolved.ref)) {
+        try {
+          def = iconDef(resolved.ref, resolved.svg.viewBox, resolved.svg.body);
+        } catch {
+          def = undefined; // body failed the emitter's trust check
+        }
+      }
+      if (!resolved || (!def && !iconRefs.has(resolved.ref))) {
         diagnostics.push({
           severity: "warning",
           code: "render/icon-unavailable",
           path: "",
-          message: `Icon "${o.icon.ref}" for "${o.id}" could not be resolved; drawn without an icon.`,
+          message: `Icon "${o.icon.ref}" for "${o.id}" could not be used; drawn without an icon.`,
         });
       } else {
         const c = projection.project(o.icon.anchor);
         const s = o.icon.size;
         const iid = ids.icon(resolved.ref);
-        if (!iconRefs.has(resolved.ref)) {
+        if (def) {
           iconRefs.add(resolved.ref);
-          layers.background.push(
-            h(
-              ICON_DEF_TAG,
-              { ref: resolved.ref, viewBox: resolved.svg.viewBox },
-              resolved.svg.body,
-            ),
-          );
+          layers.background.push(def);
         }
         iconNodes.push(
           h("rect", {

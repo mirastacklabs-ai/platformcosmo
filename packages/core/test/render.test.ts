@@ -200,6 +200,14 @@ describe("icons", () => {
     expect(svg).toContain('<use class="pc-test-icon" href="#pc-test-i_cosmo_3alb"');
     expect(svg).not.toMatch(/<use[^>]*transform/);
     expect(model.model.scene.objects).toHaveLength(4);
+    // an icon body that fails the emitter's trust check is dropped with a warning, not thrown
+    const evil: IconResolver = {
+      ...icons,
+      resolve: () => ({ ...resolved, svg: { ...resolved.svg, body: "<script>x()</script>" } }),
+    };
+    const unsafe = buildModel_with(objects, evil).model;
+    expect(unsafe.diagnostics.map((d) => d.code)).toContain("render/icon-unavailable");
+    expect(emit(unsafe.model, noopLayer, { font: "system" })).not.toContain("<symbol");
     expect(model.diagnostics.map((d) => d.code)).toContain("render/icon-unavailable");
   });
 
@@ -324,6 +332,14 @@ describe("render pipeline (stage fakes)", () => {
       "semantic/aaa",
       "semantic/unknown-node",
     ]);
+  });
+
+  test("an invalid custom theme is a diagnostic, not an exception", async () => {
+    const render = createRender(deps());
+    const bad = { ...fixtureTheme(), background: "url(https://evil)" };
+    const r = await render(spec, { font: "system", theme: bad });
+    expect(r.outputs).toEqual([]);
+    expect(r.diagnostics.map((d) => d.code)).toEqual(["render/invalid-theme"]);
   });
 
   test("unknown theme and missing DC pack are diagnostics", async () => {

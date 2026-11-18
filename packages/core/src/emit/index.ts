@@ -22,6 +22,7 @@ import {
 import { cdata, h, raw, serialize } from "./xml.js";
 
 export { createIds, cssEscapeId } from "./ids.js";
+export { themeVars } from "./styles.js";
 export { serialize, h, raw, escapeText, escapeAttr, cdata } from "./xml.js";
 
 /**
