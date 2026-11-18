@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { buildScene, validate } from "../src/index.js";
-import type { SceneObject } from "../src/index.js";
+import type { SceneObject, Vec3 } from "../src/index.js";
 
 function rng(seed: number): () => number {
   let a = seed >>> 0;
@@ -13,7 +13,7 @@ function rng(seed: number): () => number {
   };
 }
 
-const hitsBox = (path: SceneObject["box"]["origin"][], o: SceneObject): boolean => {
+const hitsBox = (path: readonly Vec3[], o: SceneObject): boolean => {
   for (let i = 0; i + 1 < path.length; i++) {
     const p = path[i]!;
     const q = path[i + 1]!;
