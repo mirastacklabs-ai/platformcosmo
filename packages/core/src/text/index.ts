@@ -165,7 +165,7 @@ export function subsetTtf(text: string, weight: TextWeight = "regular"): Uint8Ar
 /** Fonts for `rasterize` (resvg wants TTF/OTF): the full vendored Latin faces. */
 export function fontAssets(): readonly FontAsset[] {
   return [
-    { family: EMBED_FAMILY, weight: WEIGHT_REGULAR, sfnt: load("regular").ttf },
-    { family: EMBED_FAMILY, weight: WEIGHT_BOLD, sfnt: load("bold").ttf },
+    { family: EMBED_FAMILY, weight: WEIGHT_REGULAR, sfnt: new Uint8Array(load("regular").ttf) },
+    { family: EMBED_FAMILY, weight: WEIGHT_BOLD, sfnt: new Uint8Array(load("bold").ttf) },
   ];
 }

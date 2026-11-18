@@ -1,0 +1,9 @@
+Inter-Regular.latin.ttf and Inter-Bold.latin.ttf are Latin subsets of Inter 4.1
+(https://github.com/rsms/inter, SIL Open Font License 1.1, see LICENSES/Inter-OFL-1.1.txt,
+the upstream LICENSE.txt at tag v4.1, unmodified).
+
+Built from the Debian fonts-inter OTF (CFF) files: outlines converted to TrueType (cu2qu),
+hinting and layout features removed, subset to U+0020-007E, U+00A0-00FF and a few
+punctuation/arrow/math code points. The font family and style names are unchanged
+("Inter", "Regular"/"Bold"). The base64 copy in src/text/font-data.ts is generated from these
+files. The license text ships in the package at dist/LICENSES/Inter-OFL-1.1.txt.

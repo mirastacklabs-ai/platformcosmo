@@ -38,7 +38,9 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit -p .",
     "gen:examples": "node scripts/gen-examples.mjs",
-    "check:examples": "node scripts/gen-examples.mjs --check"
+    "check:examples": "node scripts/gen-examples.mjs --check",
+    "bundle:plugin": "node scripts/bundle-plugin.mjs",
+    "check:plugin": "node scripts/bundle-plugin.mjs --check"
   },
   "dependencies": {
     "@platformcosmo/core": "workspace:*",
