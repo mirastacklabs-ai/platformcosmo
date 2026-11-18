@@ -1,0 +1,30 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "GCP streaming data pipeline",
+    "description": "Events flow through Pub/Sub and Dataflow into BigQuery and Cloud Storage. Requires the GCP icon pack (pcosmo icons add gcp)."
+  },
+  "canvas": { "theme": "light" },
+  "nodes": [
+    { "id": "apps", "type": "client", "label": "Producers" },
+    { "id": "pubsub", "type": "queue", "icon": "gcp:pub-sub", "label": "Pub/Sub" },
+    { "id": "dataflow", "type": "pipeline", "icon": "gcp:dataflow", "label": "Dataflow" },
+    { "id": "bq", "type": "warehouse", "icon": "gcp:bigquery", "label": "BigQuery" },
+    { "id": "gcs", "type": "object-store", "icon": "gcp:cloud-storage", "label": "Cloud Storage" },
+    { "id": "bi", "type": "client", "label": "Dashboards" }
+  ],
+  "edges": [
+    { "id": "apps-pubsub", "from": "apps", "to": "pubsub" },
+    { "id": "pubsub-dataflow", "from": "pubsub", "to": "dataflow" },
+    { "id": "dataflow-bq", "from": "dataflow", "to": "bq" },
+    { "id": "dataflow-gcs", "from": "dataflow", "to": "gcs", "style": "dashed" },
+    { "id": "bq-bi", "from": "bq", "to": "bi" }
+  ],
+  "flows": [
+    { "edge": "apps-pubsub", "kind": "heavy" },
+    { "edge": "pubsub-dataflow" },
+    { "edge": "dataflow-bq" }
+  ],
+  "legend": "auto"
+}

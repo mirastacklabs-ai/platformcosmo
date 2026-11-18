@@ -39,7 +39,24 @@ importers:
         specifier: ^5.1.1
         version: 5.1.1(@types/node@22.20.5)(vite@8.3.8(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1))
 
-  packages/cli: {}
+  packages/cli:
+    dependencies:
+      '@platformcosmo/core':
+        specifier: workspace:*
+        version: link:../core
+      '@platformcosmo/dc-pack':
+        specifier: workspace:*
+        version: link:../dc-pack
+      '@platformcosmo/icons-base':
+        specifier: workspace:*
+        version: link:../icons-base
+      '@platformcosmo/themes':
+        specifier: workspace:*
+        version: link:../themes
+    devDependencies:
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   packages/core:
     dependencies:
@@ -56,7 +73,11 @@ importers:
         specifier: workspace:*
         version: link:../core
 
-  packages/icons-base: {}
+  packages/icons-base:
+    dependencies:
+      '@platformcosmo/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/themes:
     dependencies:

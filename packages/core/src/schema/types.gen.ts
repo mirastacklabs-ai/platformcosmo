@@ -142,7 +142,7 @@ export type SpecEndpoint = string
 export type SpecFlow = (SpecFlowByEdge | SpecFlowByEndpoints)
 export type SpecFlowKind = ("normal" | "heavy" | "health" | "failed" | "airflow" | "power")
 /**
- * #rgb or #rrggbb hex, a palette name (blue, green, red, orange, yellow, purple, teal, pink, gray) or a flow kind name.
+ * #rgb or #rrggbb hex, a palette name (blue, green, red, orange, yellow, purple, teal, pink, gray) or a flow kind name. Flow kind names: normal, heavy, health, failed, airflow, power.
  */
 export type SpecColor = string
 export type SpecMetricValue = (string | number)
@@ -308,7 +308,7 @@ label?: SpecText
  */
 members: [SpecId, ...(SpecId)[]]
 /**
- * Direction the row's equipment faces: front or back.
+ * Which side of the rack faces the row front. Omit to derive it from the aisles: rows face their cold aisle and turn their backs to their hot aisle.
  */
 facing?: ("front" | "back")
 }

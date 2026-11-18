@@ -1,0 +1,82 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "Data-center hall",
+    "description": "Two rack rows face a contained cold aisle; a CRAH cools the hall and a UPS feeds the racks."
+  },
+  "canvas": { "theme": "light" },
+  "racks": [
+    {
+      "id": "rack-a1",
+      "label": "A1",
+      "u": 42,
+      "pdu": "dual",
+      "slots": [
+        { "id": "tor", "at": 40, "type": "switch-tor", "label": "ToR" },
+        { "id": "srv-1", "at": 30, "type": "server-2u" },
+        { "id": "srv-2", "at": 26, "type": "server-2u" },
+        { "id": "gpu", "at": 18, "size": 4, "type": "gpu-node", "label": "GPU node" }
+      ]
+    },
+    {
+      "id": "rack-a2",
+      "label": "A2",
+      "u": 42,
+      "pdu": "dual",
+      "slots": [
+        { "id": "tor", "at": 40, "type": "switch-tor", "label": "ToR" },
+        { "id": "srv-1", "at": 30, "type": "server-1u" },
+        { "id": "srv-2", "at": 28, "type": "server-1u" },
+        { "id": "array", "at": 10, "type": "storage-flash", "label": "Flash array" }
+      ]
+    },
+    {
+      "id": "rack-b1",
+      "label": "B1",
+      "u": 42,
+      "pdu": "single",
+      "rearDoorHeatExchanger": true,
+      "slots": [
+        { "id": "tor", "at": 40, "type": "switch-tor", "label": "ToR" },
+        { "id": "srv-1", "at": 30, "type": "server-4u" }
+      ]
+    },
+    {
+      "id": "rack-b2",
+      "label": "B2",
+      "u": 42,
+      "pdu": "single",
+      "slots": [
+        { "id": "tor", "at": 40, "type": "switch-tor", "label": "ToR" },
+        { "id": "srv-1", "at": 30, "type": "server-2u" }
+      ]
+    }
+  ],
+  "equipment": [
+    { "id": "crah-1", "type": "crah", "label": "CRAH 1" },
+    { "id": "ups-1", "type": "ups", "label": "UPS 1" }
+  ],
+  "rows": [
+    { "id": "row-a", "label": "Row A", "members": ["rack-a1", "rack-a2"], "facing": "front" },
+    { "id": "row-b", "label": "Row B", "members": ["rack-b1", "rack-b2"], "facing": "front" }
+  ],
+  "aisles": [{ "id": "cold-1", "kind": "cold", "rows": ["row-a", "row-b"], "contained": true }],
+  "cables": [
+    { "id": "uplink-a", "from": "rack-a1/tor", "to": "rack-a2/tor", "kind": "fiber" },
+    { "id": "uplink-b", "from": "rack-b1/tor", "to": "rack-b2/tor", "kind": "fiber" },
+    { "id": "power-a", "from": "ups-1", "to": "rack-a1", "kind": "power" }
+  ],
+  "facility": { "raisedFloor": true, "perforatedTiles": true, "cableTrays": "overhead" },
+  "flows": [
+    { "from": "crah-1", "to": "rack-a1", "kind": "airflow" },
+    { "edge": "power-a", "kind": "power" }
+  ],
+  "steps": [
+    { "caption": "The hall: two rows around a contained cold aisle", "duration": 4 },
+    { "caption": "Row A", "focus": "row-a", "duration": 3 },
+    { "caption": "Rack A1", "focus": "rack-a1", "duration": 3 },
+    { "caption": "A GPU node in rack A1", "focus": "rack-a1/gpu", "duration": 3 }
+  ],
+  "legend": "auto"
+}
