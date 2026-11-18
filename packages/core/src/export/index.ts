@@ -3,7 +3,9 @@
  * is built here from the model with the injected animator/emit/optimize/rasterize stages, so
  * `render()` only wires them up. All outputs are deterministic (mp4 depends on the system ffmpeg).
  */
+import { r2, t4 } from "../anim/css.js";
 import type {
+  AnimationLayer,
   Diagnostic,
   ExportFn,
   OutputKind,
@@ -40,6 +42,25 @@ function withRootSize(
   });
 }
 
+/**
+ * Zoomed step/frame outputs shrink the viewBox, and the overlay layer (caption box, metric tiles,
+ * legend) is laid out for the full view: wrap it in the inverse zoom so it stays where it would
+ * be on screen. Done on the model (an attribute, which resvg honours; CSS `transform` it does not).
+ */
+function pinOverlay(m: RenderModel, animation: AnimationLayer): RenderModel {
+  const vb = animation.viewBox;
+  if (!vb || m.layers.overlay.length === 0) return m;
+  const s = m.viewBox.width / vb.width;
+  const transform = `translate(${r2(vb.x - m.viewBox.x / s)} ${r2(vb.y - m.viewBox.y / s)}) scale(${t4(1 / s)})`;
+  return {
+    ...m,
+    layers: {
+      ...m.layers,
+      overlay: [{ tag: "g", attrs: { transform }, children: m.layers.overlay }],
+    },
+  };
+}
+
 export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
   const invalid = validateRenderOptions(options);
   if (invalid.some((d) => d.severity === "error")) return { outputs: [], diagnostics: invalid };
@@ -65,7 +86,7 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
       kind,
       path,
       mime: SVG_MIME,
-      data: finish(deps.emit(m, animation, { font })),
+      data: finish(deps.emit(pinOverlay(m, animation), animation, { font })),
       ...(step !== undefined ? { step } : {}),
     });
   };
@@ -117,7 +138,10 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
   let lastPng: Uint8Array | undefined;
   const renderFrame = async (time: number, scale: number): Promise<Uint8Array> => {
     const layer = deps.animator.animate(model, { speed, mode: "frame", time });
-    const svg = withRootSize(deps.emit(model, layer, { font, target: "raster" }), model.viewBox);
+    const svg = withRootSize(
+      deps.emit(pinOverlay(model, layer), layer, { font, target: "raster" }),
+      model.viewBox,
+    );
     const key = `${scale}|${svg}`;
     if (lastPng && key === lastSvg) return lastPng;
     const png = await deps.rasterize(svg, { scale, fonts: model.fontAssets });
