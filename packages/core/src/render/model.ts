@@ -283,7 +283,9 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       ),
     );
 
-    if (o.label) {
+    // Devices inside a rack (`rack/slot`) stay unlabeled: their labels pile up over the rack.
+    const insideRack = o.source === "dc" && o.id.includes("/");
+    if (o.label && !insideRack) {
       const text = fit(o.label, labelSize, false, 150);
       const y = bbox.y + bbox.height + labelSize + 3;
       labelNodes.push(
@@ -425,8 +427,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   }
 
   // ---- Viewbox, overlays ---------------------------------------------------------------
-  const tile = projection.tileWidth;
-  const pad = Math.max(0.5, scene.canvas.padding) * (tile / 2);
+  const pad = Math.max(0, scene.canvas.padding); // pixels (schema: canvas.padding)
   let vb: Rect =
     extents.length > 0 ? unionRects(extents) : projectBoxBounds(projection, scene.bounds);
   vb = { x: vb.x - pad, y: vb.y - pad, width: vb.width + 2 * pad, height: vb.height + 2 * pad };

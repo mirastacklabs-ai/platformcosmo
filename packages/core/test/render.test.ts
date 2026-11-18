@@ -152,6 +152,7 @@ describe("buildModel", () => {
     const dev = {
       ...scene.objects[0]!,
       id: "r1/u3",
+      label: "DEV-LABEL",
       source: "dc" as const,
       box: { origin: { x: 8.1, y: 0.1, z: 0.5 }, size: { x: 0.8, y: 0.8, z: 0.1 } },
     };
@@ -162,6 +163,8 @@ describe("buildModel", () => {
     const svg = emit(m, noopLayer, { font: "system" });
     expect(svg).toContain('id="pc-test-o_r1.u3"');
     expect(svg.indexOf('pc-test-o_r1"')).toBeLessThan(svg.indexOf('pc-test-o_r1.u3"'));
+    // devices inside a rack are not labeled (their labels would pile up over the rack)
+    expect(svg).not.toContain("DEV-LABEL");
     // LED part faces carry the led class and per-part face ids
     expect(svg).toContain(
       'id="pc-test-f_r1__led0__top" class="pc-test-face pc-test-p-led-top pc-test-led"',
@@ -169,6 +172,74 @@ describe("buildModel", () => {
     // device group is not inside the rack group
     const rackGroup = /<g id="pc-test-o_r1" [^>]*>(.*?)<path id="pc-test-ov_r1"/s.exec(svg);
     expect(rackGroup?.[1]).not.toContain("pc-test-o_r1.u3");
+  });
+});
+
+describe("view box and overlay layout", () => {
+  const union = (rs: { x: number; y: number; width: number; height: number }[]) => {
+    const x0 = Math.min(...rs.map((r) => r.x));
+    const y0 = Math.min(...rs.map((r) => r.y));
+    return {
+      x: x0,
+      y: y0,
+      width: Math.max(...rs.map((r) => r.x + r.width)) - x0,
+      height: Math.max(...rs.map((r) => r.y + r.height)) - y0,
+    };
+  };
+
+  test("canvas.padding is in pixels and the view box hugs the drawing", () => {
+    const at = (padding: number) =>
+      buildModel({
+        ...inputs(),
+        scene: { ...loadBalancerScene(), canvas: { ...loadBalancerScene().canvas, padding } },
+      }).viewBox;
+    const a = at(0);
+    const b = at(100);
+    expect(b.width - a.width).toBeCloseTo(200, 0);
+    expect(b.height - a.height).toBeCloseTo(200, 0);
+    // with the default padding the view box is the drawing plus overlays plus 32px, not a huge canvas
+    const m = buildModel(inputs());
+    const drawing = union(Object.values(m.anchors).map((x) => x.bbox));
+    expect(m.viewBox.width).toBeLessThan(drawing.width + 2 * 32 + 400);
+    expect(m.viewBox.height).toBeLessThan(drawing.height + 2 * 32 + 400);
+    expect(drawing.width / m.viewBox.width).toBeGreaterThan(0.4);
+  });
+
+  test("metrics, caption and legend sit inside the view box next to the drawing", () => {
+    const m = buildModel(inputs());
+    const vb = m.viewBox;
+    const drawing = union(Object.values(m.anchors).map((x) => x.bbox));
+    const inside = (r: { x: number; y: number; width: number; height: number }) => {
+      expect(r.x).toBeGreaterThanOrEqual(vb.x);
+      expect(r.y).toBeGreaterThanOrEqual(vb.y);
+      expect(r.x + r.width).toBeLessThanOrEqual(vb.x + vb.width + 0.01);
+      expect(r.y + r.height).toBeLessThanOrEqual(vb.y + vb.height + 0.01);
+    };
+    for (const r of Object.values(m.metricRects)) {
+      inside(r);
+      expect(r.y + r.height).toBeLessThanOrEqual(drawing.y); // above the drawing
+    }
+    const cap = m.captionRect as NonNullable<typeof m.captionRect>;
+    inside(cap);
+    expect(cap.y).toBeGreaterThanOrEqual(drawing.y + drawing.height); // below the drawing
+    // nothing but padding sits left of / right of the content
+    expect(drawing.x - vb.x).toBeLessThan(120);
+  });
+
+  test("canvas.aspect is respected", () => {
+    const m = buildModel({
+      ...inputs(),
+      scene: {
+        ...loadBalancerScene(),
+        canvas: { ...loadBalancerScene().canvas, aspect: "16:9" },
+      },
+    });
+    expect(m.viewBox.width / m.viewBox.height).toBeCloseTo(16 / 9, 1);
+    const sq = buildModel({
+      ...inputs(),
+      scene: { ...loadBalancerScene(), canvas: { ...loadBalancerScene().canvas, aspect: "1:1" } },
+    });
+    expect(sq.viewBox.width / sq.viewBox.height).toBeCloseTo(1, 1);
   });
 });
 

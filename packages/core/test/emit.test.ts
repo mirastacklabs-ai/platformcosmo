@@ -145,6 +145,10 @@ describe("emit structure", () => {
     expect(svg).not.toContain(":root");
   });
 
+  test("text uses geometric precision (no hinted, rounded advances at small sizes)", () => {
+    expect(svg).toMatch(/#pc-test\{[^}]*text-rendering:geometricPrecision\}/);
+  });
+
   test("base state rules per contract", () => {
     expect(svg).toContain(".pc-test-s-down{opacity:var(--pc-states-down-opacity)}");
     expect(svg).toContain(
