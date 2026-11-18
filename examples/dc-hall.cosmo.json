@@ -58,8 +58,8 @@
     { "id": "ups-1", "type": "ups", "label": "UPS 1" }
   ],
   "rows": [
-    { "id": "row-a", "label": "Row A", "members": ["rack-a1", "rack-a2"], "facing": "front" },
-    { "id": "row-b", "label": "Row B", "members": ["rack-b1", "rack-b2"], "facing": "front" }
+    { "id": "row-a", "label": "Row A", "members": ["rack-a1", "rack-a2"] },
+    { "id": "row-b", "label": "Row B", "members": ["rack-b1", "rack-b2"] }
   ],
   "aisles": [{ "id": "cold-1", "kind": "cold", "rows": ["row-a", "row-b"], "contained": true }],
   "cables": [
