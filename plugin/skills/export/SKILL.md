@@ -2,13 +2,15 @@
 name: export
 description: Re-export an existing PlatformCosmo spec (*.cosmo.json or *.cosmo.yaml) to other formats or themes: static SVG, per-step SVGs, PNG, interactive SVG, GIF or MP4. Use when the user already has a spec and wants a different output, size, theme or speed without redrawing it.
 argument-hint: <spec file> [--static --steps --interactive --png --gif --mp4 --theme dark --speed 2]
-allowed-tools: Bash(pcosmo *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs *) Read
+allowed-tools: Bash(pcosmo build *) Bash(pcosmo validate *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs build *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs validate *) Read
 ---
 
 # PlatformCosmo export
 
-Re-render an existing spec: `pcosmo build $ARGUMENTS`. Do not edit the spec unless the user asks; this skill only
-exports. If the spec fails validation, run `pcosmo validate <spec>`, report the diagnostics and offer to fix the
+Re-render an existing spec: `pcosmo build $ARGUMENTS --packs-dir "${CLAUDE_PLUGIN_DATA}/icons"` (the flag points at the
+user's installed icon packs; Bash commands do not see `CLAUDE_PLUGIN_DATA`). Treat `$ARGUMENTS` as a spec path plus the
+flags listed below; do not pass anything else through. Do not edit the spec unless the user asks; this skill only
+exports. If the spec fails validation, run `pcosmo validate <spec> --packs-dir "${CLAUDE_PLUGIN_DATA}/icons"`, report the diagnostics and offer to fix the
 spec with `/platformcosmo:diagram`.
 
 ## Outputs

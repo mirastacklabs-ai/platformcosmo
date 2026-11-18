@@ -2,7 +2,13 @@
 # pcosmo launcher for the Claude Code plugin: checks Node, then runs the bundled CLI.
 # POSIX sh only. Needs Node >= 22.12 on PATH.
 self=$0
+hops=0
 while [ -L "$self" ]; do
+  hops=$((hops + 1))
+  if [ "$hops" -gt 40 ]; then
+    echo "pcosmo: too many levels of symbolic links resolving $0." >&2
+    exit 1
+  fi
   link=$(readlink "$self")
   case $link in
     /*) self=$link ;;

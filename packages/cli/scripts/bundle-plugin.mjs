@@ -25,6 +25,8 @@ const result = await build({
   minify: true,
   legalComments: "none",
   charset: "ascii",
+  // Assets (resvg wasm, fonts) must be inlined: the plugin ships exactly one file.
+  loader: { ".wasm": "binary", ".woff2": "binary", ".ttf": "binary", ".otf": "binary" },
   logLevel: "warning",
   alias: {
     "@platformcosmo/core": src("core"),
@@ -38,7 +40,16 @@ const result = await build({
   },
 });
 
+if (result.outputFiles.length !== 1) {
+  console.error(`expected one output file, esbuild produced ${result.outputFiles.length}`);
+  process.exit(1);
+}
 const text = result.outputFiles[0].text;
+// A runtime file read relative to the bundle would break once the plugin is copied.
+if (/new URL\([^)]*import\.meta\.url/.test(text)) {
+  console.error("bundle contains new URL(..., import.meta.url); inline that asset with a loader");
+  process.exit(1);
+}
 // esbuild keeps the entry's shebang first; the launcher runs `node pcosmo.mjs`, so drop it.
 const out = text.startsWith("#!") ? text.slice(text.indexOf("\n") + 1) : text;
 

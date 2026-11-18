@@ -29,7 +29,7 @@ describe("plugin launcher (POSIX sh)", () => {
   const runLauncher = (pathDir: string) =>
     spawnSync("/bin/sh", [launcher, "--version"], {
       encoding: "utf8",
-      env: { PATH: `${pathDir}:/bin`, HOME: "/nonexistent" },
+      env: { PATH: `${pathDir}:/usr/bin:/bin`, HOME: "/nonexistent" },
     });
 
   test.each(["22.12.0", "22.20.1", "24.0.0", "30.1.2"])(
@@ -58,10 +58,23 @@ describe("plugin launcher (POSIX sh)", () => {
     const dir = await withNode(null);
     const r = spawnSync("/bin/sh", [launcher], {
       encoding: "utf8",
-      env: { PATH: `${dir}:/bin`, HOME: "/nonexistent" },
+      env: { PATH: `${dir}:/usr/bin:/bin`, HOME: "/nonexistent" },
     });
     expect(r.status).toBe(127);
     expect(r.stderr).toContain("Node.js 22.12 or newer is required");
+  });
+
+  test("gives up on a symlink loop", async () => {
+    const dir = await withNode("24.0.0");
+    execFileSync("ln", ["-s", join(dir, "b"), join(dir, "a")]);
+    execFileSync("ln", ["-s", join(dir, "a"), join(dir, "b")]);
+    // Run the launcher text with $0 pointing at the loop (a looping symlink cannot be exec'd directly).
+    const r = spawnSync("/bin/sh", ["-c", readFileSync(launcher, "utf8"), join(dir, "a")], {
+      encoding: "utf8",
+      env: { PATH: `${dir}:/usr/bin:/bin`, HOME: "/nonexistent" },
+    });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("too many levels of symbolic links");
   });
 
   test("follows a symlink to the real location", async () => {
@@ -69,7 +82,7 @@ describe("plugin launcher (POSIX sh)", () => {
     execFileSync("ln", ["-s", launcher, join(dir, "pcosmo")]);
     const r = spawnSync(join(dir, "pcosmo"), ["x"], {
       encoding: "utf8",
-      env: { PATH: `${dir}:/bin`, HOME: "/nonexistent" },
+      env: { PATH: `${dir}:/usr/bin:/bin`, HOME: "/nonexistent" },
     });
     expect(r.stdout).toContain(join(root, "plugin/bin/pcosmo.mjs"));
   });
@@ -92,6 +105,25 @@ describe("plugin contents", () => {
     expect(readFileSync(join(skills, "diagram/SKILL.md"), "utf8")).not.toContain(
       "disable-model-invocation",
     );
+  });
+
+  test("allowed-tools are narrow and every pack-resolving command passes --packs-dir", () => {
+    for (const s of ["diagram", "export", "icons"]) {
+      const text = readFileSync(join(skills, s, "SKILL.md"), "utf8");
+      const tools = /^allowed-tools: (.*)$/m.exec(text)?.[1] ?? "";
+      expect(tools, s).not.toMatch(/Bash\(pcosmo \*\)/);
+      expect(tools, s).not.toMatch(/pcosmo\.mjs \*\)/);
+      expect(tools, s).not.toMatch(/icons (remove|\*)/);
+      expect(text, s).toContain('--packs-dir "${CLAUDE_PLUGIN_DATA}/icons"');
+      // Fenced or inline command examples for validate/build must carry the flag.
+      for (const m of text.matchAll(/`(pcosmo (?:validate|build) [^`]*)`/g)) {
+        if (m[1]!.includes("<spec>") || m[1]!.includes("<name>")) {
+          expect(m[1], `${s}: ${m[1]}`).toContain("--packs-dir");
+        }
+      }
+    }
+    const exp = readFileSync(join(skills, "export/SKILL.md"), "utf8");
+    expect(/^allowed-tools: (.*)$/m.exec(exp)?.[1]).not.toMatch(/init|examples|icons/);
   });
 
   test("skill example specs are identical to /examples", () => {
