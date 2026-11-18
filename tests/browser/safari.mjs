@@ -245,12 +245,22 @@ try {
             frames.push(await shot());
             await sleep(600);
           }
-          rec(
-            file,
-            mode,
-            "reduced motion: static",
-            frames.every((f) => f === frames[0]) ? "pass" : "fail",
-          );
+          const still = frames.every((f) => f === frames[0]);
+          let moved = "";
+          if (!still) {
+            // Evidence of what moves: the first and last frame, and how much differs.
+            const last = frames[frames.length - 1];
+            const d = await diffFraction(frames[0], last);
+            moved = `${(d * 100).toFixed(3)}% of pixels differ between the first and last frame`;
+            for (const [n, f] of [
+              ["a", frames[0]],
+              ["b", last],
+            ]) {
+              writeFileSync(`${OUT}/moving-${file}-${mode}-${n}.png`, Buffer.from(f, "base64"));
+            }
+            await go(`/page/${mode}/${encodeURIComponent(file)}`); // restore the page for later steps
+          }
+          rec(file, mode, "reduced motion: static", still ? "pass" : "fail", moved);
           rec(
             file,
             mode,
