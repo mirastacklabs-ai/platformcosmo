@@ -332,3 +332,13 @@ export type ExportFn = (
   readonly outputs: readonly RenderOutput[];
   readonly diagnostics: readonly Diagnostic[];
 }>;
+
+/**
+ * Scene builder (A2 → A1 seam): semantic defaults, layout on the iso grid, group packing,
+ * DC fragment merge, orthogonal routing (world-space `SceneEdge.path`), flows and timeline.
+ * Called only with a spec that passed `validate`.
+ */
+export type BuildSceneFn = (
+  spec: PlatformCosmoSpec,
+  context: { readonly icons?: IconResolver; readonly dc?: DcPack },
+) => SceneGraph;
