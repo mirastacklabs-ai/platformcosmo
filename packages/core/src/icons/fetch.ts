@@ -74,7 +74,8 @@ export function checkHttpsUrl(
     return { ok: false, reason: "URLs with credentials are not allowed" };
   if (u.port && u.port !== "443")
     return { ok: false, reason: "non-standard ports are not allowed" };
-  const host = u.hostname.toLowerCase();
+  // `localhost.` and `127.0.0.1.` name the same hosts: strip one trailing dot before checking.
+  const host = u.hostname.toLowerCase().replace(/\.$/, "");
   if (
     !host ||
     host.startsWith("[") ||
@@ -134,15 +135,28 @@ interface ZipEntry {
 const u16 = (b: Uint8Array, o: number): number => (b[o] as number) | ((b[o + 1] as number) << 8);
 const u32 = (b: Uint8Array, o: number): number => (u16(b, o) | (u16(b, o + 2) << 16)) >>> 0;
 
-function unsafeName(name: string): boolean {
-  if (name.length === 0 || name.length > 512) return true;
-  if (name.includes("\0") || name.includes("\\") || name.startsWith("/")) return true;
-  if (/^[A-Za-z]:/.test(name)) return true;
-  return name.split("/").some((seg) => seg === "..");
+const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+function hasControlChars(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c <= 0x1f || c === 0x7f) return true;
+  }
+  return false;
 }
 
+/** Why an archive or listing path must be refused, or `undefined` when it is acceptable. */
+function nameProblem(name: string): "zip-slip" | "unsafe-entry-name" | undefined {
+  if (name.length === 0 || name.length > 512) return "unsafe-entry-name";
+  if (hasControlChars(name)) return "unsafe-entry-name";
+  if (name.includes("\\") || name.startsWith("/") || /^[A-Za-z]:/.test(name)) return "zip-slip";
+  return name.split("/").some((seg) => seg === "..") ? "zip-slip" : undefined;
+}
+
+const unsafeName = (name: string): boolean => nameProblem(name) !== undefined;
+
 /** Reads the central directory without inflating anything. */
-export function readZipDirectory(buf: Uint8Array): ZipEntry[] {
+export function readZipDirectory(buf: Uint8Array, duplicates?: string[]): ZipEntry[] {
   let eocd = -1;
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 65535); i--) {
     if (u32(buf, i) === 0x06054b50) {
@@ -170,6 +184,7 @@ export function readZipDirectory(buf: Uint8Array): ZipEntry[] {
   if (cdOffset + cdSize > eocd)
     throw new ArchiveError("archive-invalid", "central directory out of bounds");
   const entries: ZipEntry[] = [];
+  const seenNames = new Set<string>();
   let p = cdOffset;
   for (let n = 0; n < total; n++) {
     if (p + 46 > buf.length || u32(buf, p) !== 0x02014b50) {
@@ -182,12 +197,22 @@ export function readZipDirectory(buf: Uint8Array): ZipEntry[] {
       throw new ArchiveError("archive-invalid", "central directory entry out of bounds");
     }
     const name = utf8.decode(buf.subarray(p + 46, p + 46 + nameLen));
-    if (unsafeName(name)) {
+    const problem = nameProblem(name);
+    if (problem) {
       throw new ArchiveError(
-        "zip-slip",
+        problem,
         `unsafe entry name in archive: ${JSON.stringify(name.slice(0, 80))}`,
       );
     }
+    // Unix mode in the high 16 bits of the external attributes: refuse symbolic links.
+    if (((u32(buf, p + 38) >>> 16) & 0o170000) === 0o120000) {
+      throw new ArchiveError(
+        "zip-symlink",
+        `archive contains a symbolic link: ${name.slice(0, 80)}`,
+      );
+    }
+    if (seenNames.has(name)) duplicates?.push(name);
+    seenNames.add(name);
     entries.push({
       name,
       flags: u16(buf, p + 8),
@@ -282,11 +307,13 @@ function buildPack(
   const icons: IconEntry[] = [];
   const used = new Set<string>();
   let rejected = 0;
-  for (const r of [...raws].sort((a, b) =>
-    a.sourcePath < b.sourcePath ? -1 : a.sourcePath > b.sourcePath ? 1 : 0,
-  )) {
+  for (const r of [...raws].sort((a, b) => cmp(a.sourcePath, b.sourcePath))) {
     const res = sanitizeSvg(r.svg, { maxBytes: FETCH_LIMITS.svgBytes });
-    if (!res.ok || res.svg.body.length > FETCH_LIMITS.sanitizedBytes) {
+    // The stored file (with its <svg> wrapper) is what is bounded, not just the body.
+    const stored = res.ok
+      ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${res.svg.viewBox}">${res.svg.body.replaceAll("__PCID__-", "i")}</svg>`
+      : "";
+    if (!res.ok || stored.length > FETCH_LIMITS.sanitizedBytes) {
       rejected++;
       if (rejected <= MAX_REPORTED) {
         diagnostics.push(
@@ -304,8 +331,7 @@ function buildPack(
     used.add(id);
     const file = `svg/${id}.svg`;
     // Store the sanitized form so persisted packs never contain unsanitized markup.
-    files[file] =
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${res.svg.viewBox}">${res.svg.body.replaceAll("__PCID__-", "i")}</svg>`;
+    files[file] = stored;
     icons.push({
       id,
       aliases: [],
@@ -320,7 +346,7 @@ function buildPack(
       diag("warning", "svg-rejected", `${rejected - MAX_REPORTED} more SVG files were skipped`),
     );
   }
-  icons.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  icons.sort((a, b) => cmp(a.id, b.id));
   const manifest: IconManifest = { manifestVersion: 1, pack: info, icons };
   return { pack: { manifest, files }, diagnostics };
 }
@@ -330,9 +356,25 @@ function buildPack(
 type Selector = (path: string) => { id: string; category: IconCategory } | undefined;
 
 function extractSvgs(buf: Uint8Array, select: Selector, diagnostics: Diagnostic[]): RawIcon[] {
-  const entries = readZipDirectory(buf);
+  const duplicates: string[] = [];
+  const entries = readZipDirectory(buf, duplicates);
+  if (duplicates.length) {
+    diagnostics.push(
+      diag(
+        "warning",
+        "duplicate-entry",
+        `archive lists ${duplicates.length} entry name(s) more than once (first occurrence kept): ${duplicates
+          .slice(0, 3)
+          .map((n) => n.slice(0, 60))
+          .join(", ")}`,
+      ),
+    );
+  }
   const selected: { e: ZipEntry; id: string; category: IconCategory }[] = [];
+  const takenNames = new Set<string>();
   for (const e of entries) {
+    if (takenNames.has(e.name)) continue;
+    takenNames.add(e.name);
     if (e.name.endsWith("/") || e.name.startsWith("__MACOSX/") || !/\.svg$/i.test(e.name)) continue;
     const base = e.name.slice(e.name.lastIndexOf("/") + 1);
     if (base.startsWith("._")) continue;
@@ -503,11 +545,17 @@ async function mapLimit<T, R>(
 ): Promise<R[]> {
   const out: R[] = new Array<R>(items.length);
   let next = 0;
+  let aborted = false; // after the first failure no further requests are started
   await Promise.all(
     Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (next < items.length) {
+      while (next < items.length && !aborted) {
         const i = next++;
-        out[i] = await fn(items[i] as T);
+        try {
+          out[i] = await fn(items[i] as T);
+        } catch (e) {
+          aborted = true;
+          throw e;
+        }
       }
     }),
   );
@@ -523,7 +571,36 @@ async function fetchGithubSvgs(
   match: (path: string) => { id: string; category: IconCategory } | undefined,
   diagnostics: Diagnostic[],
 ): Promise<{ raws: RawIcon[]; resolved: string; version: string }> {
-  const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`;
+  if (
+    !/^[\w.-]+$/.test(owner) ||
+    !/^[\w.-]+$/.test(repo) ||
+    !/^[\w./-]+$/.test(ref) ||
+    ref.includes("..")
+  ) {
+    throw new FetchError("invalid-url", "unsupported GitHub owner, repository or ref");
+  }
+  // Pin everything to one commit: resolve a branch/tag to its sha so the listing and every file
+  // come from the same snapshot and the lock entry is reproducible.
+  let commit = ref;
+  if (!/^[0-9a-f]{40}$/.test(ref)) {
+    const c = await guardedGet(
+      ctx,
+      `https://api.github.com/repos/${owner}/${repo}/commits/${ref.split("/").map(encodeURIComponent).join("/")}`,
+      FETCH_LIMITS.documentBytes,
+      GITHUB_HOSTS,
+    );
+    let sha: unknown;
+    try {
+      sha = (JSON.parse(utf8.decode(c.body)) as { sha?: unknown }).sha;
+    } catch {
+      sha = undefined;
+    }
+    if (typeof sha !== "string" || !/^[0-9a-f]{40}$/.test(sha)) {
+      throw new FetchError("fetch-failed", "could not resolve the GitHub ref to a commit");
+    }
+    commit = sha;
+  }
+  const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${commit}?recursive=1`;
   const res = await guardedGet(ctx, treeUrl, FETCH_LIMITS.documentBytes, GITHUB_HOSTS);
   let tree: { sha?: unknown; truncated?: unknown; tree?: unknown };
   try {
@@ -547,14 +624,14 @@ async function fetchGithubSvgs(
     const m = match(n.path);
     if (m) paths.push({ path: n.path, ...m });
   }
-  paths.sort((a, b) => (a.path < b.path ? -1 : 1));
+  paths.sort((a, b) => cmp(a.path, b.path));
   if (paths.length > MAX_LISTED_FILES) {
     throw new ArchiveError(
       "archive-too-many-files",
       `listing has more than ${MAX_LISTED_FILES} matching files`,
     );
   }
-  const base = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(ref)}/`;
+  const base = `https://raw.githubusercontent.com/${owner}/${repo}/${commit}/`;
   const raws = await mapLimit(paths, 6, async (p) => {
     const r = await guardedGet(
       ctx,
@@ -569,9 +646,7 @@ async function fetchGithubSvgs(
       svg: utf8.decode(r.body),
     } satisfies RawIcon;
   });
-  const sha =
-    typeof tree.sha === "string" ? tree.sha.replace(/[^0-9a-f]/g, "").slice(0, 12) : "unknown";
-  return { raws, resolved: treeUrl, version: `${repo}@${sha}` };
+  return { raws, resolved: res.url, version: `${repo}@${commit.slice(0, 12)}` };
 }
 
 const PROVIDERS: Record<string, Provider> = {
@@ -589,7 +664,7 @@ const PROVIDERS: Record<string, Provider> = {
     terms:
       "AWS Architecture Icons: AWS allows customers and partners to use these toolkits and assets to create architecture diagrams. Review the current terms at https://aws.amazon.com/architecture/icons/. The icons are downloaded to your machine and are never redistributed by PlatformCosmo.",
     requiresAcceptance: false,
-    async fetch(ctx) {
+    async fetch(ctx, diagnostics) {
       const hosts = ["amazon.com", "awsstatic.com"];
       const page = await guardedGet(ctx, AWS_LANDING, FETCH_LIMITS.documentBytes, hosts);
       const html = utf8.decode(page.body);
@@ -605,7 +680,6 @@ const PROVIDERS: Record<string, Provider> = {
       const zip = await guardedGet(ctx, m[0], FETCH_LIMITS.archiveBytes, hosts);
       if (!isZip(zip.body))
         throw new FetchError("archive-invalid", "AWS download is not a zip archive");
-      const diagnostics: Diagnostic[] = [];
       const raws = extractSvgs(zip.body, awsSelect, diagnostics);
       return { raws, resolved: zip.url, version: /_(\d{8})\./.exec(zip.url)?.[1] ?? "current" };
     },
@@ -624,7 +698,7 @@ const PROVIDERS: Record<string, Provider> = {
     terms:
       "Azure Architecture Icons are provided by Microsoft. Per Microsoft's terms of use you may use the icons in architectural diagrams, training materials, or documentation, and may copy, distribute, and display them only for that permitted use. Read the full terms at https://learn.microsoft.com/azure/architecture/icons/ (Microsoft_Terms_of_Use.pdf in the download). Continuing means you have read and accept them.",
     requiresAcceptance: true,
-    async fetch(ctx) {
+    async fetch(ctx, diagnostics) {
       const zip = await guardedGet(ctx, AZURE_URL, FETCH_LIMITS.archiveBytes, [
         "azureedge.net",
         "microsoft.com",
@@ -632,9 +706,9 @@ const PROVIDERS: Record<string, Provider> = {
       ]);
       if (!isZip(zip.body))
         throw new FetchError("archive-invalid", "Azure download is not a zip archive");
-      const raws = extractSvgs(zip.body, azureSelect, []);
+      const raws = extractSvgs(zip.body, azureSelect, diagnostics);
       // Prefer category folders over `other`/`new` when an icon appears in several.
-      raws.sort((a, b) => (azureOrder(a.sourcePath) < azureOrder(b.sourcePath) ? -1 : 1));
+      raws.sort((a, b) => cmp(azureOrder(a.sourcePath), azureOrder(b.sourcePath)));
       const seen = new Set<string>();
       const unique = raws.filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)));
       return { raws: unique, resolved: zip.url, version: "V25" };
@@ -654,15 +728,18 @@ const PROVIDERS: Record<string, Provider> = {
     terms:
       "Google Cloud icons: check Google's terms at https://cloud.google.com/icons before using them. The icons are downloaded to your machine and are never redistributed by PlatformCosmo.",
     requiresAcceptance: false,
-    async fetch(ctx) {
+    async fetch(ctx, diagnostics) {
       const raws: RawIcon[] = [];
+      const finals: string[] = [];
       for (const url of GCP_URLS) {
         const zip = await guardedGet(ctx, url, FETCH_LIMITS.archiveBytes, ["google.com"]);
         if (!isZip(zip.body))
           throw new FetchError("archive-invalid", "Google download is not a zip archive");
-        raws.push(...extractSvgs(zip.body, gcpSelect, []));
+        finals.push(zip.url);
+        raws.push(...extractSvgs(zip.body, gcpSelect, diagnostics));
       }
-      return { raws, resolved: GCP_URLS.join(" "), version: "current" };
+      // Both archives, as the final URLs actually fetched (space separated).
+      return { raws, resolved: finals.join(" "), version: "current" };
     },
   },
   cncf: {
@@ -717,14 +794,15 @@ const GITHUB_TREE_RE = /^\/([^/]+)\/([^/]+)\/tree\/([^/]+)(?:\/(.*))?$/;
 
 export const fetchIconPack: FetchIconPackFn = async (source, options) => {
   const diagnostics: Diagnostic[] = [];
-  const fail = (code: string, message: string, terms?: string) => ({
+  const key = typeof source === "string" ? source.trim().toLowerCase() : "";
+  const provider = Object.hasOwn(PROVIDERS, key) ? PROVIDERS[key] : undefined;
+  // Provider terms accompany every outcome, including failures, so the CLI can always show them.
+  const fail = (code: string, message: string, terms: string | undefined = provider?.terms) => ({
     diagnostics: [...diagnostics, diag("error", code, message)],
     ...(terms ? { terms } : {}),
   });
   try {
     const ctx: HttpCtx = { http: options.http };
-    const provider =
-      typeof source === "string" ? PROVIDERS[source.trim().toLowerCase()] : undefined;
     const packId = options.packId ?? provider?.id;
     if (options.packId !== undefined && !PACK_ID_RE.test(options.packId)) {
       return fail("invalid-pack-id", `pack id must match ${PACK_ID_RE.source}`);

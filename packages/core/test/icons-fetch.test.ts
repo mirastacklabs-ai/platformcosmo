@@ -7,6 +7,7 @@ vi.setConfig({ testTimeout: 30_000 });
 import type { IconHttpClient } from "../src/index.js";
 import {
   FETCH_LIMITS,
+  PROVIDER_TERMS,
   checkHttpsUrl,
   computeIconIntegrity,
   createIconResolver,
@@ -313,14 +314,21 @@ describe("fetchIconPack: zip archives", () => {
         return c;
       })(),
     ];
-    for (const body of cases) {
+    // Each corruption yields no pack and exactly one error diagnostic; none ever throws.
+    const expected = ["icons/archive-invalid", "icons/archive-invalid", undefined];
+    for (const [i, body] of cases.entries()) {
       const { http } = fakeHttp({ [url]: { body } });
       const r = await fetchIconPack(url, { http });
-      expect(r.pack === undefined || (r.pack.manifest.icons.length ?? 0) >= 0).toBe(true);
-      expect(r.diagnostics.length).toBeGreaterThan(0);
+      if (expected[i]) {
+        expect(r.pack, `case ${i}`).toBeUndefined();
+        expect(codes(r), `case ${i}`).toEqual([expected[i]]);
+      } else {
+        // Flipped bytes inside the first local header: either refused or still a sane pack.
+        expect(
+          r.pack === undefined ? codes(r).length : r.pack.manifest.icons.length,
+        ).toBeGreaterThan(0);
+      }
     }
-    const { http } = fakeHttp({ [url]: { body: cases[0] as Uint8Array } });
-    expect(codes(await fetchIconPack(url, { http }))).toEqual(["icons/archive-invalid"]);
     expect(() => readZipDirectory(new Uint8Array(100))).toThrow();
   });
 });
@@ -439,9 +447,13 @@ describe("fetchIconPack: providers", () => {
         { path: "projects/dir/icon/color/dir-icon-color.svg", type: "tree" },
       ],
     };
-    const raw = "https://raw.githubusercontent.com/cncf/artwork/main/";
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    const raw = `https://raw.githubusercontent.com/cncf/artwork/${commit}/`;
     const { http, calls } = fakeHttp({
-      "https://api.github.com/repos/cncf/artwork/git/trees/main?recursive=1": {
+      "https://api.github.com/repos/cncf/artwork/commits/main": {
+        body: JSON.stringify({ sha: commit }),
+      },
+      [`https://api.github.com/repos/cncf/artwork/git/trees/${commit}?recursive=1`]: {
         body: JSON.stringify(tree),
       },
       [`${raw}projects/agones/icon/color/agones-icon-color.svg`]: { body: svg() },
@@ -449,9 +461,14 @@ describe("fetchIconPack: providers", () => {
     });
     const r = await fetchIconPack("cncf", { http });
     expect(r.pack?.manifest.icons.map((i) => i.id)).toEqual(["agones", "akri"]);
-    expect(r.pack?.manifest.pack.version).toBe("artwork@d26cd4f9de25");
+    // Pinned by commit sha: version, final URL and every file come from the same snapshot.
+    expect(r.pack?.manifest.pack.version).toBe("artwork@0123456789ab");
+    expect(r.lock?.resolved).toBe(
+      `https://api.github.com/repos/cncf/artwork/git/trees/${commit}?recursive=1`,
+    );
     expect(r.terms).toMatch(/trademark/);
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(4);
+    expect(calls.slice(2).every((c) => c.url.includes(commit))).toBe(true);
   });
 
   test("github tree URLs work as an SVG folder listing", async () => {
@@ -464,9 +481,11 @@ describe("fetchIconPack: providers", () => {
         { path: "icons/readme.md", type: "blob" },
       ],
     };
-    const raw = "https://raw.githubusercontent.com/acme/set/v1/";
+    const commit = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    const raw = `https://raw.githubusercontent.com/acme/set/${commit}/`;
     const { http } = fakeHttp({
-      "https://api.github.com/repos/acme/set/git/trees/v1?recursive=1": {
+      "https://api.github.com/repos/acme/set/commits/v1": { body: JSON.stringify({ sha: commit }) },
+      [`https://api.github.com/repos/acme/set/git/trees/${commit}?recursive=1`]: {
         body: JSON.stringify(tree),
       },
       [`${raw}icons/a.svg`]: { body: svg() },
@@ -475,6 +494,169 @@ describe("fetchIconPack: providers", () => {
     const r = await fetchIconPack("https://github.com/acme/set/tree/v1/icons", { http });
     expect(r.pack?.manifest.icons.map((i) => i.id)).toEqual(["a", "b"]);
     expect(r.pack?.manifest.pack.id).toBe("icons");
+  });
+});
+
+/** Central-directory header offsets (one per entry, in order). */
+function centralHeaders(z: Uint8Array): number[] {
+  const dv = new DataView(z.buffer, z.byteOffset, z.byteLength);
+  const out: number[] = [];
+  for (let i = 0; i < z.length - 4; i++) if (dv.getUint32(i, true) === 0x02014b50) out.push(i);
+  return out;
+}
+
+describe("review round: hostile archives and URLs", () => {
+  const url = "https://example.com/pack.zip";
+  const run = async (body: Uint8Array) => {
+    const { http } = fakeHttp({ [url]: { body } });
+    return fetchIconPack(url, { http });
+  };
+
+  test.each([
+    ["NUL byte", "a\0b.svg"],
+    ["control character", "a\u0001b.svg"],
+    ["DEL", "a\u007fb.svg"],
+    ["newline", "a\nb.svg"],
+  ])("entry name with %s is refused", async (_n, name) => {
+    const r = await run(zip({ [name]: svg(), "ok.svg": svg() }));
+    expect(r.pack).toBeUndefined();
+    expect(codes(r)).toEqual(["icons/unsafe-entry-name"]);
+  });
+
+  test("symbolic-link entries are refused", async () => {
+    const z = zip({ "ok.svg": svg(), "link.svg": svg() });
+    const dv = new DataView(z.buffer, z.byteOffset, z.byteLength);
+    const second = centralHeaders(z)[1] as number;
+    dv.setUint32(second + 38, (0o120777 << 16) >>> 0, true);
+    const r = await run(z);
+    expect(r.pack).toBeUndefined();
+    expect(codes(r)).toEqual(["icons/zip-symlink"]);
+    // A regular-file mode is fine.
+    const z2 = zip({ "ok.svg": svg() });
+    new DataView(z2.buffer, z2.byteOffset, z2.byteLength).setUint32(
+      (centralHeaders(z2)[0] as number) + 38,
+      (0o100644 << 16) >>> 0,
+      true,
+    );
+    expect((await run(z2)).pack?.manifest.icons).toHaveLength(1);
+  });
+
+  test("duplicate central-directory names warn and the first entry wins", async () => {
+    const z = zip({
+      "a.svg": svg('<circle r="1"/>'),
+      "b.svg": svg('<rect width="2" height="2"/>'),
+    });
+    const second = centralHeaders(z)[1] as number;
+    z.set(strToU8("a.svg"), second + 46); // same length: rename b.svg -> a.svg in the directory
+    const r = await run(z);
+    expect(codes(r)).toEqual(["icons/duplicate-entry"]);
+    expect(r.pack?.manifest.icons.map((i) => i.id)).toEqual(["a"]);
+    expect(r.pack?.files["svg/a.svg"]).toContain("circle");
+  });
+
+  test.each(["https://localhost./a.svg", "https://127.0.0.1./a.svg", "https://LOCALHOST./a.svg"])(
+    "trailing-dot host %s is refused",
+    (u) => {
+      expect(checkHttpsUrl(u).ok).toBe(false);
+    },
+  );
+
+  test("a trailing dot does not defeat host allowlists", () => {
+    expect(checkHttpsUrl("https://d1.awsstatic.com./x.zip", ["awsstatic.com"]).ok).toBe(true);
+    expect(checkHttpsUrl("https://evil.example./x.zip", ["awsstatic.com"]).ok).toBe(false);
+  });
+
+  test("stored icon (with wrapper) is capped at 65,536 bytes", async () => {
+    const mk = (extra: number) => {
+      const fixed = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d=""/></svg>'
+        .length;
+      const n = Math.floor((FETCH_LIMITS.sanitizedBytes - fixed - 4) / 2) + extra;
+      return svg(`<path d="M0 0${" 1".repeat(n)}"/>`);
+    };
+    const atLimit = await run(zip({ "a.svg": mk(0) }));
+    const file = Object.values(atLimit.pack?.files ?? {})[0] as string;
+    expect(file.length).toBeLessThanOrEqual(FETCH_LIMITS.sanitizedBytes);
+    expect(file.length).toBeGreaterThan(FETCH_LIMITS.sanitizedBytes - 4);
+    const over = await run(zip({ "a.svg": mk(3) }));
+    expect(over.pack).toBeUndefined();
+    expect(codes(over)).toEqual(["icons/svg-rejected", "icons/no-icons"]);
+  });
+
+  test("provider terms accompany failures too", async () => {
+    const { http } = fakeHttp({}); // every request fails
+    for (const id of ["aws", "gcp", "cncf"]) {
+      const r = await fetchIconPack(id, { http });
+      expect(r.pack, id).toBeUndefined();
+      expect(codes(r), id).toEqual(["icons/fetch-failed"]);
+      expect(r.terms, id).toBe(PROVIDER_TERMS[id]);
+    }
+    const bad = await fetchIconPack("aws", { http, packId: "Bad Id" });
+    expect(bad.terms).toBe(PROVIDER_TERMS.aws);
+    // Non-provider sources carry no terms.
+    expect((await fetchIconPack("https://example.com/a.svg", { http })).terms).toBeUndefined();
+  });
+
+  test("prototype keys are not providers", async () => {
+    const { http, calls } = fakeHttp({});
+    for (const s of ["constructor", "__proto__", "toString"]) {
+      expect(codes(await fetchIconPack(s, { http }))).toEqual(["icons/invalid-url"]);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  test("gcp records the final URLs and provider warnings surface", async () => {
+    const a = "https://services.google.com/fh/files/misc/core-products-icons.zip";
+    const b = "https://services.google.com/fh/files/misc/category-icons.zip";
+    const dupZip = zip({
+      "Unique Icons/X/SVG/a.svg": svg(),
+      "Unique Icons/Y/SVG/b.svg": svg(),
+    });
+    const hdr = centralHeaders(dupZip)[1] as number;
+    dupZip.set(strToU8("Unique Icons/X/SVG/a.svg".slice(0, 25)), hdr + 46); // renames Y/b.svg to X/a.svg
+    const { http } = fakeHttp({
+      [a]: { body: dupZip, url: `${a}?v=2` },
+      [b]: { body: zip({ "Category Icons/Z/SVG/c.svg": svg() }) },
+    });
+    const r = await fetchIconPack("gcp", { http });
+    expect(r.lock?.resolved).toBe(`${a}?v=2 ${b}`);
+    expect(codes(r)).toContain("icons/duplicate-entry");
+  });
+
+  test("a failing listing fetch stops further requests", async () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    const raw = `https://raw.githubusercontent.com/cncf/artwork/${commit}/`;
+    const tree = {
+      tree: Array.from({ length: 50 }, (_, i) => ({
+        path: `projects/p${i}/icon/color/p${i}-icon-color.svg`,
+        type: "blob",
+      })),
+    };
+    const routes: Record<string, Route> = {
+      "https://api.github.com/repos/cncf/artwork/commits/main": {
+        body: JSON.stringify({ sha: commit }),
+      },
+      [`https://api.github.com/repos/cncf/artwork/git/trees/${commit}?recursive=1`]: {
+        body: JSON.stringify(tree),
+      },
+    };
+    for (let i = 1; i < 50; i++)
+      routes[`${raw}projects/p${i}/icon/color/p${i}-icon-color.svg`] = { body: svg() };
+    routes[`${raw}projects/p0/icon/color/p0-icon-color.svg`] = new Error("boom");
+    const { http, calls } = fakeHttp(routes);
+    const r = await fetchIconPack("cncf", { http });
+    expect(codes(r)).toEqual(["icons/fetch-failed"]);
+    expect(calls.length).toBeLessThan(2 + 12);
+  });
+
+  test("github refs and owners are validated", async () => {
+    const { http, calls } = fakeHttp({});
+    for (const u of [
+      "https://github.com/ac%20me/set/tree/v1",
+      "https://github.com/acme/set/tree/a..b",
+    ]) {
+      expect(codes(await fetchIconPack(u, { http })), u).toEqual(["icons/invalid-url"]);
+    }
+    expect(calls).toHaveLength(0);
   });
 });
 
