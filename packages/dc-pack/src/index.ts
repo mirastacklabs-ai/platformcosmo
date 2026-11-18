@@ -1,6 +1,11 @@
-/** Placeholder until v1.1 (Track E). Slot types mirror the schema's SpecDcSlotType enum. */
-import type { SpecDcEquipmentType, SpecDcSlotType } from "@platformcosmo/core";
+/** PlatformCosmo data-center pack (Track E): parametric components and hall layout. */
+import type { DcPack, SpecDcEquipmentType, SpecDcSlotType } from "@platformcosmo/core";
+import { buildDcScene } from "./scene.js";
+import { registry } from "./registry.js";
 
+export { registry } from "./registry.js";
+
+/** Slot types mirror the schema's SpecDcSlotType enum. */
 export const slotTypes = [
   "server-1u",
   "server-2u",
@@ -28,3 +33,8 @@ export const equipmentTypes = [
   "cdu",
   "tape-library",
 ] as const satisfies readonly SpecDcEquipmentType[];
+
+export const dcPack: DcPack = {
+  registry,
+  buildScene: buildDcScene,
+};

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "CDN and cache",
+    "description": "A CDN serves cached content from the edge; misses go to the origin, which uses a cache in front of the database."
+  },
+  "canvas": { "theme": "light" },
+  "nodes": [
+    { "id": "users", "type": "users", "label": "Users" },
+    { "id": "dns", "type": "dns", "label": "DNS" },
+    { "id": "cdn", "type": "cdn", "label": "CDN edge", "badge": "cache hit" },
+    { "id": "lb", "type": "lb", "label": "Origin LB", "group": "origin" },
+    { "id": "web", "type": "server", "label": "Web server", "group": "origin" },
+    { "id": "cache", "type": "cache", "label": "Redis cache", "group": "origin" },
+    { "id": "db", "type": "sql", "label": "Database", "group": "origin" }
+  ],
+  "groups": [{ "id": "origin", "label": "Origin", "style": "zone" }],
+  "edges": [
+    { "id": "users-dns", "from": "users", "to": "dns", "style": "dotted" },
+    { "id": "users-cdn", "from": "users", "to": "cdn" },
+    { "id": "cdn-lb", "from": "cdn", "to": "lb", "label": "miss" },
+    { "id": "lb-web", "from": "lb", "to": "web" },
+    { "id": "web-cache", "from": "web", "to": "cache" },
+    { "id": "web-db", "from": "web", "to": "db", "style": "dashed" }
+  ],
+  "metrics": [{ "id": "hit-rate", "label": "CDN hit rate", "value": "0%" }],
+  "steps": [
+    {
+      "caption": "Users resolve the site and hit the nearest edge",
+      "flows": [{ "edge": "users-dns", "kind": "health" }, { "edge": "users-cdn" }]
+    },
+    {
+      "caption": "Hot content is served from the edge cache",
+      "flows": [{ "edge": "users-cdn", "kind": "heavy" }],
+      "metrics": { "hit-rate": "92%" },
+      "set": { "cdn": "highlighted" }
+    },
+    {
+      "caption": "A miss goes to the origin, which checks its own cache first",
+      "set": { "cdn": "healthy", "cache": "highlighted" },
+      "flows": [
+        { "edge": "cdn-lb" },
+        { "edge": "lb-web" },
+        { "edge": "web-cache" },
+        { "edge": "web-db", "rate": 0.5 }
+      ]
+    }
+  ],
+  "legend": "auto"
+}

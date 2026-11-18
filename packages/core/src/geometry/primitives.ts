@@ -55,10 +55,13 @@ function footprint(kind: PrimitiveKind, box: Box3): W2[] {
   const n = kind === "hex-prism" ? HEX_SIDES : CYLINDER_SEGMENTS;
   const cx = o.x + s.x / 2;
   const cy = o.y + s.y / 2;
+  // Hexagon: a vertex faces the viewer (one left and one right visible side); scaled so the
+  // extreme vertices touch the box (cos 15° is the largest axis projection).
+  const scale = kind === "hex-prism" ? 1 / Math.cos(Math.PI / 12) : 1;
   const pts: W2[] = [];
   for (let k = 0; k < n; k++) {
-    const t = (2 * Math.PI * k) / n;
-    pts.push({ x: cx + (s.x / 2) * Math.cos(t), y: cy + (s.y / 2) * Math.sin(t) });
+    const t = (kind === "hex-prism" ? Math.PI / 4 : 0) + (2 * Math.PI * k) / n;
+    pts.push({ x: cx + (s.x / 2) * scale * Math.cos(t), y: cy + (s.y / 2) * scale * Math.sin(t) });
   }
   return pts;
 }
@@ -98,7 +101,10 @@ function isCircle(kind: PrimitiveKind, box: Box3): boolean {
   return kind === "cylinder" && Math.abs(box.size.x - box.size.y) < EPS;
 }
 
-/** Screen-space ellipse of a circular cylinder's cross-section at the given height. */
+/**
+ * Screen-space ellipse of a circular cylinder cross-section. Assumes the 2:1 dimetric projection
+ * (a world circle of radius r projects to rx = r*sqrt2*tw/2, ry = r*sqrt2*tw/4).
+ */
 function circleEllipse(
   box: Box3,
   projection: Projection,
@@ -207,9 +213,11 @@ export function primitiveFaces(
     if (!pts || Math.abs(area(pts)) < EPS) continue;
     faces.push(arcs ? { face: which, points: pts, d: arcs[which] } : { face: which, points: pts });
   }
-  faces.push(
-    arcs ? { face: "top", points: topRing, d: arcs.top } : { face: "top", points: topRing },
-  );
+  if (Math.abs(area(topRing)) >= EPS) {
+    faces.push(
+      arcs ? { face: "top", points: topRing, d: arcs.top } : { face: "top", points: topRing },
+    );
+  }
   return faces;
 }
 

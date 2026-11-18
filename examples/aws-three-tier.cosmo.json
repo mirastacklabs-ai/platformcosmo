@@ -1,0 +1,48 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "AWS three-tier web app",
+    "description": "Requests flow through DNS and a CDN to a load balancer, app servers, a cache and a managed database. Requires the AWS icon pack (pcosmo icons add aws)."
+  },
+  "canvas": { "theme": "light" },
+  "nodes": [
+    { "id": "users", "type": "users", "label": "Users" },
+    { "id": "dns", "type": "dns", "icon": "aws:route-53", "label": "Route 53" },
+    { "id": "cdn", "type": "cdn", "icon": "aws:cloudfront", "label": "CloudFront" },
+    {
+      "id": "alb",
+      "type": "lb",
+      "icon": "aws:elastic-load-balancing",
+      "label": "ALB",
+      "group": "vpc"
+    },
+    { "id": "app", "type": "server", "icon": "aws:ec2", "label": "App (EC2)", "group": "vpc" },
+    {
+      "id": "cache",
+      "type": "cache",
+      "icon": "aws:elasticache",
+      "label": "ElastiCache",
+      "group": "vpc"
+    },
+    { "id": "db", "type": "sql", "icon": "aws:rds", "label": "RDS", "group": "vpc" },
+    { "id": "assets", "type": "object-store", "icon": "aws:s3", "label": "S3 assets" }
+  ],
+  "groups": [{ "id": "vpc", "label": "VPC", "style": "vpc" }],
+  "edges": [
+    { "id": "users-dns", "from": "users", "to": "dns", "style": "dotted" },
+    { "id": "users-cdn", "from": "users", "to": "cdn" },
+    { "id": "cdn-assets", "from": "cdn", "to": "assets" },
+    { "id": "cdn-alb", "from": "cdn", "to": "alb" },
+    { "id": "alb-app", "from": "alb", "to": "app" },
+    { "id": "app-cache", "from": "app", "to": "cache" },
+    { "id": "app-db", "from": "app", "to": "db", "style": "dashed" }
+  ],
+  "flows": [
+    { "edge": "users-cdn" },
+    { "edge": "cdn-alb" },
+    { "edge": "alb-app" },
+    { "edge": "app-db" }
+  ],
+  "legend": "auto"
+}
