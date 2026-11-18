@@ -6,7 +6,7 @@
  * lookup, so DNS rebinding cannot swap it), `maxBytes` enforced while streaming, one overall timeout.
  */
 import { lookup } from "node:dns/promises";
-import { request as httpsRequest } from "node:https";
+import { Agent, request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import type { IconHttpClient } from "@platformcosmo/core";
 
@@ -106,16 +106,17 @@ export function isBlockedAddress(ip: string): boolean {
     return blockedV4(embeddedV4(g, 6, 7));
   }
   // NAT64 64:ff9b::/96 and 64:ff9b:1::/48: judge the embedded address.
-  if (first === 0x64 && g[1] === 0xff9b) return blockedV4(embeddedV4(g, 6, 7));
+  if (first === 0x64 && g[1] === 0xff9b) {
+    if (g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0) return blockedV4(embeddedV4(g, 6, 7));
+    return true; // 64:ff9b:1::/48 local-use NAT64 and anything else under 64:ff9b::
+  }
   if (first === 0x2002) return blockedV4(embeddedV4(g, 1, 2)); // 6to4
-  if (first === 0x2001 && g[1] === 0) return true; // Teredo
+  if (first === 0x2001 && g[1]! < 0x200) return true; // 2001::/23 IETF assignments (Teredo, ORCHID, ...)
   if (first === 0x2001 && g[1] === 0xdb8) return true; // documentation
-  if (first === 0x100 && g[1] === 0 && g[2] === 0 && g[3] === 0) return true; // discard prefix
-  if ((first & 0xfe00) === 0xfc00) return true; // unique local (incl. fd00:ec2::254 metadata)
-  if ((first & 0xffc0) === 0xfe80) return true; // link-local
-  if ((first & 0xffc0) === 0xfec0) return true; // site-local (deprecated)
-  if ((first & 0xff00) === 0xff00) return true; // multicast
-  return false;
+  if (first === 0x3fff && (g[1]! & 0xf000) === 0) return true; // documentation 3fff::/20
+  // Default deny: only global unicast 2000::/3 is reachable. This also drops fc00::/7 (ULA, incl.
+  // the fd00:ec2::254 metadata address), fe80::/10, fec0::/10, ff00::/8, 100::/64 and the rest.
+  return (first & 0xe000) !== 0x2000;
 }
 
 export interface TransportRequest {
@@ -129,6 +130,8 @@ export interface TransportResponse {
   readonly status: number;
   readonly headers: Readonly<Record<string, string | undefined>>;
   readonly body: AsyncIterable<Uint8Array>;
+  /** Tears the connection down without reading the rest of the body. */
+  readonly destroy?: () => void;
 }
 export type Transport = (req: TransportRequest) => Promise<TransportResponse>;
 export type Resolver = (hostname: string) => Promise<readonly string[]>;
@@ -137,7 +140,7 @@ const defaultResolver: Resolver = async (hostname) =>
   (await lookup(hostname, { all: true, verbatim: true })).map((a) => a.address);
 
 /** Connects to the vetted IP while keeping SNI and certificate checks on the hostname. */
-const defaultTransport: Transport = ({ url, ip, signal, headers }) =>
+export const defaultTransport: Transport = ({ url, ip, signal, headers }) =>
   new Promise((resolve, reject) => {
     const host = url.hostname.startsWith("[") ? url.hostname.slice(1, -1) : url.hostname;
     const req = httpsRequest(
@@ -149,12 +152,17 @@ const defaultTransport: Transport = ({ url, ip, signal, headers }) =>
         servername: isIP(host) ? undefined : host,
         headers: { ...headers, host: url.host },
         signal,
-        lookup: undefined,
+        agent: new Agent({ keepAlive: false }),
       },
       (res) => {
         const h: Record<string, string | undefined> = {};
         for (const [k, v] of Object.entries(res.headers)) h[k] = Array.isArray(v) ? v[0] : v;
-        resolve({ status: res.statusCode ?? 0, headers: h, body: res });
+        resolve({
+          status: res.statusCode ?? 0,
+          headers: h,
+          body: res,
+          destroy: () => void res.destroy(),
+        });
       },
     );
     req.on("error", reject);
@@ -212,6 +220,14 @@ async function vet(url: URL, resolve: Resolver): Promise<string> {
   return addrs[0]!;
 }
 
+/** Rejects when `signal` aborts, so a stalled DNS lookup cannot outlive the overall timeout. */
+function aborted(signal: AbortSignal, make: () => Error): Promise<never> {
+  return new Promise((_, reject) => {
+    if (signal.aborted) return reject(make());
+    signal.addEventListener("abort", () => reject(make()), { once: true });
+  });
+}
+
 export function createIconHttpClient(options: HttpClientOptions = {}): IconHttpClient {
   const resolve = options.resolve ?? defaultResolver;
   const transport = options.transport ?? defaultTransport;
@@ -219,14 +235,19 @@ export function createIconHttpClient(options: HttpClientOptions = {}): IconHttpC
 
   return {
     async get(rawUrl, { maxBytes, timeoutMs }) {
+      if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
+        throw new HttpPolicyError("too-large", "maxBytes must be a positive finite number");
+      }
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+        throw new HttpPolicyError("timeout", "timeoutMs must be a positive finite number");
+      }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       const timedOut = () => new HttpPolicyError("timeout", `request exceeded ${timeoutMs} ms`);
       try {
         let url = checkUrl(rawUrl);
         for (let hop = 0; ; hop++) {
-          const ip = await vet(url, resolve);
-          if (controller.signal.aborted) throw timedOut();
+          const ip = await Promise.race([vet(url, resolve), aborted(controller.signal, timedOut)]);
           let res: TransportResponse;
           try {
             res = await transport({
@@ -240,13 +261,14 @@ export function createIconHttpClient(options: HttpClientOptions = {}): IconHttpC
             throw new HttpPolicyError("network", `request failed: ${(e as Error).message}`);
           }
           if (REDIRECT.has(res.status)) {
+            res.destroy?.();
             const loc = res.headers["location"];
             if (!loc)
               throw new HttpPolicyError("status", `redirect ${res.status} without Location`);
             if (hop >= maxRedirects) {
               throw new HttpPolicyError("redirects", `more than ${maxRedirects} redirects`);
             }
-            await drain(res.body);
+            res.destroy?.();
             try {
               url = checkUrl(new URL(loc, url).toString());
             } catch (e) {
@@ -258,12 +280,20 @@ export function createIconHttpClient(options: HttpClientOptions = {}): IconHttpC
             continue;
           }
           if (res.status < 200 || res.status > 299) {
-            await drain(res.body);
+            res.destroy?.();
             throw new HttpPolicyError("status", `HTTP ${res.status} from ${url.host}`);
+          }
+          const encoding = res.headers["content-encoding"]?.trim().toLowerCase();
+          if (encoding && encoding !== "identity") {
+            res.destroy?.();
+            throw new HttpPolicyError(
+              "status",
+              `unsupported Content-Encoding "${encoding.slice(0, 40)}"`,
+            );
           }
           const declared = Number(res.headers["content-length"]);
           if (Number.isFinite(declared) && declared > maxBytes) {
-            await drain(res.body);
+            res.destroy?.();
             throw new HttpPolicyError(
               "too-large",
               `response is ${declared} bytes (limit ${maxBytes})`,
@@ -276,6 +306,7 @@ export function createIconHttpClient(options: HttpClientOptions = {}): IconHttpC
               total += chunk.byteLength;
               if (total > maxBytes) {
                 controller.abort();
+                res.destroy?.();
                 throw new HttpPolicyError("too-large", `response exceeds ${maxBytes} bytes`);
               }
               chunks.push(chunk);
@@ -298,12 +329,4 @@ export function createIconHttpClient(options: HttpClientOptions = {}): IconHttpC
       }
     },
   };
-}
-
-async function drain(body: AsyncIterable<Uint8Array>): Promise<void> {
-  try {
-    for await (const _ of body) void _;
-  } catch {
-    /* ignore: we only free the socket */
-  }
 }

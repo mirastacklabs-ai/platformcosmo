@@ -34,3 +34,9 @@ export function errorDiagnostic(code: string, message: string, suggestion?: stri
     ...(suggestion === undefined ? {} : { suggestion }),
   };
 }
+
+/** Removes C0/C1 control characters (and DEL) except newline, so untrusted text cannot drive the terminal. */
+export function stripControl(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u0009\u000B-\u001F\u007F-\u009F]/g, "");
+}

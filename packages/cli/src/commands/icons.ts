@@ -26,6 +26,7 @@ export const HELP = `Usage: pcosmo icons <add|list|search|remove> ...
 Options:
   --id <pack-id>      Pack id to assign on add
   --accept-terms      Accept the provider's terms (add)
+  --force             Replace an already installed pack with the same id (add)
   --limit <n>         Max search results (default 20)
   --packs-dir <dir>   Pack directory (default: $CLAUDE_PLUGIN_DATA/icons or ~/.platformcosmo/icons)
   -h, --help          Show this help
@@ -40,6 +41,7 @@ export async function iconsCommand(ctx: Ctx, args: string[]): Promise<number> {
   const p = parse(args, {
     id: { type: "string" },
     "accept-terms": { type: "boolean" },
+    force: { type: "boolean" },
     limit: { type: "string" },
   });
   const [sub, ...rest] = p.positionals;
@@ -49,8 +51,12 @@ export async function iconsCommand(ctx: Ctx, args: string[]): Promise<number> {
       return list(ctx, dir);
     case "search": {
       if (rest.length === 0) throw new UsageError("search needs a query");
+      const limit = num(p, "limit") ?? 20;
+      if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+        throw new UsageError("--limit must be an integer from 1 to 500");
+      }
       const { resolver } = await makeResolver(ctx);
-      const hits = resolver.search(rest.join(" "), num(p, "limit") ?? 20);
+      const hits = resolver.search(rest.join(" "), limit);
       if (hits.length === 0) ctx.out("no matches\n");
       for (const h of hits) ctx.out(`${h.ref.padEnd(40)} ${h.score.toFixed(2)}\n`);
       return EXIT.ok;
@@ -62,13 +68,15 @@ export async function iconsCommand(ctx: Ctx, args: string[]): Promise<number> {
         throw new Failure(`"${id}" is a bundled pack and cannot be removed`);
       }
       if (!PACK_ID_RE.test(id)) throw new UsageError(`invalid pack id "${id}"`);
-      const had = await removePack(dir, id);
+      const had = await userError(() => removePack(dir, id));
       ctx.out(had ? `removed ${id}\n` : `${id} is not installed\n`);
       return had ? EXIT.ok : EXIT.failed;
     }
     case "add": {
       if (rest.length !== 1) throw new UsageError("add needs exactly one source");
-      return add(ctx, dir, rest[0]!, str(p, "id"), flag(p, "accept-terms"));
+      return userError(() =>
+        add(ctx, dir, rest[0]!, str(p, "id"), flag(p, "accept-terms"), flag(p, "force")),
+      );
     }
     default:
       throw new UsageError(sub ? `unknown icons subcommand "${sub}"` : "icons needs a subcommand");
@@ -95,6 +103,7 @@ async function add(
   source: string,
   packId: string | undefined,
   acceptTerms: boolean,
+  force: boolean,
 ): Promise<number> {
   if (packId !== undefined && !PACK_ID_RE.test(packId)) {
     throw new UsageError("--id must match ^[a-z][a-z0-9-]{0,31}$");
@@ -140,12 +149,17 @@ async function add(
   if (ctx.deps.bundledPacks.some((b) => b.manifest.pack.id === id)) {
     throw new Failure(`"${id}" is a bundled pack id; choose another with --id`);
   }
-  const entry = await savePack(dir, pack, {
-    source,
-    resolved,
-    license: license ?? pack.manifest.pack.license,
-    redistributable: redistributable ?? pack.manifest.pack.redistributable,
-  });
+  const entry = await savePack(
+    dir,
+    pack,
+    {
+      source,
+      resolved,
+      license: license ?? pack.manifest.pack.license,
+      redistributable: redistributable ?? pack.manifest.pack.redistributable,
+    },
+    force,
+  );
   ctx.out(`installed ${id} (${plural(entry.iconCount, "icon")}, ${entry.license}) in ${dir}\n`);
   if (!entry.redistributable) {
     ctx.out(
@@ -153,4 +167,14 @@ async function add(
     );
   }
   return EXIT.ok;
+}
+
+/** Expected failures (bad folder, existing pack, invalid manifest) are exit 1 messages, not internal errors. */
+async function userError<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof Failure || e instanceof UsageError) throw e;
+    throw new Failure((e as Error).message, { cause: e });
+  }
 }

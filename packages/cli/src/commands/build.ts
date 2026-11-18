@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { UnsafePathError, writeInside } from "../fsafe.js";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Diagnostic, FontMode, OutputKind, RenderOptions } from "@platformcosmo/core";
 import { type Parsed, flag, num, parse, str } from "../args.js";
@@ -205,9 +205,16 @@ export async function buildOnce(ctx: Ctx, s: BuildSettings): Promise<number> {
     }
   }
   for (const o of result.outputs) {
-    const full = resolve(s.outDir, o.path);
-    await mkdir(dirname(full), { recursive: true });
-    await writeFile(full, o.data);
+    let full: string;
+    try {
+      full = await writeInside(s.outDir, o.path, o.data);
+    } catch (e) {
+      if (!(e instanceof UnsafePathError)) throw e;
+      diagnostics.push(
+        errorDiagnostic("cli/unsafe-output-path", `refusing to write ${o.path}: ${e.message}`),
+      );
+      return finish(EXIT.failed);
+    }
     written.push({
       kind: o.kind,
       path: full,

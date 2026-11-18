@@ -10,7 +10,7 @@
  * against its lockfile `integrity` before it is loaded; mismatches are diagnostics, never loaded.
  */
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, posix, resolve, sep } from "node:path";
 import type {
   Diagnostic,
@@ -27,6 +27,7 @@ export const PACK_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_SVG_BYTES = 1024 * 1024;
 const MAX_FILES = 20_000;
+const MAX_PACK_BYTES = 64 * 1024 * 1024;
 
 export function packsDirFor(deps: Deps, override?: string): string {
   const e = deps.env;
@@ -50,6 +51,7 @@ function canonical(value: unknown): string {
   if (value !== null && typeof value === "object") {
     const o = value as Record<string, unknown>;
     return `{${Object.keys(o)
+      .filter((k) => o[k] !== undefined)
       .sort()
       .map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`)
       .join(",")}}`;
@@ -65,10 +67,11 @@ export function computeIntegrity(pack: LoadedIconPack): string {
   const h = createHash("sha256");
   h.update(canonical(pack.manifest));
   h.update("\0");
-  for (const path of Object.keys(pack.files).sort()) {
+  // Exactly what a pack on disk consists of: the manifest and the files it references.
+  for (const path of [...new Set(pack.manifest.icons.map((i) => i.file))].sort()) {
     h.update(path);
     h.update("\0");
-    h.update(pack.files[path]!);
+    h.update(pack.files[path] ?? "");
     h.update("\0");
   }
   return `sha256-${h.digest("base64")}`;
@@ -127,26 +130,35 @@ async function writeLockfile(dir: string, lock: IconLockfile): Promise<void> {
   const sorted: Record<string, IconLockEntry> = {};
   for (const k of Object.keys(lock.packs).sort()) sorted[k] = lock.packs[k]!;
   await mkdir(dir, { recursive: true });
-  await writeFile(
-    join(dir, LOCKFILE_NAME),
-    `${JSON.stringify({ lockfileVersion: 1, packs: sorted }, null, 2)}\n`,
-  );
+  const tmp = join(dir, `.${LOCKFILE_NAME}.${process.pid}.tmp`);
+  await writeFile(tmp, `${JSON.stringify({ lockfileVersion: 1, packs: sorted }, null, 2)}\n`);
+  await rename(tmp, join(dir, LOCKFILE_NAME));
 }
 
-/** Reads one pack directory (manifest plus its files). Throws with a readable message. */
+/** Reads one pack directory (manifest plus its files). Symlinks are rejected. Throws with a readable message. */
 export async function readPackDir(dir: string): Promise<LoadedIconPack> {
-  const mp = join(dir, "icons.json");
-  if ((await stat(mp)).size > MAX_MANIFEST_BYTES) throw new Error("icons.json is too large");
-  const manifest = JSON.parse(await readFile(mp, "utf8")) as IconManifest;
+  const root = await realpath(dir);
+  let total = 0;
+  const readSafe = async (full: string, max: number, what: string): Promise<string> => {
+    const st = await lstat(full);
+    if (st.isSymbolicLink()) throw new Error(`${what} is a symbolic link`);
+    if (!st.isFile()) throw new Error(`${what} is not a regular file`);
+    if (st.size > max) throw new Error(`${what} is too large`);
+    total += st.size;
+    if (total > MAX_PACK_BYTES) throw new Error(`pack is larger than ${MAX_PACK_BYTES} bytes`);
+    if (!(await realpath(full)).startsWith(root + sep)) throw new Error(`${what} escapes the pack`);
+    return readFile(full, "utf8");
+  };
+  const manifest = JSON.parse(
+    await readSafe(join(root, "icons.json"), MAX_MANIFEST_BYTES, "icons.json"),
+  ) as IconManifest;
   const problems = checkManifest(manifest);
   if (problems.length > 0) throw new Error(problems.slice(0, 5).join("; "));
   const files: Record<string, string> = {};
-  const root = resolve(dir);
   for (const ic of manifest.icons) {
     const full = resolve(root, ic.file);
     if (!full.startsWith(root + sep)) throw new Error(`icon path escapes the pack: ${ic.file}`);
-    if ((await stat(full)).size > MAX_SVG_BYTES) throw new Error(`${ic.file} is too large`);
-    files[ic.file] = await readFile(full, "utf8");
+    files[ic.file] = await readSafe(full, MAX_SVG_BYTES, ic.file);
   }
   return { manifest, files };
 }
@@ -197,41 +209,72 @@ export async function loadUserPacks(
   return { packs, diagnostics };
 }
 
-/** Writes a pack and records it in the lockfile (integrity is computed here). */
-export async function savePack(
-  dir: string,
-  pack: LoadedIconPack,
-  entry: Omit<IconLockEntry, "integrity" | "iconCount">,
-): Promise<IconLockEntry> {
-  const id = pack.manifest.pack.id;
-  const problems = checkManifest(pack.manifest);
-  if (problems.length > 0) throw new Error(`invalid pack: ${problems.slice(0, 5).join("; ")}`);
-  const target = resolve(dir, id);
-  await rm(target, { recursive: true, force: true });
-  await mkdir(target, { recursive: true });
-  await writeFile(join(target, "icons.json"), `${JSON.stringify(pack.manifest, null, 2)}\n`);
-  for (const ic of pack.manifest.icons) {
-    const full = resolve(target, ic.file);
-    if (!full.startsWith(target + sep)) throw new Error(`icon path escapes the pack: ${ic.file}`);
+/** The pack exactly as it will exist on disk: JSON round-tripped manifest, referenced files only. */
+function normalizePack(pack: LoadedIconPack): LoadedIconPack {
+  const manifest = JSON.parse(JSON.stringify(pack.manifest)) as IconManifest;
+  const files: Record<string, string> = {};
+  for (const ic of manifest.icons) {
     const text = pack.files[ic.file];
     if (text === undefined) throw new Error(`pack is missing file ${ic.file}`);
-    await mkdir(dirname(full), { recursive: true });
-    await writeFile(full, text);
+    files[ic.file] = text;
   }
+  return { manifest, files };
+}
+
+/**
+ * Writes a pack and records it in the lockfile. The pack is written to a temp directory and
+ * renamed into place, then the lockfile is updated (integrity is computed over what was written).
+ * An existing pack with the same id is refused unless `overwrite` is set.
+ */
+export async function savePack(
+  dir: string,
+  input: LoadedIconPack,
+  entry: Omit<IconLockEntry, "integrity" | "iconCount">,
+  overwrite = false,
+): Promise<IconLockEntry> {
+  const problems = checkManifest(input.manifest);
+  if (problems.length > 0) throw new Error(`invalid pack: ${problems.slice(0, 5).join("; ")}`);
+  const pack = normalizePack(input);
+  const id = pack.manifest.pack.id;
   const lock = await readLockfile(dir);
-  const full: IconLockEntry = {
-    ...entry,
-    integrity: computeIntegrity(pack),
-    iconCount: pack.manifest.icons.length,
-  };
-  await writeLockfile(dir, { lockfileVersion: 1, packs: { ...lock.packs, [id]: full } });
-  return full;
+  const target = resolve(dir, id);
+  const exists =
+    Object.hasOwn(lock.packs, id) ||
+    (await lstat(target).then(
+      () => true,
+      () => false,
+    ));
+  if (exists && !overwrite) {
+    throw new Error(`icon pack "${id}" is already installed (use --force to replace it)`);
+  }
+  await mkdir(dir, { recursive: true });
+  const tmp = resolve(dir, `.tmp-${id}-${process.pid}-${Date.now()}`);
+  try {
+    await mkdir(tmp, { recursive: true });
+    await writeFile(join(tmp, "icons.json"), `${JSON.stringify(pack.manifest, null, 2)}\n`);
+    for (const ic of pack.manifest.icons) {
+      const full = resolve(tmp, ic.file);
+      if (!full.startsWith(tmp + sep)) throw new Error(`icon path escapes the pack: ${ic.file}`);
+      await mkdir(dirname(full), { recursive: true });
+      await writeFile(full, pack.files[ic.file]!);
+    }
+    // Integrity over exactly what landed on disk.
+    const written = await readPackDir(tmp);
+    const integrity = computeIntegrity(written);
+    await rm(target, { recursive: true, force: true });
+    await rename(tmp, target);
+    const full: IconLockEntry = { ...entry, integrity, iconCount: pack.manifest.icons.length };
+    await writeLockfile(dir, { lockfileVersion: 1, packs: { ...lock.packs, [id]: full } });
+    return full;
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
 }
 
 export async function removePack(dir: string, id: string): Promise<boolean> {
   if (!PACK_ID_RE.test(id)) throw new Error(`invalid pack id "${id}"`);
   const lock = await readLockfile(dir);
-  const had = id in lock.packs;
+  const had = Object.hasOwn(lock.packs, id);
   if (had) {
     const rest = { ...lock.packs };
     delete rest[id];

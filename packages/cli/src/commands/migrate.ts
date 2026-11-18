@@ -1,7 +1,7 @@
 import { parse } from "../args.js";
-import { readText, MAX_SPEC_BYTES } from "../common.js";
+import { loadSpec } from "../common.js";
+import { formatDiagnostics, hasErrors } from "../format.js";
 import { type Ctx, EXIT, UsageError } from "../deps.js";
-import { resolve } from "node:path";
 
 export const HELP = `Usage: pcosmo migrate <spec>
 
@@ -18,8 +18,13 @@ export async function migrateCommand(ctx: Ctx, args: string[]): Promise<number> 
   const p = parse(args, {});
   if (p.positionals.length !== 1) throw new UsageError("migrate needs exactly one spec file");
   const file = p.positionals[0]!;
-  const text = await readText(resolve(ctx.deps.cwd, file), MAX_SPEC_BYTES);
-  const major = /["']?version["']?\s*:\s*["']?(\d+)["']?/.exec(text)?.[1];
+  const { spec, diagnostics } = await loadSpec(ctx, file);
+  if (hasErrors(diagnostics) || spec === undefined) {
+    ctx.err(formatDiagnostics(diagnostics, file));
+    return EXIT.failed;
+  }
+  const v = (spec as { meta?: { version?: unknown } } | null)?.meta?.version;
+  const major = typeof v === "string" ? v : undefined;
   if (major === CURRENT_MAJOR) {
     ctx.out(`${file}: already at spec major ${CURRENT_MAJOR}; nothing to migrate\n`);
     return EXIT.ok;

@@ -1,3 +1,4 @@
+import { stripControl } from "./format.js";
 import pkg from "../package.json" with { type: "json" };
 import { UsageError, Failure, EXIT, type Ctx, type Deps, type RunResult } from "./deps.js";
 import { HELP as BUILD_HELP, buildCommand } from "./commands/build.js";
@@ -52,8 +53,10 @@ export async function run(argv: string[], deps?: Deps): Promise<RunResult> {
   let stderr = "";
   const ctx: Ctx = {
     deps: d,
-    out: (t) => (d.io ? d.io.out(t) : void (stdout += t)),
-    err: (t) => (d.io ? d.io.err(t) : void (stderr += t)),
+    // Untrusted strings (spec text, pack names, provider terms) must not smuggle terminal escapes.
+    out: (t) => (d.io ? d.io.out(stripControl(t)) : void (stdout += stripControl(t))),
+    err: (t) => (d.io ? d.io.err(stripControl(t)) : void (stderr += stripControl(t))),
+    packsDir: packsDirArg(argv),
   };
   const done = (code: number): RunResult => ({ code, stdout, stderr });
 
@@ -89,4 +92,15 @@ export async function run(argv: string[], deps?: Deps): Promise<RunResult> {
     ctx.err(`internal error: ${(e as Error).message}\n`);
     return done(EXIT.internal);
   }
+}
+
+/** `--packs-dir <dir>` / `--packs-dir=<dir>` anywhere in the arguments (last one wins). */
+function packsDirArg(argv: readonly string[]): string | undefined {
+  let found: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === "--packs-dir") found = argv[i + 1];
+    else if (a.startsWith("--packs-dir=")) found = a.slice("--packs-dir=".length);
+  }
+  return found === "" ? undefined : found;
 }
