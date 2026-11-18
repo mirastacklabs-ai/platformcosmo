@@ -30,3 +30,17 @@ export {
   DEFAULT_TILE_WIDTH,
 } from "./geometry/index.js";
 export type { ProjectionOptions, Silhouette } from "./geometry/index.js";
+
+// Depth ordering and text (Track A1).
+export { depthOrder, compareBoxes, depthKey, orderGroups } from "./depth/index.js";
+export type { DepthItem } from "./depth/index.js";
+export {
+  EMBED_FAMILY,
+  measureText,
+  missingGlyphs,
+  lineMetrics,
+  textToPath,
+  subsetWoff2Base64,
+  fontAssets,
+} from "./text/index.js";
+export type { TextAnchor, TextWeight, TextPathOptions } from "./text/index.js";
