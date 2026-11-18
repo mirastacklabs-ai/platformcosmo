@@ -67,6 +67,21 @@ export function shadowRects(box: Box3): Rect[] {
 
 export type KeepoutKind = "shadow" | "label";
 
+/** Zones in front of the +x and +y face midpoints of a small node (own label cells there are exempt). */
+export function stubZones(box: Box3, reach = 0.75): Rect[] {
+  // Only 1-tile (sm) nodes need it: their label covers both visible-side stubs; larger ones
+  // clear their own label without any exemption.
+  if (box.size.x > 1.25 || box.size.y > 1.25) return [];
+  const x1 = box.origin.x + box.size.x;
+  const y1 = box.origin.y + box.size.y;
+  const cx = box.origin.x + box.size.x / 2;
+  const cy = box.origin.y + box.size.y / 2;
+  return [
+    { x0: x1, y0: cy - 0.25, x1: x1 + reach, y1: cy + 0.25 },
+    { x0: cx - 0.25, y0: y1, x1: cx + 0.25, y1: y1 + reach },
+  ];
+}
+
 /**
  * Keep-out rects of a whole scene, built once and queried per route window. Shadows can be
  * skipped per owner (a route's own endpoints); labels always apply.
@@ -90,8 +105,16 @@ export class KeepoutIndex {
     }
   }
 
-  /** Rects intersecting `win`, without the shadows of `skipShadows` owners. */
-  query(win: Rect, skipShadows: ReadonlySet<string>): Rect[] {
+  /**
+   * Rects intersecting `win`, without the shadows of `skipShadows` owners. Label cells of
+   * `own.owners` that touch one of `own.zones` (the stub zones in front of the route's own
+   * visible faces) are exempt, so small labelled nodes keep visible-side arrivals.
+   */
+  query(
+    win: Rect,
+    skipShadows: ReadonlySet<string>,
+    own?: { readonly owners: ReadonlySet<string>; readonly zones: readonly Rect[] },
+  ): Rect[] {
     const seen = new Set<number>();
     const out: Rect[] = [];
     const cx0 = Math.floor(Math.max(win.x0, -30000) / BUCKET);
@@ -104,6 +127,13 @@ export class KeepoutIndex {
       seen.add(i);
       const e = this.rects[i]!;
       if (e.kind === "shadow" && skipShadows.has(e.owner)) return;
+      if (
+        own &&
+        e.kind === "label" &&
+        own.owners.has(e.owner) &&
+        own.zones.some((z) => e.r.x0 < z.x1 && z.x0 < e.r.x1 && e.r.y0 < z.y1 && z.y0 < e.r.y1)
+      )
+        return;
       out.push(e.r);
     };
     if (span > this.buckets.size) {

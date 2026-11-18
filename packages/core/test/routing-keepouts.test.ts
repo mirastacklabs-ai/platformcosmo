@@ -3,7 +3,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import type { DcPack, DcSceneFragment, SceneGraph, SceneObject, Vec3 } from "../src/index.js";
 import { buildScene, validate } from "../src/index.js";
-import { isRoutingFurniture, labelRects, shadowRects } from "../src/routing/obstacles.js";
+import {
+  isRoutingFurniture,
+  labelRects,
+  shadowRects,
+  stubZones,
+} from "../src/routing/obstacles.js";
 
 function rng(seed: number): () => number {
   let a = seed >>> 0;
@@ -76,7 +81,16 @@ function violations(g: SceneGraph): string[] {
         });
         for (const r of shadowRects(o.box)) rects.push({ what: "shadow", r });
       }
-      if (o.label) for (const r of labelRects(o.label, o.box)) rects.push({ what: "label", r });
+      if (o.label) {
+        // Small endpoints may use the stub-zone exemption for their own label.
+        const zones = own ? stubZones(o.box) : [];
+        for (const r of labelRects(o.label, o.box)) {
+          const exempt = zones.some(
+            (z) => r.x0 < z.x1 && z.x0 < r.x1 && r.y0 < z.y1 && z.y0 < r.y1,
+          );
+          if (!exempt) rects.push({ what: "label", r });
+        }
+      }
       for (const { what, r } of rects) {
         if (segHits(e.path, r)) out.push(`${e.id} crosses ${what} of ${o.id}`);
       }
@@ -108,7 +122,7 @@ describe("routes keep clear of objects, occlusion shadows and labels", () => {
         id: `n${i}`,
         type: "server",
         label: `Node number ${i}`,
-        size: (["md", "md", "lg"] as const)[Math.floor(rand() * 3)],
+        size: (["sm", "md", "lg"] as const)[Math.floor(rand() * 3)],
       }));
       const edges: { from: string; to: string }[] = [];
       for (let i = 1; i < n; i++) {
@@ -145,6 +159,27 @@ describe("routes keep clear of objects, occlusion shadows and labels", () => {
     expect(Date.now() - t0).toBeLessThan(20000);
     expect(blockedEdges(g)).toBeLessThanOrEqual(Math.ceil(edges.length * 0.1));
     expect(violations(g)).toEqual([]);
+  });
+});
+
+describe("small labelled nodes keep visible-side arrivals", () => {
+  test("sm target with a 14-char label: no hidden-side, no blocked", () => {
+    const r = validate({
+      meta: { version: "1" },
+      nodes: [
+        { id: "src", type: "server", size: "sm", label: "Source service" },
+        { id: "dst", type: "server", size: "sm", label: "Service node 1" },
+        { id: "mid", type: "server", size: "sm", label: "Middle tier ab" },
+      ],
+      edges: [
+        { from: "src", to: "mid" },
+        { from: "mid", to: "dst" },
+        { from: "src", to: "dst" },
+      ],
+    });
+    const g = buildScene(r.spec!, {});
+    expect(hiddenSide(g)).toBe(0);
+    expect(blockedEdges(g)).toBe(0);
   });
 });
 

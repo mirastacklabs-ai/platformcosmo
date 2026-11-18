@@ -24,6 +24,7 @@ import {
   labelRects,
   plateRects,
   shadowRects,
+  stubZones,
 } from "../routing/obstacles.js";
 import { RouteLanes, routeEdge, type Rect } from "../routing/router.js";
 import { particleCount, PARTICLE_LIMIT } from "../schema/semantic.js";
@@ -293,7 +294,14 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
       }
     }
     for (const id of [...shadowSkip]) shadowSkip.add(`${id}_front`);
-    const extra = (win: Rect): Rect[] => keepouts.query(win, shadowSkip);
+    const own = {
+      owners: new Set([from, to]),
+      zones: [
+        ...(boxes.get(from) ? stubZones(boxes.get(from)!) : []),
+        ...(boxes.get(to) ? stubZones(boxes.get(to)!) : []),
+      ],
+    };
+    const extra = (win: Rect): Rect[] => keepouts.query(win, shadowSkip, own);
     const portsOf = (id: string): Vec3[] | undefined => {
       const p = objectById.get(id)?.ports;
       if (!p) return undefined;
@@ -316,7 +324,7 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
     const strict = attempt(extra);
     if (!strict.blocked) return strict;
     const relaxedSkip = new Set([...shadowSkip, from, to]);
-    const relaxed = attempt((win) => keepouts.query(win, relaxedSkip));
+    const relaxed = attempt((win) => keepouts.query(win, relaxedSkip, own));
     return { ...relaxed, relaxed: !relaxed.blocked };
   };
 

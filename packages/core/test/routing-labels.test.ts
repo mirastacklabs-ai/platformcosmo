@@ -82,6 +82,10 @@ function emittedEdges(svg: string, ids: string[]): Map<string, P[]> {
     ).exec(svg);
     const d = m ? attrsOf(m[0]).d : undefined;
     if (!d) continue;
+    // A1's absolute, compact path format: "M<x> <y>L<x> <y>L...".
+    expect(d, `edge ${id} path data`).toMatch(
+      /^M-?\d+(?:\.\d+)? -?\d+(?:\.\d+)?(?:L-?\d+(?:\.\d+)? -?\d+(?:\.\d+)?)+$/,
+    );
     const pts = [...d.matchAll(/(-?\d+(?:\.\d+)?)[ ,](-?\d+(?:\.\d+)?)/g)].map((q) => ({
       x: Number(q[1]),
       y: Number(q[2]),
@@ -163,25 +167,26 @@ describe("no visible edge runs under a label, badge, icon plate or group pill (r
     });
   }
 
-  test("positive control: a segment forced through a label is detected", async () => {
-    const raw = JSON.parse(readFileSync(`${dir}load-balancing.cosmo.json`, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    const { svg, edges } = await renderExample(raw);
-    const [id, pts] = [...edges][0]!;
-    const mid = { x: (pts[0]!.x + pts[1]!.x) / 2, y: (pts[0]!.y + pts[1]!.y) / 2 };
-    const forced: Box = {
-      what: "forced",
-      box: { x: mid.x - 10, y: mid.y - 10, width: 20, height: 20 },
+  test("positive control: a manual-pos layout forcing an edge under a label is reported", async () => {
+    // C is walled in on all four sides, so no route reaches it and the fallback goes straight
+    // along y = 11, right under the label of A (which sits on that line's path).
+    const raw = {
+      meta: { version: "1" },
+      nodes: [
+        { id: "a", type: "server", label: "Obstacle label long", pos: { x: 8, y: 8 } },
+        { id: "b", type: "server", label: "B", pos: { x: 0, y: 10 } },
+        { id: "c", type: "server", label: "C", pos: { x: 20, y: 10 } },
+        { id: "w", type: "server", size: "lg", pos: { x: 17, y: 10 } },
+        { id: "n", type: "server", pos: { x: 20, y: 8 } },
+        { id: "s", type: "server", pos: { x: 20, y: 12 } },
+        { id: "e", type: "server", pos: { x: 22, y: 10 } },
+      ],
+      edges: [{ id: "forced", from: "b", to: "c" }],
     };
-    expect(crossings(new Map([[id, pts]]), [forced])).toEqual([`${id} over forced`]);
-    expect(
-      crossings(
-        edges,
-        emittedBoxes(svg).filter((b) => b.what !== 'label "Users"'),
-      ).length,
-    ).toBeGreaterThanOrEqual(0);
+    const { res, svg, edges } = await renderExample(raw);
+    expect(res.scene!.diagnostics.map((d) => d.code)).toContain("routing/blocked");
+    const bad = crossings(edges, emittedBoxes(svg));
+    expect(bad.some((x) => x.startsWith("forced over label"))).toBe(true);
   });
 
   test("kubernetes example draws floating icon plates and badges that are checked", async () => {
