@@ -24,12 +24,28 @@ jobs:
         with:
           persist-credentials: false
       - run: scripts/pc install --frozen-lockfile
-      - run: tests/browser/run.sh
+      - name: Browser check on the generated fixtures
+        run: tests/browser/run.sh
+      - name: Render the launch examples and dc-hall with the CLI (animated + interactive)
+        if: always()
+        run: |
+          scripts/pc run build
+          mkdir -p tests/browser/real
+          for f in load-balancing rag-pipeline kubernetes-deployment cdn-cache gpu-inference-cluster dc-hall; do
+            scripts/pc exec node packages/cli/dist/bin.js build "examples/$f.cosmo.json" \
+              -o tests/browser/real --interactive
+          done
+      - name: Browser check on the real CLI output
+        if: always()
+        run: OUT=tests/browser/out-real tests/browser/run.sh tests/browser/real
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: browser-check
-          path: tests/browser/out/
+          path: |
+            tests/browser/out/
+            tests/browser/out-real/
+            tests/browser/real/
 
   safari-check:
     needs: browser-check
@@ -47,33 +63,12 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: browser-check
-          path: tests/browser/out
+          path: tests/browser
       - run: sudo safaridriver --enable
-      - name: Prepare the macOS session (Reduce Motion off, display awake)
-        run: |
-          sw_vers
-          echo "reduceMotion before: $(defaults read com.apple.universalaccess reduceMotion 2>&1)"
-          defaults write com.apple.universalaccess reduceMotion -bool false || true
-          sudo defaults write com.apple.universalaccess reduceMotion -bool false || true
-          defaults write com.apple.Accessibility ReduceMotionEnabled -int 0 || true
-          echo "reduceMotion after: $(defaults read com.apple.universalaccess reduceMotion 2>&1)"
-          echo "AllowRemoteAutomation: $(defaults read com.apple.Safari AllowRemoteAutomation 2>&1)"
-          # keep the display awake so Safari renders
-          (caffeinate -disu -t 900 &)
-          system_profiler SPDisplaysDataType | head -15 || true
-          screencapture -x /tmp/screen.png && ls -l /tmp/screen.png || echo "screencapture failed"
-      - name: Run Safari checks
-        run: |
-          safaridriver -p 4444 &
-          for i in $(seq 1 30); do
-            curl -sf http://127.0.0.1:4444/status >/dev/null && break
-            [ "$i" = 30 ] && { echo "safaridriver did not start" >&2; exit 1; }
-            sleep 1
-          done
-          INPUT_DIR=tests/browser/out/fixtures GIT_SHA=$(git describe --always --dirty) \
-            node tests/browser/safari.mjs
+      - name: Safari checks (Reduce Motion off, then on) on fixtures and real output
+        run: tests/browser/safari-ci.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: safari-check
-          path: tests/browser/out/results-safari.json
+          path: tests/browser/out-safari/

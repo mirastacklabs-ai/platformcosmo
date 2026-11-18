@@ -86,7 +86,7 @@ try {
       script:
         "const done = arguments[arguments.length - 1]; requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 50)));",
       args: [],
-    }).catch(() => undefined);
+    }).catch((e) => console.log("settle failed (screenshot may predate the paint):", e.message));
   const shot = async () => {
     await settle();
     return wd("GET", s("/screenshot"));
@@ -127,15 +127,20 @@ try {
   await diag("ref-red");
   const red = await shot();
   console.log(`screenshots: blank ${hash(blank)}, green ${hash(green)}, red ${hash(red)}`);
-  if (green === red || green === blank) {
-    rec(
-      "-",
-      "-",
-      "screenshots reflect the page",
-      "fail",
-      "WebDriver screenshots of different pages are identical (window not rendering?)",
-    );
-  }
+  const pairs = [
+    ["blank", "green", blank === green],
+    ["blank", "red", blank === red],
+    ["green", "red", green === red],
+  ].filter((p) => p[2]);
+  rec(
+    "-",
+    "-",
+    "screenshots of blank, green and red pages all differ",
+    pairs.length === 0 ? "pass" : "fail",
+    pairs.length === 0
+      ? ""
+      : `identical: ${pairs.map((p) => `${p[0]}=${p[1]}`).join(", ")} (window not rendering?)`,
+  );
   const host = await exec(
     "return {reduce: matchMedia('(prefers-reduced-motion: reduce)').matches, dark: matchMedia('(prefers-color-scheme: dark)').matches}",
   );
@@ -154,7 +159,96 @@ try {
     `host reduce=${host.reduce}, dark=${host.dark}; <img> document matches reduce: ${image.reduce}, no-preference: ${image["no-preference"]}, dark: ${image.dark}`,
   );
 
-  for (const file of listSvgs(IN)) {
+  // The probe must match the macOS setting this pass was started for.
+  const expectReduce = process.env.SAFARI_REDUCED === "1";
+  const probeOk = expectReduce
+    ? host.reduce === true && image.reduce === "matches" && image["no-preference"] === "no match"
+    : host.reduce === false && image.reduce === "no match" && image["no-preference"] === "matches";
+  rec(
+    "-",
+    "-",
+    `probe matches the expected setting (reduced motion ${expectReduce ? "ON" : "OFF"})`,
+    probeOk ? "pass" : "fail",
+  );
+
+  /** Share of pixels that differ clearly between two PNG screenshots (decoded in the browser). */
+  const diffFraction = async (a, b) => {
+    await go("/blank");
+    const r = await wd("POST", s("/execute/async"), {
+      script: `const x = arguments[0], y = arguments[1], done = arguments[arguments.length - 1];
+        const load = (v) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('decode')); i.src = 'data:image/png;base64,' + v; });
+        Promise.all([load(x), load(y)]).then(([A, B]) => {
+          if (A.naturalWidth !== B.naturalWidth || A.naturalHeight !== B.naturalHeight) return done(1);
+          const px = (i) => { const c = document.createElement('canvas'); c.width = i.naturalWidth; c.height = i.naturalHeight; const g = c.getContext('2d'); g.drawImage(i, 0, 0); return g.getImageData(0, 0, c.width, c.height).data; };
+          const p = px(A), q = px(B); let n = 0;
+          for (let k = 0; k < p.length; k += 4) {
+            if (Math.max(Math.abs(p[k] - q[k]), Math.abs(p[k + 1] - q[k + 1]), Math.abs(p[k + 2] - q[k + 2])) > 64) n++;
+          }
+          done(n / (p.length / 4));
+        }).catch((e) => done(1));`,
+      args: [a, b],
+    });
+    return r;
+  };
+
+  if (expectReduce) {
+    // Second pass (macOS Reduce Motion ON): every embedding must show the static rest frame, and
+    // the <img> must equal the inline rest frame (overview).
+    for (const file of listSvgs(IN)) {
+      let rest;
+      for (const mode of ["inline", "img", "object"]) {
+        try {
+          await go(`/page/${mode}/${encodeURIComponent(file)}`);
+          if (mode === "img") {
+            await exec("return document.getElementById('el').decode().then(() => true)");
+          } else if (mode === "object") {
+            for (let i = 0; i < 40; i++) {
+              if (
+                await exec(
+                  "const d = document.getElementById('el').contentDocument; return !!(d && d.documentElement)",
+                )
+              )
+                break;
+              await sleep(150);
+            }
+          }
+          await sleep(400);
+          const frames = [];
+          for (let i = 0; i < 3; i++) {
+            frames.push(await shot());
+            await sleep(600);
+          }
+          rec(
+            file,
+            mode,
+            "reduced motion: static",
+            frames.every((f) => f === frames[0]) ? "pass" : "fail",
+          );
+          rec(
+            file,
+            mode,
+            "not blank (differs from the empty page)",
+            frames[0] !== blank ? "pass" : "fail",
+          );
+          if (mode === "inline") rest = frames[0];
+          else if (rest) {
+            const d = await diffFraction(rest, frames[0]);
+            rec(
+              file,
+              mode,
+              "matches the inline rest frame (<4% of pixels differ)",
+              d < 0.04 ? "pass" : "fail",
+              `${(d * 100).toFixed(2)}% differ`,
+            );
+          }
+        } catch (e) {
+          rec(file, mode, "ran without error", "fail", String(e?.message ?? e));
+        }
+      }
+    }
+  }
+
+  for (const file of expectReduce ? [] : listSvgs(IN)) {
     for (const mode of MODES) {
       try {
         await go(`/page/${mode}/${encodeURIComponent(file)}`);
