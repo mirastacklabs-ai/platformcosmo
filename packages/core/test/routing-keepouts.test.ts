@@ -9,6 +9,10 @@ import {
   shadowRects,
   stubZones,
 } from "../src/routing/obstacles.js";
+import { getRouterStats, resetRouterStats } from "../src/routing/router.js";
+
+/** Cost bound for the 90-node stress graph (measured: about 660k expansions, so roughly 3x headroom). */
+const EXPANSION_BOUND = 2_000_000;
 
 function rng(seed: number): () => number {
   let a = seed >>> 0;
@@ -154,12 +158,15 @@ describe("routes keep clear of objects, occlusion shadows and labels", () => {
     }
     const r = validate({ meta: { version: "1" }, nodes, edges });
     expect(r.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
-    const t0 = Date.now();
+    resetRouterStats();
     const g = buildScene(r.spec!, {});
-    expect(Date.now() - t0).toBeLessThan(20000);
+    // Cost, not wall-clock: no search may hit a cap and total work stays bounded.
+    const stats = getRouterStats();
+    expect(stats.capHits).toBe(0);
+    expect(stats.expansions).toBeLessThan(EXPANSION_BOUND);
     expect(blockedEdges(g)).toBeLessThanOrEqual(Math.ceil(edges.length * 0.1));
     expect(violations(g)).toEqual([]);
-  });
+  }, 60_000);
 });
 
 describe("small labelled nodes keep visible-side arrivals", () => {
