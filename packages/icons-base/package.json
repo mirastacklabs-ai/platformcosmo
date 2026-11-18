@@ -34,5 +34,8 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@platformcosmo/core": "workspace:*"
   }
 }
