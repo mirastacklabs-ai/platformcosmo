@@ -41,6 +41,9 @@ const inlineRequires = {
         });
         if (imports.length === 0)
           throw new Error(`css-tree rewrite found no require() in ${args.path}`);
+        if (/\brequire\b/.test(code)) {
+          throw new Error(`css-tree rewrite left a require in ${args.path}; extend the rewrite`);
+        }
         return {
           contents: `${imports.join("\n")}\n${code}`,
           loader: "js",
@@ -154,6 +157,8 @@ const ALLOWLIST = {};
 // Embedded binary assets that carry their own license obligations (they are not JS inputs).
 const WASM_NOTICE = {
   "@resvg/resvg-wasm": {
+    // The version this notice and licenses/resvg-wasm-rust-crates.md were written for.
+    version: "2.6.2",
     source:
       "Source Code Form: https://github.com/yisibl/resvg-js/tree/v2.6.2 (unmodified); license: https://mozilla.org/MPL/2.0/",
     license: "MPL-2.0",
@@ -203,6 +208,11 @@ function notices() {
   for (const { dir, pj } of pkgs) {
     const id = `${pj.name}@${pj.version}`;
     const wasm = WASM_NOTICE[pj.name];
+    if (wasm && wasm.version !== pj.version) {
+      problems.push(
+        `${id}: the bundled ${pj.name} is ${pj.version} but the notice was written for ${wasm.version}; update the resvg notice (WASM_NOTICE) and regenerate the crate list (scripts/gen-resvg-notices.sh)`,
+      );
+    }
     const license =
       wasm?.license ??
       (typeof pj.license === "string"
