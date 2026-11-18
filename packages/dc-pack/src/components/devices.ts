@@ -50,7 +50,7 @@ function server(type: string, label: string, u: number, depth: number): Dev {
     heightU: u,
     depthMm: depth,
     detail(k, h) {
-      k.part("bezel", "slab", "metal", 20, k.depthMm - 4, 3, 442, 4, h - 6);
+      k.part("bezel", "slab", "base", 20, k.depthMm - 4, 3, 442, 4, h - 6);
       k.row("vent", 3, "muted", 90, 250, 5, 40, Math.max(4, h - 12), 5);
       leds(k, h);
       k.row("drive", u >= 2 ? 6 : 3, "muted", 260, 440, 6, 24, Math.max(6, h - 14), 5);
@@ -84,7 +84,7 @@ const devices: readonly Dev[] = [
     heightU: 4,
     depthMm: 820,
     detail(k, h) {
-      k.part("bezel", "slab", "metal", 20, k.depthMm - 4, 3, 442, 4, h - 6);
+      k.part("bezel", "slab", "base", 20, k.depthMm - 4, 3, 442, 4, h - 6);
       k.row("gpu", 8, "accent", 30, 452, 10, 38, h - 20, 6);
       leds(k, h);
       netPorts(k, h, 4);

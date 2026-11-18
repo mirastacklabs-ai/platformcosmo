@@ -1,11 +1,6 @@
 /** PlatformCosmo data-center pack (Track E): parametric components and hall layout. */
-import type {
-  DcPack,
-  DcSceneFragment,
-  SpecDcEquipmentType,
-  SpecDcSlotType,
-} from "@platformcosmo/core";
-import { box } from "./units.js";
+import type { DcPack, SpecDcEquipmentType, SpecDcSlotType } from "@platformcosmo/core";
+import { buildDcScene } from "./scene.js";
 import { registry } from "./registry.js";
 
 export { registry } from "./registry.js";
@@ -39,18 +34,7 @@ export const equipmentTypes = [
   "tape-library",
 ] as const satisfies readonly SpecDcEquipmentType[];
 
-/** Replaced by the hall layout in the next PR. */
-const empty: DcSceneFragment = {
-  objects: [],
-  groups: [],
-  edges: [],
-  flows: [],
-  focusTargets: {},
-  bounds: box(0, 0, 0, 0, 0, 0),
-  diagnostics: [],
-};
-
 export const dcPack: DcPack = {
   registry,
-  buildScene: () => empty,
+  buildScene: buildDcScene,
 };

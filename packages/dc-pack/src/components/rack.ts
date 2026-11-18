@@ -4,6 +4,7 @@
  * Local frame: x width, y depth (front at +y), z up. All sizes in mm.
  */
 import type { DcBuildResult, DcComponentDef } from "@platformcosmo/core";
+import { DC_DEFAULTS } from "../defaults.js";
 import { U_MM } from "../units.js";
 import { Kit } from "./kit.js";
 
@@ -33,9 +34,9 @@ export function rackHeightMm(u: number): number {
 }
 
 export function readRackParams(p: Params): RackParams {
-  const u = RACK_HEIGHTS_U.find((x) => x === p.u) ?? 42;
+  const u = RACK_HEIGHTS_U.find((x) => x === p.u) ?? DC_DEFAULTS.rack.u;
   const pdu: RackPdu =
-    p.pdu === "none" || p.pdu === "dual" || p.pdu === "single" ? p.pdu : "single";
+    p.pdu === "none" || p.pdu === "dual" || p.pdu === "single" ? p.pdu : DC_DEFAULTS.rack.pdu;
   return { u, pdu, rearDoorHeatExchanger: p.rearDoorHeatExchanger === true };
 }
 
@@ -45,7 +46,7 @@ export const rackDef: DcComponentDef = {
   label: "Rack",
   heightU: 42,
   footprintMm: { width: RACK_WIDTH_MM, depth: RACK_DEPTH_MM, height: Math.round(rackHeightMm(42)) },
-  defaults: { u: 42, pdu: "single", rearDoorHeatExchanger: false } as Params,
+  defaults: { ...DC_DEFAULTS.rack } as Params,
   build(params: Params): DcBuildResult {
     const { u, pdu, rearDoorHeatExchanger } = readRackParams(params);
     const W = RACK_WIDTH_MM;
