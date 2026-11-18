@@ -8,6 +8,7 @@
 //   docker run --rm -v "$PWD":/work -w /work node:24.21-bookworm-slim \
 //     node packages/icons-base/scripts/gen-pack.mjs packages/icons-simple
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync, rmSync } from "node:fs";
+import { URL } from "node:url";
 import { sanitizeSvg } from "../../core/src/icons/sanitize.ts";
 
 const up = process.argv[2]; // simple-icons package dir
