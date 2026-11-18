@@ -4,51 +4,104 @@
 //
 //   scripts/pc run build                       (the CLI must be built first)
 //   scripts/pc run gen:gallery                 render everything that can be rendered
-//   node packages/cli/scripts/gen-gallery.mjs [--only a,b] [--packs-dir <dir>]
+//   scripts/pc run check:gallery               re-render the bundled-icon examples to a temp dir and fail
+//                                              when a committed render differs (skips specs with none yet)
+//   node packages/cli/scripts/gen-gallery.mjs [--only a,b] [--packs-dir <dir>] [--check]
 //
 // Provider examples (aws:, azure:, gcp: icons) need the provider packs, which are fetched on the user's
 // machine and never committed (DECISIONS D12): pass --packs-dir to a directory filled by
-// `pcosmo icons add aws|gcp`. Azure's icon terms must be accepted by a human, so Azure examples are
-// always skipped here. Only the rendered diagrams are committed.
+// `pcosmo icons add aws`. Providers whose icon terms are not confirmed (Azure, Google Cloud; D30) are
+// always skipped. Only rendered diagrams are committed. Each example is built into a temp directory
+// and moved into place only on success.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const bin = `${root}packages/cli/dist/bin.js`;
 const outDir = `${root}examples/gallery`;
 
-const args = process.argv.slice(2);
-const opt = (name) => {
-  const i = args.indexOf(name);
-  return i >= 0 ? args[i + 1] : undefined;
-};
-const only = opt("--only")?.split(",").filter(Boolean);
-const packsDir = opt("--packs-dir");
+/** Providers whose icon terms need human confirmation before anything is rendered or committed. */
+const TERMS_UNCONFIRMED = { azure: "Azure", gcp: "Google Cloud" };
+const KNOWN_PROVIDERS = ["aws", "azure", "gcp", "cncf"];
 
-if (!existsSync(bin)) {
-  console.error("packages/cli/dist/bin.js is missing; run: scripts/pc run build");
+const args = process.argv.slice(2);
+const KNOWN_FLAGS = new Set(["--only", "--packs-dir", "--check"]);
+for (const a of args) {
+  if (a.startsWith("--") && !KNOWN_FLAGS.has(a)) fail(`unknown option ${a}`);
+}
+function opt(name) {
+  const i = args.indexOf(name);
+  if (i < 0) return undefined;
+  const v = args[i + 1];
+  if (v === undefined || v.startsWith("--") || v === "") fail(`${name} needs a value`);
+  return v;
+}
+function fail(msg) {
+  console.error(msg);
   process.exit(1);
 }
+const only = opt("--only")?.split(",").filter(Boolean);
+const packsDir = opt("--packs-dir");
+const check = args.includes("--check");
+
+if (!existsSync(bin)) fail("packages/cli/dist/bin.js is missing; run: scripts/pc run build");
 
 const names = readdirSync(`${root}examples`)
   .filter((f) => f.endsWith(".cosmo.json"))
   .map((f) => f.replace(/\.cosmo\.json$/, ""))
   .sort();
-for (const n of only ?? []) {
-  if (!names.includes(n)) {
-    console.error(`unknown example "${n}"`);
-    process.exit(1);
-  }
-}
+for (const n of only ?? []) if (!names.includes(n)) fail(`unknown example "${n}"`);
 
 // An empty pack directory keeps host-installed packs from influencing non-provider renders.
-const emptyPacks = mkdtempSync(join(tmpdir(), "pcosmo-gallery-"));
-mkdirSync(outDir, { recursive: true });
+const emptyPacks = mkdtempSync(join(tmpdir(), "pcosmo-gallery-packs-"));
+const cleanup = [emptyPacks];
+process.on("exit", () => {
+  for (const d of cleanup) rmSync(d, { recursive: true, force: true });
+});
+
+/** Files a build of `name` produces, relative to its output dir. */
+function listFiles(dir, prefix = "") {
+  const out = [];
+  for (const e of readdirSync(dir)) {
+    const rel = prefix ? `${prefix}/${e}` : e;
+    if (statSync(join(dir, e)).isDirectory()) out.push(...listFiles(join(dir, e), rel));
+    else out.push(rel);
+  }
+  return out.sort();
+}
+
+function renderTo(name, spec, packs, dest) {
+  const flags = ["--static", "--png"];
+  if ((spec.steps?.length ?? 0) > 0) flags.push("--steps");
+  const r = spawnSync(
+    process.execPath,
+    [bin, "build", `${root}examples/${name}.cosmo.json`, "-o", dest, "--name", name, ...flags],
+    { encoding: "utf8", env: { ...process.env, PCOSMO_PACKS_DIR: packs } },
+  );
+  return r;
+}
+
+const ownedBy = (name) => (f) =>
+  f === `${name}.svg` ||
+  f === `${name}.static.svg` ||
+  f === `${name}.png` ||
+  f.startsWith(`${name}.steps/`);
+
 let rendered = 0;
 let skipped = 0;
+let differing = 0;
 
 for (const name of names) {
   if (only && !only.includes(name)) continue;
@@ -56,13 +109,19 @@ for (const name of names) {
   const spec = JSON.parse(text);
   const providers = [
     ...new Set([...text.matchAll(/"icon"\s*:\s*"([a-z0-9-]+):/g)].map((m) => m[1])),
-  ].filter((p) => ["aws", "azure", "gcp", "cncf"].includes(p));
+  ].filter((p) => KNOWN_PROVIDERS.includes(p));
 
-  if (providers.includes("azure")) {
+  const unconfirmed = providers.filter((p) => p in TERMS_UNCONFIRMED);
+  if (unconfirmed.length > 0) {
     console.log(
-      `skip ${name}: it uses Azure icons and Azure's icon terms must be accepted by a human ` +
-        "(pcosmo icons add azure --accept-terms); not rendered",
+      `skip ${name}: it uses ${unconfirmed.map((p) => TERMS_UNCONFIRMED[p]).join(", ")} icons; their terms require human ` +
+        "confirmation, so it is not rendered",
     );
+    skipped++;
+    continue;
+  }
+  if (check && providers.length > 0) {
+    console.log(`skip ${name}: provider example (needs user-fetched packs; not checked)`);
     skipped++;
     continue;
   }
@@ -78,28 +137,62 @@ for (const name of names) {
     continue;
   }
 
-  for (const f of [`${name}.svg`, `${name}.static.svg`, `${name}.png`])
-    rmSync(join(outDir, f), { force: true });
-  rmSync(join(outDir, `${name}.steps`), { recursive: true, force: true });
+  const tmp = mkdtempSync(join(tmpdir(), "pcosmo-gallery-"));
+  cleanup.push(tmp);
+  const r = renderTo(name, spec, providers.length > 0 ? packsDir : emptyPacks, tmp);
+  if (r.status !== 0) fail(`${name}: build failed (exit ${r.status})\n${r.stderr}${r.stdout}`);
+  const produced = listFiles(tmp);
 
-  const flags = ["--static", "--png"];
-  if ((spec.steps?.length ?? 0) > 0) flags.push("--steps");
-  const r = spawnSync(
-    process.execPath,
-    [bin, "build", `${root}examples/${name}.cosmo.json`, "-o", outDir, ...flags],
-    {
-      encoding: "utf8",
-      env: { ...process.env, PCOSMO_PACKS_DIR: providers.length > 0 ? packsDir : emptyPacks },
-    },
-  );
-  if (r.status !== 0) {
-    console.error(`${name}: build failed (exit ${r.status})\n${r.stderr}${r.stdout}`);
-    rmSync(emptyPacks, { recursive: true, force: true });
-    process.exit(1);
+  if (check) {
+    const committed = existsSync(outDir) ? listFiles(outDir).filter(ownedBy(name)) : [];
+    if (committed.length === 0) {
+      console.log(`skip ${name}: no committed render yet`);
+      skipped++;
+      continue;
+    }
+    const bad = [
+      ...produced.filter((f) => !committed.includes(f)).map((f) => `missing: ${f}`),
+      ...committed.filter((f) => !produced.includes(f)).map((f) => `stale: ${f}`),
+      ...produced
+        .filter((f) => committed.includes(f))
+        .filter((f) => !readFileSync(join(tmp, f)).equals(readFileSync(join(outDir, f))))
+        .map((f) => `differs: ${f}`),
+    ];
+    if (bad.length > 0) {
+      console.error(`FAIL ${name}\n  ${bad.join("\n  ")}\n  run: scripts/pc run gen:gallery`);
+      differing++;
+    } else console.log(`ok   ${name} (${produced.length} files identical)`);
+    continue;
+  }
+
+  // Success: replace this example's outputs in one step.
+  mkdirSync(outDir, { recursive: true });
+  for (const f of listFiles(outDir).filter(ownedBy(name))) rmSync(join(outDir, f), { force: true });
+  rmSync(join(outDir, `${name}.steps`), { recursive: true, force: true });
+  for (const f of produced) {
+    const dest = join(outDir, f);
+    mkdirSync(dirname(dest), { recursive: true });
+    copyFileSync(join(tmp, f), dest);
   }
   const warnings = r.stderr.trim();
   console.log(`ok   ${name}${warnings ? `\n${warnings.replace(/^/gm, "     ")}` : ""}`);
   rendered++;
 }
-rmSync(emptyPacks, { recursive: true, force: true });
-console.log(`gallery: ${rendered} rendered, ${skipped} skipped`);
+
+if (!check && packsDir) {
+  const lockPath = join(packsDir, "platformcosmo-icons.lock.json");
+  if (existsSync(lockPath)) {
+    const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+    for (const [id, e] of Object.entries(lock.packs ?? {})) {
+      console.log(
+        `pack ${id}: integrity ${e.integrity}, ${e.iconCount} icons, resolved ${e.resolved}`,
+      );
+    }
+  }
+}
+console.log(
+  check
+    ? `gallery check: ${differing === 0 ? "ok" : `${differing} differ`}, ${skipped} skipped`
+    : `gallery: ${rendered} rendered, ${skipped} skipped`,
+);
+if (differing > 0) process.exit(1);
