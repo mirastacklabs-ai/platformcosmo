@@ -64,6 +64,41 @@ describe("depthOrder", () => {
     expect(order.indexOf("r1/u1")).toBeLessThan(order.indexOf("r1/u3"));
   });
 
+  test("rack < slot devices < rack_front, whatever the geometry says", () => {
+    const rack = { id: "r1", box: box(0, 0, 0, 1, 1, 2) };
+    // front shell hugs the viewer-side face but its box overlaps the devices
+    const front = { id: "r1_front", box: box(0, 0, 0, 1, 1, 2) };
+    const lo = { id: "r1/u1", box: box(0.1, 0.1, 0.1, 0.8, 0.8, 0.1) };
+    const hi = { id: "r1/u9", box: box(0.1, 0.1, 1.5, 0.8, 0.8, 0.1) };
+    const other = { id: "r2", box: box(3, 0, 0, 1, 1, 2) };
+    const items = [front, hi, other, lo, rack];
+    for (const input of [items, [...items].reverse()]) {
+      const order = depthOrder(input, proj);
+      const at = (id: string) => order.indexOf(id);
+      expect(at("r1")).toBeLessThan(at("r1/u1"));
+      expect(at("r1")).toBeLessThan(at("r1/u9"));
+      expect(at("r1/u1")).toBeLessThan(at("r1_front"));
+      expect(at("r1/u9")).toBeLessThan(at("r1_front"));
+      expect(at("r1/u1")).toBeLessThan(at("r1/u9"));
+    }
+  });
+
+  test("a rack in front of another does not break either rack's sequence", () => {
+    const items = [
+      { id: "b_front", box: box(0, 2, 0, 1, 1, 2) },
+      { id: "b", box: box(0, 2, 0, 1, 1, 2) },
+      { id: "b/u1", box: box(0.1, 2.1, 0.5, 0.8, 0.8, 0.1) },
+      { id: "a_front", box: box(0, 0, 0, 1, 1, 2) },
+      { id: "a", box: box(0, 0, 0, 1, 1, 2) },
+      { id: "a/u1", box: box(0.1, 0.1, 0.5, 0.8, 0.8, 0.1) },
+    ];
+    const order = depthOrder(items, proj);
+    for (const r of ["a", "b"]) {
+      expect(order.indexOf(r)).toBeLessThan(order.indexOf(`${r}/u1`));
+      expect(order.indexOf(`${r}/u1`)).toBeLessThan(order.indexOf(`${r}_front`));
+    }
+  });
+
   test("disjoint screen regions fall back to depth key then id", () => {
     const items = [
       { id: "z", box: box(0, 0, 0) },

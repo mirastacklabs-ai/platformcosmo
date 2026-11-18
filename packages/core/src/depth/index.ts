@@ -90,6 +90,25 @@ function cmpStr(a: string, b: string): number {
 }
 
 /**
+ * Id-based rules that override geometry for one rack (DC pack): the rack object `R` comes
+ * first, its slot devices `R/<slot>` next, and its viewer-side shell `R_front` last.
+ * Returns -1 when `a` must precede `b`, 1 when after, 0 when no rule applies.
+ */
+function forcedRelation(a: string, b: string): -1 | 0 | 1 {
+  const rank = (id: string, base: string): number =>
+    id === base ? 0 : id.startsWith(`${base}/`) ? 1 : id === `${base}_front` ? 2 : -1;
+  const baseOf = (id: string): string | undefined =>
+    id.endsWith("_front") ? id.slice(0, -"_front".length) : id.split("/")[0];
+  for (const base of new Set([baseOf(a), baseOf(b)])) {
+    if (base === undefined) continue;
+    const ra = rank(a, base);
+    const rb = rank(b, base);
+    if (ra >= 0 && rb >= 0 && ra !== rb) return ra < rb ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
  * Back-to-front order of item ids. Items whose screen bounds do not overlap are not
  * constrained; overlapping pairs get an edge from compareBoxes; a deterministic Kahn sort
  * (lowest center depth, then id, first) emits the result, breaking cycles by the same key.
@@ -106,9 +125,18 @@ export function depthOrder(items: readonly DepthItem[], projection: Projection):
   const rects = items.map((it) => projectBoxBounds(projection, it.box));
   const out: number[][] = items.map(() => []);
   const indeg = new Array<number>(n).fill(0);
+  const forcedPred: number[][] = items.map(() => []);
 
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
+      const forced = forcedRelation((items[i] as DepthItem).id, (items[j] as DepthItem).id);
+      if (forced !== 0) {
+        const [a, b] = forced < 0 ? [i, j] : [j, i];
+        (out[a] as number[]).push(b);
+        indeg[b] = (indeg[b] as number) + 1;
+        (forcedPred[b] as number[]).push(a);
+        continue;
+      }
       if (!overlap(rects[i] as Rect, rects[j] as Rect)) continue;
       let rel = compareBoxes((items[i] as DepthItem).box, (items[j] as DepthItem).box);
       if (rel === 0) {
@@ -141,9 +169,9 @@ export function depthOrder(items: readonly DepthItem[], projection: Projection):
       if (pick < 0 || better(i, pick)) pick = i;
     }
     if (pick < 0) {
-      // Cycle: release the best remaining node.
+      // Cycle: release the best remaining node whose forced predecessors are all placed.
       for (let i = 0; i < n; i++) {
-        if (done[i]) continue;
+        if (done[i] || (forcedPred[i] as number[]).some((f) => !done[f])) continue;
         if (pick < 0 || better(i, pick)) pick = i;
       }
     }
