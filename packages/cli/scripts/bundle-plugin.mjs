@@ -99,6 +99,9 @@ const result = await build({
     "@platformcosmo/themes": src("themes"),
     "@platformcosmo/dc-pack": src("dc-pack"),
     "@platformcosmo/icons-base": src("icons-base"),
+    "@platformcosmo/icons-lucide": src("icons-lucide"),
+    "@platformcosmo/icons-k8s": src("icons-k8s"),
+    "@platformcosmo/icons-simple": src("icons-simple"),
   },
   plugins: [inlineRequires],
   banner: { js: BANNER },
@@ -247,6 +250,27 @@ function notices() {
       `third-party notices cannot be generated:\n  ${problems.join("\n  ")}\nAdd a vendored license text or an ALLOWLIST entry (with a reason) in bundle-plugin.mjs.`,
     );
     process.exit(1);
+  }
+  // Icon packs and the font that are compiled into the bundle (their text lives in /LICENSES).
+  const BUNDLED_ASSETS = [
+    ["cosmo", "PlatformCosmo original glyphs (icon pack `cosmo`)"],
+    ["lucide", "Lucide icons (icon pack `lucide`): ISC, plus MIT for the Feather-derived icons"],
+    ["k8s", "Kubernetes icons (icon pack `k8s`): Apache-2.0; Linux Foundation trademark note"],
+    ["simple-icons", "Simple Icons (icon pack `simple`): license summary and trademark notice"],
+    ["NOTICE-SIMPLE-ICONS", "Simple Icons: per-icon notices for the Apache-2.0 icons"],
+    ["Inter-OFL-1.1", "Inter font subsets embedded for text rendering: SIL OFL 1.1"],
+  ];
+  lines.push("# Bundled icon packs and fonts", "");
+  for (const [file, title] of BUNDLED_ASSETS) {
+    const path = join(root, "LICENSES", `${file}.txt`);
+    lines.push(
+      `## ${title}`,
+      "",
+      "~~~~text",
+      readFileSync(path, "utf8").replace(/\r\n/g, "\n").trim(),
+      "~~~~",
+      "",
+    );
   }
   return `${lines.join("\n").trimEnd()}\n`;
 }
