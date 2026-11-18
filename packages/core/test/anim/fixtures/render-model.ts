@@ -328,7 +328,7 @@ export function buildFixture(opts: FixtureOptions = {}): RenderModel {
       : []),
   ];
   const layers: Record<Layer, SvgNode[]> = {
-    background: [el("rect", { width: 560, height: 320, fill: "#ffffff" })],
+    background: [el("rect", { class: `${prefix}-bg`, width: 560, height: 320 })],
     groups: [],
     edges: ["e1", "e2"].map((id) =>
       el("g", { id: ids.edge(id) }, [
@@ -450,7 +450,8 @@ export function emit(model: RenderModel, anim: AnimationLayer, options: EmitOpti
         `.${ids.stateClass(s)} .${ids.ledClass()}{fill:var(--pc-dc-led-${s === "degraded" ? "warn" : s === "down" ? "fail" : "ok"})}`,
     )
     .join("\n");
-  let css = [varBlock, dark, base, anim.css].filter(Boolean).join("\n");
+  const bg = `.${ids.prefix}-bg{fill:var(--pc-background)}`;
+  let css = [varBlock, dark, base, bg, anim.css].filter(Boolean).join("\n");
   if (raster) {
     css = stripAtRules(css);
     css = css.replace(/^#[^{]*\{--pc-[^}]*\}/m, "");
