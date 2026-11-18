@@ -12,6 +12,7 @@
  * tests/browser/out/fixtures), OUT_DIR (default tests/browser/out), GIT_SHA.
  * Results JSON is always written, also after a failure.
  */
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { MODES, listSvgs, startServer } from "./server.mjs";
@@ -144,6 +145,15 @@ try {
   await diag("ref-red");
   const red = await shot();
   console.log(`screenshots: blank ${hash(blank)}, green ${hash(green)}, red ${hash(red)}`);
+  // Keep the evidence: what WebDriver actually returned.
+  mkdirSync(OUT, { recursive: true });
+  for (const [n, b64] of [
+    ["blank", blank],
+    ["green", green],
+    ["red", red],
+  ]) {
+    writeFileSync(`${OUT}/probe-${n}.png`, Buffer.from(b64, "base64"));
+  }
   const pairs = [
     ["blank", "green", blank === green],
     ["blank", "red", blank === red],
