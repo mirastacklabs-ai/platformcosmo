@@ -89,9 +89,16 @@ try {
         "const done = arguments[arguments.length - 1]; requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 50)));",
       args: [],
     }).catch((e) => console.log("settle failed (screenshot may predate the paint):", e.message));
+  // Element screenshot of the page's box (#box on probe pages, #host on diagram pages): it
+  // snapshots the web view itself, so it does not depend on the Safari window being painted on
+  // screen (the full-window screenshot was blank on small-display runners). SAFARI_SHOT=window
+  // switches back to the window screenshot.
   const shot = async () => {
     await settle();
-    return wd("GET", s("/screenshot"));
+    if (process.env.SAFARI_SHOT === "window") return wd("GET", s("/screenshot"));
+    const el = await wd("POST", s("/element"), { using: "css selector", value: "#box, #host" });
+    const id = el["element-6066-11e4-a52e-4f735466cecf"] ?? Object.values(el)[0];
+    return wd("GET", s(`/element/${id}/screenshot`));
   };
 
   console.log("session capabilities:", JSON.stringify(session.capabilities));
