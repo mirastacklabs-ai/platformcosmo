@@ -18,14 +18,85 @@ export interface RouteResult {
   readonly blocked: boolean;
 }
 
-interface Rect {
+export interface Rect {
   x0: number;
   y0: number;
   x1: number;
   y1: number;
 }
 
+/** Registry of routed segments, so later edges avoid sharing lanes (fan-out stays readable). */
+export class RouteLanes {
+  private readonly h = new Map<number, { a: number; b: number; src: string }[]>();
+  private readonly v = new Map<number, { a: number; b: number; src: string }[]>();
+  private readonly points = new Set<string>();
+
+  add(path: readonly Vec3[], src: string): void {
+    for (let i = 0; i + 1 < path.length; i++) {
+      const p = path[i]!;
+      const q = path[i + 1]!;
+      if (p.z !== 0 || q.z !== 0) continue;
+      if (p.y === q.y && p.x !== q.x) this.put(this.h, p.y, p.x, q.x, src);
+      else if (p.x === q.x && p.y !== q.y) this.put(this.v, p.x, p.y, q.y, src);
+    }
+    const first = path[0];
+    if (first) this.points.add(`${first.x},${first.y}`);
+  }
+
+  private put(
+    m: Map<number, { a: number; b: number; src: string }[]>,
+    c: number,
+    a: number,
+    b: number,
+    src: string,
+  ): void {
+    const list = m.get(c) ?? [];
+    list.push({ a: Math.min(a, b), b: Math.max(a, b), src });
+    m.set(c, list);
+  }
+
+  usedPoint(x: number, y: number): boolean {
+    return this.points.has(`${x},${y}`);
+  }
+
+  /** Penalty for travelling along `c` between `a` and `b` over an already used lane. */
+  overlapCost(horizontal: boolean, c: number, a: number, b: number, src: string): number {
+    const list = (horizontal ? this.h : this.v).get(c);
+    if (!list) return 0;
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    let cost = 0;
+    for (const e of list) {
+      const ov = Math.min(hi, e.b) - Math.max(lo, e.a);
+      if (ov > 1e-9) cost += ov * (e.src === src ? 4 : 0.5);
+    }
+    return cost;
+  }
+
+  /** Coordinates of lanes owned by `src` (extra grid lines are offered next to them). */
+  lines(src: string): { h: number[]; v: number[] } {
+    const pick = (m: Map<number, { src: string }[]>): number[] =>
+      [...m.entries()].filter(([, l]) => l.some((e) => e.src === src)).map(([c]) => c);
+    return { h: pick(this.h), v: pick(this.v) };
+  }
+}
+
+export interface RouteContext {
+  readonly lanes?: RouteLanes;
+  /** Source object id (same-source edges must not share segments). */
+  readonly source?: string;
+  /**
+   * Extra pre-inflated obstacle rects (occlusion shadows, label keep-outs), or a provider that
+   * returns those intersecting the current search window.
+   */
+  readonly extra?: readonly Rect[] | ((window: Rect) => readonly Rect[]);
+}
+
 interface Terminal {
+  /** Extra start/arrival cost (lane offsets, reused points). */
+  pen: number;
+  /** 0 = stub runs along x, 1 = along y. */
+  axis: number;
   /** Point on the box boundary (with its own z). */
   at: Vec3;
   /** Outward unit direction on the ground plane. */
@@ -34,7 +105,7 @@ interface Terminal {
   stub: { x: number; y: number };
 }
 
-const CLEAR = 0.5;
+const CLEAR = 0.4;
 const STUB = 0.5;
 const BEND = 2;
 /** Hard caps so a pathological scene falls back instead of stalling. */
@@ -56,33 +127,64 @@ const inflate = (r: Rect, m: number): Rect => ({
   y1: r.y1 + m,
 });
 
-function terminalsOf(ep: RouteEndpoint): Terminal[] {
+function terminalsOf(
+  ep: RouteEndpoint,
+  lanes?: RouteLanes,
+  toward?: { x: number; y: number },
+): Terminal[] {
   const r = rectOf(ep.box);
   const cx = (r.x0 + r.x1) / 2;
   const cy = (r.y0 + r.y1) / 2;
-  const sides: { at: Vec3; dx: number; dy: number }[] = [
-    { at: { x: r.x1, y: cy, z: 0 }, dx: 1, dy: 0 },
-    { at: { x: r.x0, y: cy, z: 0 }, dx: -1, dy: 0 },
-    { at: { x: cx, y: r.y1, z: 0 }, dx: 0, dy: 1 },
-    { at: { x: cx, y: r.y0, z: 0 }, dx: 0, dy: -1 },
-  ];
-  const list =
-    ep.ports && ep.ports.length > 0
-      ? ep.ports.map((p) => {
-          // Outward side = nearest box side to the port.
-          const dists = [
-            { d: Math.abs(p.x - r.x1), dx: 1, dy: 0 },
-            { d: Math.abs(p.x - r.x0), dx: -1, dy: 0 },
-            { d: Math.abs(p.y - r.y1), dx: 0, dy: 1 },
-            { d: Math.abs(p.y - r.y0), dx: 0, dy: -1 },
-          ];
-          let best = dists[0]!;
-          for (const d of dists) if (d.d < best.d - 1e-9) best = d;
-          return { at: p, dx: best.dx, dy: best.dy };
-        })
-      : sides;
+  const list: { at: Vec3; dx: number; dy: number; pen: number }[] = [];
+  if (ep.ports && ep.ports.length > 0) {
+    for (const p of ep.ports) {
+      // Outward side = nearest box side to the port.
+      const dists = [
+        { d: Math.abs(p.x - r.x1), dx: 1, dy: 0 },
+        { d: Math.abs(p.x - r.x0), dx: -1, dy: 0 },
+        { d: Math.abs(p.y - r.y1), dx: 0, dy: 1 },
+        { d: Math.abs(p.y - r.y0), dx: 0, dy: -1 },
+      ];
+      let best = dists[0]!;
+      for (const d of dists) if (d.d < best.d - 1e-9) best = d;
+      list.push({ at: p, dx: best.dx, dy: best.dy, pen: 0 });
+    }
+  } else {
+    // Side midpoints first; offset lanes (0.5 apart) let sibling edges leave side by side.
+    const lane = (len: number): number[] => {
+      const out = [0];
+      // Only sources (routes registered in `lanes`) may leave off-center; arrivals stay on the midpoint.
+      for (let o = 0.5; lanes && o <= len / 2 - 0.25 + 1e-9; o += 0.5) out.push(o, -o);
+      return out;
+    };
+    for (const o of lane(r.y1 - r.y0)) {
+      list.push({ at: { x: r.x1, y: r2(cy + o), z: 0 }, dx: 1, dy: 0, pen: Math.abs(o) * 2 });
+      list.push({ at: { x: r.x0, y: r2(cy + o), z: 0 }, dx: -1, dy: 0, pen: Math.abs(o) * 2 });
+    }
+    for (const o of lane(r.x1 - r.x0)) {
+      list.push({ at: { x: r2(cx + o), y: r.y1, z: 0 }, dx: 0, dy: 1, pen: Math.abs(o) * 2 });
+      list.push({ at: { x: r2(cx + o), y: r.y0, z: 0 }, dx: 0, dy: -1, pen: Math.abs(o) * 2 });
+    }
+  }
+  // Prefer the side facing the other endpoint along the dominant axis (flow reads left to right).
+  const dxw = toward ? toward.x - cx : 0;
+  const dyw = toward ? toward.y - cy : 0;
+  const facing = (dx: number, dy: number): number => {
+    if (!toward || (dxw === 0 && dyw === 0)) return 0;
+    const xDominant = Math.abs(dxw) >= Math.abs(dyw);
+    const want = xDominant ? Math.sign(dxw) : Math.sign(dyw);
+    const got = xDominant ? dx : dy;
+    return got === want ? 0 : 3;
+  };
   return list.map((t) => ({
-    ...t,
+    at: t.at,
+    dx: t.dx,
+    dy: t.dy,
+    axis: t.dx !== 0 ? 0 : 1,
+    pen:
+      t.pen +
+      (lanes?.usedPoint(t.at.x, t.at.y) ? 3 : 0) +
+      (ep.ports && ep.ports.length > 0 ? 0 : facing(t.dx, t.dy)),
     stub: { x: r2(t.at.x + t.dx * STUB), y: r2(t.at.y + t.dy * STUB) },
   }));
 }
@@ -150,6 +252,7 @@ function search(
   to: Terminal[],
   own: Rect[],
   obstacles: Rect[],
+  ctx: RouteContext,
 ): { pts: { x: number; y: number }[]; src: number; dst: number } | "no-terminal" | undefined {
   const xsSet = new Set<number>();
   const ysSet = new Set<number>();
@@ -165,6 +268,17 @@ function search(
   for (const r of obstacles) {
     add(r.x0, r.y0);
     add(r.x1, r.y1);
+  }
+  if (ctx.lanes && ctx.source !== undefined) {
+    const ln = ctx.lanes.lines(ctx.source);
+    for (const c of ln.v) {
+      xsSet.add(r2(c - 0.5));
+      xsSet.add(r2(c + 0.5));
+    }
+    for (const c of ln.h) {
+      ysSet.add(r2(c - 0.5));
+      ysSet.add(r2(c + 0.5));
+    }
   }
   const xs = [...xsSet].sort((a, b) => a - b);
   const ys = [...ysSet].sort((a, b) => a - b);
@@ -218,17 +332,25 @@ function search(
     return anyObstacleHit(ax, ay, bx, by);
   };
 
-  const srcNodes: { id: number; t: number }[] = [];
+  const srcNodes: { id: number; t: number; pen: number; axis: number }[] = [];
   from.forEach((t, k) => {
     const ix = xi.get(t.stub.x)!;
     const iy = yi.get(t.stub.y)!;
-    if (!nodeBlocked(ix, iy)) srcNodes.push({ id: idx(ix, iy), t: k });
+    if (!nodeBlocked(ix, iy)) srcNodes.push({ id: idx(ix, iy), t: k, pen: t.pen, axis: t.axis });
   });
   const dstNodes = new Map<number, number>();
+  const dstInfo = new Map<number, { pen: number; axis: number }>();
   to.forEach((t, k) => {
     const ix = xi.get(t.stub.x)!;
     const iy = yi.get(t.stub.y)!;
-    if (!nodeBlocked(ix, iy) && !dstNodes.has(idx(ix, iy))) dstNodes.set(idx(ix, iy), k);
+    const dn = idx(ix, iy);
+    if (!nodeBlocked(ix, iy)) {
+      const cur = dstInfo.get(dn);
+      if (!cur || t.pen < cur.pen) {
+        dstNodes.set(dn, k);
+        dstInfo.set(dn, { pen: t.pen, axis: t.axis });
+      }
+    }
   });
   if (srcNodes.length === 0 || dstNodes.size === 0) return "no-terminal";
 
@@ -251,23 +373,34 @@ function search(
     return m;
   };
   for (const s of srcNodes) {
-    const st = s.id * 3 + 2;
-    if (g[st]! > 0) {
-      g[st] = 0;
+    const st = s.id * 3 + s.axis;
+    if (g[st]! > s.pen) {
+      g[st] = s.pen;
       srcOf[s.id] = s.t;
-      heap.push(h(s.id), seq++, st);
+      heap.push(s.pen + h(s.id), seq++, st);
     }
   }
+  const finalized = new Set<number>();
   let expansions = 0;
   while (heap.size > 0) {
     if (++expansions > MAX_EXPANSIONS) return undefined;
-    const { id: st } = heap.pop();
+    const popped = heap.pop().id;
+    const isFinal = popped < 0;
+    const st = isFinal ? -popped - 1 : popped;
     const node = Math.floor(st / 3);
     const dir = st % 3;
     const ix = Math.floor(node / ny);
     const iy = node % ny;
     const cur = g[st]!;
-    if (dstNodes.has(node)) {
+    if (dstNodes.has(node) && !isFinal) {
+      // Arriving across the target's stub axis costs a bend; finish through a final heap entry.
+      if (!finalized.has(st)) {
+        finalized.add(st);
+        const info = dstInfo.get(node)!;
+        heap.push(cur + info.pen + (dir === info.axis ? 0 : BEND), seq++, -st - 1);
+      }
+    }
+    if (isFinal) {
       // Reconstruct.
       const pts: { x: number; y: number }[] = [];
       let s = st;
@@ -297,7 +430,13 @@ function search(
       const len = Math.abs(xs[jx]! - xs[ix]!) + Math.abs(ys[jy]! - ys[iy]!);
       const bend = dir === 2 || dir === nd ? 0 : BEND;
       const nst = idx(jx, jy) * 3 + nd;
-      const ng = cur + len + bend;
+      const lane =
+        ctx.lanes && ctx.source !== undefined
+          ? nd === 0
+            ? ctx.lanes.overlapCost(true, ys[iy]!, xs[ix]!, xs[jx]!, ctx.source)
+            : ctx.lanes.overlapCost(false, xs[ix]!, ys[iy]!, ys[jy]!, ctx.source)
+          : 0;
+      const ng = cur + len + bend + lane;
       if (ng < g[nst]! - 1e-9) {
         g[nst] = ng;
         prev[nst] = st;
@@ -313,9 +452,15 @@ export function routeEdge(
   from: RouteEndpoint,
   to: RouteEndpoint,
   obstacles: readonly Box3[],
+  ctx: RouteContext = {},
 ): RouteResult {
-  const fromT = terminalsOf(from);
-  const toT = terminalsOf(to);
+  const fc = {
+    x: from.box.origin.x + from.box.size.x / 2,
+    y: from.box.origin.y + from.box.size.y / 2,
+  };
+  const tc = { x: to.box.origin.x + to.box.size.x / 2, y: to.box.origin.y + to.box.size.y / 2 };
+  const fromT = terminalsOf(from, ctx.lanes, tc);
+  const toT = terminalsOf(to, undefined, fc);
   const own = [rectOf(from.box), rectOf(to.box)];
   const all = obstacles.map((b) => inflate(rectOf(b), CLEAR));
   const minX = Math.min(own[0]!.x0, own[1]!.x0);
@@ -329,8 +474,11 @@ export function routeEdge(
       x1: maxX + margin,
       y1: maxY + margin,
     };
-    const local = all.filter((r) => strictHit(win.x0, win.y0, win.x1, win.y1, r, false));
-    const found = search(fromT, toT, own, local);
+    const ex = typeof ctx.extra === "function" ? ctx.extra(win) : (ctx.extra ?? []);
+    const local = [...all, ...ex].filter((r) =>
+      strictHit(win.x0, win.y0, win.x1, win.y1, r, false),
+    );
+    const found = search(fromT, toT, own, local, ctx);
     if (found === "no-terminal") break; // wider windows only add obstacles
     if (!found) continue;
     const a = fromT[found.src]!;
@@ -341,7 +489,9 @@ export function routeEdge(
     for (const p of found.pts) pts.push({ x: p.x, y: p.y, z: 0 });
     if (Math.abs(b.at.z) > 0.01) pts.push({ x: b.at.x, y: b.at.y, z: 0 });
     pts.push(b.at);
-    return { path: simplify(pts), blocked: false };
+    const path = simplify(pts);
+    if (ctx.lanes && ctx.source !== undefined) ctx.lanes.add(path, ctx.source);
+    return { path, blocked: false };
   }
   // Fallback: axis-aligned L through the first terminals (ignores obstacles). Raised ports drop
   // to the ground plane first so every segment stays on one axis.
