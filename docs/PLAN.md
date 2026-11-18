@@ -89,12 +89,13 @@ platformcosmo/
 | `$schema` | Root-level (where editors look): `https://platformcosmo.io/schema/v1.json` |
 | `meta` | `version`, `title`, `description` (become the SVG `<title>`/`<desc>`) |
 | `canvas` | `theme`, `grid`, `padding`, `aspect` |
-| `nodes[]` | `id`, `type` (semantic), `icon` (optional, e.g. `aws:rds`), `label`, `badge`, `size`, `pos` (optional override), `group` |
-| `groups[]` | `id`, `label`, `style` (zone / vpc / cluster / platform) |
-| `edges[]` | `from`, `to`, `label`, `style`, `bidirectional` |
-| `flows[]` | `edge`, `kind` (normal / heavy / health / failed), `rate`, `color` |
+| `nodes[]` | `id`, `type` (semantic), `icon` (optional, e.g. `aws:rds`), `label`, `badge`, `size`, `pos` (optional override), `group`, `state` (initial) |
+| `groups[]` | `id`, `label`, `style` (zone / vpc / cluster / platform), `parent` (nesting) |
+| `edges[]` | `id` (optional), `from`, `to`, `label`, `style`, `bidirectional` |
+| `flows[]` | `edge` (edge or cable id) **or** `from`+`to`, `kind` (normal / heavy / health / failed / airflow / power), `rate`, `color` |
 | `metrics[]` | `id`, `label`, `value` (rendered as tiles) |
-| `steps[]` | `caption`, `set` (state changes), `flows`, `metrics`, `duration` |
+| `steps[]` | `caption`, `set` (state changes), `flows`, `metrics`, `duration`, `focus` (zoom target) |
+| DC (v1.1) | `racks[]` (`u`, `slots[]` with `at`/`size`/`type`, `pdu`, `rearDoorHeatExchanger`), `equipment[]`, `rows[]` (`members`), `aisles[]` (`kind`, `rows`, `contained`), `cables[]`, `facility`. A spec needs at least one of `nodes`, `racks`, `equipment`. |
 | `legend` | `auto`, or a manual list |
 
 **Validation layers:**
@@ -105,7 +106,7 @@ platformcosmo/
 **Version policy:**
 - `meta.version` is the spec format's **major** version, a string (`"1"`). The schema URL is per major (`/schema/v1.json`) and never moves.
 - Within a major, changes are **additive only**: new optional fields, new enum values, looser limits. `meta.version` stays `"1"`; v1.1's DC fields (`racks[]`, `rows[]`, `aisles[]`, `cables[]`) land in `v1.json` as optional fields.
-- The schema also has a semver **revision** (`1.0.0`, `1.1.0`, …) kept in the schema file and exported by core. The engine's revision decides which fields it accepts.
+- The schema also has a semver **revision** (`1.0.0`, `1.1.0`, …) kept in the schema file as `x-revision` and exported by core as `SCHEMA_REVISION` (done in the contracts PR). The engine's revision decides which fields it accepts.
 - Specs fail closed: root `additionalProperties: false` means an older engine rejects fields it doesn't know, and the error names the field and says to upgrade `platformcosmo`.
 - Breaking changes need a new major: `meta.version: "2"`, `schema/v2.json`, and `migrate()` in core (exposed as `pcosmo migrate`) that rewrites v1 specs. Core keeps validating every supported major. A field is deprecated (validator warning) for at least one minor release before a major removes it.
 
@@ -130,7 +131,7 @@ platformcosmo/
 | `anim/` | Particles along paths; step timeline; state transitions |
 | `emit/` | SVG writer: per-diagram id prefixes, `role="img"`, `<title>`/`<desc>`, `viewBox` only |
 | `optimize/` | SVGO with a config that keeps the animations |
-| `export/` | Static frame, per-step SVGs, PNG via resvg-js (no browser) |
+| `export/` | Static frame, per-step SVGs, PNG via resvg-wasm (no browser; see DECISIONS D7) |
 
 **Budgets:**
 - Typical diagram: under 150 KB, built in under 500 ms
@@ -162,7 +163,8 @@ platformcosmo/
 
 | Pack | Content | Distribution |
 |---|---|---|
-| `icons-base` | Lucide (ISC), K8s/CNCF (CC-BY 4.0, with attribution), Simple Icons (CC0, with trademark notice), original PlatformCosmo AI/platform glyphs | Bundled |
+| `icons-base` (+ `icons-lucide`, `icons-k8s`, `icons-simple`) | Original PlatformCosmo glyphs (Apache-2.0); Lucide (ISC, plus MIT for the Feather-derived icons); Kubernetes icons (Apache-2.0 option of Apache-2.0/CC-BY-4.0, LF trademark note); Simple Icons **filtered per icon** to explicit CC0/MIT/Apache entries, with trademark notice | Bundled |
+| CNCF artwork | Trademark-licensed (LF guidelines), not copyright-licensed | Not bundled; fetchable as a user pack (`pcosmo icons add cncf`) |
 | Provider packs (AWS, Azure, GCP) | Official architecture icons | `pcosmo icons add aws`: the user's machine downloads from the official source and shows the provider's terms; never redistributed |
 | Custom packs | Folder of SVGs + `icons.json` | `pcosmo icons add ./path` |
 
@@ -202,7 +204,7 @@ platformcosmo/
 |---|---|
 | default | `name.svg` (animated, looping) |
 | `--static` | `name.static.svg` (first frame) |
-| `--steps` | `steps/step-NN.svg` |
+| `--steps` | `name.steps/step-NN.svg` |
 | `--interactive` | `name.interactive.svg` |
 | `--png` | `name.png` |
 | `--gif` / `--mp4` (v1.2) | Optional; needs Puppeteer + ffmpeg |
@@ -331,3 +333,25 @@ platformcosmo/
 6. Keep dependencies minimal; justify any new one in its PR.
 7. Commit messages: Conventional Commits with DCO sign-off.
 8. Run all Node tooling in containers through `scripts/pc`. A project PreToolUse hook (`.claude/hooks/container-only.sh`) blocks host `node`/`npm`/`pnpm` and similar for agents. It is a guardrail, not a sandbox.
+9. A change to `plugin/` (skills, bundled CLI) needs a changeset on `platformcosmo` (the CLI package), because the plugin version follows it and Claude Code caches plugins by version.
+
+---
+
+## 18. Parallel tracks
+
+**Contracts** (`packages/core/src/contracts/`, `schema/v1.json`) are frozen. Only the orchestrator changes them, through its own PR. A track that needs a change asks the orchestrator and keeps working against the current contract.
+
+| Track | Scope | Owns (only these paths) |
+|---|---|---|
+| **A Engine** (two agents: **A1** geometry, depth, text, emit, optimize, `render`, schema export; **A2** parse/validate/semantic, scene, layout, routing; they meet at `BuildSceneFn`) | Semantic validation + "did you mean", scene builder, geometry, layout, depth, routing, text/fonts, emit, optimize, the `render()` pipeline, schema export | `packages/core/src/{schema,scene,geometry,layout,depth,routing,text,emit,optimize,render}` (except `schema/types.gen.ts`, which is generated) and their tests |
+| **B Animation + Export** | Particles, step timeline, reduced motion, dark mode CSS, static/steps/PNG/interactive, GIF/MP4, browser check | `packages/core/src/{anim,export}`, `tests/browser/` |
+| **C Icons** | cosmo originals, Lucide, K8s, Simple Icons, CNCF (if redistributable), manifests, resolver, sanitizer, remote fetch + lockfile, AWS/Azure/GCP fetch packs | `packages/icons-*`, `packages/core/src/icons`, `LICENSES/` |
+| **D CLI + Skills + Docs** | `pcosmo` CLI, bundled plugin CLI, skills (diagram, icons, export), docs site, gallery, lesson templates | `packages/cli`, `plugin/`, `docs/` (except `PLAN.md`), `examples/` |
+| **E DC pack + Themes** | Parametric DC components and hall layout, DC flows, zoom targets, the 4 themes | `packages/dc-pack`, `packages/themes` |
+| **Orchestrator** | Contracts, schema, PLAN/DECISIONS/PROGRESS, root config, CI workflows, integration | everything else |
+
+**Shared files:** `pnpm-lock.yaml`, `packages/core/src/index.ts`, `packages/core/package.json` and root `package.json`. Tracks may make additive edits to these and must list them in the PR description. The orchestrator resolves conflicts at merge, and regenerates the lockfile rather than hand-merging it.
+
+**Integration order:** A merges geometry and primitives first (E builds on them), then layout, routing, emit and `render()`. B, C, D and E build against the contracts using fixtures, then switch to the real stages as they land.
+
+**Every track PR:** branch `track/<letter>-<name>`, green CI, Opus review `APPROVE`, merge by the orchestrator. A claim of "passes" needs a clean `pnpm install --frozen-lockfile` and `run ci` on Node 22 and 24.
