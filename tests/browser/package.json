@@ -1,0 +1,9 @@
+{
+  "name": "platformcosmo-browser-check",
+  "private": true,
+  "type": "module",
+  "description": "Playwright browser check (runs in a container only; see README.md)",
+  "dependencies": {
+    "playwright": "1.64.0"
+  }
+}

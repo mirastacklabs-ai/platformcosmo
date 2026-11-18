@@ -10,8 +10,22 @@ export { render } from "./render/index.js";
 export { emit } from "./emit/index.js";
 export { optimize } from "./optimize/index.js";
 export { createAnimator } from "./anim/index.js";
-export { exportOutputs, rasterize, gifEncoder } from "./export/index.js";
+export {
+  exportOutputs,
+  rasterize,
+  setResvgWasm,
+  gifEncoder,
+  validateRenderOptions,
+} from "./export/index.js";
 export { sanitizeSvg, createIconResolver, fetchIconPack } from "./icons/index.js";
+export {
+  computeIconIntegrity,
+  iconRejections,
+  iconCost,
+  verifyIconIntegrity,
+  PROVIDER_IDS,
+  PROVIDER_TERMS,
+} from "./icons/index.js";
 
 // Geometry (Track A1): projection and primitive solids.
 export {

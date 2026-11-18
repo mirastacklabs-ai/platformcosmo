@@ -17,6 +17,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
+    },
     "./schema/v1.json": "./dist/schema/v1.json",
     "./package.json": "./package.json"
   },
@@ -37,8 +41,14 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
+    "@resvg/resvg-wasm": "2.6.2",
     "ajv": "^8.20.0",
+    "fflate": "0.8.3",
+    "gifenc": "1.0.3",
     "svgo": "4.1.0",
     "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "dejavu-fonts-ttf": "2.37.3"
   }
 }
