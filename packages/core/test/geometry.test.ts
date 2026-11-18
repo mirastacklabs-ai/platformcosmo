@@ -143,8 +143,8 @@ describe("hex-prism", () => {
     const faces = primitiveFaces("hex-prism", unit, proj);
     expect(faces.map((f) => f.face)).toEqual(["left", "right", "top"]);
     expect(faces[2]?.points).toHaveLength(6);
-    // right strip spans two sides (3 top + 3 bottom), left strip one side (2 + 2)
-    expect(faces[1]?.points).toHaveLength(6);
+    // a vertex faces the viewer: one visible side each, 2 top + 2 bottom points
+    expect(faces[1]?.points).toHaveLength(4);
     expect(faces[0]?.points).toHaveLength(4);
     for (const f of faces) expect(signedArea(f.points)).toBeGreaterThan(0);
   });
@@ -226,6 +226,89 @@ describe("helpers and determinism", () => {
       const a = JSON.stringify(primitiveFaces(k, box, proj));
       const b = JSON.stringify(primitiveFaces(k, box, createProjection()));
       expect(a).toBe(b);
+    }
+  });
+});
+
+describe("review follow-ups", () => {
+  test("round2 rounds halves away from zero", () => {
+    expect(round2(0.125)).toBe(0.13);
+    expect(round2(-0.125)).toBe(-0.13);
+    expect(round2(2.5)).toBe(2.5);
+  });
+
+  test("exact cube left/right coordinates", () => {
+    const [left, right] = primitiveFaces("cube", unit, proj);
+    expect(left?.points).toEqual([
+      { x: -32, y: -16 },
+      { x: 0, y: 0 },
+      { x: 0, y: 32 },
+      { x: -32, y: 16 },
+    ]);
+    expect(right?.points).toEqual([
+      { x: 0, y: 0 },
+      { x: 32, y: -16 },
+      { x: 32, y: 16 },
+      { x: 0, y: 32 },
+    ]);
+  });
+
+  test("exact hex vertices touch the box extremes", () => {
+    const faces = primitiveFaces("hex-prism", unit, proj);
+    const top = faces.find((f) => f.face === "top");
+    expect(top?.points).toMatchInlineSnapshot(`
+      [
+        {
+          "x": 0,
+          "y": -4.29,
+        },
+        {
+          "x": -20.29,
+          "y": -10.14,
+        },
+        {
+          "x": -20.29,
+          "y": -21.86,
+        },
+        {
+          "x": 0,
+          "y": -27.71,
+        },
+        {
+          "x": 20.29,
+          "y": -21.86,
+        },
+        {
+          "x": 20.29,
+          "y": -10.14,
+        },
+      ]
+    `);
+  });
+
+  test("zero-height cylinder and hex give only the top", () => {
+    const flat: Box3 = { origin: { x: 0, y: 0, z: 0 }, size: { x: 1, y: 1, z: 0 } };
+    expect(primitiveFaces("cylinder", flat, proj).map((f) => f.face)).toEqual(["top"]);
+    expect(primitiveFaces("hex-prism", flat, proj).map((f) => f.face)).toEqual(["top"]);
+  });
+
+  test("negative origin never prints -0; non-square hex works", () => {
+    const b: Box3 = { origin: { x: -1, y: -1, z: 0 }, size: { x: 2, y: 1, z: 1 } };
+    for (const k of ["cube", "hex-prism", "cylinder"] as const) {
+      const json = JSON.stringify(primitiveFaces(k, b, proj));
+      expect(json).not.toContain("-0,");
+      expect(json).not.toContain('"-0"');
+      expect(primitiveSilhouette(k, b, proj).d).not.toMatch(/-0[^.\d]/);
+    }
+    const hex = primitiveFaces("hex-prism", b, proj);
+    expect(hex.map((f) => f.face)).toEqual(["left", "right", "top"]);
+    for (const f of hex) expect(signedArea(f.points)).toBeGreaterThan(0);
+  });
+
+  test("golden output per primitive for an odd box", () => {
+    const box: Box3 = { origin: { x: 1.3, y: 2.7, z: 0.2 }, size: { x: 1.1, y: 0.9, z: 0.45 } };
+    for (const k of ["cube", "slab", "platform", "hex-prism", "cylinder"] as const) {
+      expect(JSON.stringify(primitiveFaces(k, box, proj))).toMatchSnapshot(k);
     }
   });
 });

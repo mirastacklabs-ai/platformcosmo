@@ -4,10 +4,10 @@
  * never exponent notation for the magnitudes the engine produces.
  */
 
-/** Round to at most 2 decimals; normalizes `-0` to `0`. Non-finite input throws. */
+/** Round to at most 2 decimals, halves away from zero; normalizes `-0` to `0`. Non-finite input throws. */
 export function round2(n: number): number {
   if (!Number.isFinite(n)) throw new RangeError(`non-finite coordinate: ${String(n)}`);
-  const r = Math.round(n * 100) / 100;
+  const r = (Math.sign(n) * Math.round(Math.abs(n) * 100)) / 100;
   return r === 0 ? 0 : r;
 }
 
