@@ -28,6 +28,8 @@ export interface Ref {
   /** +1 when the front faces +y, -1 when it faces -y. */
   readonly front: 1 | -1;
   readonly ports: readonly RefPort[];
+  /** World y of the cable lane (row/strip centre) this object hangs off. */
+  readonly laneY: number;
   /** Owning rack id for slot objects. */
   readonly rack?: string;
 }
@@ -120,6 +122,41 @@ export function route(
   ]);
 }
 
+const topMounted = (ref: Ref, at: Vec3): boolean =>
+  at.z >= ref.box.origin.z + ref.box.size.z - 0.001;
+
+/**
+ * Overhead tray route: out of the port, up to the tray height, along the endpoint's lane (row or
+ * strip centre), over the spine if the lanes differ, along the other lane, and down into the
+ * target (straight down for top-mounted ports such as the rack power feed).
+ */
+export function trayRoute(
+  from: Ref,
+  fromAt: Vec3,
+  to: Ref,
+  toAt: Vec3,
+  tray: { readonly spineX: number; readonly z: number },
+  lane: number,
+): Vec3[] {
+  const z = r4(tray.z + (lane % 5) * 0.025);
+  const fan = ((lane % 3) - 1) * 0.08;
+  const stepOut = 0.15 + (lane % 4) * 0.04;
+  const a1 = topMounted(from, fromAt)
+    ? fromAt
+    : vec(fromAt.x, fromAt.y + from.front * stepOut, fromAt.z);
+  const b1 = topMounted(to, toAt) ? toAt : vec(toAt.x, toAt.y + to.front * stepOut, toAt.z);
+  const ya = from.laneY + fan;
+  const yb = to.laneY + fan;
+  const spineX = tray.spineX + fan * 0.5;
+  const mid: Vec3[] =
+    r4(from.laneY) === r4(to.laneY)
+      ? [vec(a1.x, ya, z), vec(b1.x, ya, z)]
+      : [vec(a1.x, ya, z), vec(spineX, ya, z), vec(spineX, yb, z), vec(b1.x, yb, z)];
+  return simplify([fromAt, a1, vec(a1.x, a1.y, z), ...mid, vec(b1.x, b1.y, z), b1, toAt]);
+}
+
+type Router = (from: Ref, fromAt: Vec3, to: Ref, toAt: Vec3, lane: number) => Vec3[];
+
 export function midpoint(path: readonly Vec3[]): Vec3 {
   const m = path[Math.floor(path.length / 2)] ?? vec(0, 0, 0);
   return m;
@@ -136,6 +173,8 @@ export interface ConnectInput {
   readonly cables: readonly SpecCable[];
   /** Height of the cable lane (tray or default overhead / underfloor). */
   readonly laneZ: number;
+  /** Overhead tray network: spine x and cable height; absent = free-form lanes. */
+  readonly tray?: { readonly spineX: number; readonly z: number };
   /** Particle budget for all DC flows (global budget minus the spec's own flow cost). */
   readonly particleBudget: number;
   /** Rack ids in spec order with airflow inputs. */
@@ -180,6 +219,8 @@ function nearest(from: Ref, cands: readonly Ref[]): Ref | undefined {
 
 export function connect(input: ConnectInput): Connections {
   const { refs, cables, laneZ } = input;
+  const routeFn: Router = (f, fa, t, ta, lane) =>
+    input.tray ? trayRoute(f, fa, t, ta, input.tray, lane) : route(f, fa, t, ta, laneZ, lane);
   const budget = Math.max(0, Math.min(MAX_DC_PARTICLES, input.particleBudget));
   const edges: SceneEdge[] = [];
   const hidden: SceneEdge[] = [];
@@ -197,7 +238,8 @@ export function connect(input: ConnectInput): Connections {
     const c = center(r.box);
     const frontY = r.front === 1 ? r.box.origin.y + r.box.size.y : r.box.origin.y;
     const backY = r.front === 1 ? r.box.origin.y : r.box.origin.y + r.box.size.y;
-    const z = r4(r.box.origin.z + r.box.size.z * 0.5);
+    // Just above the floor so the particles read as air coming up through the cold aisle.
+    const z = r4(r.box.origin.z + 0.12);
     const path = [vec(c.x, frontY + r.front * 0.9, z), vec(c.x, backY - r.front * 0.9, z)];
     const id = `dc_air_${a.rack}`;
     hidden.push({
@@ -258,7 +300,7 @@ export function connect(input: ConnectInput): Connections {
       return;
     }
     const kind: CableKind = c.kind ?? DC_DEFAULTS.cableKind;
-    const path = pathBetween(from, to, kind, alloc, laneZ, i, `/cables/${i}`, diagnostics);
+    const path = pathBetween(from, to, kind, alloc, routeFn, i, `/cables/${i}`, diagnostics);
     const edge: SceneEdge = {
       id: cableId,
       from: c.from,
@@ -310,7 +352,7 @@ export function connect(input: ConnectInput): Connections {
       style: "solid",
       bidirectional: false,
       hidden: true,
-      path: route(from, fa, to, ta, laneZ, synth),
+      path: routeFn(from, fa, to, ta, synth),
       arrow: { start: false, end: false },
     });
     synthFlows.push({ edge: id, kind: flowKind, rate: FLOW_RATE[flowKind] });
@@ -402,7 +444,7 @@ function pathBetween(
   to: Ref,
   kind: CableKind,
   alloc: PortAllocator,
-  laneZ: number,
+  router: Router,
   lane: number,
   at: string,
   diagnostics: Diagnostic[],
@@ -417,5 +459,5 @@ function pathBetween(
       message: `A ${kind} cable endpoint has no matching port; it attaches to the object centre.`,
     });
   }
-  return route(from, f?.at ?? center(from.box), to, t?.at ?? center(to.box), laneZ, lane);
+  return router(from, f?.at ?? center(from.box), to, t?.at ?? center(to.box), lane);
 }
