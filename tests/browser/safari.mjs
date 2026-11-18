@@ -12,8 +12,10 @@
  * tests/browser/out/fixtures), OUT_DIR (default tests/browser/out), GIT_SHA.
  * Results JSON is always written, also after a failure.
  */
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { diffFraction as pixelDiff, ink as inkOf } from "./pngdiff.mjs";
 import { MODES, listSvgs, startServer } from "./server.mjs";
 
 const PORT = process.env.SAFARIDRIVER_PORT ?? "4444";
@@ -69,6 +71,7 @@ function writeResults() {
 let server;
 let sid;
 let exitCode;
+let blankRun = false; // WebDriver screenshots were blank: the caller may retry with a fresh session
 try {
   server = await startServer(IN);
   const session = await wd("POST", "/session", {
@@ -86,14 +89,35 @@ try {
       script:
         "const done = arguments[arguments.length - 1]; requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 50)));",
       args: [],
-    }).catch(() => undefined);
+    }).catch((e) => console.log("settle failed (screenshot may predate the paint):", e.message));
+  // Element screenshot of the page's box (#box on probe pages, #host on diagram pages): it
+  // snapshots the web view itself, so it does not depend on the Safari window being painted on
+  // screen (the full-window screenshot was blank on small-display runners). SAFARI_SHOT=window
+  // switches back to the window screenshot.
   const shot = async () => {
     await settle();
-    return wd("GET", s("/screenshot"));
+    if (process.env.SAFARI_SHOT === "window") return wd("GET", s("/screenshot"));
+    const el = await wd("POST", s("/element"), { using: "css selector", value: "#box, #host" });
+    const id = el["element-6066-11e4-a52e-4f735466cecf"] ?? Object.values(el)[0];
+    return wd("GET", s(`/element/${id}/screenshot`));
   };
 
   console.log("session capabilities:", JSON.stringify(session.capabilities));
-  await wd("POST", s("/window/rect"), { width: 1280, height: 900, x: 0, y: 0 }).catch((e) =>
+  // Root cause of the intermittent blank screenshots on the macOS runner: its display can be only
+  // 1024x768, and a Safari window larger than the screen is not painted (blank WebDriver
+  // screenshots). Size the window to the screen, never beyond.
+  await go("/blank");
+  const screenSize = await exec("return [screen.availWidth, screen.availHeight]").catch(() => [
+    1280, 900,
+  ]);
+  console.log("screen available size:", JSON.stringify(screenSize));
+  const rect = {
+    width: Math.min(1280, screenSize[0] - 20),
+    height: Math.min(900, screenSize[1] - 60),
+    x: 0,
+    y: 0,
+  };
+  await wd("POST", s("/window/rect"), rect).catch((e) =>
     console.log("window/rect failed:", e.message),
   );
   // Why a screenshot may be blank: what the page and window actually are.
@@ -114,6 +138,23 @@ try {
     );
   const hash = (b64) => createHash("sha1").update(b64).digest("hex").slice(0, 10);
   await wd("GET", s("/window/rect")).then((r) => console.log("window rect:", JSON.stringify(r)));
+  // The window can stay unpainted for a while after the session starts: wait (bounded) until a
+  // page with a red square renders differently from the empty page.
+  await go("/blank");
+  const w0 = await shot();
+  for (let i = 0; i < 10; i++) {
+    await go("/ref/red");
+    if ((await shot()) !== w0) {
+      console.log(`window painted after ${i} retries`);
+      break;
+    }
+    console.log(`window not painted yet (attempt ${i + 1}); maximizing and waiting`);
+    await wd("POST", s("/window/maximize"), {}).catch((e) =>
+      console.log("maximize failed:", e.message),
+    );
+    await sleep(2000);
+    await go("/blank");
+  }
   await go("/blank");
   await diag("blank");
   const blank = await shot();
@@ -127,14 +168,33 @@ try {
   await diag("ref-red");
   const red = await shot();
   console.log(`screenshots: blank ${hash(blank)}, green ${hash(green)}, red ${hash(red)}`);
-  if (green === red || green === blank) {
-    rec(
-      "-",
-      "-",
-      "screenshots reflect the page",
-      "fail",
-      "WebDriver screenshots of different pages are identical (window not rendering?)",
-    );
+  // Keep the evidence: what WebDriver actually returned.
+  mkdirSync(OUT, { recursive: true });
+  for (const [n, b64] of [
+    ["blank", blank],
+    ["green", green],
+    ["red", red],
+  ]) {
+    writeFileSync(`${OUT}/probe-${n}.png`, Buffer.from(b64, "base64"));
+  }
+  const pairs = [
+    ["blank", "green", blank === green],
+    ["blank", "red", blank === red],
+    ["green", "red", green === red],
+  ].filter((p) => p[2]);
+  rec(
+    "-",
+    "-",
+    "screenshots of blank, green and red pages all differ",
+    pairs.length === 0 ? "pass" : "fail",
+    pairs.length === 0
+      ? ""
+      : `identical: ${pairs.map((p) => `${p[0]}=${p[1]}`).join(", ")} (window not rendering?)`,
+  );
+  if (pairs.length > 0) {
+    // Nothing below can be judged on blank screenshots: stop and let the caller retry once.
+    blankRun = true;
+    throw new Error("blank WebDriver screenshots (window not painted)");
   }
   const host = await exec(
     "return {reduce: matchMedia('(prefers-reduced-motion: reduce)').matches, dark: matchMedia('(prefers-color-scheme: dark)').matches}",
@@ -154,7 +214,118 @@ try {
     `host reduce=${host.reduce}, dark=${host.dark}; <img> document matches reduce: ${image.reduce}, no-preference: ${image["no-preference"]}, dark: ${image.dark}`,
   );
 
-  for (const file of listSvgs(IN)) {
+  // The probe must match the macOS setting this pass was started for.
+  const expectReduce = process.env.SAFARI_REDUCED === "1";
+  const probeOk = expectReduce
+    ? host.reduce === true && image.reduce === "matches" && image["no-preference"] === "no match"
+    : host.reduce === false && image.reduce === "no match" && image["no-preference"] === "matches";
+  rec(
+    "-",
+    "-",
+    `probe matches the expected setting (reduced motion ${expectReduce ? "ON" : "OFF"})`,
+    probeOk ? "pass" : "fail",
+  );
+
+  // Share of pixels that differ clearly between two PNG screenshots (decoded in Node).
+  const diffFraction = async (a, b) => pixelDiff(a, b);
+
+  if (expectReduce) {
+    // Second pass (macOS Reduce Motion ON): every embedding must show the static rest frame, and
+    // the <img> must equal the inline rest frame (overview).
+    for (const file of listSvgs(IN)) {
+      let rest;
+      for (const mode of ["inline", "img", "object"]) {
+        try {
+          await go(`/page/${mode}/${encodeURIComponent(file)}`);
+          if (mode === "img") {
+            await exec("return document.getElementById('el').decode().then(() => true)");
+          } else if (mode === "object") {
+            for (let i = 0; i < 40; i++) {
+              if (
+                await exec(
+                  "const d = document.getElementById('el').contentDocument; return !!(d && d.documentElement)",
+                )
+              )
+                break;
+              await sleep(150);
+            }
+          }
+          await sleep(400);
+          const frames = [];
+          for (let i = 0; i < 3; i++) {
+            frames.push(await shot());
+            await sleep(600);
+          }
+          const still = frames.every((f) => f === frames[0]);
+          let moved = "";
+          if (!still) {
+            // Evidence of what moves: the first and last frame, and how much differs.
+            const last = frames[frames.length - 1];
+            const d = await diffFraction(frames[0], last);
+            moved =
+              typeof d === "number"
+                ? `${(d * 100).toFixed(3)}% of pixels differ between the first and last frame`
+                : String(d);
+            for (const [n, f] of [
+              ["a", frames[0]],
+              ["b", last],
+            ]) {
+              writeFileSync(`${OUT}/moving-${file}-${mode}-${n}.png`, Buffer.from(f, "base64"));
+            }
+            await go(`/page/${mode}/${encodeURIComponent(file)}`); // restore the page for later steps
+          }
+          rec(file, mode, "reduced motion: static", still ? "pass" : "fail", moved);
+          // Real content, not just a different element size: >1% of pixels differ from the
+          // background colour (a diagram hidden by its reduced-motion CSS has none).
+          const inkShare = inkOf(frames[0]);
+          rec(
+            file,
+            mode,
+            "has content (ink > 1% of pixels)",
+            typeof inkShare === "number" && inkShare > 0.01 ? "pass" : "fail",
+            typeof inkShare === "number" ? `${(inkShare * 100).toFixed(1)}% ink` : String(inkShare),
+          );
+          if (mode === "inline") {
+            rest = frames[0];
+            // The rest frame must match the motion pass's t=0 frame of the same diagram.
+            const t0Dir = process.env.SAFARI_T0_DIR;
+            const t0Path = t0Dir ? `${t0Dir}/t0-${file}.png` : undefined;
+            if (t0Path && existsSync(t0Path)) {
+              const d = await diffFraction(readFileSync(t0Path).toString("base64"), frames[0]);
+              rec(
+                file,
+                mode,
+                "rest frame matches the motion pass t=0 frame (<4% of pixels differ)",
+                typeof d === "number" && d < 0.04 ? "pass" : "fail",
+                typeof d === "number" ? `${(d * 100).toFixed(2)}% differ` : String(d),
+              );
+            } else {
+              rec(
+                file,
+                mode,
+                "rest frame matches the motion pass t=0 frame",
+                "fail",
+                "no t=0 frame from the motion pass",
+              );
+            }
+          } else if (rest) {
+            const d = await diffFraction(rest, frames[0]);
+            rec(
+              file,
+              mode,
+              "matches the inline rest frame (<4% of pixels differ)",
+              typeof d === "number" && d < 0.04 ? "pass" : "fail",
+              typeof d === "number" ? `${(d * 100).toFixed(2)}% differ` : String(d),
+            );
+          }
+        } catch (e) {
+          rec(file, mode, "ran without error", "fail", String(e?.message ?? e));
+        }
+      }
+    }
+  }
+
+  for (const file of expectReduce ? [] : listSvgs(IN)) {
     for (const mode of MODES) {
       try {
         await go(`/page/${mode}/${encodeURIComponent(file)}`);
@@ -197,6 +368,10 @@ try {
             await sleep(250);
             return shot();
           };
+          if (mode === "inline") {
+            // The t=0 frame: the reduced-motion pass compares its rest frame with this one.
+            writeFileSync(`${OUT}/t0-${file}.png`, Buffer.from(await at(0), "base64"));
+          }
           const a = await at(0.5);
           const b = await at(1.7);
           const c = await at(0.5);
@@ -207,11 +382,13 @@ try {
           rec(file, mode, "time control repeats (0.5 s twice)", "info", `identical: ${a === c}`);
         }
         rec(file, mode, "animates", animated ? "pass" : "fail", animated ? "" : "static in Safari");
+        const inkShare = inkOf(first);
         rec(
           file,
           mode,
-          "not blank (differs from the empty page)",
-          first !== blank ? "pass" : "fail",
+          "has content (ink > 1% of pixels)",
+          typeof inkShare === "number" && inkShare > 0.01 ? "pass" : "fail",
+          typeof inkShare === "number" ? `${(inkShare * 100).toFixed(1)}% ink` : String(inkShare),
         );
       } catch (e) {
         rec(file, mode, "ran without error", "fail", String(e?.message ?? e));
@@ -223,6 +400,6 @@ try {
 } finally {
   if (sid) await wd("DELETE", `/session/${sid}`).catch(() => undefined);
   if (server) await server.close();
-  exitCode = writeResults() === 0 ? 0 : 1;
+  exitCode = writeResults() === 0 ? 0 : blankRun ? 3 : 1;
 }
 process.exit(exitCode);

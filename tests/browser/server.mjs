@@ -112,7 +112,7 @@ export function startServer(dir) {
         return send(
           200,
           "text/html",
-          `<body style="margin:0"><img src="/probe/${parts[1]}.svg" width="40" height="40"></body>`,
+          `<body style="margin:0"><div id="box" style="width:200px;height:120px"><img src="/probe/${parts[1]}.svg" width="40" height="40"></div></body>`,
         );
       }
       if (parts[0] === "ref" && ["green", "red"].includes(parts[1] ?? "")) {
@@ -120,10 +120,15 @@ export function startServer(dir) {
         return send(
           200,
           "text/html",
-          `<body style="margin:0"><div style="width:40px;height:40px;background:${c}"></div></body>`,
+          `<body style="margin:0"><div id="box" style="width:200px;height:120px"><div style="width:40px;height:40px;background:${c}"></div></div></body>`,
         );
       }
-      if (parts[0] === "blank") return send(200, "text/html", "<body></body>");
+      if (parts[0] === "blank")
+        return send(
+          200,
+          "text/html",
+          `<body style="margin:0"><div id="box" style="width:200px;height:120px"></div></body>`,
+        );
       return send(404, "text/plain", "not found");
     } catch (e) {
       return send(500, "text/plain", String(e));

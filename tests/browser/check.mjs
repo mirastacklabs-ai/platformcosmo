@@ -293,8 +293,12 @@ async function checkReduced(name, browser, blocked, file, mode, expected) {
   return withPage(browser, blocked, { reducedMotion: "reduce" }, async (page) => {
     const box = await open(page, mode, file);
     await sleep(500);
+    // The first paint after load can still settle (fonts, layout); a continuous animation never
+    // does: the last two of three frames must be identical.
+    await shot(page, box);
+    await sleep(700);
     const a = await shot(page, box);
-    await sleep(900);
+    await sleep(700);
     const b = await shot(page, box);
     rec(name, file, mode, "reduced motion is static", a === b ? "pass" : "fail");
     if (expected && file === info?.loop) {
@@ -309,6 +313,35 @@ async function checkReduced(name, browser, blocked, file, mode, expected) {
       );
     }
   });
+}
+
+const themeCache = new Map();
+
+/** Light-theme `--pc-background` of a diagram as [r, g, b], or undefined when it has none. */
+async function themeBackground(browser, blocked, file) {
+  if (!themeCache.has(file)) {
+    const value = await withPage(
+      browser,
+      blocked,
+      { colorScheme: "light", reducedMotion: "reduce" },
+      async (page) => {
+        await open(page, "inline", file);
+        return page.evaluate(() =>
+          getComputedStyle(document.querySelector("#host svg"))
+            .getPropertyValue("--pc-background")
+            .trim(),
+        );
+      },
+    );
+    const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value);
+    let rgb;
+    if (m) {
+      const h = m[1].length === 3 ? [...m[1]].map((c) => c + c).join("") : m[1];
+      rgb = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+    }
+    themeCache.set(file, rgb);
+  }
+  return themeCache.get(file);
 }
 
 async function checkDark(name, browser, blocked, file, mode) {
@@ -334,13 +367,19 @@ async function checkDark(name, browser, blocked, file, mode) {
   const frames = await withPage(browser, blocked, {}, async (page) =>
     pixels(await scratchOf(page), light.img, dark.img),
   );
+  // A diagram whose own theme is already dark (spec theme "dark"/"blueprint") has no light/dark
+  // pair to compare: prefers-color-scheme changes nothing. The theme is read from the diagram's
+  // data (its light-theme --pc-background variable), not guessed from rendered pixels.
+  const bg = await themeBackground(browser, blocked, file);
+  const ownDark = bg !== undefined && 0.2126 * bg[0] + 0.7152 * bg[1] + 0.0722 * bg[2] < 90;
+  const changed = frames.sameSize && frames.diff > 0.2;
   rec(
     name,
     file,
     mode,
     "dark mode changes the rendering (whole-frame diff > 20% of pixels)",
-    frames.sameSize && frames.diff > 0.2 ? "pass" : "fail",
-    `${(frames.diff * 100).toFixed(1)}% of pixels differ; corner pixel light ${light.corner}, dark ${dark.corner}`,
+    changed ? "pass" : ownDark && frames.diff < 0.01 ? "limited" : "fail",
+    `${(frames.diff * 100).toFixed(1)}% of pixels differ; corner pixel light ${light.corner}, dark ${dark.corner}${ownDark ? " (the diagram's own theme is dark)" : ""}`,
   );
   if (info?.bg && mode === "inline") {
     rec(
