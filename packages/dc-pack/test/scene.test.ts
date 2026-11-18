@@ -10,9 +10,24 @@ import schema from "../../../schema/v1.json" with { type: "json" };
 import { DC_DEFAULTS } from "../src/defaults.js";
 import { dcPack } from "../src/index.js";
 import { compareBoxes, createProjection, depthOrder } from "@platformcosmo/core";
-import { specFlowCost } from "../src/scene.js";
+import { estimateDcElements, specFlowCost, trayPitch } from "../src/scene.js";
 
 const EPS = 1e-3;
+
+/** True when some cable tray covers the item's centre x and its lane y (within its cell). */
+const hasTrayFor = (s: DcSceneFragment, id: string): boolean => {
+  const o = s.objects.find((x) => x.id === id)!.box;
+  const cx = o.origin.x + o.size.x / 2;
+  return s.objects.some(
+    (t) =>
+      t.type === "cable-tray" &&
+      t.box.size.x > t.box.size.y &&
+      t.box.origin.x <= cx + EPS &&
+      cx <= t.box.origin.x + t.box.size.x + EPS &&
+      o.origin.y <= t.box.origin.y + t.box.size.y / 2 + EPS &&
+      t.box.origin.y + t.box.size.y / 2 <= o.origin.y + o.size.y + EPS,
+  );
+};
 
 const unionOf = (bs: Box3[]): Box3 => {
   const lo = (k: "x" | "y" | "z"): number => Math.min(...bs.map((b) => b.origin[k]));
@@ -308,11 +323,10 @@ describe("buildScene: hall, rows, aisles", () => {
     const trays = f.objects.filter((o) => o.type === "cable-tray");
     // only over rows and on the way to cabled equipment (ups1, pdu1); never a loop over the floor
     expect(trays.map((t) => t.id).sort()).toEqual([
-      "dc_tray_pdu1",
       "dc_tray_row-a",
       "dc_tray_row-b",
       "dc_tray_spine",
-      "dc_tray_ups1",
+      "dc_tray_ups1", // ups1 and pdu1 share one lane, so one tray
     ]);
     const racks = f.objects.filter((o) => o.type === "rack");
     const rackTop = Math.max(...racks.map((o) => o.box.origin.z + o.box.size.z));
@@ -685,7 +699,7 @@ describe("flow particle budget", () => {
     expect(f.flows.every((x) => edgeIds.has(x.edge))).toBe(true);
     expect(f.edges.some((e) => e.hidden)).toBe(false);
     expect(JSON.stringify(f)).toBe(JSON.stringify(build(spec({ racks, cables }))));
-  }, 60_000);
+  });
 
   it("DC cap is min(1000, 2000 - spec flow cost): cost 1800 leaves at most 200", () => {
     const racks = Array.from({ length: 150 }, (_, i) => ({ id: `r${i}`, slots: [server(1)] }));
@@ -1105,7 +1119,7 @@ describe("round 2 follow-ups", () => {
     // no cables: the automatic UPS -> PDU -> rack flows need lanes for both
     const auto = build(spec(base));
     expect(auto.objects.some((o) => o.id === "dc_tray_u")).toBe(true);
-    expect(auto.objects.some((o) => o.id === "dc_tray_p")).toBe(true);
+    expect(hasTrayFor(auto, "p")).toBe(true);
     // a rejected cable (unknown endpoint) does not create a tray; an accepted power cable does
     const s = build(
       spec({
@@ -1117,7 +1131,7 @@ describe("round 2 follow-ups", () => {
       }),
     );
     expect(s.objects.some((o) => o.id === "dc_tray_u")).toBe(false);
-    expect(s.objects.some((o) => o.id === "dc_tray_p")).toBe(true);
+    expect(hasTrayFor(s, "p")).toBe(true);
   });
 });
 
@@ -1214,5 +1228,95 @@ describe("ladder trays", () => {
     expect(hallBox.size.x - maxX).toBeLessThan(2 + 1e-6);
     expect(hallBox.size.y - maxY).toBeGreaterThanOrEqual(1 - 1e-6);
     expect(hallBox.size.y - maxY).toBeLessThan(2 + 1e-6);
+  });
+});
+
+describe("tray scaling", () => {
+  const big = (): PlatformCosmoSpec => {
+    const racks = Array.from({ length: 500 }, (_, i) => ({
+      id: `r${i}`,
+      slots: [server(1), { at: 3, type: "switch-tor" }],
+    }));
+    const cables = Array.from({ length: 2000 }, (_, i) => ({
+      from: `r${i % 500}/u1`,
+      to: `r${(i + 1) % 500}/u3`,
+      kind: i % 2 === 0 ? "network" : "power",
+    }));
+    return spec({ racks, cables });
+  };
+
+  it("merges same-y lanes into one tray, caps rungs and stays fast for 500 racks", () => {
+    const t0 = performance.now();
+    const f = build(big());
+    const ms = performance.now() - t0;
+    const trays = f.objects.filter((o) => o.type === "cable-tray");
+    expect(trays.length).toBeLessThanOrEqual(3); // one strip lane (+ spine if any)
+    const rungs = trays.reduce(
+      (n, o) => n + o.parts!.filter((p) => p.id.startsWith("rung-")).length,
+      0,
+    );
+    expect(rungs).toBeLessThanOrEqual(300);
+    expect(rungs).toBeGreaterThan(0);
+    expect(ms).toBeLessThan(4000);
+  });
+
+  it("long trays use a 1-tile (or wider) pitch; short ones 0.5", () => {
+    expect(trayPitch(40)).toBe(0.5);
+    expect(trayPitch(120)).toBe(1);
+    expect(trayPitch(1000) * 300).toBeGreaterThanOrEqual(1000);
+  });
+
+  it("tray parts are counted by the DC element estimate", () => {
+    const f = build(hall());
+    const withTrays = estimateDcElements(f);
+    const trayParts = f.objects
+      .filter((o) => o.type === "cable-tray")
+      .reduce((n, o) => n + o.parts!.length, 0);
+    expect(trayParts).toBeGreaterThan(10);
+    expect(withTrays).toBeGreaterThanOrEqual(3 * trayParts);
+    const without = estimateDcElements({
+      ...f,
+      objects: f.objects.filter((o) => o.type !== "cable-tray"),
+    });
+    expect(withTrays - without).toBeGreaterThanOrEqual(3 * trayParts);
+  });
+
+  it("every long cable run stays inside the tray rails (above the rungs, below the rail tops)", () => {
+    for (const s of [build(hall()), build(big())]) {
+      const tray = s.objects.find((o) => o.type === "cable-tray")!;
+      const lo = tray.box.origin.z + 0.02;
+      const hi = tray.box.origin.z + tray.box.size.z + 1e-6;
+      let checked = 0;
+      for (const e of s.edges) {
+        for (let i = 1; i < e.path.length; i++) {
+          const p = e.path[i - 1]!;
+          const q = e.path[i]!;
+          if (e.id.startsWith("dc_air_") || p.z !== q.z || Math.hypot(q.x - p.x, q.y - p.y) < 0.5)
+            continue;
+          expect(p.z, e.id).toBeGreaterThan(lo);
+          expect(p.z, e.id).toBeLessThanOrEqual(hi);
+          checked++;
+        }
+      }
+      expect(checked).toBeGreaterThan(3);
+    }
+  });
+
+  it("underfloor cables stay within the underfloor tray height too", () => {
+    const s = build({
+      ...hall(),
+      facility: { raisedFloor: true, cableTrays: "underfloor" },
+    } as PlatformCosmoSpec);
+    const tray = s.objects.find((o) => o.type === "cable-tray")!;
+    for (const e of s.edges.filter((x) => x.kind === "cable")) {
+      const runs = e.path.slice(1).filter((q, i) => {
+        const p = e.path[i]!;
+        return p.z === q.z && Math.hypot(q.x - p.x, q.y - p.y) > 0.5;
+      });
+      for (const q of runs) {
+        expect(q.z).toBeGreaterThan(tray.box.origin.z + 0.02);
+        expect(q.z).toBeLessThanOrEqual(tray.box.origin.z + tray.box.size.z + 1e-6);
+      }
+    }
   });
 });
