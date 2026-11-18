@@ -7,10 +7,9 @@
  *
  * Placement: emit puts each used icon once in `<defs>` as
  * `<symbol id="<ids.icon(ref)>" viewBox="…">` and places it with `<use href="#…">`.
- * Sanitized bodies use the placeholder `__PCID__` as their id prefix
- * (`id="__PCID__-0"`, `url(#__PCID__-0)`, `href="#__PCID__-0"`); emit replaces it
- * with `ids.icon(ref)` (inner ids become `<icon(ref)>_<n>`; `:` in refs is encoded as `.`),
- * so ids are unique per icon and per diagram. The CLI verifies a user pack's lockfile
+ * The sanitizer emits inner ids as `__PCID__-<n>` (`id="__PCID__-0"`, `url(#__PCID__-0)`,
+ * `href="#__PCID__-0"`); emit replaces `__PCID__-` with `<ids.icon(ref)>_` and a bare
+ * `__PCID__` with `ids.icon(ref)` (`:` in refs is encoded as `.`), so ids are unique per icon and per diagram. The CLI verifies a user pack's lockfile
  * `integrity` before building its `LoadedIconPack` and rejects mismatches with a diagnostic.
  */
 import type { SpecNodeType } from "../schema/types.gen.js";
@@ -172,9 +171,10 @@ export interface IconHttpClient {
 
 /**
  * `pcosmo icons add <source>`: fetches (URL to a single SVG, an SVG folder listing,
- * a zip, or a provider id) and builds a pack. Requires https, public addresses only
- * (no loopback/private/link-local/metadata IPs, re-checked after redirects), size and
- * file-count caps, zip path-traversal protection, and sanitizes every SVG.
+ * a zip, or a provider id) and builds a pack. Network policy (https, redirects, IP checks) is
+ * enforced by the injected `IconHttpClient`; this function checks URL syntax and the final
+ * `url`, enforces size and file-count caps and zip path-traversal protection, and sanitizes
+ * every SVG.
  */
 export type FetchIconPackFn = (
   source: string,
