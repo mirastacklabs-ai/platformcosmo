@@ -337,6 +337,47 @@ describe("label and overlay polish", () => {
     expect(nudgeLabel(box, [wall])).toEqual({ dy: 0, collided: true });
   });
 
+  test("arrowhead tip is the projected path end and points along the last segment", () => {
+    const scene = loadBalancerScene();
+    const m = buildModel({ ...inputs(), scene });
+    const svg = emit(m, noopLayer, { font: "system" });
+    for (const e of scene.edges.filter((x) => !x.hidden && x.arrow.end)) {
+      const cls = `pc-test-e_${e.id.replaceAll("_", "_5f")}-arrow`;
+      const poly = new RegExp(`<polygon class="pc-test-arrow ${cls}" points="([^"]+)"`).exec(svg);
+      expect(poly, e.id).not.toBeNull();
+      const [tip, b1, b2] = (poly![1] as string)
+        .split(" ")
+        .map((p) => p.split(",").map(Number) as [number, number]);
+      const pts = e.path.map((p) => m.projection.project(p));
+      const end = pts[pts.length - 1]!;
+      const prev = pts[pts.length - 2]!;
+      expect(tip![0]).toBeCloseTo(end.x, 1);
+      expect(tip![1]).toBeCloseTo(end.y, 1);
+      // direction: from the base midpoint to the tip == the last segment's direction
+      const mid = [(b1![0] + b2![0]) / 2, (b1![1] + b2![1]) / 2];
+      const d = [tip![0] - mid[0]!, tip![1] - mid[1]!];
+      const seg = [end.x - prev.x, end.y - prev.y];
+      const cross = d[0]! * seg[1]! - d[1]! * seg[0]!;
+      const dot = d[0]! * seg[0]! + d[1]! * seg[1]!;
+      expect(Math.abs(cross)).toBeLessThan(0.5);
+      expect(dot).toBeGreaterThan(0);
+      expect(Math.hypot(d[0]!, d[1]!)).toBeGreaterThanOrEqual(8);
+      expect(Math.hypot(d[0]!, d[1]!)).toBeLessThanOrEqual(10);
+    }
+  });
+
+  test("a zero-length last segment still gets an arrowhead along the previous one", () => {
+    const base = loadBalancerScene();
+    const e = base.edges[0]!;
+    const last = e.path[e.path.length - 1]!;
+    const scene = {
+      ...base,
+      edges: base.edges.map((x) => (x.id === e.id ? { ...x, path: [...e.path, last] } : x)),
+    };
+    const svg = emit(buildModel({ ...inputs(), scene }), noopLayer, { font: "system" });
+    expect(svg).toContain('<polygon class="pc-test-arrow pc-test-e_e_5fusers_5flb-arrow"');
+  });
+
   test("arrowheads carry a class derived from their edge id", () => {
     const svg = svgOf();
     expect(svg).toContain('<polygon class="pc-test-arrow pc-test-e_e_5fusers_5flb-arrow"');
@@ -360,13 +401,13 @@ describe("label and overlay polish", () => {
     }
   });
 
-  test("icon plates stay inside flat boxes", () => {
+  const iconBox = (z: number, size = 28) => {
     const scene = loadBalancerScene();
-    const flat = {
+    const o = {
       ...scene.objects[0]!,
-      id: "flat",
-      box: { origin: { x: 9, y: 0, z: 0 }, size: { x: 1, y: 1, z: 0.5 } },
-      icon: { ref: "cosmo:lb", anchor: { x: 9.5, y: 1, z: 0.1 }, size: 40 },
+      id: "x",
+      box: { origin: { x: 9, y: 0, z: 0 }, size: { x: 1, y: 1, z } },
+      icon: { ref: "cosmo:lb", anchor: { x: 9.5, y: 1, z: z / 2 }, size },
     };
     const icons: IconResolver = {
       resolve: () => ({
@@ -380,32 +421,36 @@ describe("label and overlay polish", () => {
     };
     const m = buildModel({
       ...inputs(),
-      scene: { ...scene, objects: [...scene.objects, flat] },
+      scene: { ...scene, objects: [...scene.objects, o] },
       icons,
     });
     const svg = emit(m, noopLayer, { font: "system" });
-    const frontH = 0.5 * m.projection.zScale;
-    const plates = [
-      ...svg.matchAll(
-        /<rect class="pc-test-plate" x="[-\d.]+" y="[-\d.]+" width="([-\d.]+)" height="([-\d.]+)"/g,
-      ),
-    ];
-    expect(plates.length).toBe(1);
-    expect(Number(plates[0]![2])).toBeLessThanOrEqual(frontH);
-    // a slab too flat for a legible icon is drawn without one
-    const slab = { ...flat, id: "slab", box: { ...flat.box, size: { x: 1, y: 1, z: 0.2 } } };
-    const m2 = buildModel({
-      ...inputs(),
-      scene: { ...scene, objects: [...scene.objects, slab] },
-      icons,
-    });
-    expect(emit(m2, noopLayer, { font: "system" })).not.toContain("pc-test-plate");
-    const info = buildModelWithDiagnostics({
-      ...inputs(),
-      scene: { ...scene, objects: [...scene.objects, slab] },
-      icons,
-    }).diagnostics;
-    expect(info.map((d) => `${d.severity}:${d.code}`)).toContain("info:render/icon-too-flat");
+    const plate =
+      /<rect class="pc-test-plate" x="([-\d.]+)" y="([-\d.]+)" width="([-\d.]+)" height="([-\d.]+)"/.exec(
+        svg,
+      );
+    const [x, y, w, hh] = (plate?.slice(1) ?? []).map(Number) as [number, number, number, number];
+    const top = m.projection.project({ x: 9.5, y: 0.5, z });
+    return { m, svg, plate: { x, y, w, h: hh }, top };
+  };
+
+  test("a tall enough front face carries the icon plate, inside the face", () => {
+    const { m, svg, plate } = iconBox(1.5);
+    expect(svg).not.toContain("pc-test-shadow");
+    const frontH = 1.5 * m.projection.zScale;
+    expect(plate.h).toBeLessThanOrEqual(frontH);
+    expect(plate.w - 4).toBe(28);
+  });
+
+  test("a front face that is too short floats the plate over the top face at standard size", () => {
+    for (const z of [0.2, 0.5]) {
+      const { svg, plate, top } = iconBox(z);
+      expect(plate.w - 4).toBe(28); // standard size, not shrunk
+      expect(plate.x + plate.w / 2).toBeCloseTo(top.x, 1); // centred over the top face
+      expect(plate.y + plate.h).toBeLessThan(top.y); // above the face centre
+      expect(svg).toMatch(/<ellipse class="pc-test-shadow" cx="[-\d.]+" cy="[-\d.]+"/);
+      expect(svg).not.toMatch(/<use[^>]*transform/);
+    }
   });
 });
 
