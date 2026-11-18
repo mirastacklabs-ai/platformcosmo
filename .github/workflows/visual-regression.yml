@@ -2,8 +2,8 @@ name: Visual regression
 
 # PLAN §13: render the bundled-icon examples to PNG with the built CLI (resvg, deterministic) and
 # compare with the committed goldens in tests/visual/golden. Update goldens locally with
-# `VISUAL_UPDATE=1 scripts/pc run visual` and commit them. Verified identical on Node 22 and 24;
-# a missing golden fails (VISUAL_REQUIRE_GOLDENS).
+# `VISUAL_UPDATE=1 scripts/pc run visual` and commit them. Matrix over the Node 22 and 24 images;
+# exact match, a missing golden fails (VISUAL_REQUIRE_GOLDENS), updates are refused in CI.
 
 on:
   push:
@@ -20,7 +20,15 @@ concurrency:
 
 jobs:
   visual:
+    name: visual (${{ matrix.image }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [node:22-bookworm-slim, node:24.21-bookworm-slim]
+    env:
+      PC_NODE_IMAGE: ${{ matrix.image }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -32,7 +40,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
-          name: visual-regression
+          name: visual-regression-${{ strategy.job-index }}
           # actual renders, diffs (differences in red) and the results summary
           path: |
             tests/visual/out/actual/

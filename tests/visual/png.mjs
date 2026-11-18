@@ -15,16 +15,22 @@ export function decodePng(buf) {
   if (buf[24] !== 8 || buf[25] !== 6 || buf[28] !== 0) {
     throw new Error("unsupported PNG: only 8-bit RGBA, non-interlaced");
   }
+  if (width === 0 || height === 0 || width * height > 1 << 26) throw new Error("bad PNG size");
   const idat = [];
   for (let o = 8; o + 8 <= buf.length;) {
     const len = buf.readUInt32BE(o);
+    if (o + 12 + len > buf.length) throw new Error("truncated PNG chunk");
     const type = buf.toString("latin1", o + 4, o + 8);
     if (type === "IDAT") idat.push(buf.subarray(o + 8, o + 8 + len));
     if (type === "IEND") break;
     o += 12 + len;
   }
   const stride = width * 4;
-  const raw = inflateSync(Buffer.concat(idat), { maxOutputLength: (stride + 1) * height });
+  const expected = (stride + 1) * height;
+  const raw = inflateSync(Buffer.concat(idat), { maxOutputLength: expected });
+  if (raw.length !== expected) {
+    throw new Error(`PNG pixel data is ${raw.length} bytes, expected ${expected}`);
+  }
   const out = new Uint8Array(stride * height);
   for (let y = 0; y < height; y++) {
     const filter = raw[y * (stride + 1)];
