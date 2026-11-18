@@ -238,8 +238,8 @@ describe("buildScene: hall, rows, aisles", () => {
   });
 
   it("the cold aisle lies between the two rows and rows face it", () => {
-    const a = g("row-a").box;
-    const b = g("row-b").box;
+    const a = f.focusTargets["row-a"]!;
+    const b = f.focusTargets["row-b"]!;
     const c = g("cold-1").box;
     expect(c.origin.y).toBeCloseTo(a.origin.y + a.size.y, 3);
     expect(c.origin.y + c.size.y).toBeCloseTo(b.origin.y, 3);
@@ -254,7 +254,7 @@ describe("buildScene: hall, rows, aisles", () => {
   });
 
   it("the hot aisle sits behind row B", () => {
-    const b = g("row-b").box;
+    const b = f.focusTargets["row-b"]!;
     const h = g("hot-1").box;
     expect(h.origin.y).toBeCloseTo(b.origin.y + b.size.y, 3); // backs of the mirrored row face +y
     expect(h.size.y).toBeCloseTo(2, 3);
@@ -764,7 +764,14 @@ describe("review fixes", () => {
     const f = build(hall());
     const shell = f.objects.find((o) => o.id === "a1_front")!;
     expect(shell).toMatchObject({ type: "rack-front", group: "row-a" });
-    expect(shell.parts!.map((p) => p.id).sort()).toEqual(["post-fl", "post-fr", "top"]);
+    expect(shell.parts!.map((p) => p.id).sort()).toEqual([
+      "post-fl",
+      "post-fr",
+      "top",
+      "top-b",
+      "top-l",
+      "top-r",
+    ]);
     const rack = f.objects.find((o) => o.id === "a1")!;
     expect(rack.parts!.some((p) => p.id === "top")).toBe(false);
     // mirrored rows: the viewer-side shell is the rear
@@ -852,7 +859,7 @@ describe("integration fixes", () => {
     for (const id of rackIds) expect(gap(crah, box(id)), id).toBeGreaterThanOrEqual(1 - EPS);
     const aisle = f.groups.find((g) => g.id === "cold-1")!.box;
     const minRackX = Math.min(...rackIds.map((id) => box(id).origin.x));
-    expect(crah.origin.x + crah.size.x).toBeLessThanOrEqual(minRackX - 1 + EPS);
+    expect(crah.origin.x + crah.size.x).toBeLessThanOrEqual(minRackX - 2 + EPS);
     expect(crah.origin.y).toBeGreaterThanOrEqual(aisle.origin.y - EPS);
   });
 
@@ -1111,5 +1118,46 @@ describe("round 2 follow-ups", () => {
     );
     expect(s.objects.some((o) => o.id === "dc_tray_u")).toBe(false);
     expect(s.objects.some((o) => o.id === "dc_tray_p")).toBe(true);
+  });
+});
+
+describe("round 3 legibility", () => {
+  const f = build(hall());
+  const tone = (id: string): string | undefined =>
+    f.objects.find((o) => o.id === id)!.parts!.find((p) => p.id === "chassis")?.tone;
+
+  it("device categories have distinct chassis tones (servers, GPU, network, storage)", () => {
+    expect(tone("a1/s3")).toBe("accent"); // server
+    expect(tone("a1/tor")).toBe("muted"); // network
+    expect(tone("a2/u5")).toBe("glass"); // storage flash
+    expect(tone("b1/u10")).toBe("base"); // GPU node
+  });
+
+  it("devices fill the rack between the posts", () => {
+    const rack = f.objects.find((o) => o.id === "a1")!.box;
+    const dev = f.objects.find((o) => o.id === "a1/s3")!.box;
+    expect(dev.size.x / rack.size.x).toBeGreaterThan(0.85);
+    expect(dev.origin.x).toBeGreaterThan(rack.origin.x);
+  });
+
+  it("the containment roof is a rails-only frame and rack tops are open frames", () => {
+    const roof = f.objects.find((o) => o.id === "dc_roof_cold-1")!;
+    expect(roof.parts!.every((p) => p.id.startsWith("rail-"))).toBe(true);
+    const shell = f.objects.find((o) => o.id === "a1_front")!;
+    expect(shell.parts!.filter((p) => p.id.startsWith("top")).length).toBe(4);
+  });
+
+  it("row lane trays sit on the row's -y edge, never over rack tops", () => {
+    const racks = f.objects.filter((o) => o.type === "rack");
+    for (const t of f.objects.filter((o) => o.id === "dc_tray_row-a" || o.id === "dc_tray_row-b")) {
+      for (const r of racks) {
+        const overlap =
+          t.box.origin.x < r.box.origin.x + r.box.size.x - EPS &&
+          r.box.origin.x < t.box.origin.x + t.box.size.x - EPS &&
+          t.box.origin.y < r.box.origin.y + r.box.size.y - EPS &&
+          r.box.origin.y < t.box.origin.y + t.box.size.y - EPS;
+        expect(overlap, `${t.id} over ${r.id}`).toBe(false);
+      }
+    }
   });
 });
