@@ -32,7 +32,7 @@ const equipment: readonly Eq[] = [
     d: 1000,
     h: 1900,
     detail(k) {
-      k.part("door", "slab", "metal", 30, k.depthMm - 6, 60, k.widthMm - 60, 6, k.heightMm - 120);
+      k.part("door", "slab", "base", 30, k.depthMm - 6, 60, k.widthMm - 60, 6, k.heightMm - 120);
       k.part("display", "slab", "glass", 520, k.depthMm - 8, 1500, 220, 4, 160);
       k.row("vent", 4, "muted", 60, 400, 200, 60, 900, 5);
       ledStrip(k, 3, 1560);
@@ -68,7 +68,7 @@ const equipment: readonly Eq[] = [
     d: 900,
     h: 1800,
     detail(k) {
-      k.part("door", "slab", "metal", 20, k.depthMm - 6, 60, k.widthMm - 40, 6, k.heightMm - 120);
+      k.part("door", "slab", "base", 20, k.depthMm - 6, 60, k.widthMm - 40, 6, k.heightMm - 120);
       k.row("breaker", 6, "muted", 60, 520, 1300, 50, 120, 6);
       k.row("breaker-lo", 6, "muted", 60, 520, 1100, 50, 120, 6);
       ledStrip(k, 3, 1600);
@@ -84,7 +84,7 @@ const equipment: readonly Eq[] = [
     d: 900,
     h: 2000,
     detail(k) {
-      k.part("panel", "slab", "metal", 30, k.depthMm - 6, 60, k.widthMm - 60, 6, k.heightMm - 120);
+      k.part("panel", "slab", "base", 30, k.depthMm - 6, 60, k.widthMm - 60, 6, k.heightMm - 120);
       k.part("grille", "slab", "glass", 100, k.depthMm - 8, 200, k.widthMm - 200, 4, 700);
       k.part("fan-0", "cylinder", "accent", 400, 300, k.heightMm, 400, 400, 40);
       k.part("fan-1", "cylinder", "accent", 1000, 300, k.heightMm, 400, 400, 40);
@@ -103,7 +103,7 @@ const equipment: readonly Eq[] = [
     d: 1200,
     h: 2000,
     detail(k) {
-      k.part("door", "slab", "glass", 30, k.depthMm - 6, 60, k.widthMm - 60, 6, k.heightMm - 160);
+      k.part("door", "slab", "glass", 30, k.depthMm - 6, 60, k.widthMm - 60, 6, k.heightMm - 300);
       k.row("fan", 4, "accent", 80, 440, 150, 80, 80, 8, "cylinder");
       ledStrip(k, 2, 1800);
       k.port("intake", "airflow-in", k.widthMm / 2, 0, 1000);
@@ -120,7 +120,7 @@ const equipment: readonly Eq[] = [
     d: 1200,
     h: 1500,
     detail(k) {
-      k.part("door", "slab", "metal", 20, k.depthMm - 6, 60, k.widthMm - 40, 6, k.heightMm - 120);
+      k.part("door", "slab", "base", 20, k.depthMm - 6, 60, k.widthMm - 40, 6, k.heightMm - 120);
       k.part("pipe-supply", "cylinder", "accent", 80, k.depthMm - 80, k.heightMm, 90, 90, 140);
       k.part("pipe-return", "cylinder", "muted", 300, k.depthMm - 80, k.heightMm, 90, 90, 140);
       k.part("display", "slab", "glass", 160, k.depthMm - 8, 1100, 280, 4, 160);
@@ -144,7 +144,7 @@ const equipment: readonly Eq[] = [
       ledStrip(k, 3, 1500);
       k.port("power-a", "power-a", 150, k.depthMm, 300);
       k.port("net-0", "network", 450, k.depthMm, 300);
-      k.port("net-1", "fiber", 520, k.depthMm, 300);
+      k.port("up-0", "fiber", 520, k.depthMm, 300);
     },
   },
 ];

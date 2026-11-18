@@ -12,6 +12,16 @@ import { dcPack } from "../src/index.js";
 
 const EPS = 1e-3;
 
+const unionOf = (bs: Box3[]): Box3 => {
+  const lo = (k: "x" | "y" | "z"): number => Math.min(...bs.map((b) => b.origin[k]));
+  const hi = (k: "x" | "y" | "z"): number => Math.max(...bs.map((b) => b.origin[k] + b.size[k]));
+  const r = (n: number): number => Math.round(n * 10000) / 10000;
+  return {
+    origin: { x: r(lo("x")), y: r(lo("y")), z: r(lo("z")) },
+    size: { x: r(hi("x") - lo("x")), y: r(hi("y") - lo("y")), z: r(hi("z") - lo("z")) },
+  };
+};
+
 function spec(extra: Record<string, unknown>): PlatformCosmoSpec {
   return { meta: { version: "1" }, ...extra } as unknown as PlatformCosmoSpec;
 }
@@ -278,10 +288,12 @@ describe("buildScene: hall, rows, aisles", () => {
   });
 
   it("perforated tiles fill the cold aisle; containment adds a roof", () => {
-    const tiles = f.objects.filter((o) => o.type === "perforated-tile");
+    const floor = f.objects.filter((o) => o.type === "perforated-tiles");
+    expect(floor.map((o) => o.id)).toEqual(["dc_tiles_cold-1"]);
     const c = g("cold-1").box;
+    const tiles = floor[0]!.parts!;
     expect(tiles.length).toBe(Math.round(c.size.x) * Math.round(c.size.y));
-    for (const t of tiles) expect(t.parts?.[0]?.tone).toBe("perforated");
+    for (const t of tiles) expect(t.tone).toBe("perforated");
     const roof = f.objects.find((o) => o.id === "dc_roof_cold-1")!;
     expect(roof.type).toBe("containment");
     expect(roof.box.origin.z).toBeGreaterThan(1);
@@ -489,7 +501,23 @@ describe("buildScene: focus targets", () => {
 
   it("focus boxes equal the object/group boxes", () => {
     expect(f.focusTargets["a1"]).toEqual(f.objects.find((o) => o.id === "a1")!.box);
-    expect(f.focusTargets["row-a"]).toEqual(f.groups.find((g) => g.id === "row-a")!.box);
+    const union = unionOf(["a1", "a2"].map((id) => f.objects.find((o) => o.id === id)!.box));
+    expect(f.focusTargets["row-a"]).toEqual(union);
+    expect(f.focusTargets["dc_hall"]).toEqual(f.bounds);
+    // Aisle focus is its footprint extruded to the bounding rows' top.
+    const cold = f.focusTargets["cold-1"]!;
+    const colds = f.groups.find((g) => g.id === "cold-1")!.box;
+    expect(cold.origin.x).toBeCloseTo(colds.origin.x, 3);
+    expect(cold.size.y).toBeCloseTo(colds.size.y, 3);
+    expect(cold.origin.z + cold.size.z).toBeCloseTo(
+      Math.max(
+        ...["a1", "a2", "b1", "b2"].map((id) => {
+          const b = f.objects.find((o) => o.id === id)!.box;
+          return b.origin.z + b.size.z;
+        }),
+      ),
+      3,
+    );
   });
 });
 
@@ -559,7 +587,7 @@ describe("buildScene: diagnostics", () => {
       "dc/perforated-without-raised-floor",
       "dc/underfloor-without-raised-floor",
     ]);
-    expect(s.objects.every((o) => o.type !== "perforated-tile" && o.type !== "cable-tray")).toBe(
+    expect(s.objects.every((o) => o.type !== "perforated-tiles" && o.type !== "cable-tray")).toBe(
       true,
     );
   });
@@ -596,7 +624,7 @@ describe("defaults", () => {
       }),
     );
     expect(s.groups.find((g) => g.id === "dc_hall")!.box.size.z).toBeCloseTo(0.3, 3);
-    expect(s.objects.some((o) => o.type === "perforated-tile")).toBe(true);
+    expect(s.objects.some((o) => o.type === "perforated-tiles")).toBe(true);
     expect(s.objects.some((o) => o.type === "cable-tray")).toBe(true);
     expect(s.groups.find((g) => g.id === "c")!.contained).toBe(false);
     const rack = s.objects.find((o) => o.id === "r")!;
@@ -604,7 +632,7 @@ describe("defaults", () => {
     expect(rack.box.size.z).toBeCloseTo((50 + 42 * 44.45 + 50) / 600, 3);
   });
 
-  it("fallback constants equal schema/v1.json defaults where the schema declares them", () => {
+  it("fallback constants equal the schema/v1.json defaults", () => {
     type Defs = Record<string, { properties?: Record<string, { default?: unknown }> }>;
     const d = schema.$defs as unknown as Defs;
     const prop = (def: string, key: string): unknown => d[def]?.properties?.[key]?.default;
@@ -613,7 +641,6 @@ describe("defaults", () => {
       [prop("rack", "pdu"), DC_DEFAULTS.rack.pdu],
       [prop("rack", "rearDoorHeatExchanger"), DC_DEFAULTS.rack.rearDoorHeatExchanger],
       [prop("rack", "state"), DC_DEFAULTS.state],
-      [prop("row", "facing"), DC_DEFAULTS.rowFacing],
       [prop("aisle", "contained"), DC_DEFAULTS.aisleContained],
       [prop("cable", "kind"), DC_DEFAULTS.cableKind],
       [prop("facility", "raisedFloor"), DC_DEFAULTS.facility.raisedFloor],
@@ -621,7 +648,154 @@ describe("defaults", () => {
       [prop("facility", "cableTrays"), DC_DEFAULTS.facility.cableTrays],
     ];
     for (const [schemaDefault, ours] of pairs) {
-      if (schemaDefault !== undefined) expect(ours).toEqual(schemaDefault);
+      expect(schemaDefault).toBeDefined();
+      expect(ours).toEqual(schemaDefault);
     }
+  });
+});
+
+describe("flow particle budget", () => {
+  it("keeps DC flows within 1000 particles: cables first, then airflow, then synthesized", () => {
+    const racks = Array.from({ length: 500 }, (_, i) => ({
+      id: `r${i}`,
+      slots: [server(1), { at: 3, type: "switch-tor" }],
+    }));
+    const cables = Array.from({ length: 2000 }, (_, i) => ({
+      from: `r${i % 500}/u1`,
+      to: `r${(i + 1) % 500}/u3`,
+      kind: i % 2 === 0 ? "network" : "power",
+    }));
+    const f = build(spec({ racks, cables }));
+    const particles = f.flows.reduce((n, x) => n + Math.ceil(x.rate * 2), 0);
+    expect(particles).toBeLessThanOrEqual(1000);
+    expect(f.flows.map((x) => x.id)).toEqual(f.flows.map((_, i) => `dc_f_${i + 1}`));
+    const warn = f.diagnostics.filter((d) => d.code === "dc/flow-budget");
+    expect(warn).toHaveLength(1);
+    expect(warn[0]!.severity).toBe("warning");
+    // user cables take priority, so no airflow or synthesized flow survives here
+    const cableIds = new Set(f.edges.filter((e) => e.kind === "cable").map((e) => e.id));
+    expect(f.flows.every((x) => cableIds.has(x.edge))).toBe(true);
+    // every flow references a surviving edge; dropped hidden edges are gone
+    const edgeIds = new Set(f.edges.map((e) => e.id));
+    expect(f.flows.every((x) => edgeIds.has(x.edge))).toBe(true);
+    expect(f.edges.some((e) => e.hidden)).toBe(false);
+    expect(JSON.stringify(f)).toBe(JSON.stringify(build(spec({ racks, cables }))));
+  });
+
+  it("small halls are not truncated", () => {
+    const f = build(hall());
+    expect(f.diagnostics.some((d) => d.code === "dc/flow-budget")).toBe(false);
+  });
+});
+
+describe("review fixes", () => {
+  it("bounds include cable path points and label anchors", () => {
+    const f = build(hall());
+    for (const e of f.edges) {
+      for (const v of [...e.path, ...(e.labelAnchor ? [e.labelAnchor] : [])]) {
+        expect(v.x).toBeGreaterThanOrEqual(f.bounds.origin.x - EPS);
+        expect(v.y).toBeGreaterThanOrEqual(f.bounds.origin.y - EPS);
+        expect(v.z).toBeGreaterThanOrEqual(f.bounds.origin.z - EPS);
+        expect(v.x).toBeLessThanOrEqual(f.bounds.origin.x + f.bounds.size.x + EPS);
+        expect(v.y).toBeLessThanOrEqual(f.bounds.origin.y + f.bounds.size.y + EPS);
+        expect(v.z).toBeLessThanOrEqual(f.bounds.origin.z + f.bounds.size.z + EPS);
+      }
+    }
+  });
+
+  it("duplicate cable ids are reported and skipped", () => {
+    const s = build(
+      spec({
+        racks: [{ id: "r1" }, { id: "r2" }, { id: "r3" }],
+        cables: [
+          { id: "c", from: "r1", to: "r2" },
+          { id: "c", from: "r2", to: "r3" },
+          { from: "r1", to: "r3", id: "dc_cable_4" },
+          { from: "r1", to: "r3" },
+        ],
+      }),
+    );
+    expect(s.edges.filter((e) => e.kind === "cable").map((e) => e.id)).toEqual(["c", "dc_cable_4"]);
+    expect(s.diagnostics.map((d) => [d.code, d.path])).toEqual([
+      ["dc/duplicate-cable-id", "/cables/1/id"],
+      ["dc/duplicate-cable-id", "/cables/3/id"],
+    ]);
+  });
+
+  it("unknown slot types are reported", () => {
+    const s = build(spec({ racks: [{ id: "r", slots: [{ at: 1, type: "toaster" }, server(2)] }] }));
+    expect(s.diagnostics.map((d) => [d.code, d.path])).toEqual([
+      ["dc/unknown-component", "/racks/0/slots/0/type"],
+    ]);
+    expect(s.objects.some((o) => o.id === "r/u1")).toBe(false);
+    expect(s.objects.some((o) => o.id === "r/u2")).toBe(true);
+  });
+
+  it("the rack shell is a sibling object so it can draw after the slot devices", () => {
+    const f = build(hall());
+    const shell = f.objects.find((o) => o.id === "a1_front")!;
+    expect(shell).toMatchObject({ type: "rack-front", group: "row-a" });
+    expect(shell.parts!.map((p) => p.id).sort()).toEqual(["post-fl", "post-fr", "top"]);
+    const rack = f.objects.find((o) => o.id === "a1")!;
+    expect(rack.parts!.some((p) => p.id === "top")).toBe(false);
+    // mirrored rows: the viewer-side shell is the rear
+    const back = f.objects.find((o) => o.id === "b1_front")!;
+    expect(back.parts!.map((p) => p.id)).toContain("post-bl");
+    expect(back.parts!.map((p) => p.id)).toContain("rear-door");
+  });
+
+  it("slot state defaults to the rack state, and explicit slot state wins", () => {
+    const s = build(
+      spec({
+        racks: [
+          {
+            id: "r",
+            state: "degraded",
+            slots: [server(1), { at: 2, type: "server-1u", state: "down" }],
+          },
+        ],
+      }),
+    );
+    const st = (id: string) => s.objects.find((o) => o.id === id)!.state;
+    expect(st("r")).toBe("degraded");
+    expect(st("r/u1")).toBe("degraded");
+    expect(st("r/u2")).toBe("down");
+  });
+
+  it("manual-pos rows derive their extent from members; aisles with no space are skipped", () => {
+    const s = build(
+      spec({
+        racks: [
+          { id: "x", pos: { x: 0, y: 0 } },
+          { id: "y", pos: { x: 0, y: 1 } },
+        ],
+        rows: [
+          { id: "r1", members: ["x"] },
+          { id: "r2", members: ["y"] },
+        ],
+        aisles: [{ id: "a", kind: "cold", rows: ["r1", "r2"] }],
+      }),
+    );
+    expect(s.diagnostics.map((d) => d.code)).toContain("dc/aisle-no-space");
+    expect(s.groups.some((g) => g.id === "a")).toBe(false);
+    expect(s.focusTargets["a"]).toBeUndefined();
+  });
+
+  it("warns about conflicting facing from different aisles and keeps the first", () => {
+    const s = build(
+      spec({
+        racks: [{ id: "x" }, { id: "y" }, { id: "z" }],
+        rows: [
+          { id: "r1", members: ["x"] },
+          { id: "r2", members: ["y"] },
+          { id: "r3", members: ["z"] },
+        ],
+        aisles: [
+          { id: "c1", kind: "cold", rows: ["r1", "r2"] },
+          { id: "c2", kind: "cold", rows: ["r2", "r3"] },
+        ],
+      }),
+    );
+    expect(s.diagnostics.some((d) => d.code === "dc/facing-conflict")).toBe(true);
   });
 });

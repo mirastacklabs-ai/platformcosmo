@@ -34,8 +34,14 @@ export interface Ref {
 
 export type CableKind = "power" | "network" | "fiber" | "management";
 
-/** Max synthesized (hidden) flows; user cables always get flows. */
-export const MAX_SYNTH_FLOWS = 300;
+/** DC flows together may use at most this many particles (each flow uses ceil(rate x 2)). */
+export const MAX_DC_PARTICLES = 1000;
+
+interface PendingFlow {
+  readonly edge: string;
+  readonly kind: SceneFlow["kind"];
+  readonly rate: number;
+}
 
 const center = (b: Box3): Vec3 =>
   vec(b.origin.x + b.size.x / 2, b.origin.y + b.size.y / 2, b.origin.z + b.size.z / 2);
@@ -174,14 +180,12 @@ export function connect(input: ConnectInput): Connections {
   const { refs, cables, laneZ } = input;
   const edges: SceneEdge[] = [];
   const hidden: SceneEdge[] = [];
-  const flows: SceneFlow[] = [];
   const diagnostics: Diagnostic[] = [];
   const alloc = new PortAllocator();
-  let flowN = 0;
-  const addFlow = (edge: string, kind: SceneFlow["kind"], rate: number): void => {
-    flowN++;
-    flows.push({ id: `dc_f_${flowN}`, edge, kind, rate, reverse: false });
-  };
+  const airflowFlows: PendingFlow[] = [];
+  const cableFlows: PendingFlow[] = [];
+  const synthFlows: PendingFlow[] = [];
+  const flows: SceneFlow[] = [];
 
   // ---- airflow: cold aisle -> through the rack -> hot aisle (hidden paths) ----
   for (const a of input.airflow) {
@@ -204,12 +208,24 @@ export function connect(input: ConnectInput): Connections {
       path,
       arrow: { start: false, end: false },
     });
-    addFlow(id, "airflow", FLOW_RATE.airflow);
+    airflowFlows.push({ edge: id, kind: "airflow", rate: FLOW_RATE.airflow });
   }
 
   // ---- user cables ----
   const cableEdges: { edge: SceneEdge; kind: CableKind }[] = [];
+  const cableIds = new Set<string>();
   cables.forEach((c, i) => {
+    const cableId = c.id ?? `dc_cable_${i + 1}`;
+    if (cableIds.has(cableId)) {
+      diagnostics.push({
+        severity: "error",
+        code: "dc/duplicate-cable-id",
+        path: `/cables/${i}/id`,
+        message: `Cable id "${cableId}" is used more than once; the duplicate was skipped.`,
+      });
+      return;
+    }
+    cableIds.add(cableId);
     const from = refs.get(c.from);
     const to = refs.get(c.to);
     if (!from) {
@@ -241,7 +257,7 @@ export function connect(input: ConnectInput): Connections {
     const kind: CableKind = c.kind ?? DC_DEFAULTS.cableKind;
     const path = pathBetween(from, to, kind, alloc, laneZ, i, `/cables/${i}`, diagnostics);
     const edge: SceneEdge = {
-      id: c.id ?? `dc_cable_${i + 1}`,
+      id: cableId,
       from: c.from,
       to: c.to,
       kind: "cable",
@@ -263,12 +279,13 @@ export function connect(input: ConnectInput): Connections {
     (c) => c.kind === "network" || c.kind === "fiber" || c.kind === undefined,
   );
   for (const { edge, kind } of cableEdges) {
-    if (kind === "power") addFlow(edge.id, "power", FLOW_RATE.power);
-    else if (kind === "network" || kind === "fiber") addFlow(edge.id, "normal", FLOW_RATE.normal);
+    if (kind === "power") cableFlows.push({ edge: edge.id, kind: "power", rate: FLOW_RATE.power });
+    else if (kind === "network" || kind === "fiber") {
+      cableFlows.push({ edge: edge.id, kind: "normal", rate: FLOW_RATE.normal });
+    }
   }
 
   let synth = 0;
-  let capped = false;
   const synthEdge = (
     prefix: string,
     from: Ref,
@@ -276,10 +293,6 @@ export function connect(input: ConnectInput): Connections {
     kind: CableKind,
     flowKind: "power" | "normal",
   ): void => {
-    if (synth >= MAX_SYNTH_FLOWS) {
-      capped = true;
-      return;
-    }
     const f = alloc.pick(from, kind);
     const t = alloc.pick(to, kind);
     const fa = f?.at ?? center(from.box);
@@ -297,7 +310,7 @@ export function connect(input: ConnectInput): Connections {
       path: route(from, fa, to, ta, laneZ, synth),
       arrow: { start: false, end: false },
     });
-    addFlow(id, flowKind, FLOW_RATE[flowKind]);
+    synthFlows.push({ edge: id, kind: flowKind, rate: FLOW_RATE[flowKind] });
   };
 
   const all = [...refs.values()];
@@ -342,16 +355,43 @@ export function connect(input: ConnectInput): Connections {
     }
   }
 
-  if (capped) {
+  // ---- particle budget: user cables, then airflow, then synthesized flows ----
+  let used = 0;
+  let dropped = 0;
+  const keep = new Set<PendingFlow>();
+  const droppedEdges = new Set<string>();
+  for (const group of [cableFlows, airflowFlows, synthFlows]) {
+    for (const f of group) {
+      const n = Math.ceil(f.rate * 2);
+      if (used + n <= MAX_DC_PARTICLES) {
+        used += n;
+        keep.add(f);
+      } else {
+        dropped++;
+        droppedEdges.add(f.edge);
+      }
+    }
+  }
+  [...airflowFlows, ...cableFlows, ...synthFlows]
+    .filter((f) => keep.has(f))
+    .forEach((f, i) =>
+      flows.push({ id: `dc_f_${i + 1}`, edge: f.edge, kind: f.kind, rate: f.rate, reverse: false }),
+    );
+  if (dropped > 0) {
     diagnostics.push({
-      severity: "info",
+      severity: "warning",
       code: "dc/flow-budget",
       path: "",
-      message: `Automatic power/network flows were capped at ${MAX_SYNTH_FLOWS}; add cables to show specific paths.`,
+      message: `${dropped} DC flows were dropped to stay within the ${MAX_DC_PARTICLES}-particle budget (cables first, then airflow, then automatic flows).`,
+      params: { dropped, budget: MAX_DC_PARTICLES },
     });
   }
 
-  return { edges: [...edges, ...hidden], flows, diagnostics };
+  return {
+    edges: [...edges, ...hidden.filter((e) => !droppedEdges.has(e.id))],
+    flows,
+    diagnostics,
+  };
 }
 
 function pathBetween(

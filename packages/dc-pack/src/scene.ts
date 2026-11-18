@@ -135,6 +135,12 @@ function checkSlots(rack: SpecRack, rackIndex: number, diags: Diagnostic[]): Val
   const ok: ValidSlot[] = [];
   for (const s of order) {
     const path = `/racks/${rackIndex}/slots/${s.index}`;
+    if (!registry.get(s.spec.type)) {
+      diags.push(
+        err("dc/unknown-component", `${path}/type`, `Unknown slot type "${s.spec.type}".`),
+      );
+      continue;
+    }
     if (
       !Number.isInteger(s.at) ||
       !Number.isInteger(s.size) ||
@@ -318,8 +324,8 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     });
     return rs.sort((x, y) => x.index - y.index);
   };
-  const aisleInfo = aislesSpec.map((a, ai) => ({ spec: a, rows: aisleRows(a, ai) }));
-  for (const { spec: a, rows } of aisleInfo) {
+  const aisleInfo = aislesSpec.map((a, ai) => ({ spec: a, rows: aisleRows(a, ai), index: ai }));
+  for (const { spec: a, rows, index } of aisleInfo) {
     if (rows.length !== 2) continue;
     const [upper, lower] = rows as [ActiveRow, ActiveRow];
     const cold = a.kind === "cold";
@@ -330,13 +336,20 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
       if (!facingSet.has(r.spec.id)) {
         r.mirror = mirror;
         facingSet.add(r.spec.id);
+      } else if (r.mirror !== mirror) {
+        diags.push({
+          severity: "warning",
+          code: "dc/facing-conflict",
+          path: `/aisles/${index}`,
+          message: `Aisle "${a.id}" would turn row "${r.spec.id}" the other way; the earlier facing was kept.`,
+        });
       }
     }
     if (lower.index !== upper.index + 1) {
       diags.push({
         severity: "warning",
         code: "dc/aisle-rows-not-adjacent",
-        path: `/aisles/${aislesSpec.indexOf(a)}/rows`,
+        path: `/aisles/${index}/rows`,
         message: `Aisle "${a.id}" spans rows that are not neighbours; other rows sit between them.`,
       });
     }
@@ -381,6 +394,10 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
   for (const r of active) {
     r.x0 = Math.min(...r.items.map((i) => i.cx));
     r.x1 = Math.max(...r.items.map((i) => i.cx + i.w));
+    // Manual positions may move members off the nominal row line: derive y from the members.
+    const y1 = Math.max(...r.items.map((i) => i.cy + i.d));
+    r.y = Math.min(...r.items.map((i) => i.cy));
+    r.d = y1 - r.y;
   }
   // overlaps (only reachable with manual positions)
   const placedItems = order.filter((i) => i.placed);
@@ -411,7 +428,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     readonly y1: number;
   }
   const aisleBoxes: AisleBox[] = [];
-  for (const { spec: a, rows } of aisleInfo) {
+  for (const { spec: a, rows, index } of aisleInfo) {
     if (rows.length === 0) continue;
     const x0 = Math.min(...rows.map((r) => r.x0));
     const x1 = Math.max(...rows.map((r) => r.x1));
@@ -433,6 +450,15 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
         y1 = r.y;
         y0 = y1 - GAP;
       }
+    }
+    if (!(x1 > x0) || !(y1 > y0)) {
+      diags.push({
+        severity: "warning",
+        code: "dc/aisle-no-space",
+        path: `/aisles/${index}`,
+        message: `Aisle "${a.id}" has no floor space between its rows and was skipped.`,
+      });
+      continue;
     }
     aisleBoxes.push({ spec: a, rows, x0, x1, y0, y1 });
   }
@@ -505,7 +531,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
         pdu: rack.pdu,
         rearDoorHeatExchanger: rack.rearDoorHeatExchanger,
       });
-      const state: SpecState = rack.state ?? "healthy";
+      const state: SpecState = rack.state ?? DC_DEFAULTS.state;
       const built = def.build(params as unknown as Record<string, unknown>, {
         id: rack.id,
         state,
@@ -520,6 +546,16 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
         depth: D,
       };
       const rackBox = tb(built.bounds, p);
+      // The viewer-side shell (corner posts, top cap; for mirrored rows the rear door, PDUs and
+      // posts) is its own sibling object so it can draw after the slot devices.
+      const nearIds = it.mirror
+        ? ["post-bl", "post-br", "rear-", "pdu-", "top"]
+        : ["post-fl", "post-fr", "top"];
+      const worldParts = built.parts.map((q) => ({ ...q, box: tb(q.box, p) }));
+      const isNear = (id: string): boolean =>
+        nearIds.some((n) => (n.endsWith("-") ? id.startsWith(n) : id === n));
+      const shellParts = worldParts.filter((q) => isNear(q.id));
+      const bodyParts = worldParts.filter((q) => !isNear(q.id));
       const rackPorts: RefPort[] = built.ports.map((q) => ({
         id: q.id,
         kind: q.kind,
@@ -535,9 +571,26 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
         ...(rack.label !== undefined ? { label: rack.label } : {}),
         group,
         state,
-        parts: depthSort(built.parts.map((q) => ({ ...q, box: tb(q.box, p) }))),
+        parts: depthSort(bodyParts),
         ports: portMap(rackPorts),
       });
+      const shellBox = shellParts.reduce<Box3 | undefined>(
+        (acc, q) => (acc ? unionBox(acc, q.box) : q.box),
+        undefined,
+      );
+      if (shellBox) {
+        objects.push({
+          id: `${rack.id}_front`,
+          source: "dc",
+          type: "rack-front",
+          category: "dc",
+          primitive: "cube",
+          box: shellBox,
+          group,
+          state,
+          parts: depthSort(shellParts),
+        });
+      }
       finishRef(rack.id, "rack", rackBox, it.mirror, rackPorts);
 
       const slots = checkSlots(rack, it.index, diags);
@@ -582,7 +635,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     } else {
       const eq = it.equip!;
       const def = registry.get(eq.type)!;
-      const state: SpecState = eq.state ?? "healthy";
+      const state: SpecState = eq.state ?? DC_DEFAULTS.state;
       const built = def.build(def.defaults, {
         id: eq.id,
         state,
@@ -639,7 +692,11 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
       level: 1,
       ...(r.spec.label !== undefined ? { label: r.spec.label } : {}),
     });
-    focus[r.spec.id] = rb;
+    focus[r.spec.id] =
+      r.items.reduce<Box3 | undefined>((acc, i) => {
+        const b = refs.get(i.id)?.box;
+        return b ? (acc ? unionBox(acc, b) : b) : acc;
+      }, undefined) ?? rb;
   }
   for (const a of aisleBoxes) {
     const ab = slab(a.x0, a.y0, a.x1, a.y1);
@@ -653,7 +710,6 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
       level: 1,
       ...(a.spec.label !== undefined ? { label: a.spec.label } : {}),
     });
-    focus[a.spec.id] = ab;
   }
 
   // ---- facility objects: containment roofs, perforated tiles, cable trays ----
@@ -663,6 +719,14 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
       ...rows.flatMap((r) => r.items.map((i) => (refs.get(i.id)?.box.size.z ?? 0) + zBase)),
     );
   for (const a of aisleBoxes) {
+    focus[a.spec.id] = box(
+      a.x0 + sx,
+      a.y0 + sy,
+      zBase,
+      a.x1 - a.x0,
+      a.y1 - a.y0,
+      Math.max(GROUP_H, rowTop(a.rows) - zBase),
+    );
     if (a.spec.contained ?? DC_DEFAULTS.aisleContained) {
       const z = rowTop(a.rows);
       const b = box(a.x0 + sx, a.y0 + sy, z, a.x1 - a.x0, a.y1 - a.y0, 0.04);
@@ -681,22 +745,28 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
       });
     } else {
       for (const a of aisleBoxes.filter((x) => x.spec.kind === "cold")) {
-        let n = 0;
+        const tiles: ScenePart[] = [];
         for (let x = a.x0; x < a.x1; x++) {
           for (let y = a.y0; y < a.y1; y++) {
-            n++;
-            const b = box(x + sx, y + sy, zBase, 1, 1, 0.01);
-            objects.push(
-              facilityObject(
-                `dc_tile_${a.spec.id}_${n}`,
-                "perforated-tile",
-                b,
-                "perforated",
-                a.spec.id,
-              ),
-            );
+            tiles.push({
+              id: `tile-${tiles.length + 1}`,
+              primitive: "slab",
+              tone: "perforated",
+              box: box(x + sx, y + sy, zBase, 1, 1, 0.01),
+            });
           }
         }
+        const fb = box(a.x0 + sx, a.y0 + sy, zBase, a.x1 - a.x0, a.y1 - a.y0, 0.01);
+        objects.push({
+          ...facilityObject(
+            `dc_tiles_${a.spec.id}`,
+            "perforated-tiles",
+            fb,
+            "perforated",
+            a.spec.id,
+          ),
+          parts: tiles,
+        });
       }
     }
   }
@@ -781,6 +851,12 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
   groups.sort((a, b) => a.level - b.level || cmp(a.id, b.id));
   let bounds = hallBox;
   for (const o of objects) bounds = unionBox(bounds, o.box);
+  for (const e of conn.edges) {
+    for (const v of [...e.path, ...(e.labelAnchor ? [e.labelAnchor] : [])]) {
+      bounds = unionBox(bounds, box(v.x, v.y, v.z, 0, 0, 0));
+    }
+  }
+  focus["dc_hall"] = bounds;
   const focusSorted = Object.fromEntries(Object.entries(focus).sort(([a], [b]) => cmp(a, b)));
 
   return {
@@ -813,7 +889,7 @@ function facilityObject(
     primitive: "slab",
     box: b,
     group,
-    state: "healthy",
+    state: DC_DEFAULTS.state,
     parts: [{ id: "body", primitive: "slab", box: b, tone }],
   };
 }

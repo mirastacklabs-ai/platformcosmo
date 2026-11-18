@@ -5,7 +5,7 @@ export const MM_PER_TILE = 600;
 export const U_MM = 44.45;
 
 /** Rounds to 4 decimals to keep world coordinates free of float noise. */
-export const r4 = (n: number): number => Math.round(n * 10000) / 10000;
+export const r4 = (n: number): number => Math.round(n * 10000) / 10000 || 0;
 
 /** Millimetres to world units. */
 export const mm = (n: number): number => r4(n / MM_PER_TILE);

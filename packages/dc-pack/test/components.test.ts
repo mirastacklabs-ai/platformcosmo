@@ -183,3 +183,35 @@ describe("equipment", () => {
     }
   });
 });
+
+describe("LED backing", () => {
+  it("every LED is mounted on `base` parts only (so theme LED contrast applies)", () => {
+    const tol = 1.5 / 600;
+    for (const d of reg.list()) {
+      const r = d.build(d.defaults, ctx);
+      for (const led of r.parts.filter((p) => p.tone === "led")) {
+        const l = led.box;
+        const backing = r.parts.filter((p) => {
+          if (p === led || p.tone === "led") return false;
+          const b = p.box;
+          return (
+            b.origin.x <= l.origin.x + EPS &&
+            b.origin.x + b.size.x >= l.origin.x + l.size.x - EPS &&
+            b.origin.z <= l.origin.z + EPS &&
+            b.origin.z + b.size.z >= l.origin.z + l.size.z - EPS &&
+            b.origin.y + b.size.y >= l.origin.y - tol &&
+            b.origin.y < l.origin.y + l.size.y
+          );
+        });
+        for (const b of backing) {
+          expect(b.tone, `${d.type}: ${led.id} on ${b.id}`).toBe("base");
+        }
+      }
+    }
+  });
+
+  it("tape library fiber port is named up-0", () => {
+    const r = reg.get("tape-library")!.build({}, ctx);
+    expect(r.ports.find((p) => p.kind === "fiber")?.id).toBe("up-0");
+  });
+});

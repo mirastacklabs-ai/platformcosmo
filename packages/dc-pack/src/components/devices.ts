@@ -71,8 +71,8 @@ const devices: readonly Dev[] = [
     heightU: 10,
     depthMm: 800,
     detail(k, h) {
-      k.row("blade", 8, "accent", 24, 458, 8, 44, h - 16, 6);
-      k.row("blade-led", 8, "led", 30, 452, h - 12, 4, 4, 8);
+      k.row("blade", 8, "accent", 24, 458, 8, 44, h - 28, 6);
+      k.row("blade-led", 8, "led", 30, 452, h - 14, 4, 4, 8);
       netPorts(k, h, 2);
       psuPorts(k, h);
     },

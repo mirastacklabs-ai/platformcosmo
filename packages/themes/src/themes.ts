@@ -451,10 +451,12 @@ const mono: Seed = {
 };
 
 /** Recursively freezes plain data so shared themes cannot be mutated by consumers. */
-export function deepFreeze<T>(v: T): T {
-  if (typeof v === "object" && v !== null && !Object.isFrozen(v)) {
+export function deepFreeze<T>(v: T, seen: WeakSet<object> = new WeakSet()): T {
+  if (typeof v === "object" && v !== null && !seen.has(v)) {
+    seen.add(v);
     Object.freeze(v);
-    for (const x of Object.values(v)) deepFreeze(x);
+    // Recurse even into already-frozen objects: a shallow freeze may hide mutable children.
+    for (const x of Object.values(v)) deepFreeze(x, seen);
   }
   return v;
 }

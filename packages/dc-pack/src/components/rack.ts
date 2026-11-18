@@ -88,11 +88,11 @@ export const rackDef: DcComponentDef = {
     k.part("post-br", "cube", "metal", W - post, 0, RACK_BASE_MM, post, post, bodyH);
     const pduH = u * U_MM * 0.8;
     if (pdu !== "none") {
-      k.part("pdu-a", "cube", "muted", 40, 120, RACK_BASE_MM + 60, 40, 50, pduH);
+      k.part("pdu-a", "cube", "base", 40, 120, RACK_BASE_MM + 60, 40, 50, pduH);
       k.part("pdu-a-led", "cube", "led", 48, 168, RACK_BASE_MM + 60 + pduH - 30, 8, 4, 8);
     }
     if (pdu === "dual") {
-      k.part("pdu-b", "cube", "muted", W - 80, 120, RACK_BASE_MM + 60, 40, 50, pduH);
+      k.part("pdu-b", "cube", "base", W - 80, 120, RACK_BASE_MM + 60, 40, 50, pduH);
       k.part("pdu-b-led", "cube", "led", W - 72, 168, RACK_BASE_MM + 60 + pduH - 30, 8, 4, 8);
     }
     k.part("post-fl", "cube", "metal", 0, D - post, RACK_BASE_MM, post, post, bodyH);
