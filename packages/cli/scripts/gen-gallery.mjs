@@ -6,7 +6,9 @@
 //   scripts/pc run gen:gallery                 render everything that can be rendered
 //   scripts/pc run check:gallery               re-render the bundled-icon examples to a temp dir and fail
 //                                              when a committed render differs (skips specs with none yet)
-//   node packages/cli/scripts/gen-gallery.mjs [--only a,b] [--packs-dir <dir>] [--check]
+//   node packages/cli/scripts/gen-gallery.mjs [--only a,b] [--packs-dir <dir>] [--check [--min N]]
+//   --check also compares provider examples whose packs are given with --packs-dir; it fails when an
+//   example has no committed render and when fewer than --min (default 1) examples were compared.
 //
 // Provider examples (aws:, azure:, gcp: icons) need the provider packs, which are fetched on the user's
 // machine and never committed (DECISIONS D12): pass --packs-dir to a directory filled by
@@ -37,7 +39,7 @@ const TERMS_UNCONFIRMED = { azure: "Azure", gcp: "Google Cloud" };
 const KNOWN_PROVIDERS = ["aws", "azure", "gcp", "cncf"];
 
 const args = process.argv.slice(2);
-const KNOWN_FLAGS = new Set(["--only", "--packs-dir", "--check"]);
+const KNOWN_FLAGS = new Set(["--only", "--packs-dir", "--check", "--min"]);
 for (const a of args) {
   if (a.startsWith("--") && !KNOWN_FLAGS.has(a)) fail(`unknown option ${a}`);
 }
@@ -55,6 +57,8 @@ function fail(msg) {
 const only = opt("--only")?.split(",").filter(Boolean);
 const packsDir = opt("--packs-dir");
 const check = args.includes("--check");
+const min = opt("--min") === undefined ? 1 : Number(opt("--min"));
+if (!Number.isInteger(min) || min < 1) fail("--min must be a positive integer");
 
 if (!existsSync(bin)) fail("packages/cli/dist/bin.js is missing; run: scripts/pc run build");
 
@@ -102,6 +106,7 @@ const ownedBy = (name) => (f) =>
 let rendered = 0;
 let skipped = 0;
 let differing = 0;
+let compared = 0;
 
 for (const name of names) {
   if (only && !only.includes(name)) continue;
@@ -117,11 +122,6 @@ for (const name of names) {
       `skip ${name}: it uses ${unconfirmed.map((p) => TERMS_UNCONFIRMED[p]).join(", ")} icons; their terms require human ` +
         "confirmation, so it is not rendered",
     );
-    skipped++;
-    continue;
-  }
-  if (check && providers.length > 0) {
-    console.log(`skip ${name}: provider example (needs user-fetched packs; not checked)`);
     skipped++;
     continue;
   }
@@ -146,10 +146,11 @@ for (const name of names) {
   if (check) {
     const committed = existsSync(outDir) ? listFiles(outDir).filter(ownedBy(name)) : [];
     if (committed.length === 0) {
-      console.log(`skip ${name}: no committed render yet`);
-      skipped++;
+      console.error(`FAIL ${name}: no committed render; run: scripts/pc run gen:gallery`);
+      differing++;
       continue;
     }
+    compared++;
     const bad = [
       ...produced.filter((f) => !committed.includes(f)).map((f) => `missing: ${f}`),
       ...committed.filter((f) => !produced.includes(f)).map((f) => `stale: ${f}`),
@@ -192,7 +193,11 @@ if (!check && packsDir) {
 }
 console.log(
   check
-    ? `gallery check: ${differing === 0 ? "ok" : `${differing} differ`}, ${skipped} skipped`
+    ? `gallery check: compared ${compared}, ${differing === 0 ? "all identical" : `${differing} differ`}, ${skipped} skipped`
     : `gallery: ${rendered} rendered, ${skipped} skipped`,
 );
 if (differing > 0) process.exit(1);
+if (check && compared < min) {
+  console.error(`gallery check compared ${compared} example(s); at least ${min} required`);
+  process.exit(1);
+}

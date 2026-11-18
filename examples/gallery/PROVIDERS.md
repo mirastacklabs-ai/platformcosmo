@@ -28,6 +28,9 @@ Pack the render was made from (`pcosmo icons add aws` into a temporary directory
 | SHA-256 of the zip                      | `d2d166c453526471749d520e0db022c459abef759d2946cf2dd1d1c992dc6526`                                                                                                    |
 | Lockfile integrity (`pcosmo icons add`) | `sha256-uroF89FYhYPvGvphGZEOD60jgTilTFObW7Ibfd4b7ZU=`                                                                                                                 |
 
+Re-rendered 2026-11-18 on main 1538908 with a fresh `pcosmo icons add aws` (same pack version and lock integrity as
+above; the render bytes changed with the engine).
+
 Refs used: `aws:amazon-route-53`, `aws:amazon-cloudfront`, `aws:elastic-load-balancing`, `aws:amazon-ec2`,
 `aws:amazon-elasticache`, `aws:amazon-rds`, `aws:amazon-simple-storage-service`. All resolve (`pcosmo validate --packs-dir`
 passes).
