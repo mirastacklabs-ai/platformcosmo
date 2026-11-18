@@ -285,7 +285,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
         }
         const frontH = o.box.size.z * projection.zScale;
         const std = Math.min(o.icon.size, bbox.width * 0.6); // standard size
-        const floating = frontH - 8 < std;
+        // Shrink on the face down to 0.75x the standard size; below that the plate floats.
+        const floating = frontH - 8 < std * 0.75;
         let s = std;
         let c: { x: number; y: number };
         if (floating) {

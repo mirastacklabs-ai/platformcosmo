@@ -375,7 +375,23 @@ describe("label and overlay polish", () => {
       edges: base.edges.map((x) => (x.id === e.id ? { ...x, path: [...e.path, last] } : x)),
     };
     const svg = emit(buildModel({ ...inputs(), scene }), noopLayer, { font: "system" });
-    expect(svg).toContain('<polygon class="pc-test-arrow pc-test-e_e_5fusers_5flb-arrow"');
+    const poly =
+      /<polygon class="pc-test-arrow pc-test-e_e_5fusers_5flb-arrow" points="([^"]+)"/.exec(
+        svg,
+      ) as RegExpExecArray;
+    const [tip, b1, b2] = poly[1]!
+      .split(" ")
+      .map((q) => q.split(",").map(Number) as [number, number]);
+    const proj = buildModel({ ...inputs(), scene }).projection;
+    const pts = e.path.map((q) => proj.project(q));
+    const end = pts[pts.length - 1]!;
+    const prev = pts[pts.length - 2]!; // previous distinct point (original path)
+    const mid = [(b1![0] + b2![0]) / 2, (b1![1] + b2![1]) / 2];
+    const d = [tip![0] - mid[0]!, tip![1] - mid[1]!];
+    const seg = [end.x - prev.x, end.y - prev.y];
+    expect(tip![0]).toBeCloseTo(end.x, 1);
+    expect(Math.abs(d[0]! * seg[1]! - d[1]! * seg[0]!)).toBeLessThan(0.5); // parallel
+    expect(d[0]! * seg[0]! + d[1]! * seg[1]!).toBeGreaterThan(0); // same direction
   });
 
   test("arrowheads carry a class derived from their edge id", () => {
@@ -440,6 +456,21 @@ describe("label and overlay polish", () => {
     const frontH = 1.5 * m.projection.zScale;
     expect(plate.h).toBeLessThanOrEqual(frontH);
     expect(plate.w - 4).toBe(28);
+  });
+
+  test("the default sm cube (height 1, icon 28) keeps its icon on the face, shrunk to fit", () => {
+    const { svg, plate, m } = iconBox(1, 28);
+    expect(svg).not.toContain("pc-test-shadow");
+    expect(plate.w - 4).toBe(1 * m.projection.zScale - 8); // 24, >= 0.75 * 28
+    expect(plate.w - 4).toBeGreaterThanOrEqual(0.75 * 28);
+    // md (height 1.5, icon 36) fits at the standard size
+    const md = iconBox(1.5, 36);
+    expect(md.plate.w - 4).toBe(36);
+    expect(md.svg).not.toContain("pc-test-shadow");
+    // just below 0.75x floats at the standard size
+    const short = iconBox(0.8, 28); // avail 17.6 < 21
+    expect(short.svg).toContain("pc-test-shadow");
+    expect(short.plate.w - 4).toBe(28);
   });
 
   test("a front face that is too short floats the plate over the top face at standard size", () => {
