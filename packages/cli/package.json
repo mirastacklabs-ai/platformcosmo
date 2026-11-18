@@ -38,6 +38,7 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit -p .",
     "gen:examples": "node scripts/gen-examples.mjs",
+    "gen:gallery": "node scripts/gen-gallery.mjs",
     "check:examples": "node scripts/gen-examples.mjs --check",
     "bundle:plugin": "node scripts/bundle-plugin.mjs",
     "check:plugin": "node scripts/bundle-plugin.mjs --check"
