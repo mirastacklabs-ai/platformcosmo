@@ -33,6 +33,9 @@ jobs:
 
   safari-check:
     needs: browser-check
+    # macOS minutes are scarce: run on main, manual dispatch, or PRs labelled "browser"; keep
+    # going when the Playwright job failed so Safari evidence is still collected.
+    if: ${{ !cancelled() && needs.browser-check.result != 'cancelled' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'browser')) }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
