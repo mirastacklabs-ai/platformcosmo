@@ -68,15 +68,14 @@ export class RouteLanes {
     let cost = 0;
     for (const e of list) {
       const ov = Math.min(hi, e.b) - Math.max(lo, e.a);
-      if (ov > 1e-9) cost += ov * (e.src === src ? 4 : 0.5);
+      if (ov > 1e-9) cost += ov * (e.src === src ? 4 : 1.5);
     }
     return cost;
   }
 
-  /** Coordinates of lanes owned by `src` (extra grid lines are offered next to them). */
-  lines(src: string): { h: number[]; v: number[] } {
-    const pick = (m: Map<number, { src: string }[]>): number[] =>
-      [...m.entries()].filter(([, l]) => l.some((e) => e.src === src)).map(([c]) => c);
+  /** Coordinates of used lanes (extra grid lines are offered 0.5 beside them, so near-parallel edges separate). */
+  lines(): { h: number[]; v: number[] } {
+    const pick = (m: Map<number, { src: string }[]>): number[] => [...m.keys()].slice(0, 80);
     return { h: pick(this.h), v: pick(this.v) };
   }
 }
@@ -253,6 +252,7 @@ function search(
   own: Rect[],
   obstacles: Rect[],
   ctx: RouteContext,
+  win: Rect,
 ): { pts: { x: number; y: number }[]; src: number; dst: number } | "no-terminal" | undefined {
   const xsSet = new Set<number>();
   const ysSet = new Set<number>();
@@ -270,7 +270,7 @@ function search(
     add(r.x1, r.y1);
   }
   if (ctx.lanes && ctx.source !== undefined) {
-    const ln = ctx.lanes.lines(ctx.source);
+    const ln = ctx.lanes.lines();
     for (const c of ln.v) {
       xsSet.add(r2(c - 0.5));
       xsSet.add(r2(c + 0.5));
@@ -324,6 +324,8 @@ function search(
   const nodeBlocked = (ix: number, iy: number): boolean => {
     const x = xs[ix]!;
     const y = ys[iy]!;
+    // Obstacles outside the search window were not loaded, so the window is a hard boundary.
+    if (x < win.x0 || x > win.x1 || y < win.y0 || y > win.y1) return true;
     for (const r of own) if (strictHit(x, y, x, y, r, true)) return true;
     return anyObstacleHit(x, y, x, y);
   };
@@ -336,7 +338,8 @@ function search(
   from.forEach((t, k) => {
     const ix = xi.get(t.stub.x)!;
     const iy = yi.get(t.stub.y)!;
-    if (!nodeBlocked(ix, iy)) srcNodes.push({ id: idx(ix, iy), t: k, pen: t.pen, axis: t.axis });
+    if (!nodeBlocked(ix, iy) && !anyObstacleHit(t.at.x, t.at.y, t.stub.x, t.stub.y))
+      srcNodes.push({ id: idx(ix, iy), t: k, pen: t.pen, axis: t.axis });
   });
   const dstNodes = new Map<number, number>();
   const dstInfo = new Map<number, { pen: number; axis: number }>();
@@ -344,7 +347,7 @@ function search(
     const ix = xi.get(t.stub.x)!;
     const iy = yi.get(t.stub.y)!;
     const dn = idx(ix, iy);
-    if (!nodeBlocked(ix, iy)) {
+    if (!nodeBlocked(ix, iy) && !anyObstacleHit(t.at.x, t.at.y, t.stub.x, t.stub.y)) {
       const cur = dstInfo.get(dn);
       if (!cur || t.pen < cur.pen) {
         dstNodes.set(dn, k);
@@ -478,7 +481,7 @@ export function routeEdge(
     const local = [...all, ...ex].filter((r) =>
       strictHit(win.x0, win.y0, win.x1, win.y1, r, false),
     );
-    const found = search(fromT, toT, own, local, ctx);
+    const found = search(fromT, toT, own, local, ctx, win);
     if (found === "no-terminal") break; // wider windows only add obstacles
     if (!found) continue;
     const a = fromT[found.src]!;

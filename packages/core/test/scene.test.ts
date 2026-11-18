@@ -215,4 +215,39 @@ describe("buildScene (objects, groups, edges)", () => {
       else expect(end.x).toBe(cx);
     }
   });
+
+  test("arrows land on viewer-facing (+x/+y) sides of tall targets, approached from outside their shadow", () => {
+    const g = buildScene(lb(), {});
+    for (const e of g.edges) {
+      const t = g.objects.find((o) => o.id === e.to)!;
+      if (t.box.size.z < 1) continue; // low slabs hide almost nothing
+      const end = e.path[e.path.length - 1]!;
+      const b = t.box;
+      const onFront =
+        (end.x === b.origin.x + b.size.x && end.y > b.origin.y && end.y < b.origin.y + b.size.y) ||
+        (end.y === b.origin.y + b.size.y && end.x > b.origin.x && end.x < b.origin.x + b.size.x);
+      expect(onFront, `${e.id} ends at ${end.x},${end.y}`).toBe(true);
+    }
+  });
+
+  test("long layer chains wrap into rows and group plates hug their members", () => {
+    const nodes = Array.from({ length: 10 }, (_, i) => ({
+      id: `n${i}`,
+      type: "server",
+      ...(i >= 2 && i <= 3 ? { group: "g" } : {}),
+    }));
+    const edges = Array.from({ length: 9 }, (_, i) => ({ from: `n${i}`, to: `n${i + 1}` }));
+    const r = validate({ meta: { version: "1" }, groups: [{ id: "g" }], nodes, edges });
+    const g = buildScene(r.spec!, {});
+    const b = g.bounds.size;
+    expect(Math.max(b.x, b.y) / Math.min(b.x, b.y)).toBeLessThan(3);
+    const gb = g.groups[0]!.box;
+    const members = g.objects.filter((x) => x.group === "g");
+    expect(Math.min(...members.map((o) => o.box.origin.x)) - gb.origin.x).toBeLessThanOrEqual(
+      0.5 + 1e-9,
+    );
+    expect(Math.min(...members.map((o) => o.box.origin.y)) - gb.origin.y).toBeLessThanOrEqual(
+      0.5 + 1e-9,
+    );
+  });
 });

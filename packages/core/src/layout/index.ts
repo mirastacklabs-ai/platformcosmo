@@ -29,7 +29,9 @@ export interface LayoutResult {
 
 export const GAP_X = 4.5;
 export const GAP_Y = 3.5;
-export const GROUP_PAD = 1;
+export const GROUP_PAD = 0.5;
+/** Layers per row before the layout wraps onto the next row. */
+export const MAX_COLS = 4;
 
 const snap = (v: number): number => Math.round(v * 2) / 2;
 
@@ -278,14 +280,39 @@ export function layoutSpec(spec: Spec): LayoutResult {
       nodes: new Map(),
       groups: new Map(),
     };
-    let x = pad;
+    // Long layer chains wrap: at most MAX_COLS layers per row, further rows stack along y, which
+    // keeps the canvas close to landscape instead of one long diagonal strip.
+    const rows = Math.max(1, Math.ceil(nLayers / MAX_COLS));
+    const perRow = Math.max(1, Math.ceil(nLayers / rows));
+    const xOf: number[] = [];
+    const rowOf: number[] = [];
+    let cursor = pad;
+    for (let l = 0; l < nLayers; l++) {
+      if (l % perRow === 0) cursor = pad;
+      rowOf.push(Math.floor(l / perRow));
+      xOf.push(cursor);
+      cursor += colW[l]! + GAP_X;
+    }
+    const rowDepth: number[] = new Array<number>(rows).fill(0);
+    columns.forEach((col, l) => {
+      for (const v of col) {
+        rowDepth[rowOf[l]!] = Math.max(rowDepth[rowOf[l]!]!, top[v]! - minTop + items[v]!.d);
+      }
+    });
+    const rowY: number[] = [];
+    let ry = 0;
+    for (let r = 0; r < rows; r++) {
+      rowY.push(ry);
+      ry += rowDepth[r]! + GAP_Y + 1;
+    }
     const placedRects: LayoutRect[] = [];
     columns.forEach((col, l) => {
-      let y = pad;
+      let y = pad + rowY[rowOf[l]!]!;
+      const x = xOf[l]!;
       for (const v of col) {
         const it = items[v]!;
         const ix = x;
-        let iy = Math.max(y, pad + top[v]! - minTop);
+        let iy = Math.max(y, pad + rowY[rowOf[l]!]! + top[v]! - minTop);
         // Root only: keep clear of fixed (manual) nodes, 1 tile margin.
         for (let guard = 0; guard < 2000; guard++) {
           const r: LayoutRect = { x: ix, y: iy, w: it.w, d: it.d };
@@ -297,7 +324,6 @@ export function layoutSpec(spec: Spec): LayoutResult {
         placedRects.push({ x: ix, y: iy, w: it.w, d: it.d });
         y = iy + it.d + GAP_Y;
       }
-      x += colW[l]! + GAP_X;
     });
     const right = placedRects.reduce((m, r) => Math.max(m, r.x + r.w), pad);
     const bottom = placedRects.reduce((m, r) => Math.max(m, r.y + r.d), pad);
