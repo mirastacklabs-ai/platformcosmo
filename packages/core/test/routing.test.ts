@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { Box3, Vec3 } from "../src/index.js";
-import { routeEdge } from "../src/routing/router.js";
+import { getRouterStats, resetRouterStats, routeEdge } from "../src/routing/router.js";
 
 const box = (x: number, y: number, w = 2, d = 2, h = 1): Box3 => ({
   origin: { x, y, z: 0 },
@@ -122,9 +122,10 @@ describe("routeEdge", () => {
     const obstacles: Box3[] = [];
     for (let i = 0; i < 400; i++)
       obstacles.push(box(3 + (i % 20) * 4, -40 + Math.floor(i / 20) * 4, 2, 2));
-    const t0 = Date.now();
+    resetRouterStats();
     const r = routeEdge({ box: box(0, 0) }, { box: box(90, 5) }, obstacles);
-    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(getRouterStats().capHits).toBe(0);
+    expect(getRouterStats().expansions).toBeLessThan(500_000);
     expect(orthogonal(r.path)).toBe(true);
   });
 
