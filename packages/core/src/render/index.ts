@@ -24,7 +24,7 @@ import { exportOutputs, rasterize } from "../export/index.js";
 import { optimize } from "../optimize/index.js";
 import { buildScene } from "../scene/index.js";
 import { validate } from "../schema/index.js";
-import { buildModelWithDiagnostics, type ModelInputs } from "./model.js";
+import { buildModel, buildModelWithDiagnostics, inputsOf } from "./model.js";
 
 export { buildModel } from "./model.js";
 export type { ModelInputs } from "./model.js";
@@ -162,31 +162,15 @@ function byteLength(data: string | Uint8Array): number {
   return typeof data === "string" ? Buffer.byteLength(data, "utf8") : data.byteLength;
 }
 
-// Inputs of every model made by `render`, so `withVariant` can rebuild ids and layers.
-const modelInputs = new WeakMap<RenderModel, ModelInputs>();
-
 /**
  * Same model with every id re-prefixed `prefix + variant` (ExportFn `deps.withVariant`).
- * `variant` must match `^-[a-z0-9]{1,7}$`.
+ * `variant` must match `^-[a-z0-9]{1,7}$`. Works for any model made by `buildModel`.
  */
 export function withVariant(model: RenderModel, variant: string): RenderModel {
   if (!VARIANT_RE.test(variant)) throw new Error(`invalid id variant: ${variant}`);
-  const inputs = modelInputs.get(model);
-  if (!inputs) throw new Error("withVariant: model was not built by buildModel/render");
-  const next: ModelInputs = { ...inputs, prefix: `${model.ids.prefix}${variant}` };
-  const built = buildModelWithDiagnostics(next).model;
-  modelInputs.set(built, next);
-  return built;
-}
-
-/** Builds a model and remembers its inputs (for `withVariant`). */
-export function buildTrackedModel(inputs: ModelInputs): {
-  model: RenderModel;
-  diagnostics: readonly Diagnostic[];
-} {
-  const built = buildModelWithDiagnostics(inputs);
-  modelInputs.set(built.model, inputs);
-  return built;
+  const inputs = inputsOf(model);
+  if (!inputs) throw new Error("withVariant: model was not built by buildModel");
+  return buildModel({ ...inputs, prefix: `${model.ids.prefix}${variant}` });
 }
 
 export function createRender(deps: RenderDeps): RenderFn {
@@ -199,161 +183,174 @@ export function createRender(deps: RenderDeps): RenderFn {
       ...(scene ? { scene } : {}),
     });
 
-    const optionErrors = (deps.validateOptions ?? validateOptions)(options).filter(
-      (d) => d.severity === "error",
-    );
-    if (optionErrors.length > 0) return fail(optionErrors);
+    const optionDiagnostics = (deps.validateOptions ?? validateOptions)(options);
+    if (optionDiagnostics.some((d) => d.severity === "error")) return fail(optionDiagnostics);
     const kinds: readonly OutputKind[] = options.outputs ?? ["animated"];
     if (kinds.includes("mp4") && !options.video?.encoder) {
       throw new Error("render: the mp4 output requires options.video.encoder");
     }
 
-    if (!options.dc && hasDcContent(spec)) {
-      return fail([
-        err(
-          "render/dc-pack-required",
-          "",
-          "The spec has data-center content but no DC pack was provided.",
-          "Pass the @platformcosmo/dc-pack `dcPack` as options.dc.",
-        ),
-      ]);
-    }
-
-    const diagnostics: Diagnostic[] = [];
-    const report = deps.validate(spec, {
-      ...(options.icons ? { icons: options.icons } : {}),
-      ...(options.dc ? { dc: options.dc } : {}),
-    });
-    diagnostics.push(...report.diagnostics);
-    if (!report.valid || !report.spec) return fail(diagnostics);
-    const parsed: PlatformCosmoSpec = report.spec;
-
-    const themeId = parsed.canvas?.theme ?? "light";
-    const theme = options.theme ?? options.themes?.get(themeId);
-    if (!theme) {
-      return fail([
-        ...diagnostics,
-        err(
-          "render/theme-unavailable",
-          "/canvas/theme",
-          `Theme "${themeId}" is not available.`,
-          options.themes
-            ? `Available: ${options.themes.list().join(", ")}`
-            : "Pass options.theme or options.themes.",
-        ),
-      ]);
-    }
-    const darkTheme =
-      options.darkTheme === null
-        ? undefined
-        : (options.darkTheme ??
-          (theme.colorScheme === "light" ? options.themes?.get("dark") : undefined));
-
-    // Custom themes are untrusted: reject bad values here so emit never throws on user input.
+    const diagnostics: Diagnostic[] = [...optionDiagnostics];
     try {
-      themeVars(theme);
-      if (darkTheme) themeVars(darkTheme);
+      return await run();
     } catch (e) {
       return fail([
         ...diagnostics,
-        err(
-          "render/invalid-theme",
-          "/canvas/theme",
-          `The theme is invalid: ${(e as Error).message}.`,
-        ),
+        err("render/internal-error", "", `Unexpected error: ${(e as Error).message}`),
       ]);
     }
 
-    const scene = deps.buildScene(parsed, {
-      ...(options.icons ? { icons: options.icons } : {}),
-      ...(options.dc ? { dc: options.dc } : {}),
-    });
-    diagnostics.push(...scene.diagnostics);
-    if (diagnostics.some((d) => d.severity === "error")) return fail(diagnostics, scene);
+    async function run(): Promise<RenderResult> {
+      const report = deps.validate(spec, {
+        ...(options.icons ? { icons: options.icons } : {}),
+        ...(options.dc ? { dc: options.dc } : {}),
+      });
+      diagnostics.push(...report.diagnostics);
+      if (!options.dc && hasDcContent(spec)) {
+        diagnostics.push(
+          err(
+            "render/dc-pack-required",
+            "",
+            "The spec has data-center content but no DC pack was provided.",
+            "Pass the @platformcosmo/dc-pack `dcPack` as options.dc.",
+          ),
+        );
+      }
+      if (!report.valid || !report.spec || diagnostics.some((d) => d.severity === "error")) {
+        return fail(diagnostics);
+      }
+      const parsed: PlatformCosmoSpec = report.spec;
 
-    const font = options.font ?? "embed";
-    const speed = options.speed ?? 1;
-    const doOptimize = options.optimize !== false;
-    const prefix =
-      options.idPrefix ??
-      defaultIdPrefix(spec, {
+      const themeId = parsed.canvas?.theme ?? "light";
+      const theme = options.theme ?? options.themes?.get(themeId);
+      if (!theme) {
+        return fail([
+          ...diagnostics,
+          err(
+            "render/theme-unavailable",
+            "/canvas/theme",
+            `Theme "${themeId}" is not available.`,
+            options.themes
+              ? `Available: ${options.themes.list().join(", ")}`
+              : "Pass options.theme or options.themes.",
+          ),
+        ]);
+      }
+      const darkTheme =
+        options.darkTheme === null
+          ? undefined
+          : (options.darkTheme ??
+            (theme.colorScheme === "light" ? options.themes?.get("dark") : undefined));
+
+      // Custom themes are untrusted: reject bad values here so emit never throws on user input.
+      const themePath = options.theme ? "/theme" : "/canvas/theme";
+      const darkPath = options.darkTheme ? "/darkTheme" : "/canvas/theme";
+      for (const [t, path] of [
+        [theme, themePath],
+        [darkTheme, darkPath],
+      ] as const) {
+        if (!t) continue;
+        try {
+          themeVars(t);
+        } catch (e) {
+          return fail([
+            ...diagnostics,
+            err("render/invalid-theme", path, `The theme is invalid: ${(e as Error).message}.`),
+          ]);
+        }
+      }
+
+      const scene = deps.buildScene(parsed, {
+        ...(options.icons ? { icons: options.icons } : {}),
+        ...(options.dc ? { dc: options.dc } : {}),
+      });
+      diagnostics.push(...scene.diagnostics);
+      if (diagnostics.some((d) => d.severity === "error")) return fail(diagnostics, scene);
+
+      const font = options.font ?? "embed";
+      const speed = options.speed ?? 1;
+      const doOptimize = options.optimize !== false;
+      const prefix =
+        options.idPrefix ??
+        defaultIdPrefix(spec, {
+          theme,
+          ...(darkTheme ? { darkTheme } : {}),
+          font,
+          speed,
+          optimize: doOptimize,
+        });
+
+      const built = buildModelWithDiagnostics({
+        scene,
         theme,
         ...(darkTheme ? { darkTheme } : {}),
         font,
-        speed,
-        optimize: doOptimize,
+        prefix,
+        ...(options.icons ? { icons: options.icons } : {}),
       });
+      diagnostics.push(...built.diagnostics);
+      const model = built.model;
 
-    const built = buildTrackedModel({
-      scene,
-      theme,
-      ...(darkTheme ? { darkTheme } : {}),
-      font,
-      prefix,
-      ...(options.icons ? { icons: options.icons } : {}),
-    });
-    diagnostics.push(...built.diagnostics);
-    const model = built.model;
+      const name = options.name ?? "diagram";
+      const finish = (svg: string) => (doOptimize ? deps.optimize(svg) : svg);
+      const animator = deps.createAnimator();
+      const outputs: RenderOutput[] = [];
+      let elements = 0;
 
-    const name = options.name ?? "diagram";
-    const finish = (svg: string) => (doOptimize ? deps.optimize(svg) : svg);
-    const animator = deps.createAnimator();
-    const outputs: RenderOutput[] = [];
-    let elements = 0;
-
-    if (kinds.includes("animated")) {
-      const layer = animator.animate(model, { speed, mode: "loop" });
-      const raw = deps.emit(model, layer, { font });
-      elements = countElements(raw);
-      outputs.push({
-        kind: "animated",
-        path: `${name}.svg`,
-        mime: "image/svg+xml",
-        data: finish(raw),
-      });
-    }
-
-    const others = kinds.filter((k) => k !== "animated");
-    if (others.length > 0) {
-      const exported = await deps.exportOutputs(
-        model,
-        others,
-        {
-          animator,
-          emit: deps.emit,
-          optimize: finish,
-          rasterize: deps.rasterize,
-          withVariant,
-        },
-        { ...options, idPrefix: prefix, name },
-      );
-      outputs.push(...exported.outputs);
-      diagnostics.push(...exported.diagnostics);
-      if (elements === 0) {
-        const first = exported.outputs.find((o) => typeof o.data === "string");
-        if (first) elements = countElements(first.data as string);
+      if (kinds.includes("animated")) {
+        const layer = animator.animate(model, { speed, mode: "loop" });
+        const raw = deps.emit(model, layer, { font });
+        elements = countElements(raw);
+        outputs.push({
+          kind: "animated",
+          path: `${name}.svg`,
+          mime: "image/svg+xml",
+          data: finish(raw),
+        });
       }
-    }
 
-    if (elements > ELEMENT_BUDGET) {
-      diagnostics.push({
-        severity: "warning",
-        code: "budget/elements",
-        path: "",
-        message: `The diagram has ${elements} SVG elements (budget ${ELEMENT_BUDGET}).`,
-        suggestion: "Split the diagram into several smaller ones.",
-      });
-    }
+      const others = kinds.filter((k) => k !== "animated");
+      if (others.length > 0) {
+        const exported = await deps.exportOutputs(
+          model,
+          others,
+          {
+            animator,
+            emit: deps.emit,
+            optimize: finish,
+            rasterize: deps.rasterize,
+            withVariant,
+          },
+          { ...options, idPrefix: prefix, name },
+        );
+        outputs.push(...exported.outputs);
+        diagnostics.push(...exported.diagnostics);
+        if (elements === 0) {
+          const first = exported.outputs.find((o) => typeof o.data === "string");
+          if (first) elements = countElements(first.data as string);
+        }
+      }
 
-    const bytes: Record<string, number> = {};
-    for (const o of outputs) bytes[o.path] = byteLength(o.data);
-    const hasError = diagnostics.some((d) => d.severity === "error");
-    return {
-      outputs: hasError ? [] : outputs,
-      diagnostics: sortDiagnostics(diagnostics),
-      stats: hasError ? emptyStats : { elements, bytes },
-      scene,
-    };
+      if (elements > ELEMENT_BUDGET) {
+        diagnostics.push({
+          severity: "warning",
+          code: "budget/elements",
+          path: "",
+          message: `The diagram has ${elements} SVG elements (budget ${ELEMENT_BUDGET}).`,
+          suggestion: "Split the diagram into several smaller ones.",
+        });
+      }
+
+      const bytes: Record<string, number> = {};
+      for (const o of outputs) bytes[o.path] = byteLength(o.data);
+      const hasError = diagnostics.some((d) => d.severity === "error");
+      return {
+        outputs: hasError ? [] : outputs,
+        diagnostics: sortDiagnostics(diagnostics),
+        stats: hasError ? emptyStats : { elements, bytes },
+        scene,
+      };
+    }
   };
 }
 

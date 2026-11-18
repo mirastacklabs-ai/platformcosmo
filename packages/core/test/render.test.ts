@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, test, vi } from "vitest";
 import type {
   AnimationLayer,
@@ -13,7 +14,6 @@ import { emit } from "../src/emit/index.js";
 import { optimize } from "../src/optimize/index.js";
 import { buildModelWithDiagnostics } from "../src/render/model.js";
 import {
-  buildTrackedModel,
   buildModel,
   canonicalJson,
   createRender,
@@ -81,7 +81,7 @@ describe("buildModel", () => {
     expect(svg).toContain('<g id="pc-test-o_app-1" class="pc-test-s-healthy">');
     for (const o of model.scene.objects) {
       expect(svg).toContain(`id="pc-test-ov_${o.id}"`);
-      expect(svg).toContain(`id="pc-test-f_${o.id}_top"`);
+      expect(svg).toContain(`id="pc-test-f_${o.id}__top"`);
     }
   });
 
@@ -109,9 +109,9 @@ describe("buildModel", () => {
     ]);
     expect(model.edgePaths["e_users_lb"]?.length).toBeGreaterThan(30);
     const svg = emit(model, noopLayer, { font: "system" });
-    expect(svg).toContain('<g id="pc-test-e_e_users_lb">');
-    expect(svg).not.toContain('id="pc-test-e_e_users_app-1"');
-    expect(svg).toMatch(/<defs><path id="pc-test-ep_e_users_app-1" d="M/);
+    expect(svg).toContain('<g id="pc-test-e_e_5fusers_5flb">');
+    expect(svg).not.toContain('id="pc-test-e_e_5fusers_5fapp-1"');
+    expect(svg).toMatch(/<defs><path id="pc-test-ep_e_5fusers_5fapp-1" d="M/);
   });
 
   test("captions: step 1 visible, later steps hidden; metric values per contract", () => {
@@ -121,11 +121,11 @@ describe("buildModel", () => {
       /<text id="pc-test-cap_2"[^>]*visibility="hidden"[^>]*>app-2 fails<\/text>/,
     );
     // rps changes in step 2 (900), err does not change
-    expect(svg).toMatch(/<text id="pc-test-mv_rps_0"(?![^>]*hidden)[^>]*>1200<\/text>/);
-    expect(svg).toMatch(/<text id="pc-test-mv_rps_2"[^>]*visibility="hidden"[^>]*>900<\/text>/);
-    expect(svg).toMatch(/<text id="pc-test-mv_err_0"/);
-    expect(svg).not.toContain("pc-test-mv_err_2");
-    expect(svg).not.toContain("pc-test-mv_rps_1");
+    expect(svg).toMatch(/<text id="pc-test-mv_rps__0"(?![^>]*hidden)[^>]*>1200<\/text>/);
+    expect(svg).toMatch(/<text id="pc-test-mv_rps__2"[^>]*visibility="hidden"[^>]*>900<\/text>/);
+    expect(svg).toMatch(/<text id="pc-test-mv_err__0"/);
+    expect(svg).not.toContain("pc-test-mv_err__2");
+    expect(svg).not.toContain("pc-test-mv_rps__1");
   });
 
   test("objects that are siblings, never nested (rack + devices)", () => {
@@ -164,7 +164,7 @@ describe("buildModel", () => {
     expect(svg.indexOf('pc-test-o_r1"')).toBeLessThan(svg.indexOf('pc-test-o_r1.u3"'));
     // LED part faces carry the led class and per-part face ids
     expect(svg).toContain(
-      'id="pc-test-f_r1_led0_top" class="pc-test-face pc-test-p-led-top pc-test-led"',
+      'id="pc-test-f_r1__led0__top" class="pc-test-face pc-test-p-led-top pc-test-led"',
     );
     // device group is not inside the rack group
     const rackGroup = /<g id="pc-test-o_r1" [^>]*>(.*?)<path id="pc-test-ov_r1"/s.exec(svg);
@@ -232,12 +232,15 @@ describe("withVariant", () => {
     const tracked = buildTracked();
     expect(() => withVariant(tracked, "s01")).toThrow(/invalid id variant/);
     expect(() => withVariant(tracked, "-TOOLONG99")).toThrow();
-    expect(() => withVariant(buildModel(inputs()), "-x")).toThrow(/not built/);
+    // models from buildModel work directly
+    expect(withVariant(buildModel(inputs()), "-x").ids.prefix).toBe("pc-test-x");
+    // a hand-made model that did not come from buildModel has no inputs to rebuild from
+    expect(() => withVariant({ ...buildModel(inputs()) }, "-x")).toThrow(/not built/);
   });
 });
 
 function buildTracked(): RenderModel {
-  return buildTrackedModel(inputs()).model;
+  return buildModel(inputs());
 }
 
 describe("render pipeline (stage fakes)", () => {
@@ -342,6 +345,60 @@ describe("render pipeline (stage fakes)", () => {
     expect(r.diagnostics.map((d) => d.code)).toEqual(["render/invalid-theme"]);
   });
 
+  test("option warnings are kept; DC gate runs after validate and reports both", async () => {
+    const warn: Diagnostic = {
+      severity: "warning",
+      code: "options/note",
+      path: "/x",
+      message: "w",
+    };
+    const bad: Diagnostic = { severity: "error", code: "schema/x", path: "/y", message: "e" };
+    const render = createRender(
+      deps({
+        validateOptions: () => [warn],
+        validate: () => ({ valid: false, diagnostics: [bad] }),
+      }),
+    );
+    const r = await render({ ...spec, racks: [{ id: "r" }] }, opts);
+    expect(r.outputs).toEqual([]);
+    expect(r.diagnostics.map((d) => d.code)).toEqual([
+      "render/dc-pack-required",
+      "options/note",
+      "schema/x",
+    ]);
+    const ok = await createRender(deps({ validateOptions: () => [warn] }))(spec, opts);
+    expect(ok.outputs).toHaveLength(1);
+    expect(ok.diagnostics.map((d) => d.code)).toContain("options/note");
+  });
+
+  test("theme diagnostics point at the option that supplied the theme", async () => {
+    const render = createRender(deps());
+    const bad = { ...fixtureTheme(), background: "url(https://evil)" };
+    const a = await render(spec, { font: "system", theme: bad });
+    expect(a.diagnostics[0]?.path).toBe("/theme");
+    const b = await render(spec, { font: "system", theme: fixtureTheme(), darkTheme: bad });
+    expect(b.diagnostics[0]?.path).toBe("/darkTheme");
+    const c = await render(spec, {
+      font: "system",
+      themes: { get: () => bad, list: () => ["light"] },
+    });
+    expect(c.diagnostics[0]?.path).toBe("/canvas/theme");
+  });
+
+  test("unexpected stage failures become render/internal-error", async () => {
+    const render = createRender(
+      deps({
+        buildScene: () => {
+          throw new Error("boom");
+        },
+      }),
+    );
+    const r = await render(spec, opts);
+    expect(r.outputs).toEqual([]);
+    expect(r.diagnostics.map((d) => d.code)).toEqual(["render/internal-error"]);
+    expect(r.diagnostics[0]?.message).toContain("boom");
+  });
+
   test("unknown theme and missing DC pack are diagnostics", async () => {
     const render = createRender(deps());
     const r = await render(spec, {
@@ -398,6 +455,13 @@ describe("render pipeline (stage fakes)", () => {
 });
 
 describe("canonical JSON and schema export", () => {
+  test("dist/schema/v1.json is byte-identical to schema/v1.json (after build)", () => {
+    const dist = new URL("../dist/schema/v1.json", import.meta.url);
+    if (!existsSync(dist)) return; // `pnpm test` / ci build first; skipped on a bare checkout
+    const src = new URL("../../../schema/v1.json", import.meta.url);
+    expect(readFileSync(dist).equals(readFileSync(src))).toBe(true);
+  });
+
   test("JCS: sorted keys, no whitespace, undefined dropped", () => {
     expect(canonicalJson({ b: 1, a: [true, null, "x\n"], c: undefined })).toBe(
       '{"a":[true,null,"x\\n"],"b":1}',

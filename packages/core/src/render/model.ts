@@ -125,6 +125,14 @@ function aspectRatio(aspect: string): number | undefined {
   return w > 0 && hh > 0 ? w / hh : undefined;
 }
 
+// Inputs of every model built here, so `withVariant` can rebuild ids and layers.
+const registry = new WeakMap<RenderModel, ModelInputs>();
+
+/** The inputs a model was built from (undefined for models built elsewhere). */
+export function inputsOf(model: RenderModel): ModelInputs | undefined {
+  return registry.get(model);
+}
+
 export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   const { scene, theme, prefix } = inputs;
   const projection = createProjection();
@@ -659,6 +667,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     font: inputs.font,
     fontAssets: fontAssets(),
   };
+  registry.set(model, inputs);
   return { model, diagnostics };
 }
 
