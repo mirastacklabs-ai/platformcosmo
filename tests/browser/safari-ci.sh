@@ -44,7 +44,7 @@ EOF
 
 rc=0
 run_pass() { # pass-name reduced(0|1)
-  local pass="$1" reduced="$2" input name dir code attempt expect_fail
+  local pass="$1" reduced="$2" input name dir code attempt expect_fail shot_pid
   for input in ${SAFARI_INPUTS:-out/fixtures real} negative; do
     name="${input##*/}"
     dir="tests/browser/out-safari/$pass/$name"
@@ -55,6 +55,7 @@ run_pass() { # pass-name reduced(0|1)
     mkdir -p "$dir"
     # evidence: what the display itself shows while the session runs (kept only on failure)
     (sleep 12; screencapture -x "$dir/screen.png" || true) &
+    shot_pid=$!
     # Exit 3 = blank WebDriver screenshots (an unpainted window): up to 3 attempts in total,
     # each retry with a fresh Safari session; blank attempts are kept in the output directory.
     code=0
@@ -83,6 +84,7 @@ run_pass() { # pass-name reduced(0|1)
     fi
     [ "$code" = 0 ] || rc=1
     # Desktop screenshots only matter when something failed.
+    wait "$shot_pid" 2>/dev/null
     [ "$code" = 0 ] && rm -f "$dir/screen.png"
   done
 }
