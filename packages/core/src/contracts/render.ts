@@ -45,7 +45,7 @@
  *   the others carry `visibility="hidden"`, and B's CSS (`visibility: visible`) decides which one
  *   shows at each time (in `frame`/`step` modes B emits static rules).
  * - Icons: `<symbol id=icon(ref)>` in `<defs>`, placed with `<use>`.
- * - `prefers-reduced-motion: reduce` (B's CSS): pause CSS animations at the static frame and
+ * - `prefers-reduced-motion: reduce` (B's CSS): pause CSS animations at the rest frame (full view, D27) and
  *   hide the `flows` layer (SMIL cannot be paused by CSS).
  */
 import type { PlatformCosmoSpec } from "../schema/types.gen.js";
@@ -287,7 +287,7 @@ export interface AnimateOptions {
   /**
    * `loop`: one looping master timeline over all steps (animated output).
    * `step`: static states of one step with its own particle loops (per-step output).
-   * `frame`: no CSS/SMIL animation at all; particles frozen at `time` (static, png, gif/mp4 frames).
+   * `frame`: no CSS/SMIL animation at all; particles frozen at `time` (static, png, gif/mp4 frames); time 0 = the rest frame (no zoom).
    * `interactive`: `loop` plus Play/Pause/Step script.
    */
   readonly mode: "loop" | "step" | "frame" | "interactive";
