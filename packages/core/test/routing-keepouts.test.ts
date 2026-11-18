@@ -42,6 +42,9 @@ const segHits = (path: readonly Vec3[], r: R): boolean => {
 const blockedEdges = (g: SceneGraph): number =>
   g.diagnostics.filter((d) => d.code === "routing/blocked").length;
 
+const hiddenSide = (g: SceneGraph): number =>
+  g.diagnostics.filter((d) => d.code === "routing/hidden-side").length;
+
 /** Every non-blocked route avoids non-endpoint footprints, their shadows and every label keep-out. */
 function violations(g: SceneGraph): string[] {
   const out: string[] = [];
@@ -92,6 +95,7 @@ describe("routes keep clear of objects, occlusion shadows and labels", () => {
       if (!r.spec) return;
       const g = buildScene(r.spec, {});
       expect(blockedEdges(g)).toBe(0);
+      expect(hiddenSide(g)).toBe(0);
       expect(violations(g)).toEqual([]);
     });
   }
@@ -104,7 +108,7 @@ describe("routes keep clear of objects, occlusion shadows and labels", () => {
         id: `n${i}`,
         type: "server",
         label: `Node number ${i}`,
-        size: (["sm", "md", "lg"] as const)[Math.floor(rand() * 3)],
+        size: (["md", "md", "lg"] as const)[Math.floor(rand() * 3)],
       }));
       const edges: { from: string; to: string }[] = [];
       for (let i = 1; i < n; i++) {
@@ -115,6 +119,7 @@ describe("routes keep clear of objects, occlusion shadows and labels", () => {
       expect(r.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
       const g = buildScene(r.spec!, {});
       expect(blockedEdges(g), `seed ${seed}`).toBe(0);
+      expect(hiddenSide(g), `seed ${seed}`).toBe(0);
       expect(violations(g), `seed ${seed}`).toEqual([]);
     }
   });

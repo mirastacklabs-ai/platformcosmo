@@ -74,9 +74,25 @@ export class RouteLanes {
   }
 
   /** Coordinates of used lanes (extra grid lines are offered 0.5 beside them, so near-parallel edges separate). */
-  lines(): { h: number[]; v: number[] } {
-    const pick = (m: Map<number, { src: string }[]>): number[] => [...m.keys()].slice(0, 80);
-    return { h: pick(this.h), v: pick(this.v) };
+  lines(win: Rect): { h: number[]; v: number[] } {
+    // Only lanes inside the search window, nearest to its centre first, at most 80 per axis.
+    const mid = (a: number, b: number): number => (Number.isFinite(a + b) ? (a + b) / 2 : 0);
+    const cx = mid(win.x0, win.x1);
+    const cy = mid(win.y0, win.y1);
+    const pick = (
+      m: Map<number, { src: string }[]>,
+      lo: number,
+      hi: number,
+      mid: number,
+    ): number[] =>
+      [...m.keys()]
+        .filter((c) => c >= lo && c <= hi)
+        .sort((a, b) => Math.abs(a - mid) - Math.abs(b - mid) || a - b)
+        .slice(0, 80);
+    return {
+      h: pick(this.h, win.y0, win.y1, cy),
+      v: pick(this.v, win.x0, win.x1, cx),
+    };
   }
 }
 
@@ -270,7 +286,7 @@ function search(
     add(r.x1, r.y1);
   }
   if (ctx.lanes && ctx.source !== undefined) {
-    const ln = ctx.lanes.lines();
+    const ln = ctx.lanes.lines(win);
     for (const c of ln.v) {
       xsSet.add(r2(c - 0.5));
       xsSet.add(r2(c + 0.5));

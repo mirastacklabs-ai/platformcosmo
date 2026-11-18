@@ -16,7 +16,15 @@ import type {
   Vec3,
 } from "../contracts/index.js";
 import { layoutSpec } from "../layout/index.js";
-import { KeepoutIndex, isRoutingFurniture, labelRects, shadowRects } from "../routing/obstacles.js";
+import {
+  KeepoutIndex,
+  badgeRects,
+  groupPillRects,
+  isRoutingFurniture,
+  labelRects,
+  plateRects,
+  shadowRects,
+} from "../routing/obstacles.js";
 import { RouteLanes, routeEdge, type Rect } from "../routing/router.js";
 import { particleCount, PARTICLE_LIMIT } from "../schema/semantic.js";
 import type { PlatformCosmoSpec, SpecFlow, SpecNode } from "../schema/types.gen.js";
@@ -249,13 +257,18 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
     solidObjects.push(o);
     keepouts.add(o.id, "shadow", shadowRects(o.box));
     if (o.label) keepouts.add(o.id, "label", labelRects(o.label, o.box));
+    if (o.icon) keepouts.add(o.id, "label", plateRects(o.box, o.icon.size));
+    if (o.badge) keepouts.add(o.id, "label", badgeRects(o.badge, o.box, o.icon?.size));
+  }
+  for (const g of allGroups) {
+    if (g.label && g.kind === "group") keepouts.add(g.id, "label", groupPillRects(g.label, g.box));
   }
   const lanes = new RouteLanes();
   const route = (
     from: string,
     to: string,
     visible = false,
-  ): { path: Vec3[]; blocked: boolean } | undefined => {
+  ): { path: Vec3[]; blocked: boolean; relaxed?: boolean } | undefined => {
     const a = boxes.get(from);
     const b = boxes.get(to);
     if (!a || !b) return undefined;
@@ -303,7 +316,8 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
     const strict = attempt(extra);
     if (!strict.blocked) return strict;
     const relaxedSkip = new Set([...shadowSkip, from, to]);
-    return attempt((win) => keepouts.query(win, relaxedSkip));
+    const relaxed = attempt((win) => keepouts.query(win, relaxedSkip));
+    return { ...relaxed, relaxed: !relaxed.blocked };
   };
 
   const edges: SceneEdge[] = [];
@@ -345,7 +359,10 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
         i - j
       );
     });
-  const routedByIndex = new Map<number, { path: Vec3[]; blocked: boolean } | undefined>();
+  const routedByIndex = new Map<
+    number,
+    { path: Vec3[]; blocked: boolean; relaxed?: boolean } | undefined
+  >();
   for (const i of routeOrder) {
     const e = edgesSpec[i]!;
     routedByIndex.set(i, route(e.from, e.to, true));
@@ -361,6 +378,15 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
         message: `Edge ${JSON.stringify(id)} has an endpoint with no geometry (${JSON.stringify(boxes.has(e.from) ? e.to : e.from)})`,
       });
       return;
+    }
+    if (routed.relaxed) {
+      diagnostics.push({
+        severity: "info",
+        code: "routing/hidden-side",
+        path: `/edges/${i}`,
+        message: `No route reaches "${e.to}" on a viewer-facing side; the arrow lands on a hidden side`,
+        suggestion: "Give the nodes more room or move them apart",
+      });
     }
     if (routed.blocked) {
       diagnostics.push({

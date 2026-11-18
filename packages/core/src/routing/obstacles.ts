@@ -120,45 +120,110 @@ export class KeepoutIndex {
   }
 }
 
-/** Ground cells covered by the label drawn under the object, merged into column runs. */
-export function labelRects(label: string, box: Box3): Rect[] {
-  const cx = box.origin.x + box.size.x / 2;
-  const cy = box.origin.y + box.size.y / 2;
-  const w = labelWidth(label);
-  const sx = (cx - cy) * HALF_TILE;
-  const yb = (box.origin.x + box.size.x + box.origin.y + box.size.y) * QUARTER_TILE;
-  // Screen rect -> (u, v) = (x - y, x + y) ground coordinates.
-  const u0 = (sx - w / 2) / HALF_TILE;
-  const u1 = (sx + w / 2) / HALF_TILE;
-  const v0 = (yb + 1) / QUARTER_TILE;
-  const v1 = (yb + 24) / QUARTER_TILE;
+/**
+ * Ground cells covered by a screen rectangle drawn at ground-plane (z = 0) coordinates, merged
+ * into column runs. `u = x - y`, `v = x + y`; a cell is kept when the L1 distance from its
+ * (u, v) centre to the rectangle is within the cell's diamond (plus slack), and neighbouring
+ * column rects overlap so no seam is left.
+ */
+function screenRectCells(sx0: number, sx1: number, sy0: number, sy1: number): Rect[] {
+  const u0 = sx0 / HALF_TILE;
+  const u1 = sx1 / HALF_TILE;
+  const v0 = sy0 / QUARTER_TILE;
+  const v1 = sy1 / QUARTER_TILE;
   const xa = Math.floor((u0 + v0 - 2 * PAD) / 2 / CELL) * CELL - CELL;
   const xb = (u1 + v1 + 2 * PAD) / 2;
   const ya = Math.floor((v0 - u1 - 2 * PAD) / 2 / CELL) * CELL - CELL;
-  const yb2 = (v1 - u0 + 2 * PAD) / 2;
+  const yb = (v1 - u0 + 2 * PAD) / 2;
   const out: Rect[] = [];
   for (let x = xa; x <= xb; x += CELL) {
     let runStart: number | undefined;
     let runEnd = 0;
-    for (let y = ya; y <= yb2 + 1e-9; y += CELL) {
-      // The cell is a diamond in (u, v) with half-diagonal CELL / 2 around its center; include it
-      // when the L1 distance from that center to the label rectangle is within the diamond.
+    const flush = (): void => {
+      if (runStart === undefined) return;
+      out.push({ x0: r2(x - SLIT), y0: r2(runStart), x1: r2(x + CELL + SLIT), y1: r2(runEnd) });
+      runStart = undefined;
+    };
+    for (let y = ya; y <= yb + 1e-9; y += CELL) {
       const cu = x - y;
       const cv = x + y + CELL;
       const du = Math.max(u0 - cu, 0, cu - u1);
       const dv = Math.max(v0 - cv, 0, cv - v1);
-      const inside = du + dv <= CELL / 2 + PAD;
-      if (inside) {
+      if (du + dv <= CELL / 2 + PAD) {
         if (runStart === undefined) runStart = y;
         runEnd = y + CELL;
-      } else if (runStart !== undefined) {
-        out.push({ x0: r2(x - SLIT), y0: r2(runStart), x1: r2(x + CELL + SLIT), y1: r2(runEnd) });
-        runStart = undefined;
-      }
+      } else flush();
     }
-    if (runStart !== undefined) {
-      out.push({ x0: r2(x - SLIT), y0: r2(runStart), x1: r2(x + CELL + SLIT), y1: r2(runEnd) });
-    }
+    flush();
   }
   return out;
+}
+
+/** Screen position of a world point (default 2:1 projection). */
+const sxOf = (x: number, y: number): number => (x - y) * HALF_TILE;
+const syOf = (x: number, y: number, z: number): number => (x + y) * QUARTER_TILE - z * HALF_TILE;
+
+/** Ground cells covered by the label drawn under the object. */
+export function labelRects(label: string, box: Box3): Rect[] {
+  const cx = box.origin.x + box.size.x / 2;
+  const cy = box.origin.y + box.size.y / 2;
+  const w = labelWidth(label);
+  const bottom = syOf(box.origin.x + box.size.x, box.origin.y + box.size.y, box.origin.z);
+  const sx = sxOf(cx, cy);
+  return screenRectCells(sx - w / 2, sx + w / 2, bottom + 1, bottom + 24);
+}
+
+/** A1 draws the icon plate floating above the top face when the front face is too short. */
+function floatingPlate(box: Box3, iconSize: number): { s: number; topY: number } | undefined {
+  const frontH = box.size.z * HALF_TILE;
+  const std = Math.min(iconSize, (box.size.x + box.size.y) * HALF_TILE * 0.6);
+  if (!(frontH - 8 < std * 0.75)) return undefined;
+  const cx = box.origin.x + box.size.x / 2;
+  const cy = box.origin.y + box.size.y / 2;
+  const top = syOf(cx, cy, box.origin.z + box.size.z);
+  return { s: std, topY: top };
+}
+
+/**
+ * Ground cells hidden behind a floating icon plate (the plate rect lies above the top face centre
+ * on screen, so it covers ground behind the object). Empty when the plate sits on the face.
+ */
+export function plateRects(box: Box3, iconSize: number): Rect[] {
+  const f = floatingPlate(box, iconSize);
+  if (!f) return [];
+  const cx = box.origin.x + box.size.x / 2;
+  const cy = box.origin.y + box.size.y / 2;
+  const sx = sxOf(cx, cy);
+  const half = f.s / 2 + 2;
+  return screenRectCells(sx - half, sx + half, f.topY - f.s - 8, f.topY - 4);
+}
+
+/** Ground cells hidden behind the badge pill drawn above the object (or its floating plate). */
+export function badgeRects(badge: string, box: Box3, iconSize?: number): Rect[] {
+  const cx = box.origin.x + box.size.x / 2;
+  const cy = box.origin.y + box.size.y / 2;
+  const sx = sxOf(cx, cy);
+  const top = box.origin.z + box.size.z;
+  let aboveTop = syOf(box.origin.x, box.origin.y, top); // back corner of the top face
+  const f = iconSize === undefined ? undefined : floatingPlate(box, iconSize);
+  if (f) aboveTop = Math.min(aboveTop, f.topY - f.s - 8);
+  const w = Math.min(60, [...badge].length * 7.2) + 10;
+  const bh = 16; // theme badge font 10 + 6
+  return screenRectCells(sx - w / 2, sx + w / 2, aboveTop - bh - 2, aboveTop - 2);
+}
+
+/** Ground cells under the group label pill drawn left of the slab's left corner. */
+export function groupPillRects(label: string, box: Box3): Rect[] {
+  const corner = {
+    sx: sxOf(box.origin.x, box.origin.y + box.size.y),
+    sy: syOf(box.origin.x, box.origin.y + box.size.y, box.origin.z + box.size.z),
+  };
+  const w = Math.min(160, [...label].length * 7.4) + 12;
+  const ph = 20; // label font 12 + 8
+  return screenRectCells(
+    corner.sx - 10 - w,
+    corner.sx - 10,
+    corner.sy - ph / 2,
+    corner.sy + ph / 2,
+  );
 }
