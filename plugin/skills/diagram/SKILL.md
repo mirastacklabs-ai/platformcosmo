@@ -2,7 +2,7 @@
 name: diagram
 description: Draw an animated isometric architecture diagram (cloud, platform engineering, AI, data center) from a description. Use when the user asks for an architecture diagram, system or network diagram, request-flow or data-flow picture, load balancer, RAG, Kubernetes, CDN or GPU cluster visual, or a data-center rack/row layout. You write a small JSON spec; the pcosmo CLI renders the SVG.
 argument-hint: <what to draw, e.g. "RAG pipeline with a vector DB and a guardrail">
-allowed-tools: Bash(pcosmo validate *) Bash(pcosmo build *) Bash(pcosmo init *) Bash(pcosmo examples *) Bash(pcosmo icons search *) Bash(pcosmo icons list*) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs validate *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs build *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs init *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs examples *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs icons search *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs icons list*) Read Write(*.cosmo.json)
+allowed-tools: Bash(pcosmo validate *) Bash(pcosmo build *) Bash(pcosmo init *) Bash(pcosmo examples list *) Bash(pcosmo examples show *) Bash(pcosmo examples copy *) Bash(pcosmo icons search *) Bash(pcosmo icons list*) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs validate *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs build *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs init *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs examples list *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs examples show *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs examples copy *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs icons search *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs icons list*) Read Write(*.cosmo.json)
 ---
 
 # PlatformCosmo diagram
@@ -20,7 +20,8 @@ Request: $ARGUMENTS
 3. **Always validate, fix, then build:** `pcosmo validate <spec> --packs-dir "${CLAUDE_PLUGIN_DATA}/icons"`; fix every error; then `pcosmo build <spec> --packs-dir "${CLAUDE_PLUGIN_DATA}/icons"`.
 4. **Report the output paths** printed by `pcosmo build` (lines starting `wrote`).
 5. Keep it readable: 5 to 20 nodes, labels under about 24 characters, one idea per diagram.
-6. Do not invent fields. If the CLI says a field is unknown, remove it or use the suggestion.
+6. Never pass `--force` to `pcosmo init` or `pcosmo examples copy` without asking the user first; it overwrites files.
+7. Do not invent fields. If the CLI says a field is unknown, remove it or use the suggestion.
 
 Pass `--packs-dir "${CLAUDE_PLUGIN_DATA}/icons"` to every `validate`, `build` and `icons search`/`icons list`
 command: it is where the user's installed icon packs live (Bash commands do not see `CLAUDE_PLUGIN_DATA`).
@@ -75,7 +76,7 @@ Read the one closest to the request, then adapt it:
 - [RAG pipeline](examples/rag-pipeline.cosmo.json): a linear story told entirely through steps and highlights.
 - [Kubernetes deployment](examples/kubernetes-deployment.cosmo.json): a cluster group, a rollout with degraded pods.
 
-More gallery specs ship with the CLI: `pcosmo examples` lists them, `pcosmo examples copy <name>` copies one.
+More gallery specs ship with the CLI: `pcosmo examples list` lists them, `pcosmo examples copy <name>` copies one.
 
 ## When validation fails
 

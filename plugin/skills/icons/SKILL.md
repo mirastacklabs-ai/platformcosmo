@@ -44,10 +44,9 @@ validated (below).
    allows https to public addresses only, with size and time limits. If it refuses a URL, report the reason; do not
    try to work around it (no `curl`, no other hosts).
 2. **Terms:** provider packs come with the provider's terms. `add` prints them. Show the full text to the user.
-   Azure (and any pack that prints terms) installs only with `--accept-terms`. Add that flag **only after the user
-   sends a new message agreeing to the terms you showed**. Never add it on the first run, never infer agreement from the
-   original request, and never pass it on the user's behalf. Because `--accept-terms` appears in an `add` command,
-   run it so that the user is prompted (do not rely on the pre-approval).
+   Azure (and any pack that prints terms) installs only with `--accept-terms`. The gate for that flag is a **fresh
+   user message agreeing to the terms you showed**: add the flag only after such a message. Never add it on the first
+   run, never infer agreement from the original request, and never pass it on the user's behalf.
 3. **No redistribution:** provider packs live in `${CLAUDE_PLUGIN_DATA}/icons` on the user's machine. Never copy them
    into a repository or commit them. Rendered diagrams that use the icons are fine to share.
 4. **Integrity:** user packs are verified against a lockfile on every use. If `list` reports an integrity mismatch,

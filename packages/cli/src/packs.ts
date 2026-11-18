@@ -19,7 +19,7 @@ import type {
   IconManifest,
   LoadedIconPack,
 } from "@platformcosmo/core";
-import type { Deps } from "./deps.js";
+import { type Deps, Failure } from "./deps.js";
 import { errorDiagnostic } from "./format.js";
 
 export const LOCKFILE_NAME = "platformcosmo-icons.lock.json";
@@ -31,10 +31,20 @@ const MAX_PACK_BYTES = 64 * 1024 * 1024;
 
 export function packsDirFor(deps: Deps, override?: string): string {
   const e = deps.env;
-  if (override) return resolve(deps.cwd, override);
-  if (e["PCOSMO_PACKS_DIR"]) return resolve(deps.cwd, e["PCOSMO_PACKS_DIR"]);
-  if (e["CLAUDE_PLUGIN_DATA"]) return join(e["CLAUDE_PLUGIN_DATA"], "icons");
-  return join(deps.homedir, ".platformcosmo", "icons");
+  let dir: string;
+  if (override) dir = resolve(deps.cwd, override);
+  else if (e["PCOSMO_PACKS_DIR"]) dir = resolve(deps.cwd, e["PCOSMO_PACKS_DIR"]);
+  else if (e["CLAUDE_PLUGIN_DATA"]) dir = join(e["CLAUDE_PLUGIN_DATA"], "icons");
+  else dir = join(deps.homedir, ".platformcosmo", "icons");
+  // A skill passes "${CLAUDE_PLUGIN_DATA}/icons"; when that variable was not substituted the shell
+  // turns it into "/icons" (or leaves a literal "${"). Never use such a directory.
+  if (dir === "/icons" || dir.includes("${")) {
+    throw new Failure(
+      `cli/plugin-data-unset: the icon pack directory "${dir}" looks like an unexpanded \${CLAUDE_PLUGIN_DATA}; ` +
+        "pass a real directory with --packs-dir or set PCOSMO_PACKS_DIR",
+    );
+  }
+  return dir;
 }
 
 /** A manifest file path must be relative, forward-slashed and stay inside the pack. */
