@@ -150,10 +150,11 @@ describe("frame mode", () => {
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 
-  test("time 0 equals the first step", () => {
+  test("time 0 is step 1 states on the full overview", () => {
     const l = run({ mode: "frame", time: 0 });
     expect(l.css).not.toContain("cap-1{visibility");
-    expect(l.viewBox).toBeDefined();
+    expect(l.viewBox).toBeUndefined(); // D27: the poster frame is the full overview
+    expect(run({ mode: "frame", time: 1.5 }).viewBox).toBeDefined(); // zoomed once step 1 eased in
   });
 });
 

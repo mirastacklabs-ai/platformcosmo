@@ -6,6 +6,7 @@ import type {
   AnimateOptions,
   Animator,
   AnimationLayer,
+  IdScheme,
   ObjectState,
   RenderModel,
   SceneFlow,
@@ -22,17 +23,17 @@ import {
   traversalSeconds,
 } from "./particles.js";
 import {
-  IDENTITY_TRANSFORM,
+  cameraStops,
   cameraTransform,
   inverseCameraTransform,
   metricTexts,
   stateAt,
   frameViewBox,
   stepIndexAt,
-  transitionSeconds,
   windows,
   zoomFor,
   type Windows,
+  type Zoom,
 } from "./timeline.js";
 
 export function createAnimator(): Animator {
@@ -47,6 +48,17 @@ const LED_OF_STATE: Readonly<Record<ObjectState, "ok" | "warn" | "fail">> = {
 };
 
 const EASE = "cubic-bezier(.4,0,.2,1)";
+
+/**
+ * Selector of the legend group: `ids.legend()` once the contract has it, until then the class the
+ * render pipeline puts on it (`<prefix>-legend`).
+ */
+function legendSelector(ids: IdScheme): string {
+  const withLegend = ids as IdScheme & { legend?: () => string };
+  return typeof withLegend.legend === "function"
+    ? ids.sel(withLegend.legend())
+    : `.${ids.prefix}-legend`;
+}
 
 function animate(model: RenderModel, options: AnimateOptions): AnimationLayer {
   const speed = options.speed > 0 ? options.speed : 1;
@@ -222,7 +234,6 @@ function loopLayer(
   const n = tl.length;
   const total = win.total;
   const kf = new Keyframes(ids.prefix);
-  const trs = win.durations.map(transitionSeconds);
   const rules: string[] = [];
   const reduced: string[] = [];
   const loopAnim = (name: string, timing = "step-end") =>
@@ -305,49 +316,30 @@ function loopLayer(
     reduced.push(staticStepCss(model, 0));
   }
 
-  // Camera zoom (and the inverse transform that keeps interactive controls on screen).
+  // Camera zoom (D27): the loop rests on the full overview (0% = overview), eases into step 1's
+  // focus at the start of step 1, and each later transition fills the END of the previous step so
+  // every step starts at its own view; the loop ends by easing back out to the overview.
+  // Everything in the overlay layer (caption box, metric tiles, legend, interactive controls) sits
+  // inside the camera group, so it gets the inverse transform on the same curve to stay put.
   const zooms = tl.map((s) => zoomFor(model, s));
-  const transforms = zooms.map(cameraTransform);
-  const inverses = zooms.map(inverseCameraTransform);
   const cam = ids.sel(ids.camera());
-  // Everything in the overlay layer (caption box, metric tiles, interactive controls) sits inside
-  // the camera group; counter-transform it so it stays fixed on screen. (The legend has no id in
-  // IdScheme, so it cannot be targeted here: contract change request.)
   const pinned = [
-    ids.caption(),
-    ...model.scene.metrics.map((m) => ids.metric(m.id)),
-    ...(interactive ? [controlIds(ids.prefix, ids.root()).group] : []),
+    ids.sel(ids.caption()),
+    ...model.scene.metrics.map((m) => ids.sel(ids.metric(m.id))),
+    legendSelector(ids),
+    ...(interactive ? [ids.sel(controlIds(ids.prefix, ids.root()).group)] : []),
   ];
-  const controlsSel = pinned.map((id) => ids.sel(id)).join(",");
-  const zoomed = transforms.some((t) => t !== IDENTITY_TRANSFORM);
-  if (zoomed) {
-    const anyDiffers = transforms.some((t) => t !== transforms[0]);
-    if (!anyDiffers) {
-      rules.push(`${cam}{transform-origin:0 0;transform:${transforms[0]}}`);
-      rules.push(`${controlsSel}{transform-origin:0 0;transform:${inverses[0]}}`);
-    } else {
-      // 0% shows step 1's view; each transition fills the END of the previous step and lands
-      // exactly on the next step's start, so every step starts at its own view.
-      const stops = (list: readonly string[]): [number, string][] => {
-        const at = (i: number) => list[i] ?? IDENTITY_TRANSFORM;
-        const out: [number, string][] = [[0, `transform:${at(0)}`]];
-        for (let i = 1; i < n; i++) {
-          const start = win.starts[i] ?? 0;
-          out.push([(start - (trs[i - 1] ?? 0)) / total, `transform:${at(i - 1)}`]);
-          out.push([start / total, `transform:${at(i)}`]);
-        }
-        out.push([(total - (trs[n - 1] ?? 0)) / total, `transform:${at(n - 1)}`]);
-        out.push([1, `transform:${at(0)}`]);
-        return out;
-      };
-      const camName = kf.add(stops(transforms));
-      rules.push(`${cam}{transform-origin:0 0;${loopAnim(camName, EASE)}}`);
-      const invName = kf.add(stops(inverses));
-      rules.push(`${controlsSel}{transform-origin:0 0;${loopAnim(invName, EASE)}}`);
-    }
-    // Reduced motion pauses at the static frame: step 1's view.
-    reduced.push(`${cam}{transform:${transforms[0]}}`);
-    reduced.push(`${controlsSel}{transform:${inverses[0]}}`);
+  const pinSel = pinned.join(",");
+  if (zooms.some((z) => z !== undefined) && total > 0) {
+    const stops = cameraStops(zooms, win);
+    const keyframes = (fmt: (z: Zoom | undefined) => string): [number, string][] =>
+      stops.map((s) => [s.t / total, `transform:${fmt(s.z)}`]);
+    rules.push(
+      `${cam}{transform-origin:0 0;${loopAnim(kf.add(keyframes(cameraTransform)), EASE)}}`,
+      `${pinSel}{transform-origin:0 0;${loopAnim(kf.add(keyframes(inverseCameraTransform)), EASE)}}`,
+    );
+    // Reduced motion rests on the overview.
+    reduced.push(`${cam}{transform:none}`, `${pinSel}{transform:none}`);
   }
 
   // Reduced motion: no CSS animation (static first frame), particles hidden (SMIL cannot be paused by CSS).
