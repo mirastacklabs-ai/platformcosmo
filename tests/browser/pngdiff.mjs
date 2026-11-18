@@ -74,3 +74,25 @@ export function diffFraction(aB64, bB64) {
     return `error ${e.message}`;
   }
 }
+
+/**
+ * Share of pixels that differ from the top-left (background) pixel by more than 24 in some
+ * channel: "ink". A blank or fully hidden diagram has none. A string says why it cannot be computed.
+ */
+export function ink(b64) {
+  try {
+    const A = decode(b64);
+    const n = A.width * A.height;
+    let count = 0;
+    for (let i = 0; i < n; i++) {
+      let max = 0;
+      for (let k = 0; k < Math.min(A.channels, 3); k++) {
+        max = Math.max(max, Math.abs(A.data[i * A.channels + k] - A.data[k]));
+      }
+      if (max > 24) count++;
+    }
+    return count / n;
+  } catch (e) {
+    return `error ${e.message}`;
+  }
+}

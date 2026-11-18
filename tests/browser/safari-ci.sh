@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Real-Safari passes for CI on macOS (never run this on a machine you use: it changes the
 # Accessibility setting and takes over Safari). Input layout, from the browser-check artifact
-# downloaded to tests/browser: out/fixtures (generated) and real (CLI renders of the examples).
-#   pass 1: Reduce Motion OFF, animation checks, fixtures and real output
-#   pass 2: Reduce Motion ON,  static rest-frame checks, fixtures and real output
-# Results: tests/browser/out-safari/<pass>/<input>/results-safari.json. Exit 1 if any pass failed.
+# downloaded to tests/browser: out/fixtures (generated) and real (CLI renders of the examples),
+# plus a generated negative fixture (a diagram whose reduced-motion CSS hides everything).
+#   pass 1 (motion):  Reduce Motion OFF, animation checks; also saves each diagram's t=0 frame
+#   pass 2 (reduced): Reduce Motion ON, static rest-frame checks (content present, equal to the
+#                     pass-1 t=0 frame); the negative fixture must FAIL here, proving the checks bite
+# Results: tests/browser/out-safari/<pass>/<input>/results-safari.json. Exit 1 if anything failed.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -15,7 +17,7 @@ set_reduce_motion() { # on|off: write, then assert the stored value
   defaults write com.apple.universalaccess reduceMotion -bool "$bool"
   got="$(defaults read com.apple.universalaccess reduceMotion 2>&1 || true)"
   echo "reduceMotion after: $got (expected $expect)"
-  [ "$got" = "$expect" ] || { echo "Reduce Motion is not $1" >&2; exit 1; }
+  [ "$got" = "$expect" ] || { echo "Reduce Motion is not $1" >&2; return 1; }
 }
 
 start_driver() {
@@ -34,31 +36,54 @@ stop_driver() {
   sleep 2
 }
 
+# Negative fixture: animated and visible normally, completely hidden under reduced motion.
+mkdir -p tests/browser/negative
+cat > tests/browser/negative/hide.svg <<'EOF'
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><style>@media (prefers-reduced-motion:reduce){svg *{display:none}}</style><rect width="200" height="100" fill="#ffffff"/><rect x="20" y="20" width="60" height="40" fill="#2563eb"/><circle r="8" fill="#ef4444"><animateMotion dur="2s" repeatCount="indefinite" path="M20 50 L180 50"/></circle></svg>
+EOF
+
 rc=0
 run_pass() { # pass-name reduced(0|1)
-  local pass="$1" reduced="$2" input name
-  for input in ${SAFARI_INPUTS:-out/fixtures real}; do
+  local pass="$1" reduced="$2" input name dir code attempt expect_fail
+  for input in ${SAFARI_INPUTS:-out/fixtures real} negative; do
     name="${input##*/}"
+    dir="tests/browser/out-safari/$pass/$name"
     [ -d "tests/browser/$input" ] || { echo "missing tests/browser/$input" >&2; rc=1; continue; }
-    echo "=== Safari $pass: $input"
-    mkdir -p "tests/browser/out-safari/$pass/$name"
-    # evidence: what the display itself shows while the session runs
-    (sleep 12; screencapture -x "tests/browser/out-safari/$pass/$name/screen.png" || true) &
-    # Exit 3 = blank WebDriver screenshots (an unpainted window): retry with a fresh Safari
-    # session, at most twice; the attempt number is kept in the output directory.
-    local attempt code=0
+    expect_fail=0
+    [ "$input" = negative ] && [ "$pass" = reduced ] && expect_fail=1
+    echo "=== Safari $pass: $input (expect_fail=$expect_fail)"
+    mkdir -p "$dir"
+    # evidence: what the display itself shows while the session runs (kept only on failure)
+    (sleep 12; screencapture -x "$dir/screen.png" || true) &
+    # Exit 3 = blank WebDriver screenshots (an unpainted window): up to 3 attempts in total,
+    # each retry with a fresh Safari session; blank attempts are kept in the output directory.
+    code=0
     for attempt in 1 2 3; do
       SAFARI_REDUCED="$reduced" INPUT_DIR="tests/browser/$input" \
-        OUT_DIR="tests/browser/out-safari/$pass/$name" GIT_SHA="$(git describe --always --dirty)" \
+        SAFARI_T0_DIR="tests/browser/out-safari/motion/$name" \
+        OUT_DIR="$dir" GIT_SHA="$(git describe --always --dirty)" \
         node tests/browser/safari.mjs && { code=0; break; } || code=$?
       echo "Safari $pass/$input attempt $attempt exited $code"
       [ "$code" = 3 ] || break
-      mkdir -p "tests/browser/out-safari/$pass/$name/blank-attempt-$attempt"
-      cp tests/browser/out-safari/"$pass/$name"/*.png "tests/browser/out-safari/$pass/$name/blank-attempt-$attempt/" 2>/dev/null || true
+      mkdir -p "$dir/blank-attempt-$attempt"
+      cp "$dir"/*.png "$dir/blank-attempt-$attempt/" 2>/dev/null || true
       stop_driver
       start_driver || break
     done
+    if [ "$expect_fail" = 1 ]; then
+      # The negative fixture must fail, and on the content check (not on something incidental).
+      if [ "$code" = 1 ] && tr -d '\n' < "$dir/results-safari.json" |
+        grep -Eq '"check": "has content[^}]*"status": "fail"'; then
+        echo "negative fixture failed as expected"
+        code=0
+      else
+        echo "negative fixture did NOT fail on the content check (exit $code)" >&2
+        code=1
+      fi
+    fi
     [ "$code" = 0 ] || rc=1
+    # Desktop screenshots only matter when something failed.
+    [ "$code" = 0 ] && rm -f "$dir/screen.png"
   done
 }
 

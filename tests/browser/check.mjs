@@ -315,6 +315,35 @@ async function checkReduced(name, browser, blocked, file, mode, expected) {
   });
 }
 
+const themeCache = new Map();
+
+/** Light-theme `--pc-background` of a diagram as [r, g, b], or undefined when it has none. */
+async function themeBackground(browser, blocked, file) {
+  if (!themeCache.has(file)) {
+    const value = await withPage(
+      browser,
+      blocked,
+      { colorScheme: "light", reducedMotion: "reduce" },
+      async (page) => {
+        await open(page, "inline", file);
+        return page.evaluate(() =>
+          getComputedStyle(document.querySelector("#host svg"))
+            .getPropertyValue("--pc-background")
+            .trim(),
+        );
+      },
+    );
+    const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value);
+    let rgb;
+    if (m) {
+      const h = m[1].length === 3 ? [...m[1]].map((c) => c + c).join("") : m[1];
+      rgb = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+    }
+    themeCache.set(file, rgb);
+  }
+  return themeCache.get(file);
+}
+
 async function checkDark(name, browser, blocked, file, mode) {
   const corner = (scheme) =>
     withPage(browser, blocked, { colorScheme: scheme, reducedMotion: "reduce" }, async (page) => {
@@ -339,9 +368,10 @@ async function checkDark(name, browser, blocked, file, mode) {
     pixels(await scratchOf(page), light.img, dark.img),
   );
   // A diagram whose own theme is already dark (spec theme "dark"/"blueprint") has no light/dark
-  // pair to compare: its light rendering is dark, and prefers-color-scheme changes nothing.
-  const [lr, lg, lb] = light.corner.split(",").map(Number);
-  const ownDark = 0.2126 * lr + 0.7152 * lg + 0.0722 * lb < 90;
+  // pair to compare: prefers-color-scheme changes nothing. The theme is read from the diagram's
+  // data (its light-theme --pc-background variable), not guessed from rendered pixels.
+  const bg = await themeBackground(browser, blocked, file);
+  const ownDark = bg !== undefined && 0.2126 * bg[0] + 0.7152 * bg[1] + 0.0722 * bg[2] < 90;
   const changed = frames.sameSize && frames.diff > 0.2;
   rec(
     name,

@@ -14,8 +14,8 @@
  */
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { diffFraction as pixelDiff } from "./pngdiff.mjs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { diffFraction as pixelDiff, ink as inkOf } from "./pngdiff.mjs";
 import { MODES, listSvgs, startServer } from "./server.mjs";
 
 const PORT = process.env.SAFARIDRIVER_PORT ?? "4444";
@@ -275,14 +275,40 @@ try {
             await go(`/page/${mode}/${encodeURIComponent(file)}`); // restore the page for later steps
           }
           rec(file, mode, "reduced motion: static", still ? "pass" : "fail", moved);
+          // Real content, not just a different element size: >1% of pixels differ from the
+          // background colour (a diagram hidden by its reduced-motion CSS has none).
+          const inkShare = inkOf(frames[0]);
           rec(
             file,
             mode,
-            "not blank (differs from the empty page)",
-            frames[0] !== blank ? "pass" : "fail",
+            "has content (ink > 1% of pixels)",
+            typeof inkShare === "number" && inkShare > 0.01 ? "pass" : "fail",
+            typeof inkShare === "number" ? `${(inkShare * 100).toFixed(1)}% ink` : String(inkShare),
           );
-          if (mode === "inline") rest = frames[0];
-          else if (rest) {
+          if (mode === "inline") {
+            rest = frames[0];
+            // The rest frame must match the motion pass's t=0 frame of the same diagram.
+            const t0Dir = process.env.SAFARI_T0_DIR;
+            const t0Path = t0Dir ? `${t0Dir}/t0-${file}.png` : undefined;
+            if (t0Path && existsSync(t0Path)) {
+              const d = await diffFraction(readFileSync(t0Path).toString("base64"), frames[0]);
+              rec(
+                file,
+                mode,
+                "rest frame matches the motion pass t=0 frame (<4% of pixels differ)",
+                typeof d === "number" && d < 0.04 ? "pass" : "fail",
+                typeof d === "number" ? `${(d * 100).toFixed(2)}% differ` : String(d),
+              );
+            } else {
+              rec(
+                file,
+                mode,
+                "rest frame matches the motion pass t=0 frame",
+                "fail",
+                "no t=0 frame from the motion pass",
+              );
+            }
+          } else if (rest) {
             const d = await diffFraction(rest, frames[0]);
             rec(
               file,
@@ -342,6 +368,10 @@ try {
             await sleep(250);
             return shot();
           };
+          if (mode === "inline") {
+            // The t=0 frame: the reduced-motion pass compares its rest frame with this one.
+            writeFileSync(`${OUT}/t0-${file}.png`, Buffer.from(await at(0), "base64"));
+          }
           const a = await at(0.5);
           const b = await at(1.7);
           const c = await at(0.5);
@@ -352,11 +382,13 @@ try {
           rec(file, mode, "time control repeats (0.5 s twice)", "info", `identical: ${a === c}`);
         }
         rec(file, mode, "animates", animated ? "pass" : "fail", animated ? "" : "static in Safari");
+        const inkShare = inkOf(first);
         rec(
           file,
           mode,
-          "not blank (differs from the empty page)",
-          first !== blank ? "pass" : "fail",
+          "has content (ink > 1% of pixels)",
+          typeof inkShare === "number" && inkShare > 0.01 ? "pass" : "fail",
+          typeof inkShare === "number" ? `${(inkShare * 100).toFixed(1)}% ink` : String(inkShare),
         );
       } catch (e) {
         rec(file, mode, "ran without error", "fail", String(e?.message ?? e));

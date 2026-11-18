@@ -43,7 +43,7 @@ jobs:
           done
       - name: Browser check on the real CLI output
         if: always()
-        run: OUT=tests/browser/out-real tests/browser/run.sh tests/browser/real
+        run: BROWSER_OUT=tests/browser/out-real tests/browser/run.sh tests/browser/real
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
