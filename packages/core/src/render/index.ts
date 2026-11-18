@@ -21,6 +21,7 @@ import type {
 import { createAnimator } from "../anim/index.js";
 import { countElements, emit, themeVars } from "../emit/index.js";
 import { exportOutputs, rasterize } from "../export/index.js";
+import { validateRenderOptions } from "../export/options.js";
 import { optimize } from "../optimize/index.js";
 import { buildScene } from "../scene/index.js";
 import { validate } from "../schema/index.js";
@@ -39,25 +40,13 @@ export interface RenderDeps {
   readonly rasterize: RasterizeFn;
   readonly emit: EmitFn;
   readonly optimize: OptimizeFn;
-  /** Option checks; defaults to the local `validateOptions` (to be replaced by Track B's `validateRenderOptions`). */
+  /** Option checks; defaults to `validateRenderOptions` (export/options.ts). */
   readonly validateOptions?: (options: RenderOptions) => readonly Diagnostic[];
 }
 
-const PREFIX_RE = /^[a-z][a-z0-9-]{0,31}$/;
-const NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const VARIANT_RE = /^-[a-z0-9]{1,7}$/;
 const ELEMENT_BUDGET = 5000;
 const DC_KEYS = ["racks", "equipment", "rows", "aisles", "cables", "facility"] as const;
-
-const KINDS: readonly OutputKind[] = [
-  "animated",
-  "static",
-  "steps",
-  "interactive",
-  "png",
-  "gif",
-  "mp4",
-];
 
 function err(code: string, path: string, message: string, suggestion?: string): Diagnostic {
   return { severity: "error", code, path, message, ...(suggestion ? { suggestion } : {}) };
@@ -100,49 +89,8 @@ export function defaultIdPrefix(
   return `pc-${digest.slice(0, 8)}`;
 }
 
-export function validateOptions(options: RenderOptions): Diagnostic[] {
-  const out: Diagnostic[] = [];
-  if (options.idPrefix !== undefined && !PREFIX_RE.test(options.idPrefix)) {
-    out.push(
-      err("options/invalid-id-prefix", "/idPrefix", "idPrefix must match ^[a-z][a-z0-9-]{0,31}$."),
-    );
-  }
-  if (options.name !== undefined && !NAME_RE.test(options.name)) {
-    out.push(err("options/invalid-name", "/name", "name must match ^[A-Za-z0-9._-]{1,64}$."));
-  }
-  const s = options.speed;
-  if (s !== undefined && !(Number.isFinite(s) && s > 0 && s <= 10)) {
-    out.push(err("options/invalid-speed", "/speed", "speed must be in (0, 10]."));
-  }
-  const sc = options.png?.scale;
-  if (sc !== undefined && !(Number.isFinite(sc) && sc > 0 && sc <= 8)) {
-    out.push(err("options/invalid-png-scale", "/png/scale", "png.scale must be in (0, 8]."));
-  }
-  const t = options.png?.time;
-  if (t !== undefined && !(Number.isFinite(t) && t >= 0)) {
-    out.push(err("options/invalid-png-time", "/png/time", "png.time must be >= 0."));
-  }
-  const fps = options.video?.fps;
-  if (fps !== undefined && !(Number.isFinite(fps) && fps >= 1 && fps <= 60)) {
-    out.push(err("options/invalid-video-fps", "/video/fps", "video.fps must be in [1, 60]."));
-  }
-  const dur = options.video?.durationSec;
-  if (dur !== undefined && !(Number.isFinite(dur) && dur > 0 && dur <= 120)) {
-    out.push(
-      err(
-        "options/invalid-video-duration",
-        "/video/durationSec",
-        "video.durationSec must be in (0, 120].",
-      ),
-    );
-  }
-  for (const k of options.outputs ?? []) {
-    if (!KINDS.includes(k)) {
-      out.push(err("options/invalid-output", "/outputs", `Unknown output kind "${String(k)}".`));
-    }
-  }
-  return out;
-}
+/** Option checks live in Track B's `export/options.ts`; kept under this name for callers and tests. */
+export const validateOptions = validateRenderOptions;
 
 function sortDiagnostics(d: readonly Diagnostic[]): Diagnostic[] {
   const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -183,7 +131,7 @@ export function createRender(deps: RenderDeps): RenderFn {
       ...(scene ? { scene } : {}),
     });
 
-    const optionDiagnostics = (deps.validateOptions ?? validateOptions)(options);
+    const optionDiagnostics = (deps.validateOptions ?? validateRenderOptions)(options);
     if (optionDiagnostics.some((d) => d.severity === "error")) return fail(optionDiagnostics);
     const kinds: readonly OutputKind[] = options.outputs ?? ["animated"];
     if (kinds.includes("mp4") && !options.video?.encoder) {

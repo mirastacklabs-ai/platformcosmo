@@ -481,8 +481,6 @@ export function emit(model: RenderModel, anim: AnimationLayer, options: EmitOpti
       id: ids.root(),
       role: "img",
       viewBox: `${vb.x} ${vb.y} ${vb.width} ${vb.height}`,
-      width: vb.width,
-      height: vb.height,
     },
     [
       el("title", { id: ids.title() }, [model.scene.meta.title ?? ""]),
