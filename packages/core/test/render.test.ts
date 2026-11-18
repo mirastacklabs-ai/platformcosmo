@@ -243,6 +243,130 @@ describe("view box and overlay layout", () => {
   });
 });
 
+describe("label and overlay polish", () => {
+  const svgOf = (scene = loadBalancerScene()) =>
+    emit(buildModel({ ...inputs(), scene }), noopLayer, { font: "system" });
+
+  test("caption, metric and legend groups carry ids but no transform", () => {
+    const svg = svgOf();
+    for (const id of ["pc-test-cap", "pc-test-m_rps", "pc-test-m_err", "pc-test-legend"]) {
+      const tag = new RegExp(`<g [^>]*id="${id}"[^>]*>`).exec(svg)?.[0];
+      expect(tag, id).toBeDefined();
+      expect(tag).not.toContain("transform");
+    }
+    expect(svg).toMatch(/<g id="pc-test-legend" class="pc-test-legend">/);
+  });
+
+  test("background rect is the view box plus half its size on each side", () => {
+    const m = buildModel(inputs());
+    const svg = emit(m, noopLayer, { font: "system" });
+    const bg =
+      /<rect class="pc-test-bg" x="([-\d.]+)" y="([-\d.]+)" width="([-\d.]+)" height="([-\d.]+)"/.exec(
+        svg,
+      ) as RegExpExecArray;
+    const [x, y, w, h] = bg.slice(1).map(Number) as [number, number, number, number];
+    const vb = m.viewBox;
+    expect(x).toBeCloseTo(vb.x - vb.width / 2, 1);
+    expect(y).toBeCloseTo(vb.y - vb.height / 2, 1);
+    expect(w).toBeCloseTo(vb.width * 2, 1);
+    expect(h).toBeCloseTo(vb.height * 2, 1);
+  });
+
+  test("group labels sit outside the slab on a pill", () => {
+    const m = buildModel(inputs());
+    const g = m.scene.groups[0]!;
+    const left = m.projection.project({
+      x: g.box.origin.x,
+      y: g.box.origin.y + g.box.size.y,
+      z: g.box.origin.z + g.box.size.z,
+    });
+    const svg = emit(m, noopLayer, { font: "system" });
+    const pill = /<rect class="pc-test-gpill" x="([-\d.]+)" y="[-\d.]+" width="([-\d.]+)"/.exec(
+      svg,
+    ) as RegExpExecArray;
+    expect(Number(pill[1]) + Number(pill[2])).toBeLessThan(left.x);
+    expect(svg).toMatch(/class="pc-test-glabel pc-test-tb"/);
+  });
+
+  test("arrowheads live in the labels layer, above the objects", () => {
+    const svg = svgOf();
+    const labels = svg.indexOf('id="pc-test-ly_labels"');
+    expect(svg.indexOf('<polygon class="pc-test-arrow"')).toBeGreaterThan(labels);
+    expect(svg.slice(0, labels)).not.toContain("<polygon");
+  });
+
+  test("edge labels step aside from other labels", () => {
+    const scene = loadBalancerScene();
+    // put the edge label exactly where the "lb" node label is
+    const lb = buildModel({ ...inputs(), scene }).anchors["lb"]!;
+    const world = scene.edges.map((e) =>
+      e.id === "e_lb_app-1" ? { ...e, labelAnchor: undefined } : e,
+    );
+    expect(world).toHaveLength(scene.edges.length);
+    const m = buildModel({ ...inputs(), scene });
+    const svg = emit(m, noopLayer, { font: "system" });
+    const rects = [
+      ...svg.matchAll(
+        /<rect class="pc-test-elabel" x="([-\d.]+)" y="([-\d.]+)" width="([-\d.]+)" height="([-\d.]+)"/g,
+      ),
+    ];
+    expect(rects.length).toBeGreaterThan(0);
+    for (const r of rects) {
+      const [x, y, w, h] = r.slice(1).map(Number) as [number, number, number, number];
+      // not on top of the lb node label (centered under the lb bbox)
+      const lbLabel = { x: lb.center.x - 40, y: lb.bbox.y + lb.bbox.height, width: 80, height: 16 };
+      const overlap =
+        x < lbLabel.x + lbLabel.width &&
+        lbLabel.x < x + w &&
+        y < lbLabel.y + lbLabel.height &&
+        lbLabel.y < y + h;
+      expect(overlap).toBe(false);
+    }
+  });
+
+  test("icon plates stay inside flat boxes", () => {
+    const scene = loadBalancerScene();
+    const flat = {
+      ...scene.objects[0]!,
+      id: "flat",
+      box: { origin: { x: 9, y: 0, z: 0 }, size: { x: 1, y: 1, z: 0.5 } },
+      icon: { ref: "cosmo:lb", anchor: { x: 9.5, y: 1, z: 0.1 }, size: 40 },
+    };
+    const icons: IconResolver = {
+      resolve: () => ({
+        ref: "cosmo:lb",
+        svg: { viewBox: "0 0 24 24", body: "<path d='M0 0h1'/>", monochrome: true },
+        license: "x",
+      }),
+      defaultFor: () => undefined,
+      search: () => [],
+      packs: () => [],
+    };
+    const m = buildModel({
+      ...inputs(),
+      scene: { ...scene, objects: [...scene.objects, flat] },
+      icons,
+    });
+    const svg = emit(m, noopLayer, { font: "system" });
+    const frontH = 0.5 * m.projection.zScale;
+    const plates = [
+      ...svg.matchAll(
+        /<rect class="pc-test-plate" x="[-\d.]+" y="[-\d.]+" width="([-\d.]+)" height="([-\d.]+)"/g,
+      ),
+    ];
+    expect(plates.length).toBe(1);
+    expect(Number(plates[0]![2])).toBeLessThanOrEqual(frontH);
+    // a slab too flat for a legible icon is drawn without one
+    const slab = { ...flat, id: "slab", box: { ...flat.box, size: { x: 1, y: 1, z: 0.2 } } };
+    const m2 = buildModel({
+      ...inputs(),
+      scene: { ...scene, objects: [...scene.objects, slab] },
+      icons,
+    });
+    expect(emit(m2, noopLayer, { font: "system" })).not.toContain("pc-test-plate");
+  });
+});
+
 describe("icons", () => {
   const resolved: ResolvedIcon = {
     ref: "cosmo:lb",
