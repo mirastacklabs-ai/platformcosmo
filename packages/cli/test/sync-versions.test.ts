@@ -105,6 +105,14 @@ describe("sync-plugin-version", () => {
     }
   });
 
+  test("unknown arguments (including --root=/x) are a usage error (exit 2)", () => {
+    for (const a of [["--root=/x"], ["--bogus"], ["--check", "extra"]]) {
+      const r = spawnSync(process.execPath, [script, ...a], { encoding: "utf8" });
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("unknown argument");
+    }
+  });
+
   test("default root is the repo, independent of cwd", () => {
     const r = spawnSync(process.execPath, [script, "--check"], { encoding: "utf8", cwd: tmp });
     expect(r.status, r.stderr).toBe(0);

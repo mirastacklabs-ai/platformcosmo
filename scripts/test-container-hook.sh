@@ -31,7 +31,7 @@ for c in 'npm install' 'pnpm i' 'npx tsc' 'node -e 1' 'FOO=1 pnpm test' 'cd x &&
   '/usr/local/bin/node x.js' 'echo $(node -v)' 'echo hi; yarn' 'echo `node -v`' \
   "eval 'pnpm i'" 'python3 -m pip install x' 'cargo install x' 'env A=b vitest run' \
   "cat <<EOF${nl}x${nl}EOF${nl}npm i" 'true && (eslint .)' 'time tsc --noEmit' \
-  "eval 'a && npm i'" "echo 'it''s' && npm i" "# don't${nl}npm i" "echo a#b; npm i" \
+  "eval no''de" 'eval "n""pm" i' "eval 'a && npm i'""echo 'it''s' && npm i" "# don't${nl}npm i" "echo a#b; npm i" \
   "cat <<'PR-BODY'${nl}x${nl}PR-BODY${nl}npm i" "cat <<\\EOF${nl}x${nl}EOF${nl}npm i" \
   "echo '<<EOF'${nl}npm i" 'echo $((1<<2)); npm i' "cat <<< hi; npm i"; do
   t deny "$c"
@@ -44,6 +44,9 @@ for c in 'scripts/pc run ci' './scripts/pc install' \
   'gh pr create --title "chore: pnpm"' 'claude plugin validate . --strict' 'echo node' \
   'grep -r pnpm .' 'jq . package.json' '' 'ls -la' 'bash scripts/test-container-hook.sh' \
   "bash -c 'ls'" 'cat package.json | jq .name' \
+  "git commit -m \"\$(cat <<'EOF'${nl}docs: say \"cd x && npm i\" is blocked${nl}EOF${nl})\"" \
+  "gh pr create --body \"\$(cat <<'EOF'${nl}odd \" quote, see #12, a \`tick\`${nl}node is great${nl}EOF${nl})\"" \
+  '__Q08__ x' \
   'command -v node' 'command -V pnpm' 'command -v npm >/dev/null || echo missing' \
   "# don't run node${nl}ls" "echo a # node ${nl}ls" \
   "cat <<'PR-BODY'${nl}npm i${nl}PR-BODY" "cat <<\\EOF${nl}npm i${nl}EOF" \

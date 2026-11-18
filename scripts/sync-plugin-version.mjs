@@ -5,19 +5,23 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
+const usage = "Usage: sync-plugin-version.mjs [--check] [--root <dir>]";
 const args = process.argv.slice(2);
-const check = args.includes("--check");
-const ri = args.indexOf("--root");
+let check = false;
 let root = fileURLToPath(new URL("..", import.meta.url));
-if (ri >= 0) {
-  const v = args[ri + 1];
-  if (v === undefined || v.startsWith("--")) {
-    console.error(
-      "--root requires a directory\nUsage: sync-plugin-version.mjs [--check] [--root <dir>]",
-    );
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === "--check") check = true;
+  else if (args[i] === "--root") {
+    const v = args[++i];
+    if (v === undefined || v.startsWith("--")) {
+      console.error(`--root requires a directory\n${usage}`);
+      process.exit(2);
+    }
+    root = v;
+  } else {
+    console.error(`unknown argument: ${args[i]}\n${usage}`);
     process.exit(2);
   }
-  root = v;
 }
 
 const version = JSON.parse(readFileSync(join(root, "packages/cli/package.json"), "utf8")).version;

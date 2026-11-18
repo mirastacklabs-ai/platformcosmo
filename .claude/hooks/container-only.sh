@@ -8,6 +8,9 @@
 #   - command substitution inside double quotes: echo "$(npm i)"  (quoted text is treated as data)
 #   - wrapper options that take an argument: nice -n 10 node x.js  (the "10" is taken as the command)
 #   - wrappers not in the wrapper list: timeout 5 node x.js, watch node x.js
+#   - a # after an escaped space (a\ #x) is treated as a comment start
+#   - several heredocs on one line (cat <<A <<B): only the first terminator is honored
+#   - (( ... )) arithmetic detection is heuristic and can misfire around << on odd input
 #   - indirection: eval "$var", scripts that call node internally, aliases, absolute-path tricks
 
 DENY=""
@@ -15,7 +18,8 @@ DENY=""
 # find_heredoc <line>: returns 0 and sets HD_TERM/HD_DASH if the line opens a heredoc.
 # Ignores << inside quotes, in comments, in here-strings (<<<) and in arithmetic ((a<<b)).
 find_heredoc() {
-  local s="$1" n=${#1} i c mode="" pre rest open close q
+  local s="$1" n=${#1} i c mode="" pre rest open close pd=0 sp=0
+  local -a stk=()
   local sq="'" dq='"'
   local re='^(-?)[[:space:]]*(\\|'"$sq"'|'"$dq"')?([A-Za-z0-9_.-]+)'
   for ((i = 0; i < n; i++)); do
@@ -23,10 +27,31 @@ find_heredoc() {
     case "$mode" in
     s) [ "$c" = "$sq" ] && mode="" ;;
     d)
-      if [ "$c" = "\\" ]; then i=$((i + 1)); elif [ "$c" = "$dq" ]; then mode=""; fi
+      if [ "$c" = "\\" ]; then
+        i=$((i + 1))
+      elif [ "$c" = "$dq" ]; then
+        mode=""
+      elif [ "$c" = "$" ] && [ "${s:i+1:1}" = "(" ]; then
+        # "$( ... )": command substitution, an unquoted context until the matching ")".
+        stk[sp]=$pd
+        sp=$((sp + 1))
+        pd=0
+        mode=""
+        i=$((i + 1))
+      fi
       ;;
     *)
       case "$c" in
+      "(") pd=$((pd + 1)) ;;
+      ")")
+        if [ "$pd" -gt 0 ]; then
+          pd=$((pd - 1))
+        elif [ "$sp" -gt 0 ]; then
+          sp=$((sp - 1))
+          pd=${stk[sp]}
+          mode=d
+        fi
+        ;;
       "\\") i=$((i + 1)) ;;
       "$sq") mode=s ;;
       "$dq") mode=d ;;
@@ -187,7 +212,7 @@ check_cmd() {
     done
     [ "$k" -ge "$nw" ] && continue
     word="${w[k]}"
-    if [[ $word =~ ^__Q([0-9]+)__$ ]]; then word="${Q[BASH_REMATCH[1]]}"; fi
+    if [[ $word =~ ^__Q([0-9]+)__$ ]]; then word="${Q[10#${BASH_REMATCH[1]}]}"; fi
     base="${word##*/}"
     case "$base" in
     docker | git | gh | claude | pc) continue ;;
@@ -224,7 +249,7 @@ check_cmd() {
       for ((j = k + 1; j < nw; j++)); do
         if [[ ${w[j]} =~ ^-[A-Za-z]*c[A-Za-z]*$ ]]; then
           payload="${w[j + 1]:-}"
-          if [[ $payload =~ ^__Q([0-9]+)__$ ]]; then payload="${Q[BASH_REMATCH[1]]}"; fi
+          if [[ $payload =~ ^__Q([0-9]+)__$ ]]; then payload="${Q[10#${BASH_REMATCH[1]}]}"; fi
           if [ -n "$payload" ] && check_cmd "$payload" $((depth + 1)); then return 0; fi
           break
         fi
@@ -256,9 +281,9 @@ main() {
   input="$(cat)" || exit 0
   cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null)" || exit 0
   [ -z "$cmd" ] && exit 0
-  # Fast path: nothing that could be denied appears anywhere in the raw command.
+  # Fast path: no denied word (or install/upgrade verb, or eval) anywhere in the raw command.
   case "$cmd" in
-  *node* | *npm* | *npx* | *yarn* | *corepack* | *bun* | *deno* | *tsc* | *tsx* | *tsup* | *esbuild* | *vitest* | *eslint* | *prettier* | *changeset* | *brew* | *pip* | *gem* | *cargo* | *go*) ;;
+  *node* | *npm* | *npx* | *yarn* | *corepack* | *bun* | *deno* | *tsc* | *tsx* | *tsup* | *esbuild* | *vitest* | *eslint* | *prettier* | *changeset* | *install* | *upgrade* | *eval*) ;;
   *) exit 0 ;;
   esac
   if check_cmd "$cmd" 0; then
