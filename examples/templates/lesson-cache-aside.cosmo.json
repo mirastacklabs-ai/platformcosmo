@@ -1,0 +1,48 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "Lesson: the cache-aside pattern",
+    "description": "The app checks the cache first, falls back to the database on a miss, and fills the cache so the next read is fast."
+  },
+  "canvas": { "theme": "light" },
+  "nodes": [
+    { "id": "client", "type": "client", "label": "Client" },
+    { "id": "app", "type": "server", "label": "App" },
+    { "id": "cache", "type": "cache", "label": "Cache" },
+    { "id": "db", "type": "sql", "label": "Database" }
+  ],
+  "edges": [
+    { "id": "client-app", "from": "client", "to": "app" },
+    { "id": "app-cache", "from": "app", "to": "cache" },
+    { "id": "app-db", "from": "app", "to": "db", "style": "dashed" }
+  ],
+  "metrics": [
+    { "id": "latency", "label": "Read latency", "value": "-" },
+    { "id": "hit-rate", "label": "Cache hit rate", "value": "0%" }
+  ],
+  "steps": [
+    {
+      "caption": "1. A read arrives; the app asks the cache first",
+      "flows": [{ "edge": "client-app" }, { "edge": "app-cache" }],
+      "set": { "cache": "highlighted" }
+    },
+    {
+      "caption": "2. Miss: the cache has nothing, so the app reads the database",
+      "flows": [{ "edge": "app-db", "kind": "heavy" }],
+      "set": { "cache": "degraded", "db": "highlighted" },
+      "metrics": { "latency": "48 ms", "hit-rate": "0%" }
+    },
+    {
+      "caption": "3. The app stores the result in the cache for next time",
+      "flows": [{ "edge": "app-cache", "kind": "heavy" }],
+      "set": { "cache": "healthy", "db": "healthy" }
+    },
+    {
+      "caption": "4. The next read is a hit and skips the database",
+      "flows": [{ "edge": "client-app" }, { "edge": "app-cache" }],
+      "set": { "cache": "highlighted" },
+      "metrics": { "latency": "2 ms", "hit-rate": "90%" }
+    }
+  ]
+}

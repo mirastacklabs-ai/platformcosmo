@@ -1,0 +1,46 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "Lesson: life of a web request",
+    "description": "Follow one request from the browser through DNS, CDN, load balancer and app to the database and back. Edit the labels and captions to teach your own stack."
+  },
+  "canvas": { "theme": "light" },
+  "nodes": [
+    { "id": "browser", "type": "client", "label": "Browser" },
+    { "id": "dns", "type": "dns", "label": "DNS" },
+    { "id": "cdn", "type": "cdn", "label": "CDN" },
+    { "id": "lb", "type": "lb", "label": "Load balancer" },
+    { "id": "app", "type": "server", "label": "App server" },
+    { "id": "db", "type": "sql", "label": "Database" }
+  ],
+  "edges": [
+    { "id": "browser-dns", "from": "browser", "to": "dns", "style": "dotted" },
+    { "id": "browser-cdn", "from": "browser", "to": "cdn" },
+    { "id": "cdn-lb", "from": "cdn", "to": "lb" },
+    { "id": "lb-app", "from": "lb", "to": "app" },
+    { "id": "app-db", "from": "app", "to": "db" }
+  ],
+  "steps": [
+    {
+      "caption": "1. The browser asks DNS where the site lives",
+      "set": { "dns": "highlighted" },
+      "flows": [{ "edge": "browser-dns", "kind": "health" }]
+    },
+    {
+      "caption": "2. It sends the request to the nearest CDN edge",
+      "set": { "dns": "healthy", "cdn": "highlighted" },
+      "flows": [{ "edge": "browser-cdn" }]
+    },
+    {
+      "caption": "3. A cache miss goes to the origin through the load balancer",
+      "set": { "cdn": "healthy", "lb": "highlighted" },
+      "flows": [{ "edge": "cdn-lb" }, { "edge": "lb-app" }]
+    },
+    {
+      "caption": "4. The app reads from the database and the response travels back",
+      "set": { "lb": "healthy", "app": "highlighted", "db": "highlighted" },
+      "flows": [{ "edge": "app-db", "kind": "heavy" }]
+    }
+  ]
+}

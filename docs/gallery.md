@@ -1,0 +1,51 @@
+<script setup lang="ts">
+import { withBase } from "vitepress";
+import { data } from "./gallery.data";
+
+const groups = [
+  { id: "launch", title: "Launch examples" },
+  { id: "datacenter", title: "Data center" },
+  { id: "provider", title: "Provider icons" },
+] as const;
+</script>
+
+# Gallery
+
+Every diagram here is rendered by `pcosmo build` from the spec shown below it. Copy one with
+`pcosmo examples copy <name>` and edit it.
+
+<section v-for="g in groups" :key="g.id">
+  <h2>{{ g.title }}</h2>
+  <p v-if="g.id === 'provider'">
+    These use AWS, Azure and GCP icons. Install the packs with <code>pcosmo icons add aws</code>, <code>azure</code> or
+    <code>gcp</code>; the packs themselves are never redistributed.
+  </p>
+  <article v-for="item in data.filter((d) => d.group === g.id)" :key="item.name" class="gallery-item">
+    <h3>{{ item.title }}</h3>
+    <p>{{ item.description }}</p>
+    <img
+      v-if="item.preview"
+      :src="withBase(`/gallery/${item.name}.svg`)"
+      :alt="item.title"
+      loading="lazy"
+    />
+    <p v-else><em>Preview not rendered in this build.</em></p>
+    <p><code>pcosmo examples copy {{ item.name }}</code></p>
+    <details>
+      <summary>Spec</summary>
+      <pre><code>{{ item.spec }}</code></pre>
+    </details>
+  </article>
+</section>
+
+<style scoped>
+.gallery-item {
+  margin: 2rem 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--vp-c-divider);
+}
+.gallery-item img {
+  max-width: 100%;
+  height: auto;
+}
+</style>
