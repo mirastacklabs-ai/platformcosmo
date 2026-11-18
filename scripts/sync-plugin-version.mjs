@@ -3,46 +3,92 @@
 // Edits the files textually so existing Prettier formatting is preserved.
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath, URL } from "node:url";
 
 const args = process.argv.slice(2);
 const check = args.includes("--check");
 const ri = args.indexOf("--root");
-const root = ri >= 0 ? args[ri + 1] : ".";
+let root = fileURLToPath(new URL("..", import.meta.url));
+if (ri >= 0) {
+  const v = args[ri + 1];
+  if (v === undefined || v.startsWith("--")) {
+    console.error(
+      "--root requires a directory\nUsage: sync-plugin-version.mjs [--check] [--root <dir>]",
+    );
+    process.exit(2);
+  }
+  root = v;
+}
 
 const version = JSON.parse(readFileSync(join(root, "packages/cli/package.json"), "utf8")).version;
 const pluginPath = join(root, "plugin/.claude-plugin/plugin.json");
 const marketPath = join(root, ".claude-plugin/marketplace.json");
 
-// Index of the "}" matching the "{" at `start` (skips string contents).
-function matchEnd(text, start) {
+// Index of the closing quote of the string literal starting at `i`.
+function strEnd(text, i) {
+  for (let j = i + 1; j < text.length; j++) {
+    if (text[j] === "\\") j++;
+    else if (text[j] === '"') return j;
+  }
+  throw new Error("unterminated string");
+}
+
+// Direct children of the object/array starting at `start`:
+// objects give {key, keyStart, valStart}; arrays give {valStart} for each object element.
+function children(text, start) {
+  const isObj = text[start] === "{";
+  const out = [];
   let depth = 0;
-  let inStr = false;
   for (let i = start; i < text.length; i++) {
     const c = text[i];
-    if (inStr) {
-      if (c === "\\") i++;
-      else if (c === '"') inStr = false;
-    } else if (c === '"') inStr = true;
+    if (c === '"') {
+      const j = strEnd(text, i);
+      if (isObj && depth === 1) {
+        let k = j + 1;
+        while (/\s/.test(text[k] ?? "")) k++;
+        if (text[k] === ":") {
+          k++;
+          while (/\s/.test(text[k] ?? "")) k++;
+          out.push({ key: JSON.parse(text.slice(i, j + 1)), keyStart: i, valStart: k });
+        }
+      }
+      i = j;
+    } else if (c === "{" || c === "[") {
+      if (!isObj && depth === 1 && c === "{") out.push({ valStart: i });
+      depth++;
+    } else if ((c === "}" || c === "]") && --depth === 0) return out;
+  }
+  throw new Error("unbalanced JSON");
+}
+
+// Index of the "}" matching the "{" at `start`.
+function matchEnd(text, start) {
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') i = strEnd(text, i);
     else if (c === "{") depth++;
     else if (c === "}" && --depth === 0) return i;
   }
   throw new Error("unbalanced JSON object");
 }
 
-// Set "version" in the object starting at `start`, keyed at the indent of its "name" line.
+// Set the top-level "version" of the object starting at `start`.
 function setVersion(text, start) {
-  const end = matchEnd(text, start);
-  const body = text.slice(start, end + 1);
-  const m = /\n([ \t]+)"name":[^\n]*\n/.exec(body);
-  if (!m) throw new Error("object has no name line");
-  const indent = m[1];
-  const verRe = new RegExp(`(\\n${indent}"version":\\s*)"[^"]*"`);
-  const next = verRe.test(body)
-    ? body.replace(verRe, `$1${JSON.stringify(version)}`)
-    : body.slice(0, m.index + m[0].length) +
-      `${indent}"version": ${JSON.stringify(version)},\n` +
-      body.slice(m.index + m[0].length);
-  return text.slice(0, start) + next + text.slice(end + 1);
+  const kids = children(text, start);
+  const ver = kids.find((x) => x.key === "version");
+  const lit = JSON.stringify(version);
+  if (ver) {
+    if (text[ver.valStart] !== '"') throw new Error('"version" is not a string');
+    return text.slice(0, ver.valStart) + lit + text.slice(strEnd(text, ver.valStart) + 1);
+  }
+  const name = kids.find((x) => x.key === "name");
+  if (!name) throw new Error('object has no top-level "name"');
+  const lineStart = text.lastIndexOf("\n", name.keyStart - 1) + 1;
+  const lead = text.slice(lineStart, name.keyStart);
+  return lead.trim() === ""
+    ? text.slice(0, lineStart) + `${lead}"version": ${lit},\n` + text.slice(lineStart)
+    : text.slice(0, name.keyStart) + `"version": ${lit}, ` + text.slice(name.keyStart);
 }
 
 function updatePlugin(text) {
@@ -50,12 +96,15 @@ function updatePlugin(text) {
 }
 
 function updateMarketplace(text) {
-  const p = text.indexOf('"plugins"');
-  const nameIdx = text.indexOf('"name": "platformcosmo"', p);
-  if (p < 0 || nameIdx < 0) {
-    throw new Error("marketplace.json: no plugins[] entry named platformcosmo");
+  const plugins = children(text, text.indexOf("{")).find((x) => x.key === "plugins");
+  if (!plugins || text[plugins.valStart] !== "[") {
+    throw new Error("marketplace.json: no plugins[] array");
   }
-  return setVersion(text, text.lastIndexOf("{", nameIdx));
+  for (const el of children(text, plugins.valStart)) {
+    const obj = JSON.parse(text.slice(el.valStart, matchEnd(text, el.valStart) + 1));
+    if (obj.name === "platformcosmo") return setVersion(text, el.valStart);
+  }
+  throw new Error("marketplace.json: no plugins[] entry named platformcosmo");
 }
 
 const targets = [
@@ -67,21 +116,25 @@ const targets = [
   },
 ];
 
-let bad = 0;
-for (const t of targets) {
-  const before = readFileSync(t.path, "utf8");
-  if (check) {
-    const cur = t.read(before);
+if (check) {
+  let bad = 0;
+  for (const t of targets) {
+    const cur = t.read(readFileSync(t.path, "utf8"));
     if (cur !== version) {
       console.error(
         `${t.path}: version is ${cur ?? "missing"}, expected ${version} (packages/cli). Run: pnpm run sync:versions`,
       );
       bad++;
     }
-    continue;
   }
+  process.exit(bad ? 1 : 0);
+}
+
+// Compute and verify every new content before writing any file.
+const planned = targets.map((t) => {
+  const before = readFileSync(t.path, "utf8");
   const after = t.update(before);
   if (t.read(after) !== version) throw new Error(`${t.path}: update failed`);
-  if (after !== before) writeFileSync(t.path, after);
-}
-process.exit(bad ? 1 : 0);
+  return { path: t.path, before, after };
+});
+for (const p of planned) if (p.after !== p.before) writeFileSync(p.path, p.after);
