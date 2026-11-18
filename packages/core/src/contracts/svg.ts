@@ -8,7 +8,10 @@
  *   control characters are stripped;
  * - tag and attribute names must match `^[A-Za-z][\w:.-]*$`;
  * - `on*` attributes, and `href`/`xlink:href` values not starting with `#`, throw;
- * - attributes are serialized in insertion order; numbers with at most 2 decimals.
+ * - `url(` in attribute values must be followed by `#`;
+ * - attributes are serialized in insertion order; numeric attribute values (coordinates)
+ *   are emitted with at most 2 decimals. Timing values (`keyTimes`, `keySplines`, CSS
+ *   percentages) are passed as preformatted strings with up to 4 decimals.
  */
 
 /** Brand that only the icon sanitizer and the emitter may attach (via a cast). */

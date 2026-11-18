@@ -9,7 +9,9 @@
  * `<symbol id="<ids.icon(ref)>" viewBox="…">` and places it with `<use href="#…">`.
  * Sanitized bodies use the placeholder `__PCID__` as their id prefix
  * (`id="__PCID__-0"`, `url(#__PCID__-0)`, `href="#__PCID__-0"`); emit replaces it
- * with `ids.icon(ref)`, so ids are unique per icon and per diagram.
+ * with `ids.icon(ref)` (inner ids become `<icon(ref)>_<n>`; `:` in refs is encoded as `.`),
+ * so ids are unique per icon and per diagram. The CLI verifies a user pack's lockfile
+ * `integrity` before building its `LoadedIconPack` and rejects mismatches with a diagnostic.
  */
 import type { SpecNodeType } from "../schema/types.gen.js";
 import type { Diagnostic } from "./diagnostics.js";
@@ -153,7 +155,13 @@ export interface IconLockEntry {
   readonly iconCount: number;
 }
 
-/** HTTP is injected by the CLI so core stays network-free; implementations must enforce SSRF rules. */
+/**
+ * HTTP is injected by the CLI so core stays network-free. The client (Track D) owns SSRF
+ * defense: https only; follows redirects manually (max 5); resolves DNS itself and rejects
+ * loopback, private, link-local, CGNAT, multicast and cloud-metadata addresses on every hop;
+ * enforces `maxBytes` while streaming and `timeoutMs` overall. `FetchIconPackFn` (Track C)
+ * checks URL syntax and the final `url`, and enforces archive limits.
+ */
 export interface IconHttpClient {
   /** GET with redirects handled by the caller's policy; returns body bytes and final URL. */
   get(

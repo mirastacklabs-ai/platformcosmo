@@ -93,6 +93,7 @@ export type SpecFlowKind = ("normal" | "heavy" | "health" | "failed" | "airflow"
  * Hex (#rgb/#rrggbb) or a theme palette name: blue, green, red, orange, yellow, purple, teal, pink, gray, or a flow kind (normal, heavy, health, failed, airflow, power).
  */
 export type SpecColor = string
+export type SpecMetricValue = (string | number)
 /**
  * Defaults to u<at>.
  */
@@ -139,8 +140,8 @@ rate?: number
 color?: SpecColor
 }
 export interface SpecFlowByEndpoints {
-from: SpecId
-to: SpecId
+from: SpecEndpoint
+to: SpecEndpoint
 kind?: SpecFlowKind
 rate?: number
 color?: SpecColor
@@ -148,7 +149,7 @@ color?: SpecColor
 export interface SpecMetric {
 id: SpecId
 label: SpecText
-value: (string | number)
+value: SpecMetricValue
 }
 export interface SpecStep {
 caption?: SpecText
@@ -160,7 +161,7 @@ set?: {
  */
 flows?: SpecFlow[]
 metrics?: {
-[k: string]: string | number
+[k: string]: SpecMetricValue
 }
 duration?: number
 focus?: SpecEndpoint

@@ -14,7 +14,10 @@
  *
  * Trust: custom theme files are untrusted. `validateTheme` must accept only
  * colors matching `^#[0-9a-fA-F]{3,8}$` or `^rgba?\([0-9., %]+\)$`, a font family
- * matching `^[A-Za-z0-9 ,'"-]+$`, and finite numbers; the emitter re-checks every value.
+ * matching `^[A-Za-z0-9 ,'"-]+$` with balanced quotes, `edge.dash` values matching
+ * `^([0-9.]+([ ,][0-9.]+)*)?$`, `id` matching `^[a-z][a-z0-9-]{0,63}$`, `name` as SpecText
+ * (never written into CSS), and finite numbers. The rule covers every string token;
+ * the emitter re-checks every value it writes into CSS or attributes.
  */
 import type { Diagnostic } from "./diagnostics.js";
 import type {

@@ -131,7 +131,7 @@ platformcosmo/
 | `anim/` | Particles along paths; step timeline; state transitions |
 | `emit/` | SVG writer: per-diagram id prefixes, `role="img"`, `<title>`/`<desc>`, `viewBox` only |
 | `optimize/` | SVGO with a config that keeps the animations |
-| `export/` | Static frame, per-step SVGs, PNG via resvg-js (no browser) |
+| `export/` | Static frame, per-step SVGs, PNG via resvg-wasm (no browser; see DECISIONS D7) |
 
 **Budgets:**
 - Typical diagram: under 150 KB, built in under 500 ms
@@ -343,7 +343,7 @@ platformcosmo/
 
 | Track | Scope | Owns (only these paths) |
 |---|---|---|
-| **A Engine** | Semantic validation + "did you mean", scene builder, geometry, layout, depth, routing, text/fonts, emit, optimize, the `render()` pipeline, schema export | `packages/core/src/{schema,scene,geometry,layout,depth,routing,text,emit,optimize,render}` (except `schema/types.gen.ts`, which is generated) and their tests |
+| **A Engine** (two agents: **A1** geometry, depth, text, emit, optimize, `render`, schema export; **A2** parse/validate/semantic, scene, layout, routing; they meet at `BuildSceneFn`) | Semantic validation + "did you mean", scene builder, geometry, layout, depth, routing, text/fonts, emit, optimize, the `render()` pipeline, schema export | `packages/core/src/{schema,scene,geometry,layout,depth,routing,text,emit,optimize,render}` (except `schema/types.gen.ts`, which is generated) and their tests |
 | **B Animation + Export** | Particles, step timeline, reduced motion, dark mode CSS, static/steps/PNG/interactive, GIF/MP4, browser check | `packages/core/src/{anim,export}`, `tests/browser/` |
 | **C Icons** | cosmo originals, Lucide, K8s, Simple Icons, CNCF (if redistributable), manifests, resolver, sanitizer, remote fetch + lockfile, AWS/Azure/GCP fetch packs | `packages/icons-*`, `packages/core/src/icons`, `LICENSES/` |
 | **D CLI + Skills + Docs** | `pcosmo` CLI, bundled plugin CLI, skills (diagram, icons, export), docs site, gallery, lesson templates | `packages/cli`, `plugin/`, `docs/` (except `PLAN.md`), `examples/` |

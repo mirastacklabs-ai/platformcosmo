@@ -18,9 +18,18 @@
  * SVG structure that emit (A) always produces and animation (B) relies on:
  * - `<svg id=root() role="img" viewBox>` with `<title id=title()>` and `<desc id=desc()>`.
  * - One `<style>` (CDATA-wrapped; `]]>` in content is rejected): theme variables scoped
- *   to `#root`, dark overrides in `@media (prefers-color-scheme: dark)`, base state rules
- *   (`.stateClass(s)` → overlay fill/opacity/stroke from `--pc-states-<s>-*`), then
- *   `AnimationLayer.css`.
+ *   to `#root`, dark overrides in `@media (prefers-color-scheme: dark)`, the base state rules,
+ *   then `AnimationLayer.css`. Base state rules, for each state s (`P` = prefix):
+ *     `.stateClass(s) { opacity: var(--pc-states-s-opacity) }`
+ *     `.stateClass(s) > .P-overlay { fill: var(--pc-states-s-overlay); stroke: var(--pc-states-s-stroke) }`
+ *     `.stateClass(s) .ledClass() { fill: var(--pc-dc-led-<ok|warn|fail>) }` (healthy/highlighted → ok,
+ *     degraded → warn, down → fail). Overlay paths carry class `P-overlay`; faces of parts with
+ *     tone `led` carry `ledClass()`.
+ * - Raster target (`EmitOptions.target: "raster"`, used for PNG/GIF/MP4 frames): resvg supports no
+ *   custom properties, `@keyframes` or `@media`, so emit substitutes every `var(--pc-…)` (also in
+ *   `AnimationLayer.css`) with the literal theme value and drops `@media`/`@font-face`/keyframes.
+ *   In `frame` mode B's CSS uses only plain id/class selectors and plain properties.
+ * - Selectors: B builds every id selector with `ids.sel(id)` (CSS-escapes `.` in slot ids).
  * - `<g id=camera()>` wrapping every layer in `Layer` order; B zooms by animating its `transform`.
  * - Each object: `<g id=object(id) class="<stateClass(initial state)>">` holding its faces
  *   (`face(id, f[, part])`) and an always-present `<path id=overlay(id)>` over its silhouette,
@@ -30,8 +39,9 @@
  *   containing `<path id=edgePath(id)>`.
  * - Captions: A emits a caption box `<g id=caption()>` and one `<text id=captionStep(n)>` per
  *   step; metrics: a tile `<g id=metric(id)>` with one `<text id=metricValue(id, n)>` for the
- *   base value (n = 0) and each step that changes it. All are emitted visible; B's CSS decides
- *   which one shows at each time (in `frame`/`step` modes B emits static rules).
+ *   base value (n = 0) and each step that changes it. Only the time-0 caption/value is visible;
+ *   the others carry `visibility="hidden"`, and B's CSS (`visibility: visible`) decides which one
+ *   shows at each time (in `frame`/`step` modes B emits static rules).
  * - Icons: `<symbol id=icon(ref)>` in `<defs>`, placed with `<use>`.
  * - `prefers-reduced-motion: reduce` (B's CSS): pause CSS animations at the static frame and
  *   hide the `flows` layer (SMIL cannot be paused by CSS).
@@ -200,6 +210,10 @@ export interface IdScheme {
   metricValue(id: string, step: number): string;
   /** Class for a state, e.g. `${prefix}-s-down`. */
   stateClass(state: string): string;
+  /** Class on faces of `led`-tone parts. */
+  ledClass(): string;
+  /** CSS selector for an element id: `#` + CSS-escaped id. */
+  sel(id: string): string;
 }
 
 /** Drawing layers, bottom to top, inside `camera()`. Ground-level edges are drawn before objects so objects occlude them. */
@@ -287,11 +301,8 @@ export interface Animator {
 
 export interface EmitOptions {
   readonly font: FontMode;
-  /**
-   * Suffix appended to the id prefix for this output (e.g. `-s01` for step 1, `-x` for
-   * interactive), so outputs of one spec can be inlined together. Must match `^[a-z0-9-]{0,8}$`.
-   */
-  readonly variant?: string;
+  /** `browser` (default) keeps CSS variables/media queries; `raster` inlines literal values for resvg. */
+  readonly target?: "browser" | "raster";
 }
 
 /** Serializes model + animation into one self-contained SVG string (no external refs). */
@@ -308,7 +319,10 @@ export type EmitFn = (
  */
 export type OptimizeFn = (svg: string) => string;
 
-/** Rasterizes an SVG string to PNG with resvg-wasm (PLAN §6 export, no browser). */
+/**
+ * Rasterizes a `target: "raster"` SVG string to PNG with resvg-wasm (PLAN §6 export, no
+ * browser). Loads `fonts` and sets resvg's default font family to `fonts[0].family`.
+ */
 export type RasterizeFn = (
   svg: string,
   options: { readonly scale: number; readonly fonts: readonly FontAsset[] },
@@ -326,6 +340,12 @@ export type ExportFn = (
     readonly emit: EmitFn;
     readonly optimize: OptimizeFn;
     readonly rasterize: RasterizeFn;
+    /**
+     * Same model with every id re-prefixed `prefix + variant` (A1 rebuilds ids and layers).
+     * Variants: `-s01`… per step, `-x` interactive, `-st` static, so outputs of one spec
+     * can be inlined together. `variant` must match `^-[a-z0-9]{1,7}$`.
+     */
+    readonly withVariant: (model: RenderModel, variant: string) => RenderModel;
   },
   options: RenderOptions,
 ) => Promise<{
@@ -336,7 +356,11 @@ export type ExportFn = (
 /**
  * Scene builder (A2 → A1 seam): semantic defaults, layout on the iso grid, group packing,
  * DC fragment merge, orthogonal routing (world-space `SceneEdge.path`), flows and timeline.
- * Called only with a spec that passed `validate`.
+ * Called only with a spec that passed `validate`. One id namespace spans nodes, groups, racks,
+ * equipment, rows, aisles and cables (duplicates are a `semantic/duplicate-id` error); the DC
+ * hall group is `dc_hall`. `validate` also enforces `budget/particles`: the estimated particle
+ * element count of the looping output (Σ over steps of rate × path-traversal time) ≤ 2000.
+ * `buildModel` (scene → RenderModel) is A1-internal.
  */
 export type BuildSceneFn = (
   spec: PlatformCosmoSpec,

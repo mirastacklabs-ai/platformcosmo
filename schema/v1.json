@@ -167,7 +167,7 @@
     "color": {
       "title": "SpecColor",
       "type": "string",
-      "pattern": "^(#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6}|[a-z][a-z0-9-]*)$",
+      "pattern": "^(#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6}|blue|green|red|orange|yellow|purple|teal|pink|gray|normal|heavy|health|failed|airflow|power)$",
       "description": "Hex (#rgb/#rrggbb) or a theme palette name: blue, green, red, orange, yellow, purple, teal, pink, gray, or a flow kind (normal, heavy, health, failed, airflow, power)."
     },
     "state": {
@@ -334,10 +334,10 @@
           "required": ["from", "to"],
           "properties": {
             "from": {
-              "$ref": "#/$defs/id"
+              "$ref": "#/$defs/endpoint"
             },
             "to": {
-              "$ref": "#/$defs/id"
+              "$ref": "#/$defs/endpoint"
             },
             "kind": {
               "$ref": "#/$defs/flowKind"
@@ -367,7 +367,7 @@
           "$ref": "#/$defs/text"
         },
         "value": {
-          "type": ["string", "number"]
+          "$ref": "#/$defs/metricValue"
         }
       }
     },
@@ -386,7 +386,8 @@
           },
           "additionalProperties": {
             "$ref": "#/$defs/state"
-          }
+          },
+          "maxProperties": 1000
         },
         "flows": {
           "type": "array",
@@ -401,8 +402,9 @@
             "$ref": "#/$defs/id"
           },
           "additionalProperties": {
-            "type": ["string", "number"]
-          }
+            "$ref": "#/$defs/metricValue"
+          },
+          "maxProperties": 50
         },
         "duration": {
           "type": "number",
@@ -658,6 +660,19 @@
           "maximum": 1000
         }
       }
+    },
+    "metricValue": {
+      "title": "SpecMetricValue",
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]*$"
+        },
+        {
+          "type": "number"
+        }
+      ]
     }
   },
   "x-revision": "1.1.0",
