@@ -85,8 +85,11 @@ export interface RouteContext {
   readonly lanes?: RouteLanes;
   /** Source object id (same-source edges must not share segments). */
   readonly source?: string;
-  /** Extra pre-inflated obstacle rects (occlusion shadows, label keep-outs). */
-  readonly extra?: readonly Rect[];
+  /**
+   * Extra pre-inflated obstacle rects (occlusion shadows, label keep-outs), or a provider that
+   * returns those intersecting the current search window.
+   */
+  readonly extra?: readonly Rect[] | ((window: Rect) => readonly Rect[]);
 }
 
 interface Terminal {
@@ -459,7 +462,7 @@ export function routeEdge(
   const fromT = terminalsOf(from, ctx.lanes, tc);
   const toT = terminalsOf(to, undefined, fc);
   const own = [rectOf(from.box), rectOf(to.box)];
-  const all = [...obstacles.map((b) => inflate(rectOf(b), CLEAR)), ...(ctx.extra ?? [])];
+  const all = obstacles.map((b) => inflate(rectOf(b), CLEAR));
   const minX = Math.min(own[0]!.x0, own[1]!.x0);
   const maxX = Math.max(own[0]!.x1, own[1]!.x1);
   const minY = Math.min(own[0]!.y0, own[1]!.y0);
@@ -471,7 +474,10 @@ export function routeEdge(
       x1: maxX + margin,
       y1: maxY + margin,
     };
-    const local = all.filter((r) => strictHit(win.x0, win.y0, win.x1, win.y1, r, false));
+    const ex = typeof ctx.extra === "function" ? ctx.extra(win) : (ctx.extra ?? []);
+    const local = [...all, ...ex].filter((r) =>
+      strictHit(win.x0, win.y0, win.x1, win.y1, r, false),
+    );
     const found = search(fromT, toT, own, local, ctx);
     if (found === "no-terminal") break; // wider windows only add obstacles
     if (!found) continue;

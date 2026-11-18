@@ -16,7 +16,7 @@ import type {
   Vec3,
 } from "../contracts/index.js";
 import { layoutSpec } from "../layout/index.js";
-import { labelRects, shadowRects } from "../routing/obstacles.js";
+import { KeepoutIndex, isRoutingFurniture, labelRects, shadowRects } from "../routing/obstacles.js";
 import { RouteLanes, routeEdge, type Rect } from "../routing/router.js";
 import { particleCount, PARTICLE_LIMIT } from "../schema/semantic.js";
 import type { PlatformCosmoSpec, SpecFlow, SpecNode } from "../schema/types.gen.js";
@@ -123,10 +123,10 @@ const hasDcContent = (s: PlatformCosmoSpec): boolean =>
   s.facility !== undefined;
 
 /** DC siblings designed to share a footprint: rack and its front shell, floor/tray furniture. */
-function intentionalOverlap(a: string, b: string): boolean {
-  if (a === `${b}_front` || b === `${a}_front`) return true;
-  const furniture = /^dc_(tray_|floor_grid|tiles_)/;
-  return furniture.test(a) || furniture.test(b);
+function intentionalOverlap(a: SceneObject, b: SceneObject): boolean {
+  if (a.id === `${b.id}_front` || b.id === `${a.id}_front`) return true;
+  const furniture = (o: SceneObject): boolean => o.source === "dc" && isRoutingFurniture(o);
+  return furniture(a) || furniture(b);
 }
 
 export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
@@ -239,14 +239,16 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
 
   // ---- routing -----------------------------------------------------------------------
   const objectById = new Map(allObjects.map((o) => [o.id, o]));
-  // Per-object keep-outs beyond the footprint: occlusion shadow (skipped for the route's own
-  // endpoints) and the label drawn under the object (kept for endpoints too).
-  const shadows = new Map<string, Rect[]>();
-  const labelKeep = new Map<string, Rect[]>();
+  // Keep-outs beyond the footprint, built once: occlusion shadow (skipped for a route's own
+  // endpoints) and the label drawn under the object (kept for endpoints too). Floor furniture
+  // (cable trays, perforated tiles, floor grid) and rack front shells are never obstacles.
+  const keepouts = new KeepoutIndex();
+  const solidObjects: SceneObject[] = [];
   for (const o of allObjects) {
-    if (o.id.includes("/")) continue;
-    shadows.set(o.id, shadowRects(o.box));
-    if (o.label) labelKeep.set(o.id, labelRects(o.label, o.box));
+    if (o.id.includes("/") || (o.source === "dc" && isRoutingFurniture(o))) continue;
+    solidObjects.push(o);
+    keepouts.add(o.id, "shadow", shadowRects(o.box));
+    if (o.label) keepouts.add(o.id, "label", labelRects(o.label, o.box));
   }
   const lanes = new RouteLanes();
   const route = (
@@ -262,17 +264,10 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
       const slash = e.indexOf("/");
       if (slash > 0) skip.add(e.slice(0, slash)); // the rack holding an endpoint slot
     }
+    for (const id of [...skip]) skip.add(`${id}_front`); // its front shell goes with it
     const obstacles: Box3[] = [];
-    const extra: Rect[] = [];
-    for (const o of allObjects) {
-      if (o.id.includes("/")) continue;
-      const lk = labelKeep.get(o.id);
-      if (lk) extra.push(...lk);
-      if (skip.has(o.id)) continue;
-      obstacles.push(o.box);
-      const sh = shadows.get(o.id);
-      if (sh) extra.push(...sh);
-    }
+    for (const o of solidObjects) if (!skip.has(o.id)) obstacles.push(o.box);
+    const extra = (win: Rect): Rect[] => keepouts.query(win, skip);
     const portsOf = (id: string): Vec3[] | undefined => {
       const p = objectById.get(id)?.ports;
       if (!p) return undefined;
@@ -538,7 +533,7 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
   const solid = allObjects.filter((o) => !o.id.includes("/"));
   for (let i = 0; i < solid.length; i++) {
     for (let j = i + 1; j < solid.length; j++) {
-      if (intentionalOverlap(solid[i]!.id, solid[j]!.id)) continue;
+      if (intentionalOverlap(solid[i]!, solid[j]!)) continue;
       const a = solid[i]!.box;
       const b = solid[j]!.box;
       const hit =
@@ -568,7 +563,8 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
         (ck === "network" || ck === "fiber") && f.kind !== "airflow" && f.kind !== "power";
       const label = network ? "Network" : FLOW_LABEL[f.kind];
       const order = FLOW_KIND_ORDER.indexOf(f.kind) * 2 + (network ? 1 : 0);
-      if (!entries.has(label)) entries.set(label, { order, color: `flow:${f.kind}` });
+      const cur = entries.get(label);
+      if (!cur || order < cur.order) entries.set(label, { order, color: `flow:${f.kind}` });
     }
     for (const [label, e] of [...entries].sort((a, b) => a[1].order - b[1].order)) {
       legend.push({ label, color: e.color });

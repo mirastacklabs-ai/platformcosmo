@@ -5,23 +5,43 @@
  * - label keep-out: the label sits centered under the object on screen; the screen rectangle is
  *   mapped back to the ground and approximated by 0.5 tile cells.
  */
-import type { Box3 } from "../contracts/index.js";
+import type { Box3, SceneObject } from "../contracts/index.js";
+import { DEFAULT_TILE_WIDTH } from "../geometry/projection.js";
 import type { Rect } from "./router.js";
 
-/** Matches the default projection (tileWidth 64, 2:1 dimetric). */
-const HALF_TILE = 32;
-const QUARTER_TILE = 16;
+/** Screen units per world unit on the ground plane (2:1 dimetric projection). */
+const HALF_TILE = DEFAULT_TILE_WIDTH / 2;
+const QUARTER_TILE = DEFAULT_TILE_WIDTH / 4;
 const CELL = 0.5;
+const BUCKET = 4;
 
 const r2 = (v: number): number => Math.round(v * 100) / 100;
+const down = (v: number): number => Math.floor(v / CELL + 1e-9) * CELL;
+const up = (v: number): number => Math.ceil(v / CELL - 1e-9) * CELL;
 
-/** Estimated label width in screen units (A1 clamps labels to 150). */
+/**
+ * Estimated label width in screen units, counted by code points. A2 has no text metrics.
+ * TODO: take the clamp (150) and the per-glyph advance from A1's text/label constants once they
+ * are exported, so the keep-out tracks the emitted label exactly.
+ */
 export function labelWidth(label: string): number {
-  return Math.min(150, label.length * 6.6) + 8;
+  return Math.min(150, [...label].length * 6.6) + 8;
 }
 
-/** Occlusion shadow rects of an object (excludes the footprint itself). */
-export function shadowRects(box: Box3, margin = 0.15): Rect[] {
+/** DC facility objects that lie on the floor and are never routing obstacles (matched by `type`). */
+const FURNITURE_TYPES: ReadonlySet<string> = new Set([
+  "cable-tray",
+  "perforated-tiles",
+  "floor-grid",
+]);
+
+/** Cable trays, perforated tiles and the floor grid, plus a rack's `rack-front` shell. */
+export function isRoutingFurniture(o: Pick<SceneObject, "type">): boolean {
+  return FURNITURE_TYPES.has(o.type) || o.type === "rack-front";
+}
+
+/** Occlusion shadow rects of an object (excludes the footprint), snapped outward to a 0.5 lattice. */
+export function shadowRects(box: Box3): Rect[] {
   const out: Rect[] = [];
   const x0 = box.origin.x;
   const y0 = box.origin.y;
@@ -29,14 +49,64 @@ export function shadowRects(box: Box3, margin = 0.15): Rect[] {
   const y1 = y0 + box.size.y;
   const top = box.origin.z + box.size.z;
   for (let t = CELL; t <= top + 1e-9; t += CELL) {
-    out.push({
-      x0: r2(x0 - t - margin),
-      y0: r2(y0 - t - margin),
-      x1: r2(x1 - t + margin),
-      y1: r2(y1 - t + margin),
-    });
+    out.push({ x0: down(x0 - t), y0: down(y0 - t), x1: up(x1 - t), y1: up(y1 - t) });
   }
   return out;
+}
+
+export type KeepoutKind = "shadow" | "label";
+
+/**
+ * Keep-out rects of a whole scene, built once and queried per route window. Shadows can be
+ * skipped per owner (a route's own endpoints); labels always apply.
+ */
+export class KeepoutIndex {
+  private readonly rects: { r: Rect; owner: string; kind: KeepoutKind }[] = [];
+  private readonly buckets = new Map<number, number[]>();
+
+  add(owner: string, kind: KeepoutKind, list: readonly Rect[]): void {
+    for (const r of list) {
+      const i = this.rects.length;
+      this.rects.push({ r, owner, kind });
+      for (let cx = Math.floor(r.x0 / BUCKET); cx <= Math.floor(r.x1 / BUCKET); cx++) {
+        for (let cy = Math.floor(r.y0 / BUCKET); cy <= Math.floor(r.y1 / BUCKET); cy++) {
+          const k = (cx + 32768) * 65536 + (cy + 32768);
+          const l = this.buckets.get(k);
+          if (l) l.push(i);
+          else this.buckets.set(k, [i]);
+        }
+      }
+    }
+  }
+
+  /** Rects intersecting `win`, without the shadows of `skipShadows` owners. */
+  query(win: Rect, skipShadows: ReadonlySet<string>): Rect[] {
+    const seen = new Set<number>();
+    const out: Rect[] = [];
+    const cx0 = Math.floor(Math.max(win.x0, -30000) / BUCKET);
+    const cx1 = Math.floor(Math.min(win.x1, 30000) / BUCKET);
+    const cy0 = Math.floor(Math.max(win.y0, -30000) / BUCKET);
+    const cy1 = Math.floor(Math.min(win.y1, 30000) / BUCKET);
+    const span = (cx1 - cx0 + 1) * (cy1 - cy0 + 1);
+    const visit = (i: number): void => {
+      if (seen.has(i)) return;
+      seen.add(i);
+      const e = this.rects[i]!;
+      if (e.kind === "shadow" && skipShadows.has(e.owner)) return;
+      out.push(e.r);
+    };
+    if (span > this.buckets.size) {
+      // Huge window: cheaper to walk every bucket than every cell.
+      for (const list of this.buckets.values()) for (const i of list) visit(i);
+    } else {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        for (let cy = cy0; cy <= cy1; cy++) {
+          for (const i of this.buckets.get((cx + 32768) * 65536 + (cy + 32768)) ?? []) visit(i);
+        }
+      }
+    }
+    return out;
+  }
 }
 
 /** Ground cells covered by the label drawn under the object, merged into column runs. */

@@ -320,7 +320,7 @@ describe("DC merge", () => {
 
   test("rack/front/furniture siblings overlap by design and are not reported", () => {
     const front: SceneObject = { ...rackObj, id: "r1_front", type: "rack-front" };
-    const tray: SceneObject = { ...rackObj, id: "dc_tray_a", type: "tray" };
+    const tray: SceneObject = { ...rackObj, id: "dc_tray_a", type: "cable-tray" };
     const g = buildScene(dcSpec(), {
       dc: { ...dc, buildScene: () => ({ ...frag, objects: [rackObj, front, tray, slotObj] }) },
     });
