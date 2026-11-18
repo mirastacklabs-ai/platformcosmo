@@ -14,10 +14,12 @@ const HALF_TILE = DEFAULT_TILE_WIDTH / 2;
 const QUARTER_TILE = DEFAULT_TILE_WIDTH / 4;
 const CELL = 0.5;
 const BUCKET = 4;
+/** Extra slack around the estimated label region, in ground (u, v) units. */
+const PAD = 0.3;
+/** Adjacent column rects overlap by this much so a route cannot slip through the seam. */
+const SLIT = 0.05;
 
 const r2 = (v: number): number => Math.round(v * 100) / 100;
-const down = (v: number): number => Math.floor(v / CELL + 1e-9) * CELL;
-const up = (v: number): number => Math.ceil(v / CELL - 1e-9) * CELL;
 
 /**
  * Estimated label width in screen units, counted by code points. A2 has no text metrics.
@@ -40,7 +42,11 @@ export function isRoutingFurniture(o: Pick<SceneObject, "type">): boolean {
   return FURNITURE_TYPES.has(o.type) || o.type === "rack-front";
 }
 
-/** Occlusion shadow rects of an object (excludes the footprint), snapped outward to a 0.5 lattice. */
+/**
+ * Occlusion shadow rects of an object (excludes the footprint): the footprint swept along (-1,-1)
+ * by its height, as 0.5-step squares widened by 0.25 so consecutive steps overlap and no sliver
+ * of the true shadow is left uncovered. All coordinates stay on a 0.25 lattice.
+ */
 export function shadowRects(box: Box3): Rect[] {
   const out: Rect[] = [];
   const x0 = box.origin.x;
@@ -48,13 +54,33 @@ export function shadowRects(box: Box3): Rect[] {
   const x1 = x0 + box.size.x;
   const y1 = y0 + box.size.y;
   const top = box.origin.z + box.size.z;
-  for (let t = CELL; t <= top + 1e-9; t += CELL) {
-    out.push({ x0: down(x0 - t), y0: down(y0 - t), x1: up(x1 - t), y1: up(y1 - t) });
+  for (let t = CELL; t < top + CELL / 2 - 1e-9; t += CELL) {
+    out.push({
+      x0: r2(x0 - t - CELL / 2),
+      y0: r2(y0 - t - CELL / 2),
+      x1: r2(x1 - t + CELL / 2),
+      y1: r2(y1 - t + CELL / 2),
+    });
   }
   return out;
 }
 
 export type KeepoutKind = "shadow" | "label";
+
+/** Zones in front of the +x and +y face midpoints of a small node (own label cells there are exempt). */
+export function stubZones(box: Box3, reach = 0.75): Rect[] {
+  // Only 1-tile (sm) nodes need it: their label covers both visible-side stubs; larger ones
+  // clear their own label without any exemption.
+  if (box.size.x > 1.25 || box.size.y > 1.25) return [];
+  const x1 = box.origin.x + box.size.x;
+  const y1 = box.origin.y + box.size.y;
+  const cx = box.origin.x + box.size.x / 2;
+  const cy = box.origin.y + box.size.y / 2;
+  return [
+    { x0: x1, y0: cy - 0.25, x1: x1 + reach, y1: cy + 0.25 },
+    { x0: cx - 0.25, y0: y1, x1: cx + 0.25, y1: y1 + reach },
+  ];
+}
 
 /**
  * Keep-out rects of a whole scene, built once and queried per route window. Shadows can be
@@ -79,8 +105,16 @@ export class KeepoutIndex {
     }
   }
 
-  /** Rects intersecting `win`, without the shadows of `skipShadows` owners. */
-  query(win: Rect, skipShadows: ReadonlySet<string>): Rect[] {
+  /**
+   * Rects intersecting `win`, without the shadows of `skipShadows` owners. Label cells of
+   * `own.owners` that touch one of `own.zones` (the stub zones in front of the route's own
+   * visible faces) are exempt, so small labelled nodes keep visible-side arrivals.
+   */
+  query(
+    win: Rect,
+    skipShadows: ReadonlySet<string>,
+    own?: { readonly owners: ReadonlySet<string>; readonly zones: readonly Rect[] },
+  ): Rect[] {
     const seen = new Set<number>();
     const out: Rect[] = [];
     const cx0 = Math.floor(Math.max(win.x0, -30000) / BUCKET);
@@ -93,6 +127,13 @@ export class KeepoutIndex {
       seen.add(i);
       const e = this.rects[i]!;
       if (e.kind === "shadow" && skipShadows.has(e.owner)) return;
+      if (
+        own &&
+        e.kind === "label" &&
+        own.owners.has(e.owner) &&
+        own.zones.some((z) => e.r.x0 < z.x1 && z.x0 < e.r.x1 && e.r.y0 < z.y1 && z.y0 < e.r.y1)
+      )
+        return;
       out.push(e.r);
     };
     if (span > this.buckets.size) {
@@ -109,45 +150,110 @@ export class KeepoutIndex {
   }
 }
 
-/** Ground cells covered by the label drawn under the object, merged into column runs. */
-export function labelRects(label: string, box: Box3): Rect[] {
-  const cx = box.origin.x + box.size.x / 2;
-  const cy = box.origin.y + box.size.y / 2;
-  const w = labelWidth(label);
-  const sx = (cx - cy) * HALF_TILE;
-  const yb = (box.origin.x + box.size.x + box.origin.y + box.size.y) * QUARTER_TILE;
-  // Screen rect -> (u, v) = (x - y, x + y) ground coordinates.
-  const u0 = (sx - w / 2) / HALF_TILE;
-  const u1 = (sx + w / 2) / HALF_TILE;
-  const v0 = (yb + 2) / QUARTER_TILE;
-  const v1 = (yb + 22) / QUARTER_TILE;
-  const uc = (u0 + u1) / 2;
-  const vc = (v0 + v1) / 2;
-  const hu = (u1 - u0) / 2 + 0.5;
-  const hv = (v1 - v0) / 2 + 0.35;
-  const xa = Math.floor((u0 + v0) / 2 / CELL) * CELL;
-  const xb = (u1 + v1) / 2;
-  const ya = Math.floor((v0 - u1) / 2 / CELL) * CELL;
-  const yb2 = (v1 - u0) / 2;
+/**
+ * Ground cells covered by a screen rectangle drawn at ground-plane (z = 0) coordinates, merged
+ * into column runs. `u = x - y`, `v = x + y`; a cell is kept when the L1 distance from its
+ * (u, v) centre to the rectangle is within the cell's diamond (plus slack), and neighbouring
+ * column rects overlap so no seam is left.
+ */
+function screenRectCells(sx0: number, sx1: number, sy0: number, sy1: number): Rect[] {
+  const u0 = sx0 / HALF_TILE;
+  const u1 = sx1 / HALF_TILE;
+  const v0 = sy0 / QUARTER_TILE;
+  const v1 = sy1 / QUARTER_TILE;
+  const xa = Math.floor((u0 + v0 - 2 * PAD) / 2 / CELL) * CELL - CELL;
+  const xb = (u1 + v1 + 2 * PAD) / 2;
+  const ya = Math.floor((v0 - u1 - 2 * PAD) / 2 / CELL) * CELL - CELL;
+  const yb = (v1 - u0 + 2 * PAD) / 2;
   const out: Rect[] = [];
   for (let x = xa; x <= xb; x += CELL) {
     let runStart: number | undefined;
     let runEnd = 0;
-    for (let y = ya; y <= yb2 + 1e-9; y += CELL) {
-      const mx = x + CELL / 2;
-      const my = y + CELL / 2;
-      const inside = Math.abs(mx - my - uc) <= hu && Math.abs(mx + my - vc) <= hv;
-      if (inside) {
+    const flush = (): void => {
+      if (runStart === undefined) return;
+      out.push({ x0: r2(x - SLIT), y0: r2(runStart), x1: r2(x + CELL + SLIT), y1: r2(runEnd) });
+      runStart = undefined;
+    };
+    for (let y = ya; y <= yb + 1e-9; y += CELL) {
+      const cu = x - y;
+      const cv = x + y + CELL;
+      const du = Math.max(u0 - cu, 0, cu - u1);
+      const dv = Math.max(v0 - cv, 0, cv - v1);
+      if (du + dv <= CELL / 2 + PAD) {
         if (runStart === undefined) runStart = y;
         runEnd = y + CELL;
-      } else if (runStart !== undefined) {
-        out.push({ x0: r2(x), y0: r2(runStart), x1: r2(x + CELL), y1: r2(runEnd) });
-        runStart = undefined;
-      }
+      } else flush();
     }
-    if (runStart !== undefined) {
-      out.push({ x0: r2(x), y0: r2(runStart), x1: r2(x + CELL), y1: r2(runEnd) });
-    }
+    flush();
   }
   return out;
+}
+
+/** Screen position of a world point (default 2:1 projection). */
+const sxOf = (x: number, y: number): number => (x - y) * HALF_TILE;
+const syOf = (x: number, y: number, z: number): number => (x + y) * QUARTER_TILE - z * HALF_TILE;
+
+/** Ground cells covered by the label drawn under the object. */
+export function labelRects(label: string, box: Box3): Rect[] {
+  const cx = box.origin.x + box.size.x / 2;
+  const cy = box.origin.y + box.size.y / 2;
+  const w = labelWidth(label);
+  const bottom = syOf(box.origin.x + box.size.x, box.origin.y + box.size.y, box.origin.z);
+  const sx = sxOf(cx, cy);
+  return screenRectCells(sx - w / 2, sx + w / 2, bottom + 1, bottom + 24);
+}
+
+/** A1 draws the icon plate floating above the top face when the front face is too short. */
+function floatingPlate(box: Box3, iconSize: number): { s: number; topY: number } | undefined {
+  const frontH = box.size.z * HALF_TILE;
+  const std = Math.min(iconSize, (box.size.x + box.size.y) * HALF_TILE * 0.6);
+  if (!(frontH - 8 < std * 0.75)) return undefined;
+  const cx = box.origin.x + box.size.x / 2;
+  const cy = box.origin.y + box.size.y / 2;
+  const top = syOf(cx, cy, box.origin.z + box.size.z);
+  return { s: std, topY: top };
+}
+
+/**
+ * Ground cells hidden behind a floating icon plate (the plate rect lies above the top face centre
+ * on screen, so it covers ground behind the object). Empty when the plate sits on the face.
+ */
+export function plateRects(box: Box3, iconSize: number): Rect[] {
+  const f = floatingPlate(box, iconSize);
+  if (!f) return [];
+  const cx = box.origin.x + box.size.x / 2;
+  const cy = box.origin.y + box.size.y / 2;
+  const sx = sxOf(cx, cy);
+  const half = f.s / 2 + 2;
+  return screenRectCells(sx - half, sx + half, f.topY - f.s - 8, f.topY - 4);
+}
+
+/** Ground cells hidden behind the badge pill drawn above the object (or its floating plate). */
+export function badgeRects(badge: string, box: Box3, iconSize?: number): Rect[] {
+  const cx = box.origin.x + box.size.x / 2;
+  const cy = box.origin.y + box.size.y / 2;
+  const sx = sxOf(cx, cy);
+  const top = box.origin.z + box.size.z;
+  let aboveTop = syOf(box.origin.x, box.origin.y, top); // back corner of the top face
+  const f = iconSize === undefined ? undefined : floatingPlate(box, iconSize);
+  if (f) aboveTop = Math.min(aboveTop, f.topY - f.s - 8);
+  const w = Math.min(60, [...badge].length * 7.2) + 10;
+  const bh = 16; // theme badge font 10 + 6
+  return screenRectCells(sx - w / 2, sx + w / 2, aboveTop - bh - 2, aboveTop - 2);
+}
+
+/** Ground cells under the group label pill drawn left of the slab's left corner. */
+export function groupPillRects(label: string, box: Box3): Rect[] {
+  const corner = {
+    sx: sxOf(box.origin.x, box.origin.y + box.size.y),
+    sy: syOf(box.origin.x, box.origin.y + box.size.y, box.origin.z + box.size.z),
+  };
+  const w = Math.min(160, [...label].length * 7.4) + 12;
+  const ph = 20; // label font 12 + 8
+  return screenRectCells(
+    corner.sx - 10 - w,
+    corner.sx - 10,
+    corner.sy - ph / 2,
+    corner.sy + ph / 2,
+  );
 }

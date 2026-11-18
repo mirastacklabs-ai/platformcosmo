@@ -117,7 +117,9 @@ describe("rack", () => {
     expect(ids({ pdu: "single" })).not.toContain("pdu-b");
     expect(ids({ pdu: "dual" })).toContain("pdu-b");
     expect(ids({ rearDoorHeatExchanger: true })).toContain("rear-door");
-    expect(ids({ rearDoorHeatExchanger: false })).toContain("rear-panel");
+    // open rear: no panel in either case, so devices stay visible from behind
+    expect(ids({ rearDoorHeatExchanger: false })).not.toContain("rear-panel");
+    expect(ids({ rearDoorHeatExchanger: true })).not.toContain("rear-panel");
   });
 
   it("exposes power, network and airflow ports", () => {
@@ -138,7 +140,7 @@ describe("rack-mounted devices", () => {
     expect(b.bounds.size.z).toBeGreaterThan(a.bounds.size.z * 3);
     expect(a.bounds.size.z).toBeCloseTo((U_MM - 1.5) / MM_PER_TILE, 3);
     // Devices are 19 inch wide.
-    expect(a.bounds.size.x).toBeCloseTo(482 / MM_PER_TILE, 3);
+    expect(a.bounds.size.x).toBeCloseTo(540 / MM_PER_TILE, 3);
   });
 
   it("servers have LEDs, network ports and both power feeds", () => {
@@ -213,5 +215,35 @@ describe("LED backing", () => {
   it("tape library fiber port is named up-0", () => {
     const r = reg.get("tape-library")!.build({}, ctx);
     expect(r.ports.find((p) => p.kind === "fiber")?.id).toBe("up-0");
+  });
+});
+
+describe("visible device fronts", () => {
+  it("each device category has a distinct front tone and a base LED plate", () => {
+    const front = (t: string): string | undefined =>
+      reg
+        .get(t)!
+        .build({ heightU: reg.get(t)!.heightU }, ctx)
+        .parts.find((p) => p.id === "front")?.tone;
+    expect(front("server-1u")).toBe("metal");
+    expect(front("gpu-node")).toBe("accent");
+    expect(front("switch-tor")).toBe("glass");
+    expect(front("storage-flash")).toBe("muted");
+    for (const t of ["server-2u", "gpu-node", "switch-leaf", "storage-shelf"]) {
+      const r = reg.get(t)!.build({ heightU: reg.get(t)!.heightU }, ctx);
+      expect(r.parts.find((p) => p.id === "led-plate")?.tone, t).toBe("base");
+      expect(
+        r.parts.some((p) => p.tone === "led"),
+        t,
+      ).toBe(true);
+    }
+  });
+
+  it("the rack has no rear panel and the HX door is a thin frame", () => {
+    const rack = reg.get("rack")!;
+    const r = rack.build({ ...rack.defaults, rearDoorHeatExchanger: true }, ctx);
+    const door = r.parts.filter((p) => p.id.startsWith("rear-door"));
+    expect(door.length).toBe(4);
+    for (const p of door) expect(Math.min(p.box.size.x, p.box.size.z)).toBeLessThan(0.06);
   });
 });

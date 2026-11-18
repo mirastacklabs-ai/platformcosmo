@@ -38,6 +38,8 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit -p .",
     "gen:examples": "node scripts/gen-examples.mjs",
+    "gen:gallery": "node scripts/gen-gallery.mjs",
+    "check:gallery": "node scripts/gen-gallery.mjs --check",
     "check:examples": "node scripts/gen-examples.mjs --check",
     "bundle:plugin": "node scripts/bundle-plugin.mjs",
     "check:plugin": "node scripts/bundle-plugin.mjs --check"
@@ -46,6 +48,9 @@
     "@platformcosmo/core": "workspace:*",
     "@platformcosmo/dc-pack": "workspace:*",
     "@platformcosmo/icons-base": "workspace:*",
+    "@platformcosmo/icons-k8s": "workspace:*",
+    "@platformcosmo/icons-lucide": "workspace:*",
+    "@platformcosmo/icons-simple": "workspace:*",
     "@platformcosmo/themes": "workspace:*"
   },
   "devDependencies": {

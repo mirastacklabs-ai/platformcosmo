@@ -11,9 +11,15 @@ import type {
   Rect,
   ThemeRegistry,
 } from "../src/contracts/index.js";
-import { emit } from "../src/emit/index.js";
+import { createAnimator } from "../src/anim/index.js";
+import { emit, h } from "../src/emit/index.js";
 import { optimize } from "../src/optimize/index.js";
-import { buildModelWithDiagnostics, nudgeLabel, rectsOverlap } from "../src/render/model.js";
+import {
+  buildModelWithDiagnostics,
+  nudgeLabel,
+  rectsOverlap,
+  splitAtTiles,
+} from "../src/render/model.js";
 import {
   buildModel,
   canonicalJson,
@@ -337,6 +343,63 @@ describe("label and overlay polish", () => {
     expect(nudgeLabel(box, [wall])).toEqual({ dy: 0, collided: true });
   });
 
+  test("arrowhead tip is the projected path end and points along the last segment", () => {
+    const scene = loadBalancerScene();
+    const m = buildModel({ ...inputs(), scene });
+    const svg = emit(m, noopLayer, { font: "system" });
+    for (const e of scene.edges.filter((x) => !x.hidden && x.arrow.end)) {
+      const cls = `pc-test-e_${e.id.replaceAll("_", "_5f")}-arrow`;
+      const poly = new RegExp(`<polygon class="pc-test-arrow ${cls}" points="([^"]+)"`).exec(svg);
+      expect(poly, e.id).not.toBeNull();
+      const [tip, b1, b2] = (poly![1] as string)
+        .split(" ")
+        .map((p) => p.split(",").map(Number) as [number, number]);
+      const pts = e.path.map((p) => m.projection.project(p));
+      const end = pts[pts.length - 1]!;
+      const prev = pts[pts.length - 2]!;
+      expect(tip![0]).toBeCloseTo(end.x, 1);
+      expect(tip![1]).toBeCloseTo(end.y, 1);
+      // direction: from the base midpoint to the tip == the last segment's direction
+      const mid = [(b1![0] + b2![0]) / 2, (b1![1] + b2![1]) / 2];
+      const d = [tip![0] - mid[0]!, tip![1] - mid[1]!];
+      const seg = [end.x - prev.x, end.y - prev.y];
+      const cross = d[0]! * seg[1]! - d[1]! * seg[0]!;
+      const dot = d[0]! * seg[0]! + d[1]! * seg[1]!;
+      expect(Math.abs(cross)).toBeLessThan(0.5);
+      expect(dot).toBeGreaterThan(0);
+      expect(Math.hypot(d[0]!, d[1]!)).toBeGreaterThanOrEqual(8);
+      expect(Math.hypot(d[0]!, d[1]!)).toBeLessThanOrEqual(10);
+    }
+  });
+
+  test("a zero-length last segment still gets an arrowhead along the previous one", () => {
+    const base = loadBalancerScene();
+    const e = base.edges[0]!;
+    const last = e.path[e.path.length - 1]!;
+    const scene = {
+      ...base,
+      edges: base.edges.map((x) => (x.id === e.id ? { ...x, path: [...e.path, last] } : x)),
+    };
+    const svg = emit(buildModel({ ...inputs(), scene }), noopLayer, { font: "system" });
+    const poly =
+      /<polygon class="pc-test-arrow pc-test-e_e_5fusers_5flb-arrow" points="([^"]+)"/.exec(
+        svg,
+      ) as RegExpExecArray;
+    const [tip, b1, b2] = poly[1]!
+      .split(" ")
+      .map((q) => q.split(",").map(Number) as [number, number]);
+    const proj = buildModel({ ...inputs(), scene }).projection;
+    const pts = e.path.map((q) => proj.project(q));
+    const end = pts[pts.length - 1]!;
+    const prev = pts[pts.length - 2]!; // previous distinct point (original path)
+    const mid = [(b1![0] + b2![0]) / 2, (b1![1] + b2![1]) / 2];
+    const d = [tip![0] - mid[0]!, tip![1] - mid[1]!];
+    const seg = [end.x - prev.x, end.y - prev.y];
+    expect(tip![0]).toBeCloseTo(end.x, 1);
+    expect(Math.abs(d[0]! * seg[1]! - d[1]! * seg[0]!)).toBeLessThan(0.5); // parallel
+    expect(d[0]! * seg[0]! + d[1]! * seg[1]!).toBeGreaterThan(0); // same direction
+  });
+
   test("arrowheads carry a class derived from their edge id", () => {
     const svg = svgOf();
     expect(svg).toContain('<polygon class="pc-test-arrow pc-test-e_e_5fusers_5flb-arrow"');
@@ -360,13 +423,13 @@ describe("label and overlay polish", () => {
     }
   });
 
-  test("icon plates stay inside flat boxes", () => {
+  const iconBox = (z: number, size = 28) => {
     const scene = loadBalancerScene();
-    const flat = {
+    const o = {
       ...scene.objects[0]!,
-      id: "flat",
-      box: { origin: { x: 9, y: 0, z: 0 }, size: { x: 1, y: 1, z: 0.5 } },
-      icon: { ref: "cosmo:lb", anchor: { x: 9.5, y: 1, z: 0.1 }, size: 40 },
+      id: "x",
+      box: { origin: { x: 9, y: 0, z: 0 }, size: { x: 1, y: 1, z } },
+      icon: { ref: "cosmo:lb", anchor: { x: 9.5, y: 1, z: z / 2 }, size },
     };
     const icons: IconResolver = {
       resolve: () => ({
@@ -380,32 +443,321 @@ describe("label and overlay polish", () => {
     };
     const m = buildModel({
       ...inputs(),
-      scene: { ...scene, objects: [...scene.objects, flat] },
+      scene: { ...scene, objects: [...scene.objects, o] },
       icons,
     });
     const svg = emit(m, noopLayer, { font: "system" });
-    const frontH = 0.5 * m.projection.zScale;
-    const plates = [
-      ...svg.matchAll(
-        /<rect class="pc-test-plate" x="[-\d.]+" y="[-\d.]+" width="([-\d.]+)" height="([-\d.]+)"/g,
-      ),
-    ];
-    expect(plates.length).toBe(1);
-    expect(Number(plates[0]![2])).toBeLessThanOrEqual(frontH);
-    // a slab too flat for a legible icon is drawn without one
-    const slab = { ...flat, id: "slab", box: { ...flat.box, size: { x: 1, y: 1, z: 0.2 } } };
-    const m2 = buildModel({
-      ...inputs(),
-      scene: { ...scene, objects: [...scene.objects, slab] },
-      icons,
+    const plate =
+      /<rect class="pc-test-plate" x="([-\d.]+)" y="([-\d.]+)" width="([-\d.]+)" height="([-\d.]+)"/.exec(
+        svg,
+      );
+    const [x, y, w, hh] = (plate?.slice(1) ?? []).map(Number) as [number, number, number, number];
+    const top = m.projection.project({ x: 9.5, y: 0.5, z });
+    return { m, svg, plate: { x, y, w, h: hh }, top };
+  };
+
+  test("a tall enough front face carries the icon plate, inside the face", () => {
+    const { m, svg, plate } = iconBox(1.5);
+    expect(svg).not.toContain("pc-test-shadow");
+    const frontH = 1.5 * m.projection.zScale;
+    expect(plate.h).toBeLessThanOrEqual(frontH);
+    expect(plate.w - 4).toBe(28);
+  });
+
+  test("the default sm cube (height 1, icon 28) keeps its icon on the face, shrunk to fit", () => {
+    const { svg, plate, m } = iconBox(1, 28);
+    expect(svg).not.toContain("pc-test-shadow");
+    expect(plate.w - 4).toBe(1 * m.projection.zScale - 8); // 24, >= 0.75 * 28
+    expect(plate.w - 4).toBeGreaterThanOrEqual(0.75 * 28);
+    // md (height 1.5, icon 36) fits at the standard size
+    const md = iconBox(1.5, 36);
+    expect(md.plate.w - 4).toBe(36);
+    expect(md.svg).not.toContain("pc-test-shadow");
+    // just below 0.75x floats at the standard size
+    const short = iconBox(0.8, 28); // avail 17.6 < 21
+    expect(short.svg).toContain("pc-test-shadow");
+    expect(short.plate.w - 4).toBe(28);
+  });
+
+  test("a front face that is too short floats the plate over the top face at standard size", () => {
+    for (const z of [0.2, 0.5]) {
+      const { svg, plate, top } = iconBox(z);
+      expect(plate.w - 4).toBe(28); // standard size, not shrunk
+      expect(plate.x + plate.w / 2).toBeCloseTo(top.x, 1); // centred over the top face
+      expect(plate.y + plate.h).toBeLessThan(top.y); // above the face centre
+      expect(svg).toMatch(/<ellipse class="pc-test-shadow" cx="[-\d.]+" cy="[-\d.]+"/);
+      expect(svg).not.toMatch(/<use[^>]*transform/);
+    }
+  });
+});
+
+describe("DC layering (D31): floors flat, cables depth-sorted, particles on top", () => {
+  const dcScene = () => {
+    const scene = loadBalancerScene();
+    const base = scene.objects[0]!;
+    const mk = (
+      id: string,
+      type: string,
+      x: number,
+      y: number,
+      z: number,
+      w: number,
+      d: number,
+      hh: number,
+    ) => ({
+      ...base,
+      id,
+      type,
+      source: "dc" as const,
+      label: undefined,
+      icon: undefined,
+      box: { origin: { x, y, z }, size: { x: w, y: d, z: hh } },
     });
-    expect(emit(m2, noopLayer, { font: "system" })).not.toContain("pc-test-plate");
-    const info = buildModelWithDiagnostics({
+    const objects = [
+      mk("floor", "floor-grid", 0, 0, 0, 8, 6, 0.05),
+      mk("tiles", "perforated-tiles", 1, 4, 0.05, 2, 1, 0.02),
+      mk("tray", "cable-tray", 1, 2, 0.5, 5, 0.4, 0.1),
+      mk("back", "rack", 3, 0, 0, 1, 1, 2),
+      mk("front", "rack", 3, 3.5, 0, 1, 1, 2),
+    ];
+    const cable = {
+      id: "c1",
+      from: "back",
+      to: "front",
+      kind: "cable" as const,
+      cableKind: "power" as const,
+      style: "solid" as const,
+      bidirectional: false,
+      hidden: false,
+      path: [
+        { x: 1, y: 2.2, z: 0.62 },
+        { x: 6, y: 2.2, z: 0.62 },
+      ],
+      arrow: { start: false, end: false },
+    };
+    const air = { ...cable, id: "a1", kind: "edge" as const, cableKind: undefined, hidden: true };
+    return {
+      ...scene,
+      objects,
+      groups: [
+        {
+          id: "dc_hall",
+          kind: "hall" as const,
+          style: "zone" as const,
+          box: { origin: { x: -1, y: -1, z: 0 }, size: { x: 10, y: 8, z: 0.05 } },
+          level: 0,
+        },
+        {
+          id: "cold-1",
+          kind: "cold-aisle" as const,
+          style: "zone" as const,
+          box: { origin: { x: 1, y: 3.5, z: 0.05 }, size: { x: 4, y: 2, z: 0.02 } },
+          level: 1,
+        },
+      ],
+      edges: [cable, air],
+      flows: [{ id: "dc_f_1", edge: "a1", kind: "airflow" as const, rate: 2, reverse: false }],
+      timeline: [],
+      metrics: [],
+      legend: [],
+      focusTargets: {},
+      bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 8, y: 6, z: 2 } },
+    } as ReturnType<typeof loadBalancerScene>;
+  };
+  const particles: AnimationLayer = {
+    css: "",
+    defs: [],
+    layers: {
+      flows: [h("g", { id: "pc-test-particles" }, h("g", { id: "pc-test-fl_dc_5ff_5f1" }))],
+    },
+    duration: 1,
+  };
+
+  test("cable segments come after floors, trays and tiles and before objects in front", () => {
+    const svg = emit(buildModel({ ...inputs(), scene: dcScene() }), particles, { font: "system" });
+    const at = (needle: string) => {
+      const i = svg.indexOf(needle);
+      expect(i, needle).toBeGreaterThan(-1);
+      return i;
+    };
+    const edgesLayer = at('id="pc-test-ly_edges"');
+    // floor objects are flat ground: inside the groups layer, before the edges layer
+    expect(at('id="pc-test-o_floor"')).toBeLessThan(edgesLayer);
+    // ...and after the opaque hall and aisle slabs that would otherwise paint over them
+    expect(at('id="pc-test-g_dc_5fhall"')).toBeLessThan(at('id="pc-test-o_floor"'));
+    expect(at('id="pc-test-g_cold-1"')).toBeLessThan(at('id="pc-test-o_tiles"'));
+    expect(at('id="pc-test-g_cold-1"')).toBeLessThan(at('id="pc-test-o_floor"'));
+    expect(at('id="pc-test-o_tiles"')).toBeLessThan(edgesLayer);
+    expect(at('id="pc-test-ly_groups"')).toBeLessThan(at('id="pc-test-o_floor"'));
+    // trays and racks stay in the objects layer; the cable segment is sorted among them
+    const seg = at('id="pc-test-e_c1__s0"');
+    expect(at('id="pc-test-ly_objects"')).toBeLessThan(seg);
+    expect(at('id="pc-test-o_tray"')).toBeLessThan(seg);
+    expect(seg).toBeLessThan(at('id="pc-test-o_front"'));
+    expect(at('id="pc-test-o_floor"')).toBeLessThan(seg);
+    expect(at('id="pc-test-o_tiles"')).toBeLessThan(seg);
+    // the segment is a painted cable path; the single particle path is not painted
+    expect(svg).toMatch(
+      /<path id="pc-test-e_c1__s0" class="pc-test-edge pc-test-edge-solid pc-test-cable-power pc-test-e_c1-seg" d="M/,
+    );
+    expect(svg).toMatch(/<path id="pc-test-ep_c1" fill="none" stroke="none" d="M/);
+    // the objects layer holds the segment, not the edges layer
+    const edgesBlock = svg.slice(edgesLayer, at('id="pc-test-ly_objects"'));
+    expect(edgesBlock).not.toContain("pc-test-cable-power");
+  });
+
+  test("DC particles are drawn after the objects layer, other particles stay below it (D31)", () => {
+    const both: AnimationLayer = {
+      css: "@media (prefers-reduced-motion:reduce){\n#pc-test_particles{display:none}\n}",
+      defs: [],
+      layers: {
+        flows: [
+          h(
+            "g",
+            { id: "pc-test_particles" },
+            h("g", { id: "pc-test-fl_f_5f1" }),
+            h("g", { id: "pc-test-fl_dc_5ff_5f1" }),
+            h("g", { id: "pc-test-fl_dc_5ff_5f2" }),
+          ),
+        ],
+      },
+      duration: 1,
+    };
+    const svg = emit(buildModel({ ...inputs(), scene: dcScene() }), both, { font: "system" });
+    const at = (needle: string) => {
+      const i = svg.indexOf(needle);
+      expect(i, needle).toBeGreaterThan(-1);
+      return i;
+    };
+    // contract layer ids stay in contract order; the DC group is inserted after objects
+    const order = [
+      "background",
+      "groups",
+      "edges",
+      "flows",
+      "objects",
+      "dcflows",
+      "labels",
+      "overlay",
+    ].map((l) => at(`id="pc-test-ly_${l}"`));
+    expect(order.every((i, k) => k === 0 || i > (order[k - 1] as number))).toBe(true);
+    // non-DC particles are inside the flows layer (before objects), DC ones after objects
+    expect(at('id="pc-test-fl_f_5f1"')).toBeLessThan(at('id="pc-test-ly_objects"'));
+    expect(at('id="pc-test-fl_dc_5ff_5f1"')).toBeGreaterThan(at('id="pc-test-ly_dcflows"'));
+    expect(at('id="pc-test-fl_dc_5ff_5f2"')).toBeLessThan(at('id="pc-test-ly_labels"'));
+    expect(at('id="pc-test_particles_dc"')).toBeGreaterThan(at('id="pc-test-ly_objects"'));
+    // reduced motion: the DC wrapper gets its own rule (animated output: duration > 0)
+    expect(svg).toContain(
+      "@media (prefers-reduced-motion:reduce){#pc-test_particles_dc{display:none}}",
+    );
+    // no duplicate ids
+    const found = [...svg.matchAll(/ id="([^"]+)"/g)].map((m) => m[1] as string);
+    expect(new Set(found).size).toBe(found.length);
+  });
+
+  test("frame output (no animation) adds no reduced-motion rule for the DC wrapper", () => {
+    const frame: AnimationLayer = {
+      css: "",
+      defs: [],
+      layers: {
+        flows: [h("g", { id: "pc-test_particles" }, h("g", { id: "pc-test-fl_dc_5ff_5f1" }))],
+      },
+      duration: 0,
+    };
+    const svg = emit(buildModel({ ...inputs(), scene: dcScene() }), frame, { font: "system" });
+    expect(svg).toContain('id="pc-test_particles_dc"');
+    expect(svg).not.toContain("prefers-reduced-motion");
+  });
+
+  test("a second wrapper with DC flows is rejected", () => {
+    const two: AnimationLayer = {
+      css: "",
+      defs: [],
+      layers: {
+        flows: [
+          h("g", { id: "pc-test_particles" }, h("g", { id: "pc-test-fl_dc_5ff_5f1" })),
+          h("g", { id: "pc-test_other" }, h("g", { id: "pc-test-fl_dc_5ff_5f2" })),
+        ],
+      },
+      duration: 1,
+    };
+    expect(() =>
+      emit(buildModel({ ...inputs(), scene: dcScene() }), two, { font: "system" }),
+    ).toThrow(/single particles wrapper/);
+  });
+
+  test("with the real animator (loop), reduced motion hides both particle wrappers", () => {
+    const m = buildModel({
       ...inputs(),
-      scene: { ...scene, objects: [...scene.objects, slab] },
-      icons,
-    }).diagnostics;
-    expect(info.map((d) => `${d.severity}:${d.code}`)).toContain("info:render/icon-too-flat");
+      scene: {
+        ...dcScene(),
+        flows: [
+          ...dcScene().flows,
+          { id: "f_1", edge: "a1", kind: "normal" as const, rate: 1, reverse: false },
+        ],
+      },
+    });
+    const layer = createAnimator().animate(m, { speed: 1, mode: "loop" });
+    const svg = emit(m, layer, { font: "system" });
+    const media = svg.slice(svg.indexOf("@media (prefers-reduced-motion:reduce)"));
+    expect(svg).toContain('id="pc-test_particles_dc"');
+    expect(svg).toContain('id="pc-test_particles"');
+    expect(media).toContain("#pc-test_particles{display:none}");
+    expect(media).toContain("#pc-test_particles_dc{display:none}");
+    // the DC wrapper holds only the dc_f_ flow, the main one the other flow
+    const dcBlock = /<g id="pc-test_particles_dc">([^]*?)<\/g><\/g>/.exec(svg)?.[1] ?? "";
+    expect(dcBlock).toContain("pc-test-fl_dc_5ff_5f1");
+    expect(dcBlock).not.toContain("pc-test-fl_f_5f1");
+  });
+
+  test("a cable that stays adjacent after sorting is one merged path", () => {
+    const scene = dcScene();
+    const only = {
+      ...scene,
+      objects: scene.objects.filter((o) => o.id === "floor"),
+    };
+    const svg = emit(buildModel({ ...inputs(), scene: only }), particles, { font: "system" });
+    const segs = [...svg.matchAll(/<path id="pc-test-e_c1__s\d+"/g)];
+    expect(segs).toHaveLength(1);
+    // the merged path still runs the whole way (5 tiles = 6 points)
+    expect(/<path id="pc-test-e_c1__s0"[^>]* d="([^"]+)"/.exec(svg)?.[1]?.match(/L/g)?.length).toBe(
+      5,
+    );
+  });
+
+  test("scenes without DC flows keep the plain contract layer order", () => {
+    const plainParticles: AnimationLayer = {
+      ...particles,
+      layers: { flows: [h("g", { id: "pc-test_particles" }, h("g", { id: "pc-test-fl_f_5f1" }))] },
+    };
+    const svg = emit(buildModel(inputs()), plainParticles, { font: "system" });
+    expect(svg).not.toContain("ly_dcflows");
+    const order = ["background", "groups", "edges", "flows", "objects", "labels", "overlay"].map(
+      (l) => svg.indexOf(`id="pc-test-ly_${l}"`),
+    );
+    expect(order.every((i, k) => i > 0 && (k === 0 || i > (order[k - 1] as number)))).toBe(true);
+  });
+
+  test("painted cable segments share a per-edge class", () => {
+    const svg = emit(buildModel({ ...inputs(), scene: dcScene() }), particles, { font: "system" });
+    const segs = [...svg.matchAll(/<path id="pc-test-e_c1__s(\d+)" class="([^"]*)"/g)];
+    expect(segs.length).toBeGreaterThanOrEqual(1);
+    for (const m of segs) expect(m[2]).toContain("pc-test-e_c1-seg");
+  });
+
+  test("long cable runs are split at tile boundaries before depth sorting", () => {
+    expect(splitAtTiles({ x: 1, y: 2.2, z: 0.6 }, { x: 6, y: 2.2, z: 0.6 })).toHaveLength(5);
+    const parts = splitAtTiles({ x: 0.5, y: 0.5, z: 0 }, { x: 2.5, y: 3.5, z: 0 });
+    expect(parts[0]![0]).toEqual({ x: 0.5, y: 0.5, z: 0 });
+    expect(parts[parts.length - 1]![1]).toEqual({ x: 2.5, y: 3.5, z: 0 });
+    for (let i = 1; i < parts.length; i++) expect(parts[i]![0]).toEqual(parts[i - 1]![1]);
+    expect(splitAtTiles({ x: 1.2, y: 1.2, z: 0 }, { x: 1.2, y: 1.2, z: 2 })).toHaveLength(1);
+  });
+
+  test("cable segment ids cannot collide with other ids", () => {
+    const svg = emit(buildModel({ ...inputs(), scene: dcScene() }), particles, { font: "system" });
+    const found = [...svg.matchAll(/ id="([^"]+)"/g)].map((m) => m[1] as string);
+    expect(new Set(found).size).toBe(found.length);
   });
 });
 

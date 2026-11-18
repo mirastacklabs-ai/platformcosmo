@@ -68,16 +68,31 @@ export class RouteLanes {
     let cost = 0;
     for (const e of list) {
       const ov = Math.min(hi, e.b) - Math.max(lo, e.a);
-      if (ov > 1e-9) cost += ov * (e.src === src ? 4 : 0.5);
+      if (ov > 1e-9) cost += ov * (e.src === src ? 4 : 1.5);
     }
     return cost;
   }
 
-  /** Coordinates of lanes owned by `src` (extra grid lines are offered next to them). */
-  lines(src: string): { h: number[]; v: number[] } {
-    const pick = (m: Map<number, { src: string }[]>): number[] =>
-      [...m.entries()].filter(([, l]) => l.some((e) => e.src === src)).map(([c]) => c);
-    return { h: pick(this.h), v: pick(this.v) };
+  /** Coordinates of used lanes (extra grid lines are offered 0.5 beside them, so near-parallel edges separate). */
+  lines(win: Rect): { h: number[]; v: number[] } {
+    // Only lanes inside the search window, nearest to its centre first, at most 80 per axis.
+    const mid = (a: number, b: number): number => (Number.isFinite(a + b) ? (a + b) / 2 : 0);
+    const cx = mid(win.x0, win.x1);
+    const cy = mid(win.y0, win.y1);
+    const pick = (
+      m: Map<number, { src: string }[]>,
+      lo: number,
+      hi: number,
+      mid: number,
+    ): number[] =>
+      [...m.keys()]
+        .filter((c) => c >= lo && c <= hi)
+        .sort((a, b) => Math.abs(a - mid) - Math.abs(b - mid) || a - b)
+        .slice(0, 80);
+    return {
+      h: pick(this.h, win.y0, win.y1, cy),
+      v: pick(this.v, win.x0, win.x1, cx),
+    };
   }
 }
 
@@ -111,6 +126,22 @@ const BEND = 2;
 /** Hard caps so a pathological scene falls back instead of stalling. */
 const MAX_GRID = 60000;
 const MAX_EXPANSIONS = 150000;
+
+/** Work counters (deterministic, unlike wall-clock time) so tests can bound router cost. */
+export interface RouterStats {
+  /** A* node expansions across all searches since the last reset. */
+  expansions: number;
+  /** Searches abandoned because the grid or expansion cap was hit. */
+  capHits: number;
+}
+const stats: RouterStats = { expansions: 0, capHits: 0 };
+export function resetRouterStats(): void {
+  stats.expansions = 0;
+  stats.capHits = 0;
+}
+export function getRouterStats(): Readonly<RouterStats> {
+  return { ...stats };
+}
 const BUCKET = 4;
 const r2 = (v: number): number => Math.round(v * 100) / 100;
 
@@ -253,6 +284,7 @@ function search(
   own: Rect[],
   obstacles: Rect[],
   ctx: RouteContext,
+  win: Rect,
 ): { pts: { x: number; y: number }[]; src: number; dst: number } | "no-terminal" | undefined {
   const xsSet = new Set<number>();
   const ysSet = new Set<number>();
@@ -270,7 +302,7 @@ function search(
     add(r.x1, r.y1);
   }
   if (ctx.lanes && ctx.source !== undefined) {
-    const ln = ctx.lanes.lines(ctx.source);
+    const ln = ctx.lanes.lines(win);
     for (const c of ln.v) {
       xsSet.add(r2(c - 0.5));
       xsSet.add(r2(c + 0.5));
@@ -284,7 +316,10 @@ function search(
   const ys = [...ysSet].sort((a, b) => a - b);
   const nx = xs.length;
   const ny = ys.length;
-  if (nx * ny > MAX_GRID) return undefined;
+  if (nx * ny > MAX_GRID) {
+    stats.capHits++;
+    return undefined;
+  }
   // Bucket index over obstacles so each probe only tests nearby ones.
   const buckets = new Map<number, number[]>();
   const bkey = (cx: number, cy: number): number => (cx + 32768) * 65536 + (cy + 32768);
@@ -324,6 +359,8 @@ function search(
   const nodeBlocked = (ix: number, iy: number): boolean => {
     const x = xs[ix]!;
     const y = ys[iy]!;
+    // Obstacles outside the search window were not loaded, so the window is a hard boundary.
+    if (x < win.x0 || x > win.x1 || y < win.y0 || y > win.y1) return true;
     for (const r of own) if (strictHit(x, y, x, y, r, true)) return true;
     return anyObstacleHit(x, y, x, y);
   };
@@ -336,7 +373,8 @@ function search(
   from.forEach((t, k) => {
     const ix = xi.get(t.stub.x)!;
     const iy = yi.get(t.stub.y)!;
-    if (!nodeBlocked(ix, iy)) srcNodes.push({ id: idx(ix, iy), t: k, pen: t.pen, axis: t.axis });
+    if (!nodeBlocked(ix, iy) && !anyObstacleHit(t.at.x, t.at.y, t.stub.x, t.stub.y))
+      srcNodes.push({ id: idx(ix, iy), t: k, pen: t.pen, axis: t.axis });
   });
   const dstNodes = new Map<number, number>();
   const dstInfo = new Map<number, { pen: number; axis: number }>();
@@ -344,7 +382,7 @@ function search(
     const ix = xi.get(t.stub.x)!;
     const iy = yi.get(t.stub.y)!;
     const dn = idx(ix, iy);
-    if (!nodeBlocked(ix, iy)) {
+    if (!nodeBlocked(ix, iy) && !anyObstacleHit(t.at.x, t.at.y, t.stub.x, t.stub.y)) {
       const cur = dstInfo.get(dn);
       if (!cur || t.pen < cur.pen) {
         dstNodes.set(dn, k);
@@ -383,7 +421,11 @@ function search(
   const finalized = new Set<number>();
   let expansions = 0;
   while (heap.size > 0) {
-    if (++expansions > MAX_EXPANSIONS) return undefined;
+    stats.expansions++;
+    if (++expansions > MAX_EXPANSIONS) {
+      stats.capHits++;
+      return undefined;
+    }
     const popped = heap.pop().id;
     const isFinal = popped < 0;
     const st = isFinal ? -popped - 1 : popped;
@@ -478,7 +520,7 @@ export function routeEdge(
     const local = [...all, ...ex].filter((r) =>
       strictHit(win.x0, win.y0, win.x1, win.y1, r, false),
     );
-    const found = search(fromT, toT, own, local, ctx);
+    const found = search(fromT, toT, own, local, ctx, win);
     if (found === "no-terminal") break; // wider windows only add obstacles
     if (!found) continue;
     const a = fromT[found.src]!;

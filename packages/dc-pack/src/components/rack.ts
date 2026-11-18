@@ -57,33 +57,15 @@ export const rackDef: DcComponentDef = {
 
     // Back to front: plinth, rear, back posts, PDUs, front posts, top cap.
     k.part("base", "slab", "muted", 0, 0, 0, W, D, RACK_BASE_MM);
-    if (rearDoorHeatExchanger) {
-      k.part(
-        "rear-door",
-        "slab",
-        "glass",
-        0,
-        0,
-        RACK_BASE_MM,
-        W,
-        110,
-        H - RACK_BASE_MM - RACK_TOP_MM,
-      );
-      k.row("rear-fan", 3, "accent", 90, 510, H * 0.4, 60, 60, 4, "cylinder");
-    } else {
-      k.part(
-        "rear-panel",
-        "slab",
-        "muted",
-        0,
-        0,
-        RACK_BASE_MM,
-        W,
-        12,
-        H - RACK_BASE_MM - RACK_TOP_MM,
-      );
-    }
     const bodyH = H - RACK_BASE_MM - RACK_TOP_MM;
+    if (rearDoorHeatExchanger) {
+      // A thin frame (no panel), so devices stay visible from either side.
+      const f = 30;
+      k.part("rear-door", "cube", "accent", 0, 0, RACK_BASE_MM + bodyH - f, W, 110, f);
+      k.part("rear-door-b", "cube", "accent", 0, 0, RACK_BASE_MM, W, 110, f);
+      k.part("rear-door-l", "cube", "accent", 0, 0, RACK_BASE_MM, f, 110, bodyH);
+      k.part("rear-door-r", "cube", "accent", W - f, 0, RACK_BASE_MM, f, 110, bodyH);
+    }
     k.part("post-bl", "cube", "metal", 0, 0, RACK_BASE_MM, post, post, bodyH);
     k.part("post-br", "cube", "metal", W - post, 0, RACK_BASE_MM, post, post, bodyH);
     const pduH = u * U_MM * 0.8;
@@ -97,7 +79,22 @@ export const rackDef: DcComponentDef = {
     }
     k.part("post-fl", "cube", "metal", 0, D - post, RACK_BASE_MM, post, post, bodyH);
     k.part("post-fr", "cube", "metal", W - post, D - post, RACK_BASE_MM, post, post, bodyH);
-    k.part("top", "slab", "muted", 0, 0, H - RACK_TOP_MM, W, D, RACK_TOP_MM);
+    // Open top frame (rails, no panel) so the devices' top faces show from above.
+    const rail = 40;
+    k.part("top-b", "cube", "muted", 0, 0, H - RACK_TOP_MM, W, rail, RACK_TOP_MM);
+    k.part("top-l", "cube", "muted", 0, rail, H - RACK_TOP_MM, rail, D - 2 * rail, RACK_TOP_MM);
+    k.part(
+      "top-r",
+      "cube",
+      "muted",
+      W - rail,
+      rail,
+      H - RACK_TOP_MM,
+      rail,
+      D - 2 * rail,
+      RACK_TOP_MM,
+    );
+    k.part("top", "cube", "muted", 0, D - rail, H - RACK_TOP_MM, W, rail, RACK_TOP_MM);
 
     k.port("power-a", "power-a", 60, 140, H);
     if (pdu === "dual") k.port("power-b", "power-b", W - 60, 140, H);

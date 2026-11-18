@@ -1,10 +1,13 @@
-/** Rack-mounted devices (the 15 slot types): generic 19-inch shapes, vendor-neutral. */
+/** Rack-mounted devices (the 15 slot types): generic rack-mount shapes, vendor-neutral. */
 import type { DcBuildResult, DcCategory, DcComponentDef } from "@platformcosmo/core";
 import { U_MM } from "../units.js";
 import { Kit } from "./kit.js";
 
-/** 19-inch rack-mount width. */
-export const DEVICE_WIDTH_MM = 482;
+/**
+ * Device width (wider than a real 19-inch 482 mm unit): fills the 600 mm rack between its 30 mm
+ * posts, leaving a 30 mm inset each side, so devices read at overview zoom.
+ */
+export const DEVICE_WIDTH_MM = 540;
 /** Visual gap between stacked devices. */
 const GAP_MM = 1.5;
 
@@ -16,6 +19,8 @@ interface Dev {
   readonly label: string;
   readonly heightU: number;
   readonly depthMm: number;
+  /** Chassis tone (top and sides): distinct per category so devices read at overview. */
+  readonly tone?: "base" | "accent" | "muted" | "glass";
   /** Adds the type-specific front details to the kit. `h` is the device height in mm. */
   detail(k: Kit, h: number): void;
 }
@@ -23,10 +28,16 @@ interface Dev {
 const num = (v: unknown, fallback: number): number =>
   typeof v === "number" && Number.isFinite(v) && v >= 1 ? v : fallback;
 
+/** Front face in a category tone, starting after the LED plate so LEDs sit on `base`. */
+function face(k: Kit, h: number, tone: "metal" | "accent" | "glass" | "muted"): void {
+  k.part("led-plate", "slab", "base", 8, k.depthMm - 9, 3, 44, 9, h - 6);
+  k.part("front", "slab", tone, 54, k.depthMm - 9, 3, DEVICE_WIDTH_MM - 74, 9, h - 6);
+}
+
 /** Status LEDs near the left edge of the front panel. */
 function leds(k: Kit, h: number, n = 2): void {
   for (let i = 0; i < n; i++) {
-    k.part(`led-${i}`, "cube", "led", 14 + i * 9, k.depthMm - 5, h / 2 - 3, 5, 5, 6);
+    k.part(`led-${i}`, "cube", "led", 12 + i * 13, k.depthMm - 6, h / 2 - 4.5, 9, 6, 9);
   }
 }
 
@@ -39,7 +50,7 @@ function netPorts(k: Kit, h: number, n: number, kind: "network" | "fiber" = "net
 
 function psuPorts(k: Kit, h: number): void {
   k.port("psu-a", "power-a", 60, k.depthMm, h * 0.7);
-  k.port("psu-b", "power-b", 420, k.depthMm, h * 0.7);
+  k.port("psu-b", "power-b", DEVICE_WIDTH_MM - 62, k.depthMm, h * 0.7);
 }
 
 function server(type: string, label: string, u: number, depth: number): Dev {
@@ -49,8 +60,9 @@ function server(type: string, label: string, u: number, depth: number): Dev {
     label,
     heightU: u,
     depthMm: depth,
+    tone: "accent",
     detail(k, h) {
-      k.part("bezel", "slab", "base", 20, k.depthMm - 4, 3, 442, 4, h - 6);
+      face(k, h, "metal");
       k.row("vent", 3, "muted", 90, 250, 5, 40, Math.max(4, h - 12), 5);
       leds(k, h);
       k.row("drive", u >= 2 ? 6 : 3, "muted", 260, 440, 6, 24, Math.max(6, h - 14), 5);
@@ -84,8 +96,8 @@ const devices: readonly Dev[] = [
     heightU: 4,
     depthMm: 820,
     detail(k, h) {
-      k.part("bezel", "slab", "base", 20, k.depthMm - 4, 3, 442, 4, h - 6);
-      k.row("gpu", 8, "accent", 30, 452, 10, 38, h - 20, 6);
+      face(k, h, "accent");
+      k.row("gpu", 8, "accent", 60, 500, 10, 38, h - 20, 6);
       leds(k, h);
       netPorts(k, h, 4);
       psuPorts(k, h);
@@ -97,7 +109,9 @@ const devices: readonly Dev[] = [
     label: "Top-of-rack switch",
     heightU: 1,
     depthMm: 450,
+    tone: "muted",
     detail(k, h) {
+      face(k, h, "glass");
       k.row("port", 12, "metal", 70, 450, 6, 20, Math.max(6, h - 14), 5);
       leds(k, h, 2);
       netPorts(k, h, 4);
@@ -111,7 +125,9 @@ const devices: readonly Dev[] = [
     label: "Leaf switch",
     heightU: 1,
     depthMm: 450,
+    tone: "muted",
     detail(k, h) {
+      face(k, h, "glass");
       k.row("port", 16, "metal", 60, 452, 6, 18, Math.max(6, h - 14), 5);
       leds(k, h, 2);
       netPorts(k, h, 4);
@@ -125,7 +141,9 @@ const devices: readonly Dev[] = [
     label: "Spine switch",
     heightU: 2,
     depthMm: 600,
+    tone: "muted",
     detail(k, h) {
+      face(k, h, "glass");
       k.row("port", 16, "metal", 60, 452, 8, 18, Math.max(6, h * 0.35), 5);
       k.row("port-lo", 16, "metal", 60, 452, h * 0.55, 18, Math.max(6, h * 0.35), 5);
       leds(k, h, 3);
@@ -151,9 +169,11 @@ const devices: readonly Dev[] = [
     label: "Storage shelf",
     heightU: 2,
     depthMm: 700,
+    tone: "glass",
     detail(k, h) {
-      k.row("bay", 12, "muted", 30, 450, 6, 26, h - 14, 5);
-      k.row("bay-led", 12, "led", 36, 456, 3, 4, 3, 6);
+      face(k, h, "muted");
+      k.row("bay", 12, "base", 60, 500, 6, 24, h - 14, 5);
+      leds(k, h);
       netPorts(k, h, 2);
       psuPorts(k, h);
     },
@@ -164,8 +184,10 @@ const devices: readonly Dev[] = [
     label: "All-flash array",
     heightU: 2,
     depthMm: 720,
+    tone: "glass",
     detail(k, h) {
-      k.row("bay", 24, "glass", 24, 458, 6, 13, h - 14, 5);
+      face(k, h, "muted");
+      k.row("bay", 24, "glass", 60, 510, 6, 12, h - 14, 5);
       leds(k, h);
       netPorts(k, h, 2);
       netPorts(k, h, 2, "fiber");
@@ -178,9 +200,11 @@ const devices: readonly Dev[] = [
     label: "JBOD enclosure",
     heightU: 4,
     depthMm: 900,
+    tone: "glass",
     detail(k, h) {
-      k.row("bay", 12, "muted", 28, 454, 6, 28, h * 0.4, 5);
-      k.row("bay-lo", 12, "muted", 28, 454, h * 0.55, 28, h * 0.4, 5);
+      face(k, h, "muted");
+      k.row("bay", 12, "base", 60, 500, 6, 28, h * 0.4, 5);
+      k.row("bay-lo", 12, "base", 60, 500, h * 0.55, 28, h * 0.4, 5);
       leds(k, h);
       netPorts(k, h, 2);
       psuPorts(k, h);
@@ -236,7 +260,26 @@ function deviceDef(d: Dev): DcComponentDef {
       const h = u * U_MM - GAP_MM;
       const k = new Kit(DEVICE_WIDTH_MM, d.depthMm, h);
       // Chassis first (back-most), then front details in drawing order.
-      k.part("chassis", "cube", "base", 0, 0, 0, DEVICE_WIDTH_MM, d.depthMm - 6, h);
+      // Rear first (back-most): a panel with two power supplies, so racks seen from behind
+      // (rows facing away from the viewer) still show their devices.
+      k.part("rear", "slab", "muted", 10, 0, 3, DEVICE_WIDTH_MM - 20, 4, Math.max(2, h - 6));
+      k.part("rear-psu-a", "cube", "metal", 40, 0, 3, 110, 8, Math.max(2, h - 8));
+      k.part(
+        "rear-psu-b",
+        "cube",
+        "metal",
+        DEVICE_WIDTH_MM - 150,
+        0,
+        3,
+        110,
+        8,
+        Math.max(2, h - 8),
+      );
+      // Category-toned chassis ends short of the LED plate so only `base` backs the LEDs
+      // (base chassis, e.g. blade LEDs, runs right up to the front).
+      const tone = d.tone ?? "base";
+      const end = tone === "base" ? d.depthMm - 6 : d.depthMm - 10;
+      k.part("chassis", "cube", tone, 0, 4, 0, DEVICE_WIDTH_MM, Math.max(2, end - 4), h);
       d.detail(k, h);
       k.airflow();
       return k.done();

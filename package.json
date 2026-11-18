@@ -23,6 +23,8 @@
     "check:plugin": "pnpm -F platformcosmo run check:plugin",
     "docs:build": "pnpm -F @platformcosmo/docs run docs:build",
     "gen:examples": "pnpm -F platformcosmo run gen:examples",
+    "gen:gallery": "pnpm -F platformcosmo run gen:gallery",
+    "check:gallery": "pnpm -F platformcosmo run check:gallery",
     "check:versions": "node scripts/sync-plugin-version.mjs --check",
     "version-packages": "changeset version && pnpm run sync:versions && pnpm run bundle:plugin"
   },

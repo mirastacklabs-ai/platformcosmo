@@ -46,6 +46,7 @@ const RAISED_FLOOR_H = 0.3;
 const SLAB_H = 0.04;
 const GROUP_H = 0.02;
 const MAX_GRID_TILES = 500;
+const MAX_VENT_TILES = 100;
 /** The tile grid sits strictly below the floor surface so it never competes with objects in depth. */
 const GRID_H = 0.004;
 
@@ -392,7 +393,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     const y1 = Math.max(...r.items.map((i) => i.cy + i.d));
     r.y = Math.min(...r.items.map((i) => i.cy));
     r.d = y1 - r.y;
-    for (const it of r.items) it.lane = r.y + r.d / 2;
+    for (const it of r.items) it.lane = r.y - 0.5;
   };
   for (const r of active) fixRowExtents(r);
 
@@ -422,15 +423,17 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     return { x0, x1, y0, y1 };
   };
 
-  // Loose items: CRAHs stand at the aisle end (1 tile clear of the rack row ends); everything
-  // else (UPS, PDUs, busway, loose racks) forms a service strip 3 tiles behind the last row.
+  // The viewer looks from +x,+y, so anything at larger x or y stands IN FRONT of the rows on
+  // screen. Loose items therefore go to the far side: CRAHs at the -x end of the cold aisle
+  // (1 tile clear of the row start) and the service strip (UPS, PDUs, busway, loose racks) 3
+  // tiles behind the first row on the -y side.
   const loose = order.filter((i) => i.rowId === undefined);
   const isCrah = (i: Item): boolean =>
     i.equip?.type === "crah" && i.equip.pos === undefined && active.length > 0;
   const crahs = loose.filter(isCrah);
   const strip = loose.filter((i) => !isCrah(i));
+  const rowsMinX = active.length > 0 ? Math.min(...active.map((r) => r.x0)) : 0;
   if (crahs.length > 0) {
-    const endX = Math.max(...active.map((r) => r.x1));
     const ai =
       aisleInfo.find((a) => a.spec.kind === "cold" && a.rows.length > 0) ??
       aisleInfo.find((a) => a.rows.length > 0);
@@ -440,24 +443,30 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
       if (g.y1 > g.y0) y = g.y0;
     }
     for (const it of crahs) {
-      place(it, endX + 1, y, false);
+      place(it, rowsMinX - 2 - it.w, y, false);
       it.lane = y + it.d / 2;
       y += it.d;
     }
   }
-  const stripY = active.length > 0 ? cursorY + 1 : cursorY;
-  let stripD = 0;
   if (strip.length > 0) {
-    stripD = Math.max(...strip.map((i) => i.d));
+    const stripD = Math.max(...strip.map((i) => i.d));
+    const firstY =
+      active.length > 0
+        ? Math.min(
+            ...active.map((r) => r.y),
+            ...aisleInfo.filter((a) => a.rows.length > 0).map((a) => aisleGeom(a.spec, a.rows).y0),
+          )
+        : cursorY + stripD + 3; // no rows: the strip is the hall, start at y 0
+    const bottom = active.length > 0 ? firstY - 3 : stripD;
     let x = 0;
     for (const it of strip) {
       const pos = it.rack?.pos ?? it.equip?.pos;
       if (pos) place(it, Math.round(pos.x), Math.round(pos.y), false);
       else {
-        place(it, x, stripY + stripD - it.d, false);
+        place(it, x, bottom - it.d, false);
         x += it.w;
       }
-      it.lane = pos ? it.cy + it.d / 2 : stripY + stripD / 2;
+      it.lane = it.cy + it.d / 2;
     }
   }
   for (const r of active) {
@@ -525,7 +534,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
   };
   for (const it of placedItems) grow(it.cx, it.cy, it.cx + it.w, it.cy + it.d);
   for (const a of aisleBoxes) grow(a.x0, a.y0, a.x1, a.y1);
-  for (const r of active) grow(r.x0 - 1, r.y, r.x0, r.y + r.d);
+  for (const r of active) grow(r.x1 + 0.5, r.y, r.x1 + 1, r.y + r.d + 0.5);
   if (!Number.isFinite(minX)) {
     return {
       objects: [],
@@ -546,8 +555,9 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     0,
     0,
     0,
-    maxX - minX + 2 * HALL_MARGIN,
-    maxY - minY + 2 * HALL_MARGIN,
+    // content + 1-tile margin, rounded up to whole tiles (the floor grid is tile-based)
+    Math.ceil(maxX - minX + 2 * HALL_MARGIN - 1e-9),
+    Math.ceil(maxY - minY + 2 * HALL_MARGIN - 1e-9),
     floorH,
   );
 
@@ -612,7 +622,8 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
         : ["post-fl", "post-fr", "top"];
       const worldParts = built.parts.map((q) => ({ ...q, box: tb(q.box, p) }));
       const isNear = (id: string): boolean =>
-        nearIds.some((n) => (n.endsWith("-") ? id.startsWith(n) : id === n));
+        nearIds.some((n) => (n.endsWith("-") ? id.startsWith(n) : id === n)) ||
+        id.startsWith("top");
       const shellParts = worldParts.filter((q) => isNear(q.id));
       const bodyParts = worldParts.filter((q) => !isNear(q.id));
       const rackPorts: RefPort[] = built.ports.map((q) => ({
@@ -738,12 +749,10 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
   const slab = (x0: number, y0: number, x1: number, y1: number): Box3 =>
     box(x0 + sx, y0 + sy, zBase, x1 - x0, y1 - y0, GROUP_H);
   for (const r of active) {
-    // The group's label sits at its low-x/high-y corner: a one-tile end cap puts it in the
-    // aisle at the row end instead of on the racks.
-    const rb = r.items.reduce<Box3>(
-      (acc, i) => unionBox(acc, slab(i.cx, i.cy, i.cx + i.w, i.cy + i.d)),
-      slab(r.x0 - 1, r.y, r.x0, r.y + r.d),
-    );
+    // A's group label sits at the group box's low-x/high-y corner. The row group is therefore
+    // the one-tile end cap on the viewer (+x) side of the row, which puts the label at the row
+    // end in the aisle, never on equipment. Focus still covers the member boxes.
+    const rb = slab(r.x1 + 0.5, r.y, r.x1 + 1, r.y + r.d + 0.5); // label clear of rack labels; hall grows by whole tiles
     groups.push({
       id: r.spec.id,
       kind: "row",
@@ -791,7 +800,44 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     if (a.spec.contained ?? DC_DEFAULTS.aisleContained) {
       const z = rowTop(a.rows);
       const b = box(a.x0 + sx, a.y0 + sy, z, a.x1 - a.x0, a.y1 - a.y0, 0.04);
-      objects.push(facilityObject(`dc_roof_${a.spec.id}`, "containment", b, "glass", a.spec.id));
+      // A see-through frame (rails only) so the top devices stay visible through the roof.
+      const w = 0.1;
+      const rails: ScenePart[] = [
+        {
+          id: "rail-b",
+          primitive: "slab",
+          tone: "glass",
+          box: box(b.origin.x, b.origin.y, z, b.size.x, w, 0.04),
+        },
+        {
+          id: "rail-f",
+          primitive: "slab",
+          tone: "glass",
+          box: box(b.origin.x, b.origin.y + b.size.y - w, z, b.size.x, w, 0.04),
+        },
+        {
+          id: "rail-l",
+          primitive: "slab",
+          tone: "glass",
+          box: box(b.origin.x, b.origin.y + w, z, w, b.size.y - 2 * w, 0.04),
+        },
+        {
+          id: "rail-r",
+          primitive: "slab",
+          tone: "glass",
+          box: box(b.origin.x + b.size.x - w, b.origin.y + w, z, w, b.size.y - 2 * w, 0.04),
+        },
+        {
+          id: "rail-m",
+          primitive: "slab",
+          tone: "glass",
+          box: box(b.origin.x + w, b.origin.y + b.size.y / 2 - w / 2, z, b.size.x - 2 * w, w, 0.04),
+        },
+      ];
+      objects.push({
+        ...facilityObject(`dc_roof_${a.spec.id}`, "containment", b, "glass", a.spec.id),
+        parts: rails,
+      });
       top = Math.max(top, z + 0.04);
     }
   }
@@ -807,17 +853,29 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     } else {
       for (const a of aisleBoxes.filter((x) => x.spec.kind === "cold")) {
         const tiles: ScenePart[] = [];
+        // Slits are decoration: skip them on big aisles to keep the part count down.
+        const ventSlits = Math.round((a.x1 - a.x0) * (a.y1 - a.y0)) <= MAX_VENT_TILES;
         for (let x = a.x0; x < a.x1; x++) {
           for (let y = a.y0; y < a.y1; y++) {
+            const n = tiles.length + 1;
             tiles.push({
-              id: `tile-${tiles.length + 1}`,
+              id: `tile-${n}`,
               primitive: "slab",
               tone: "perforated",
               box: box(x + sx, y + sy, zBase, 1, 1, 0.01),
             });
+            // Vent slits so the tile reads as perforated at a glance.
+            for (let k = 0; k < (ventSlits ? 3 : 0); k++) {
+              tiles.push({
+                id: `vent-${n}-${k}`,
+                primitive: "slab",
+                tone: "base",
+                box: box(x + sx + 0.15, y + sy + 0.2 + k * 0.28, zBase + 0.01, 0.7, 0.06, 0.004),
+              });
+            }
           }
         }
-        const fb = box(a.x0 + sx, a.y0 + sy, zBase, a.x1 - a.x0, a.y1 - a.y0, 0.01);
+        const fb = box(a.x0 + sx, a.y0 + sy, zBase, a.x1 - a.x0, a.y1 - a.y0, 0.014);
         objects.push({
           ...facilityObject(
             `dc_tiles_${a.spec.id}`,
@@ -872,61 +930,102 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
       suggestion: "Set facility.raisedFloor to true.",
     });
   }
-  if (trays === "overhead") {
-    // One tray height for the whole hall: just above the tallest rack (never equipment tops).
+  if (trays === "overhead" || (trays === "underfloor" && raised)) {
+    const under = trays === "underfloor";
+    // Overhead: one tray height just above the tallest rack (never equipment tops).
+    // Underfloor: below the floor surface.
     const rackTops = [...refs.values()]
       .filter((r) => r.type === "rack")
       .map((r) => r.box.origin.z + r.box.size.z);
-    const trayZ = r4((rackTops.length > 0 ? Math.max(...rackTops) : top) + 0.12);
-    const spineX = HALL_MARGIN / 2;
-    const lanes: { id: string; x1: number; y: number; group: string }[] = [
-      ...active.map((r) => ({ id: r.spec.id, x1: r.x1, y: r.y + r.d / 2, group: r.spec.id })),
-    ];
-    const stripItems = strip.filter((i) => i.placed && !(i.rack?.pos ?? i.equip?.pos));
-    if (stripItems.length > 0) {
+    const trayZ = under
+      ? r4(zBase * 0.4)
+      : r4((rackTops.length > 0 ? Math.max(...rackTops) : top) + 0.12);
+    // The spine runs in the 1-tile gap just before the rows start (between the CRAHs and the
+    // racks); trays exist only over rows and on the way to cabled equipment.
+    const spineX =
+      (active.length > 0 ? rowsMinX : Math.min(...placedItems.map((i) => i.cx))) + sx - 0.5;
+    // Equipment that really gets a cable: accepted spec cables (endpoints known, no self-loop,
+    // unique id), plus the UPS/PDUs the automatic power flows will route to.
+    const cabled = new Set<string>();
+    const cableIds = new Set<string>();
+    let hasPowerCable = false;
+    (spec.cables ?? []).forEach((c, ci) => {
+      const id = c.id ?? `dc_cable_${ci + 1}`;
+      if (cableIds.has(id) || !refs.has(c.from) || !refs.has(c.to) || c.from === c.to) return;
+      cableIds.add(id);
+      cabled.add(c.from.split("/")[0]!);
+      cabled.add(c.to.split("/")[0]!);
+      if (c.kind === "power") hasPowerCable = true;
+    });
+    if (!hasPowerCable) {
+      for (const r of refs.values()) {
+        if (r.type === "ups" || r.type === "pdu-floor") cabled.add(r.id);
+      }
+    }
+    interface Lane {
+      id: string;
+      xa: number;
+      xb: number;
+      y: number;
+      group: string;
+    }
+    const lanes: Lane[] = active.map((r) => ({
+      id: r.spec.id,
+      xa: spineX - 0.25,
+      xb: r.x1 + sx,
+      y: r.y - 0.5 + sy,
+      group: r.spec.id,
+    }));
+    for (const it of [...crahs, ...strip]) {
+      if (!it.placed || !cabled.has(it.id)) continue;
+      const cx = it.cx + it.w / 2 + sx;
       lanes.push({
-        id: "loose",
-        x1: Math.max(...stripItems.map((i) => i.cx + i.w)),
-        y: stripY + stripD / 2,
+        id: it.id,
+        xa: Math.min(cx, spineX - 0.25),
+        xb: Math.max(cx, spineX + 0.25),
+        y: it.lane + sy,
         group: "dc_hall",
       });
     }
-    // CRAHs and manually placed strip items hang off their own lane, up to their centre.
-    for (const it of [
-      ...crahs,
-      ...strip.filter((i) => i.placed && (i.rack?.pos ?? i.equip?.pos)),
-    ]) {
-      lanes.push({ id: it.id, x1: it.cx + it.w / 2, y: it.lane, group: "dc_hall" });
-    }
-    const laneYs: number[] = lanes.map((l) => l.y + sy);
+    // Lanes at the same y are one tray (first id wins), so tray count and parts stay linear.
+    const merged = new Map<number, Lane>();
     for (const l of lanes) {
-      const x0 = spineX - 0.25;
-      const b = box(x0, l.y + sy - 0.25, trayZ, l.x1 + sx - x0, 0.5, 0.05);
-      objects.push(facilityObject(`dc_tray_${l.id}`, "cable-tray", b, "metal", l.group));
+      const key = r4(l.y);
+      const m = merged.get(key);
+      if (!m) merged.set(key, { ...l });
+      else {
+        m.xa = Math.min(m.xa, l.xa);
+        m.xb = Math.max(m.xb, l.xb);
+      }
     }
-    if (new Set(laneYs.map(r4)).size > 1) {
+    const trayLanes = [...merged.values()];
+    const laneYs = trayLanes.map((l) => l.y);
+    const spineLen =
+      new Set(laneYs.map(r4)).size > 1 ? Math.max(...laneYs) - Math.min(...laneYs) + 0.5 : 0;
+    const lens = trayLanes.map((l) => l.xb - l.xa);
+    if (spineLen > 0) lens.push(spineLen);
+    const pitch = trayPitch(lens);
+    for (const l of trayLanes) {
+      const b = box(l.xa, l.y - 0.25, trayZ, l.xb - l.xa, 0.5, 0.05);
+      objects.push(trayObject(`dc_tray_${l.id}`, b, "x", l.group, pitch));
+    }
+    if (spineLen > 0) {
       const y0 = Math.min(...laneYs) - 0.25;
       const y1 = Math.max(...laneYs) + 0.25;
       objects.push(
-        facilityObject(
+        trayObject(
           "dc_tray_spine",
-          "cable-tray",
           box(spineX - 0.25, y0, trayZ, 0.5, y1 - y0, 0.05),
-          "metal",
+          "y",
           "dc_hall",
+          pitch,
         ),
       );
     }
-    top = Math.max(top, trayZ + 0.05);
-    laneZ = r4(trayZ + 0.05);
+    if (!under) top = Math.max(top, trayZ + 0.05);
+    // Cables ride inside the ladder, just above the rungs (rails are 0.05 high).
+    laneZ = r4(trayZ + 0.03);
     tray = { spineX, z: laneZ };
-  } else if (trays === "underfloor" && raised) {
-    for (const r of active) {
-      const z = r4(zBase * 0.4);
-      const b = box(r.x0 + sx, r.y + r.d / 2 + sy - 0.25, z, r.x1 - r.x0, 0.5, 0.05);
-      objects.push(facilityObject(`dc_tray_${r.spec.id}`, "cable-tray", b, "metal", r.spec.id));
-    }
-    laneZ = r4(zBase * 0.4 + 0.05);
   }
 
   // ---- cables and flows ----
@@ -992,6 +1091,78 @@ export function specFlowCost(spec: PlatformCosmoSpec): number {
   const cost = (fs: readonly { rate?: number }[] | undefined): number =>
     (fs ?? []).reduce((n, f) => n + Math.ceil((f.rate ?? 1) * 2), 0);
   return cost(spec.flows) + (spec.steps ?? []).reduce((n, st) => n + cost(st.flows), 0);
+}
+
+/** Max rungs per hall; long runs widen the rung pitch instead (keeps the SVG element count down). */
+const MAX_TRAY_RUNGS = 300;
+
+/** Rungs a tray of `len` tiles gets at `pitch` (same loop as `trayObject`). */
+export function rungCount(len: number, pitch: number): number {
+  return len > pitch / 2 ? Math.ceil((len - pitch / 2) / pitch) : 0;
+}
+
+/**
+ * Rung pitch for a hall whose trays have the given lengths: 0.5 tile, 1 tile above ~100 tiles of
+ * tray, then wider until the ACTUAL rung total (per-tray rounding included) fits the budget of
+ * `MAX_TRAY_RUNGS` minus one per tray.
+ */
+export function trayPitch(lens: readonly number[]): number {
+  const total = lens.reduce((n, l) => n + l, 0);
+  const budget = MAX_TRAY_RUNGS - lens.length;
+  let pitch = total > 100 ? 1 : 0.5;
+  while (pitch < 1000 && lens.reduce((n, l) => n + rungCount(l, pitch), 0) > budget) pitch += 0.5;
+  return pitch;
+}
+
+/**
+ * An open ladder tray: two thin side rails and a rung every `pitch` tiles, no solid bottom, so
+ * cables riding inside stay visible. `along` is the run direction. Parts are emitted already
+ * back-to-front (rail behind, rungs in increasing run order, rail in front), so no depth sort.
+ */
+export function trayObject(
+  id: string,
+  b: Box3,
+  along: "x" | "y",
+  group: string,
+  pitch = 0.5,
+): SceneObject {
+  const rail = 0.04;
+  const rungW = 0.04;
+  const rungH = 0.02;
+  const len = along === "x" ? b.size.x : b.size.y;
+  const wid = along === "x" ? b.size.y : b.size.x;
+  const o = b.origin;
+  const parts: ScenePart[] = [];
+  const mk = (pid: string, ox: number, oy: number, sx: number, sy: number, sz: number): void => {
+    parts.push({
+      id: pid,
+      primitive: "slab",
+      tone: "metal",
+      box: box(o.x + ox, o.y + oy, o.z, sx, sy, sz),
+    });
+  };
+  if (along === "x") {
+    mk("rail-a", 0, 0, len, rail, b.size.z);
+    for (let t = pitch / 2, n = 1; t < len; t += pitch, n++)
+      mk(`rung-${n}`, t - rungW / 2, rail, rungW, wid - 2 * rail, rungH);
+    mk("rail-b", 0, wid - rail, len, rail, b.size.z);
+  } else {
+    mk("rail-a", 0, 0, rail, len, b.size.z);
+    for (let t = pitch / 2, n = 1; t < len; t += pitch, n++)
+      mk(`rung-${n}`, rail, t - rungW / 2, wid - 2 * rail, rungW, rungH);
+    mk("rail-b", wid - rail, 0, rail, len, b.size.z);
+  }
+  return { ...facilityObject(id, "cable-tray", b, "metal", group), parts };
+}
+
+/**
+ * Rough SVG element estimate for a DC fragment (each part is up to 3 face paths, each object has
+ * an overlay, each edge a path). Tray ladders are counted through their parts.
+ */
+export function estimateDcElements(f: DcSceneFragment): number {
+  let n = f.groups.length + f.edges.length;
+  for (const o of f.objects) n += 2 + 3 * (o.parts?.length ?? 1);
+  return n;
 }
 
 function portMap(ports: readonly RefPort[]): Record<string, Vec3> {

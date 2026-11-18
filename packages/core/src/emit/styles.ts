@@ -138,6 +138,8 @@ export function ruleFor(token: string): string | undefined {
     return `fill:${v("background")};fill-opacity:0.88;stroke:${v("groups-zone-stroke")};stroke-width:1`;
   if (token === "t-primary")
     return `fill:${v("text-primary")};paint-order:stroke;stroke:var(--pc-background);stroke-width:3;stroke-linejoin:round`;
+  if (token === "t-dc")
+    return `fill:${v("text-primary")};paint-order:stroke;stroke:${v("dc-hall")};stroke-width:3;stroke-linejoin:round`;
   if (token === "t-secondary")
     return `fill:${v("text-secondary")};paint-order:stroke;stroke:var(--pc-background);stroke-width:3;stroke-linejoin:round`;
   if (token === "t-inverse") return `fill:${v("text-inverse")}`;
@@ -156,7 +158,9 @@ export function ruleFor(token: string): string | undefined {
     return `stroke:${v(`dc-cable-${m[1]}`)}`;
   if (token === "leader")
     return `fill:none;stroke:${v("edge-stroke")};stroke-width:1;stroke-dasharray:2 2`;
-  if (token === "arrow") return `fill:${v("edge-stroke")};stroke:none`;
+  if (token === "arrow")
+    return `fill:${v("edge-stroke")};stroke:${v("background")};stroke-width:1.5;stroke-linejoin:round;paint-order:stroke`;
+  if (token === "shadow") return "fill:#000;fill-opacity:0.2;stroke:none";
   if (token === "elabel") return `fill:${v("edge-labelFill")};stroke:none`;
   if (token === "bg") return `fill:${v("background")}`;
   if (token === "grid")

@@ -109,7 +109,7 @@ function build(s: Seed): ThemeTokens {
       cluster: { ...g, opacity: Math.min(1, s.groupOpacity + 0.04) },
       platform: { ...g, opacity: Math.min(1, s.groupOpacity + 0.06) },
     },
-    edge: { ...s.edge, width: 1.6, dash: DASH },
+    edge: { ...s.edge, width: 2.2, dash: DASH },
     flows: s.flows,
     states: s.states,
     metric: s.metric,

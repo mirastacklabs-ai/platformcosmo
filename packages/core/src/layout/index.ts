@@ -27,9 +27,11 @@ export interface LayoutResult {
   readonly groups: ReadonlyMap<string, LayoutRect>;
 }
 
-export const GAP_X = 4.5;
-export const GAP_Y = 3.5;
-export const GROUP_PAD = 1;
+export const GAP_X = 5.5;
+export const GAP_Y = 5;
+export const GROUP_PAD = 0.5;
+/** Layers per row before the layout wraps onto the next row. */
+export const MAX_COLS = 6;
 
 const snap = (v: number): number => Math.round(v * 2) / 2;
 
@@ -278,26 +280,44 @@ export function layoutSpec(spec: Spec): LayoutResult {
       nodes: new Map(),
       groups: new Map(),
     };
-    let x = pad;
+    // Long layer chains wrap: at most MAX_COLS layers per row, further rows stack along y, which
+    // keeps the canvas close to landscape instead of one long diagonal strip.
+    const rows = Math.max(1, Math.ceil(nLayers / MAX_COLS));
+    const perRow = Math.max(1, Math.ceil(nLayers / rows));
+    const xOf: number[] = [];
+    const rowOf: number[] = [];
+    let cursor = pad;
+    for (let l = 0; l < nLayers; l++) {
+      if (l % perRow === 0) cursor = pad;
+      rowOf.push(Math.floor(l / perRow));
+      xOf.push(cursor);
+      cursor += colW[l]! + GAP_X;
+    }
+    // Row r starts below the placed bottoms of row r - 1 (collision pushes included).
+    const rowStart: number[] = [pad];
+    const rowBottom: number[] = new Array<number>(rows).fill(pad);
     const placedRects: LayoutRect[] = [];
     columns.forEach((col, l) => {
-      let y = pad;
+      const r = rowOf[l]!;
+      if (rowStart[r] === undefined) rowStart[r] = rowBottom[r - 1]! + GAP_Y + 1;
+      let y = rowStart[r]!;
+      const x = xOf[l]!;
       for (const v of col) {
         const it = items[v]!;
         const ix = x;
-        let iy = Math.max(y, pad + top[v]! - minTop);
+        let iy = Math.max(y, rowStart[r]! + top[v]! - minTop);
         // Root only: keep clear of fixed (manual) nodes, 1 tile margin.
         for (let guard = 0; guard < 2000; guard++) {
-          const r: LayoutRect = { x: ix, y: iy, w: it.w, d: it.d };
-          if (!fixed.some((f) => intersects(r, f, 1))) break;
+          const rect: LayoutRect = { x: ix, y: iy, w: it.w, d: it.d };
+          if (!fixed.some((f) => intersects(rect, f, 1))) break;
           iy += 0.5;
         }
-        for (const [id, r] of it.nodes) out.nodes.set(id, { ...r, x: r.x + ix, y: r.y + iy });
-        for (const [id, r] of it.groups) out.groups.set(id, { ...r, x: r.x + ix, y: r.y + iy });
+        for (const [id, rr] of it.nodes) out.nodes.set(id, { ...rr, x: rr.x + ix, y: rr.y + iy });
+        for (const [id, rr] of it.groups) out.groups.set(id, { ...rr, x: rr.x + ix, y: rr.y + iy });
         placedRects.push({ x: ix, y: iy, w: it.w, d: it.d });
+        rowBottom[r] = Math.max(rowBottom[r]!, iy + it.d);
         y = iy + it.d + GAP_Y;
       }
-      x += colW[l]! + GAP_X;
     });
     const right = placedRects.reduce((m, r) => Math.max(m, r.x + r.w), pad);
     const bottom = placedRects.reduce((m, r) => Math.max(m, r.y + r.d), pad);
