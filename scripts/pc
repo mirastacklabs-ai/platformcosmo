@@ -14,4 +14,5 @@ exec docker run --rm ${TTY[@]+"${TTY[@]}"} \
   -e COREPACK_HOME=/corepack \
   -e PNPM_STORE_DIR=/pnpm-store -e npm_config_store_dir=/pnpm-store \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 -e CI="${CI:-}" \
+  -e VISUAL_UPDATE -e VISUAL_ONLY -e VISUAL_REQUIRE_GOLDENS -e VISUAL_MAX_FRACTION -e VISUAL_THRESHOLD \
   "$IMAGE" sh -c 'corepack enable && exec pnpm "$@"' pnpm "$@"

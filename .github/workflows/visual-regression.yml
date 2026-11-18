@@ -1,0 +1,40 @@
+name: Visual regression
+
+# PLAN §13: render the bundled-icon examples to PNG with the built CLI (resvg, deterministic) and
+# compare with the committed goldens in tests/visual/golden. Update goldens locally with
+# `VISUAL_UPDATE=1 scripts/pc run visual` and commit them. While the gallery is still changing,
+# missing goldens are skipped; set VISUAL_REQUIRE_GOLDENS=1 below once they are committed.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: visual-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  visual:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - run: scripts/pc install --frozen-lockfile
+      - run: scripts/pc run visual
+        # env:
+        #   VISUAL_REQUIRE_GOLDENS: "1"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: visual-regression
+          # actual renders, diffs (differences in red) and the results summary
+          path: |
+            tests/visual/out/actual/
+            tests/visual/out/diff/
+            tests/visual/out/results.json
