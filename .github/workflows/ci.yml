@@ -47,3 +47,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash scripts/test-container-hook.sh
+
+  hook-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: HOOK_BASH=/bin/bash bash scripts/test-container-hook.sh
