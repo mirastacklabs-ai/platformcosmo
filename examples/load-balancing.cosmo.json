@@ -1,0 +1,67 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "Load balancing with health checks and failover",
+    "description": "A load balancer spreads requests round robin across three app servers, health checks catch a failure, and traffic fails over to the healthy servers."
+  },
+  "canvas": { "theme": "light", "grid": true },
+  "nodes": [
+    { "id": "users", "type": "users", "label": "Users" },
+    { "id": "lb", "type": "lb", "label": "Load balancer", "badge": "round robin" },
+    { "id": "app-1", "type": "server", "label": "App 1", "group": "pool" },
+    { "id": "app-2", "type": "server", "label": "App 2", "group": "pool" },
+    { "id": "app-3", "type": "server", "label": "App 3", "group": "pool" },
+    { "id": "db", "type": "sql", "label": "Database" }
+  ],
+  "groups": [{ "id": "pool", "label": "App pool", "style": "cluster" }],
+  "edges": [
+    { "id": "users-lb", "from": "users", "to": "lb" },
+    { "id": "lb-app-1", "from": "lb", "to": "app-1" },
+    { "id": "lb-app-2", "from": "lb", "to": "app-2" },
+    { "id": "lb-app-3", "from": "lb", "to": "app-3" },
+    { "id": "app-1-db", "from": "app-1", "to": "db", "style": "dashed" },
+    { "id": "app-2-db", "from": "app-2", "to": "db", "style": "dashed" },
+    { "id": "app-3-db", "from": "app-3", "to": "db", "style": "dashed" }
+  ],
+  "flows": [
+    { "edge": "users-lb", "kind": "heavy" },
+    { "edge": "lb-app-1" },
+    { "edge": "lb-app-2" },
+    { "edge": "lb-app-3" }
+  ],
+  "metrics": [
+    { "id": "healthy", "label": "Healthy servers", "value": "3 / 3" },
+    { "id": "rps", "label": "Requests/s", "value": 1200 }
+  ],
+  "steps": [
+    { "caption": "Round robin: each request goes to the next server", "duration": 4 },
+    {
+      "caption": "Health checks probe every server",
+      "flows": [
+        { "edge": "lb-app-1", "kind": "health" },
+        { "edge": "lb-app-2", "kind": "health" },
+        { "edge": "lb-app-3", "kind": "health" }
+      ],
+      "duration": 3
+    },
+    {
+      "caption": "App 2 stops answering and is marked down",
+      "set": { "app-2": "down" },
+      "flows": [{ "edge": "lb-app-2", "kind": "failed" }],
+      "metrics": { "healthy": "2 / 3" },
+      "duration": 3
+    },
+    {
+      "caption": "Failover: traffic shifts to the healthy servers",
+      "flows": [
+        { "edge": "users-lb", "kind": "heavy" },
+        { "edge": "lb-app-1", "kind": "heavy" },
+        { "edge": "lb-app-3", "kind": "heavy" }
+      ],
+      "metrics": { "rps": 1250 },
+      "duration": 4
+    }
+  ],
+  "legend": "auto"
+}
