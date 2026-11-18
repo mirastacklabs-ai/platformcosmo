@@ -1,0 +1,366 @@
+{
+  "manifestVersion": 1,
+  "pack": {
+    "id": "k8s",
+    "name": "Kubernetes icons",
+    "version": "community@07db4ef4ba5a",
+    "license": "Apache-2.0",
+    "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0",
+    "attribution": "Kubernetes Icons Set, Copyright The Kubernetes Authors, Apache-2.0 (used under the Apache-2.0 option of Apache-2.0 or CC-BY-4.0). Modified: editor metadata removed, numbers rounded.",
+    "trademarkNotice": "Kubernetes is a registered trademark of The Linux Foundation; use of the Kubernetes logo as a trademark is subject to the Linux Foundation Trademark Usage Guidelines (https://www.linuxfoundation.org/legal/trademark-usage).",
+    "source": "https://github.com/kubernetes/community/tree/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons",
+    "redistributable": true
+  },
+  "icons": [
+    {
+      "id": "certificate-authority",
+      "aliases": ["ca"],
+      "category": "security",
+      "provider": "kubernetes",
+      "tags": ["tls"],
+      "file": "svg/certificate-authority.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/infrastructure_components/unlabeled/ca.svg",
+      "monochrome": false
+    },
+    {
+      "id": "cluster-role",
+      "aliases": ["c-role", "clusterrole"],
+      "category": "security",
+      "provider": "kubernetes",
+      "tags": ["rbac"],
+      "file": "svg/cluster-role.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/c-role.svg",
+      "monochrome": false
+    },
+    {
+      "id": "cluster-role-binding",
+      "aliases": ["crb", "clusterrolebinding"],
+      "category": "security",
+      "provider": "kubernetes",
+      "tags": ["rbac"],
+      "file": "svg/cluster-role-binding.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/crb.svg",
+      "monochrome": false
+    },
+    {
+      "id": "configmap",
+      "aliases": ["cm", "config-map"],
+      "category": "general",
+      "provider": "kubernetes",
+      "tags": ["config"],
+      "file": "svg/configmap.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/cm.svg",
+      "monochrome": false
+    },
+    {
+      "id": "control-plane",
+      "aliases": ["master"],
+      "category": "compute",
+      "provider": "kubernetes",
+      "tags": ["cluster"],
+      "file": "svg/control-plane.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/infrastructure_components/unlabeled/control-plane.svg",
+      "monochrome": false
+    },
+    {
+      "id": "cronjob",
+      "aliases": ["cron-job"],
+      "category": "compute",
+      "provider": "kubernetes",
+      "tags": ["schedule", "batch"],
+      "file": "svg/cronjob.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/cronjob.svg",
+      "monochrome": false
+    },
+    {
+      "id": "custom-resource-definition",
+      "aliases": ["crd"],
+      "category": "general",
+      "provider": "kubernetes",
+      "tags": ["extension"],
+      "file": "svg/custom-resource-definition.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/crd.svg",
+      "monochrome": false
+    },
+    {
+      "id": "daemonset",
+      "aliases": ["ds", "daemon-set"],
+      "category": "compute",
+      "provider": "kubernetes",
+      "tags": ["workload"],
+      "file": "svg/daemonset.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/ds.svg",
+      "monochrome": false
+    },
+    {
+      "id": "deployment",
+      "aliases": ["deploy"],
+      "category": "compute",
+      "provider": "kubernetes",
+      "tags": ["workload"],
+      "file": "svg/deployment.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/deploy.svg",
+      "monochrome": false
+    },
+    {
+      "id": "endpoints",
+      "aliases": ["ep", "endpoint"],
+      "category": "network",
+      "provider": "kubernetes",
+      "tags": ["service"],
+      "file": "svg/endpoints.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/ep.svg",
+      "monochrome": false
+    },
+    {
+      "id": "etcd",
+      "aliases": [],
+      "category": "data",
+      "provider": "kubernetes",
+      "tags": ["cluster"],
+      "file": "svg/etcd.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/infrastructure_components/unlabeled/etcd.svg",
+      "monochrome": false
+    },
+    {
+      "id": "group",
+      "aliases": [],
+      "category": "security",
+      "provider": "kubernetes",
+      "tags": ["rbac"],
+      "file": "svg/group.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/group.svg",
+      "monochrome": false
+    },
+    {
+      "id": "horizontal-pod-autoscaler",
+      "aliases": ["hpa", "autoscaler"],
+      "category": "compute",
+      "provider": "kubernetes",
+      "tags": ["scaling"],
+      "file": "svg/horizontal-pod-autoscaler.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/hpa.svg",
+      "monochrome": false
+    },
+    {
+      "id": "ingress",
+      "aliases": ["ing"],
+      "category": "network",
+      "provider": "kubernetes",
+      "tags": ["traffic", "http"],
+      "file": "svg/ingress.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/ing.svg",
+      "monochrome": false
+    },
+    {
+      "id": "job",
+      "aliases": [],
+      "category": "compute",
+      "provider": "kubernetes",
+      "tags": ["batch"],
+      "file": "svg/job.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/job.svg",
+      "monochrome": false
+    },
+    {
+      "id": "limit-range",
+      "aliases": ["limits", "limitrange"],
+      "category": "general",
+      "provider": "kubernetes",
+      "tags": ["quota"],
+      "file": "svg/limit-range.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/limits.svg",
+      "monochrome": false
+    },
+    {
+      "id": "namespace",
+      "aliases": ["ns"],
+      "category": "general",
+      "provider": "kubernetes",
+      "tags": ["isolation"],
+      "file": "svg/namespace.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/ns.svg",
+      "monochrome": false
+    },
+    {
+      "id": "network-policy",
+      "aliases": ["netpol", "networkpolicy"],
+      "category": "network",
+      "provider": "kubernetes",
+      "tags": ["firewall"],
+      "file": "svg/network-policy.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/netpol.svg",
+      "monochrome": false
+    },
+    {
+      "id": "node",
+      "aliases": ["worker-node"],
+      "category": "compute",
+      "provider": "kubernetes",
+      "tags": ["cluster"],
+      "file": "svg/node.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/infrastructure_components/unlabeled/node.svg",
+      "monochrome": false
+    },
+    {
+      "id": "persistent-volume",
+      "aliases": ["pv"],
+      "category": "data",
+      "provider": "kubernetes",
+      "tags": ["storage"],
+      "file": "svg/persistent-volume.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/pv.svg",
+      "monochrome": false
+    },
+    {
+      "id": "persistent-volume-claim",
+      "aliases": ["pvc"],
+      "category": "data",
+      "provider": "kubernetes",
+      "tags": ["storage"],
+      "file": "svg/persistent-volume-claim.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/pvc.svg",
+      "monochrome": false
+    },
+    {
+      "id": "pod",
+      "aliases": [],
+      "category": "compute",
+      "provider": "kubernetes",
+      "tags": ["workload"],
+      "file": "svg/pod.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/pod.svg",
+      "monochrome": false
+    },
+    {
+      "id": "pod-security-policy",
+      "aliases": ["psp"],
+      "category": "security",
+      "provider": "kubernetes",
+      "tags": ["policy"],
+      "file": "svg/pod-security-policy.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/psp.svg",
+      "monochrome": false
+    },
+    {
+      "id": "replicaset",
+      "aliases": ["rs", "replica-set"],
+      "category": "compute",
+      "provider": "kubernetes",
+      "tags": ["workload"],
+      "file": "svg/replicaset.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/rs.svg",
+      "monochrome": false
+    },
+    {
+      "id": "resource-quota",
+      "aliases": ["quota"],
+      "category": "general",
+      "provider": "kubernetes",
+      "tags": ["limits"],
+      "file": "svg/resource-quota.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/quota.svg",
+      "monochrome": false
+    },
+    {
+      "id": "role",
+      "aliases": [],
+      "category": "security",
+      "provider": "kubernetes",
+      "tags": ["rbac"],
+      "file": "svg/role.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/role.svg",
+      "monochrome": false
+    },
+    {
+      "id": "role-binding",
+      "aliases": ["rb", "rolebinding"],
+      "category": "security",
+      "provider": "kubernetes",
+      "tags": ["rbac"],
+      "file": "svg/role-binding.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/rb.svg",
+      "monochrome": false
+    },
+    {
+      "id": "secret",
+      "aliases": [],
+      "category": "security",
+      "provider": "kubernetes",
+      "tags": ["credentials"],
+      "file": "svg/secret.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/secret.svg",
+      "monochrome": false
+    },
+    {
+      "id": "service",
+      "aliases": ["svc"],
+      "category": "network",
+      "provider": "kubernetes",
+      "tags": ["service-discovery"],
+      "file": "svg/service.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/svc.svg",
+      "monochrome": false
+    },
+    {
+      "id": "service-account",
+      "aliases": ["sa", "serviceaccount"],
+      "category": "security",
+      "provider": "kubernetes",
+      "tags": ["identity"],
+      "file": "svg/service-account.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/sa.svg",
+      "monochrome": false
+    },
+    {
+      "id": "statefulset",
+      "aliases": ["sts", "stateful-set"],
+      "category": "compute",
+      "provider": "kubernetes",
+      "tags": ["workload"],
+      "file": "svg/statefulset.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/sts.svg",
+      "monochrome": false
+    },
+    {
+      "id": "storage-class",
+      "aliases": ["sc", "storageclass"],
+      "category": "data",
+      "provider": "kubernetes",
+      "tags": ["storage"],
+      "file": "svg/storage-class.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/sc.svg",
+      "monochrome": false
+    },
+    {
+      "id": "user",
+      "aliases": [],
+      "category": "security",
+      "provider": "kubernetes",
+      "tags": ["identity"],
+      "file": "svg/user.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/user.svg",
+      "monochrome": false
+    },
+    {
+      "id": "vertical-pod-autoscaler",
+      "aliases": ["vpa"],
+      "category": "compute",
+      "provider": "kubernetes",
+      "tags": ["scaling"],
+      "file": "svg/vertical-pod-autoscaler.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/vpa.svg",
+      "monochrome": false
+    },
+    {
+      "id": "volume",
+      "aliases": ["vol"],
+      "category": "data",
+      "provider": "kubernetes",
+      "tags": ["storage"],
+      "file": "svg/volume.svg",
+      "sourceUrl": "https://github.com/kubernetes/community/blob/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons/svg/resources/unlabeled/vol.svg",
+      "monochrome": false
+    }
+  ]
+}

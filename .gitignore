@@ -12,3 +12,4 @@ packages/*/NOTICE
 # Local git worktrees and personal Claude settings
 .worktrees/
 .claude/settings.local.json
+.claude/worktrees/

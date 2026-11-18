@@ -1,3 +1,7 @@
+// Other workspace packages typecheck this file through a path import without core's tsconfig, so
+// the ambient typings for gifenc are referenced here.
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference
+/// <reference path="./gifenc.d.ts" />
 /** Built-in GIF `VideoEncoder` (pure JS: `gifenc`). Deterministic for identical frames. */
 import * as gifencNs from "gifenc";
 import type { Palette } from "gifenc";

@@ -4,18 +4,25 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import pkg from "../package.json" with { type: "json" };
 import { run } from "../src/index.js";
+import { makeDeps } from "./helpers.js";
+
+const deps = makeDeps("/nonexistent");
 
 describe("run", () => {
-  test("--version", () => {
-    expect(run(["--version"])).toEqual({ code: 0, stdout: `${pkg.version}\n`, stderr: "" });
+  test("--version", async () => {
+    expect(await run(["--version"], deps)).toEqual({
+      code: 0,
+      stdout: `${pkg.version}\n`,
+      stderr: "",
+    });
   });
-  test("--help", () => {
-    const r = run(["--help"]);
+  test("--help", async () => {
+    const r = await run(["--help"], deps);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("Usage: pcosmo");
   });
-  test("unknown option fails", () => {
-    expect(run(["--nope"]).code).toBe(2);
+  test("unknown option fails", async () => {
+    expect((await run(["--nope"], deps)).code).toBe(2);
   });
 });
 
@@ -26,5 +33,9 @@ describe("built bin (requires pnpm build)", () => {
     expect(execFileSync(process.execPath, [bin, "--version"], { encoding: "utf8" })).toBe(
       `${pkg.version}\n`,
     );
+  });
+  test("lists the gallery without touching the network", () => {
+    const out = execFileSync(process.execPath, [bin, "examples", "list"], { encoding: "utf8" });
+    expect(out).toContain("load-balancing");
   });
 });

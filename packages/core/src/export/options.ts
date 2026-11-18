@@ -2,9 +2,18 @@
  * Validation of `RenderOptions` bounds (contract `RenderOptions` doc). Errors, never clamps.
  * Called by `exportOutputs` and by `render()`.
  */
-import type { Diagnostic, RenderOptions } from "../contracts/index.js";
+import type { Diagnostic, OutputKind, RenderOptions } from "../contracts/index.js";
 
 const NAME = /^[A-Za-z0-9._-]{1,64}$/;
+const KINDS: readonly OutputKind[] = [
+  "animated",
+  "static",
+  "steps",
+  "interactive",
+  "png",
+  "gif",
+  "mp4",
+];
 const ID_PREFIX = /^[a-z][a-z0-9-]{0,31}$/;
 
 function err(code: string, path: string, message: string, suggestion?: string): Diagnostic {
@@ -69,6 +78,11 @@ export function validateRenderOptions(options: RenderOptions | undefined): Diagn
         "video.durationSec must be a number in (0, 120].",
       ),
     );
+  }
+  for (const k of o.outputs ?? []) {
+    if (!KINDS.includes(k)) {
+      out.push(err("options/invalid-output", "/outputs", `Unknown output kind "${String(k)}".`));
+    }
   }
   return out.sort((a, b) => (a.path === b.path ? cmp(a.code, b.code) : cmp(a.path, b.path)));
 }
