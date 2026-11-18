@@ -1,10 +1,21 @@
-// Prepares generated site inputs: the schema at its $id path and gallery SVG previews.
-// Previews need the built CLI (scripts/pc run build). While the engine stages are stubs every
-// render fails; then the gallery shows specs without images and the build still succeeds
-// (set PC_GALLERY_STRICT=1 to fail instead). Once at least one preview renders, a failing
-// bundled-icon example is an error; provider-icon examples may fail (their packs are user-installed).
+// Prepares generated site inputs: the schema at its $id path and the gallery renders.
+// Committed renders (examples/gallery, made by `scripts/pc run gen:gallery`) are copied into public/gallery.
+// A bundled-icon example without a committed render is rendered here with the built CLI so the gallery
+// never loses its preview; provider examples are only shown when their render is committed (their icon
+// packs are user-installed and their terms are handled in examples/gallery/PROVIDERS.md).
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 const docs = fileURLToPath(new URL("../", import.meta.url));
@@ -13,35 +24,43 @@ const root = `${docs}../`;
 mkdirSync(`${docs}public/schema`, { recursive: true });
 copyFileSync(`${root}schema/v1.json`, `${docs}public/schema/v1.json`);
 
-const bin = `${root}packages/cli/dist/bin.js`;
-rmSync(`${docs}public/gallery`, { recursive: true, force: true });
-mkdirSync(`${docs}public/gallery`, { recursive: true });
-
-if (!existsSync(bin)) {
-  console.warn("gallery: packages/cli/dist/bin.js not built; skipping previews");
-} else {
-  let ok = 0;
-  const failed = [];
-  const hard = [];
-  for (const f of readdirSync(`${root}examples`).filter((n) => n.endsWith(".cosmo.json"))) {
-    const r = spawnSync(
-      process.execPath,
-      [bin, "build", `${root}examples/${f}`, "-o", `${docs}public/gallery`],
-      { encoding: "utf8" },
-    );
-    if (r.status === 0) {
-      ok++;
-      continue;
-    }
-    failed.push(f);
-    console.warn(`gallery: ${f} failed (exit ${r.status})\n${(r.stderr || "").trim()}`);
-    const text = readFileSync(`${root}examples/${f}`, "utf8");
-    if (!/"icon"\s*:\s*"(aws|azure|gcp):/.test(text)) hard.push(f);
-  }
-  console.log(`gallery: ${ok} previews rendered, ${failed.length} failed`);
-  const engineMissing = ok === 0 && process.env.PC_GALLERY_STRICT !== "1";
-  if (hard.length > 0 && !engineMissing) {
-    console.error(`gallery: bundled-icon examples failed to render: ${hard.join(", ")}`);
-    process.exit(1);
-  }
+const target = `${docs}public/gallery`;
+rmSync(target, { recursive: true, force: true });
+mkdirSync(target, { recursive: true });
+const src = `${root}examples/gallery`;
+if (existsSync(src)) {
+  cpSync(src, target, { recursive: true, filter: (p) => !p.endsWith(".md") });
 }
+
+const bin = `${root}packages/cli/dist/bin.js`;
+const missing = readdirSync(`${root}examples`)
+  .filter((f) => f.endsWith(".cosmo.json"))
+  .filter((f) => !existsSync(`${target}/${f.replace(/\.cosmo\.json$/, "")}.svg`))
+  .filter(
+    (f) =>
+      !/"icon"\s*:\s*"(aws|azure|gcp|cncf):/.test(readFileSync(`${root}examples/${f}`, "utf8")),
+  );
+let fallback = 0;
+if (missing.length > 0 && existsSync(bin)) {
+  const empty = mkdtempSync(join(tmpdir(), "pcosmo-docs-packs-"));
+  for (const f of missing) {
+    const r = spawnSync(process.execPath, [bin, "build", `${root}examples/${f}`, "-o", target], {
+      encoding: "utf8",
+      env: { ...process.env, PCOSMO_PACKS_DIR: empty },
+    });
+    if (r.status === 0) fallback++;
+    else
+      console.warn(
+        `gallery: ${f} could not be rendered (exit ${r.status})\n${(r.stderr || "").trim()}`,
+      );
+  }
+  rmSync(empty, { recursive: true, force: true });
+} else if (missing.length > 0) {
+  console.warn(
+    "gallery: packages/cli/dist/bin.js not built; previews without a committed render are skipped",
+  );
+}
+const total = readdirSync(target).filter(
+  (f) => f.endsWith(".svg") && !f.endsWith(".static.svg"),
+).length;
+console.log(`gallery: ${total} previews (${total - fallback} committed, ${fallback} rendered now)`);

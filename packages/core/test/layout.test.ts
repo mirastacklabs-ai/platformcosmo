@@ -222,4 +222,36 @@ describe("layoutSpec", () => {
     expect(cy("a")).toBe(cy("b"));
     expect(cy("b")).toBe(cy("c"));
   });
+
+  test("property: wrapped chains (6+ layers) with manual positions never overlap", () => {
+    for (let seed = 300; seed < 330; seed++) {
+      const rand = rng(seed);
+      const count = 8 + Math.floor(rand() * 8);
+      const nodes: SpecNode[] = [];
+      for (let i = 0; i < count; i++) {
+        const fixedPos =
+          i % 4 === 2
+            ? { pos: { x: 6 * Math.floor(rand() * 6), y: 8 * Math.floor(rand() * 5) } }
+            : {};
+        nodes.push(
+          n(`n${i}`, { size: (["sm", "md", "lg"] as const)[Math.floor(rand() * 3)], ...fixedPos }),
+        );
+      }
+      const fixed = nodes.filter((x) => x.pos);
+      if (new Set(fixed.map((x) => `${x.pos!.x},${x.pos!.y}`)).size !== fixed.length) continue;
+      const edges = nodes.slice(1).map((x, i) => e(`n${i}`, x.id));
+      const r = layoutSpec({ nodes, groups: [], edges });
+      for (const a of nodes) {
+        if (a.pos) continue;
+        for (const b of nodes) {
+          if (a.id !== b.id) {
+            expect(
+              hit(r.nodes.get(a.id)!, r.nodes.get(b.id)!),
+              `seed ${seed} ${a.id}/${b.id}`,
+            ).toBe(false);
+          }
+        }
+      }
+    }
+  });
 });
