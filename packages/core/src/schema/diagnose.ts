@@ -1,7 +1,8 @@
-import type { ErrorObject } from "ajv";
+import type { ErrorObject, ValidateFunction } from "ajv";
+import { Ajv2020 } from "ajv/dist/2020.js";
 import type { Diagnostic } from "../contracts/index.js";
-import { SCHEMA_REVISION } from "./validate.js";
-import { closest, didYouMean } from "./suggest.js";
+import { SCHEMA_REVISION, rootDefs } from "./validate.js";
+import { closest, didYouMean, q } from "./suggest.js";
 
 const PALETTE = [
   "blue",
@@ -40,39 +41,69 @@ function describeBranch(s: unknown): string {
   return "a valid value";
 }
 
-function collapseUnions(errors: ErrorObject[]): { kept: ErrorObject[]; generic: Diagnostic[] } {
-  const generic: Diagnostic[] = [];
-  const removed = new Set<ErrorObject>();
-  // Outermost unions first (shorter schemaPath / instancePath), deterministic.
-  const unions = errors
-    .filter((e) => e.keyword === "oneOf" || e.keyword === "anyOf")
-    .sort(
-      (a, b) =>
-        a.instancePath.length - b.instancePath.length ||
-        (a.schemaPath < b.schemaPath ? -1 : a.schemaPath > b.schemaPath ? 1 : 0),
-    );
-  for (const u of unions) {
-    if (removed.has(u)) continue;
-    removed.add(u);
-    const prefix = `${u.schemaPath}/`;
-    const kids = errors.filter(
-      (c) =>
-        c !== u &&
-        !removed.has(c) &&
-        c.schemaPath.startsWith(prefix) &&
-        (c.instancePath === u.instancePath || c.instancePath.startsWith(`${u.instancePath}/`)),
-    );
-    const byBranch = new Map<number, ErrorObject[]>();
-    for (const k of kids) {
-      const idx = Number(k.schemaPath.slice(prefix.length).split("/")[0]);
-      const list = byBranch.get(idx) ?? [];
-      list.push(k);
-      byBranch.set(idx, list);
+const branchAjv = new Ajv2020({
+  strict: false,
+  allowUnionTypes: true,
+  allErrors: true,
+  verbose: true,
+});
+const branchCache = new Map<unknown, ValidateFunction>();
+
+/** Standalone validator for one oneOf/anyOf branch (`$ref`s resolve against the spec's `$defs`). */
+function branchValidator(branch: unknown): ValidateFunction {
+  let v = branchCache.get(branch);
+  if (!v) {
+    v = branchAjv.compile({ $defs: rootDefs, ...(branch as object) });
+    branchCache.set(branch, v);
+  }
+  return v;
+}
+
+/**
+ * Ajv emits a union's branch errors as one contiguous run right before the union error, but
+ * errors from `$ref`'d subschemas carry no branch prefix. So the run is found by position and
+ * every branch is re-validated on its own to pick the best one; the result is exactly one
+ * diagnostic set per location.
+ */
+function process(errors: ErrorObject[]): Diagnostic[] {
+  const removed = new Set<number>();
+  const unionDiags = new Map<number, Diagnostic[]>();
+  errors.forEach((u, ui) => {
+    if ((u.keyword !== "oneOf" && u.keyword !== "anyOf") || removed.has(ui)) return;
+    const root = u.instancePath === "";
+    const inSub = (e: ErrorObject): boolean =>
+      e.instancePath === u.instancePath || e.instancePath.startsWith(`${u.instancePath}/`);
+    const run: number[] = [];
+    for (let j = ui - 1; j >= 0; j--) {
+      const e = errors[j]!;
+      if (!inSub(e)) break;
+      if (removed.has(j) || unionDiags.has(j)) {
+        run.push(j);
+        continue;
+      }
+      const prefixed = e.schemaPath.startsWith(`${u.schemaPath}/`);
+      const leaf =
+        !root && e.instancePath !== u.instancePath && e.schemaPath.startsWith("#/$defs/");
+      if (!prefixed && !leaf) break;
+      run.push(j);
     }
+    for (const j of run) {
+      removed.add(j);
+      unionDiags.delete(j);
+    }
+    removed.add(ui);
+
+    const branches = Array.isArray(u.schema) ? (u.schema as unknown[]) : [];
+    const results = branches.map((b) => {
+      const v = branchValidator(b);
+      v(u.data);
+      return (v.errors ?? []).map((e) => ({ ...e, instancePath: u.instancePath + e.instancePath }));
+    });
     let best: number | undefined;
     let bestScore = Infinity;
     let tie = false;
-    for (const [idx, list] of [...byBranch.entries()].sort((a, b) => a[0] - b[0])) {
+    results.forEach((list, idx) => {
+      if (list.length === 0) return;
       const shallow = list.filter((e) => e.instancePath === u.instancePath).length;
       const score = shallow * 10 + list.length;
       if (score < bestScore) {
@@ -80,27 +111,23 @@ function collapseUnions(errors: ErrorObject[]): { kept: ErrorObject[]; generic: 
         best = idx;
         tie = false;
       } else if (score === bestScore) tie = true;
-    }
-    const branches = Array.isArray(u.schema) ? (u.schema as unknown[]) : [];
+    });
     if (best !== undefined && !tie && bestScore < 10) {
-      // One branch clearly fits the shape: keep only its errors.
-      for (const k of kids) if (!(byBranch.get(best) ?? []).includes(k)) removed.add(k);
-    } else {
-      for (const k of kids) removed.add(k);
-      const desc = branches.map(describeBranch);
-      const parent = isObj(u.parentSchema) ? u.parentSchema : undefined;
-      const title = parent && typeof parent.title === "string" ? parent.title : undefined;
-      const allRequired =
-        branches.length > 0 &&
-        branches.every((b) => isObj(b) && Array.isArray(b.required) && !("type" in b));
-      const rootNeeds = allRequired
-        ? branches.map((b) => String(((b as Record<string, unknown>).required as unknown[])[0]))
-        : [];
-      const matchedMany =
-        u.keyword === "oneOf" &&
-        kids.length === 0 &&
-        Array.isArray((u.params as { passingSchemas?: unknown }).passingSchemas);
-      generic.push({
+      unionDiags.set(ui, process(results[best]!));
+      return;
+    }
+    const desc = branches.map(describeBranch);
+    const parent = isObj(u.parentSchema) ? u.parentSchema : undefined;
+    const title = parent && typeof parent.title === "string" ? parent.title : undefined;
+    const allRequired =
+      branches.length > 0 &&
+      branches.every((b) => isObj(b) && Array.isArray(b.required) && !("type" in b));
+    const rootNeeds = allRequired
+      ? branches.map((b) => String(((b as Record<string, unknown>).required as unknown[])[0]))
+      : [];
+    const matchedMany = u.keyword === "oneOf" && results.filter((l) => l.length === 0).length > 1;
+    unionDiags.set(ui, [
+      {
         severity: "error",
         code: `schema/${u.keyword === "oneOf" ? "one-of" : "any-of"}`,
         path: u.instancePath,
@@ -113,10 +140,15 @@ function collapseUnions(errors: ErrorObject[]): { kept: ErrorObject[]; generic: 
           ? { suggestion: `Use one of: ${desc.join("; ")}` }
           : {}),
         params: { branches: desc },
-      });
-    }
-  }
-  return { kept: errors.filter((e) => !removed.has(e)), generic };
+      },
+    ]);
+  });
+  const out: Diagnostic[] = [];
+  errors.forEach((e, i) => {
+    if (unionDiags.has(i)) out.push(...unionDiags.get(i)!);
+    else if (!removed.has(i)) out.push(convert(e));
+  });
+  return out;
 }
 
 function convert(e: ErrorObject): Diagnostic {
@@ -131,12 +163,12 @@ function convert(e: ErrorObject): Diagnostic {
         ...base,
         code: "schema/additional-property",
         path: childPath(e.instancePath, prop),
-        message: `Unknown field "${prop}"`,
+        message: `Unknown field ${q(prop)}`,
         suggestion:
           hint ??
           (e.instancePath === ""
-            ? `If "${prop}" is a newer field, upgrade platformcosmo (this engine implements schema revision ${SCHEMA_REVISION})`
-            : `Remove "${prop}"; allowed fields: ${props.join(", ")}`),
+            ? `If ${q(prop)} is a newer field, upgrade platformcosmo (this engine implements schema revision ${SCHEMA_REVISION})`
+            : `Remove ${q(prop)}; allowed fields: ${props.join(", ")}`),
       };
     }
     case "required": {
@@ -189,7 +221,7 @@ function convert(e: ErrorObject): Diagnostic {
           ...base,
           code: "semantic/unknown-color",
           path: e.instancePath,
-          message: `Unknown color ${JSON.stringify(e.data)}`,
+          message: `Unknown color ${q(e.data)}`,
           suggestion: hint ?? `Use #rgb, #rrggbb or one of: ${PALETTE.join(", ")}`,
         };
       }
@@ -222,12 +254,11 @@ export function sortDiagnostics(list: Diagnostic[]): Diagnostic[] {
   );
 }
 
-/** Ajv errors → diagnostics, with oneOf/anyOf collapsed to one diagnostic per location. */
+/** Ajv errors to diagnostics, with oneOf/anyOf collapsed to one diagnostic per location. */
 export function schemaDiagnostics(errors: ErrorObject[]): Diagnostic[] {
-  const { kept, generic } = collapseUnions(errors);
   const seen = new Set<string>();
   const out: Diagnostic[] = [];
-  for (const d of [...kept.map(convert), ...generic]) {
+  for (const d of process(errors)) {
     const key = `${d.path}\u0000${d.code}\u0000${d.message}`;
     if (seen.has(key)) continue;
     seen.add(key);

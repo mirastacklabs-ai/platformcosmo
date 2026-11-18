@@ -1,7 +1,7 @@
 import type { DcPack, Diagnostic, IconResolver } from "../contracts/index.js";
 import { DEFAULT_RACK_U, SLOT_HEIGHT_U, footprintOf } from "../scene/sizes.js";
 import type { PlatformCosmoSpec, SpecFlow } from "./types.gen.js";
-import { closest, didYouMean } from "./suggest.js";
+import { closest, didYouMean, q } from "./suggest.js";
 
 /** Σ over every flow of ceil(rate × 2); shared formula with Track B (no path lengths needed). */
 export const PARTICLE_LIMIT = 2000;
@@ -58,7 +58,7 @@ export function semanticDiagnostics(
       err(
         "semantic/duplicate-id",
         path,
-        `Duplicate id "${id}" (already used by a ${prev.kind} at ${prev.path})`,
+        `Duplicate id ${q(id)} (already used by a ${prev.kind} at ${prev.path})`,
         "Ids are shared by nodes, groups, racks, equipment, rows, aisles and cables; rename one",
         { id, first: prev.path },
       );
@@ -83,7 +83,7 @@ export function semanticDiagnostics(
       err(
         "semantic/duplicate-id",
         `/edges/${i}/id`,
-        `Duplicate edge id "${e.id}" (first at ${prev})`,
+        `Duplicate edge id ${q(e.id)} (first at ${prev})`,
         "Rename one edge",
         {
           id: e.id,
@@ -100,7 +100,7 @@ export function semanticDiagnostics(
       err(
         "semantic/duplicate-id",
         `/cables/${i}/id`,
-        `Duplicate id "${c.id}" (also used at ${prev})`,
+        `Duplicate id ${q(c.id)} (also used at ${prev})`,
         "Rename one",
       );
   });
@@ -108,7 +108,7 @@ export function semanticDiagnostics(
   const metricIds = new Set<string>();
   (spec.metrics ?? []).forEach((m, i) => {
     if (metricIds.has(m.id))
-      err("semantic/duplicate-id", `/metrics/${i}/id`, `Duplicate metric id "${m.id}"`);
+      err("semantic/duplicate-id", `/metrics/${i}/id`, `Duplicate metric id ${q(m.id)}`);
     metricIds.add(m.id);
   });
 
@@ -126,7 +126,7 @@ export function semanticDiagnostics(
         err(
           "semantic/duplicate-id",
           `${base}/id`,
-          `Duplicate slot id "${sid}" in rack "${r.id}"`,
+          `Duplicate slot id ${q(sid)} in rack ${q(r.id)}`,
           "Give the slot an explicit unique id",
         );
       } else {
@@ -140,7 +140,7 @@ export function semanticDiagnostics(
         err(
           "semantic/slot-out-of-range",
           `${base}/at`,
-          `Slot "${sid}" occupies U${lo}-U${hi} but rack "${r.id}" has ${rackU}U`,
+          `Slot ${q(sid)} occupies U${lo}-U${hi} but rack ${q(r.id)} has ${rackU}U`,
           `Lower "at" or "size", or use a taller rack`,
         );
       }
@@ -149,7 +149,7 @@ export function semanticDiagnostics(
           err(
             "semantic/slot-overlap",
             `${base}/at`,
-            `Slot "${sid}" (U${lo}-U${hi}) overlaps slot "${t.id}" (U${t.lo}-U${t.hi}) in rack "${r.id}"`,
+            `Slot ${q(sid)} (U${lo}-U${hi}) overlaps slot ${q(t.id)} (U${t.lo}-U${t.hi}) in rack ${q(r.id)}`,
             "Move one of the devices",
           );
           break;
@@ -175,15 +175,15 @@ export function semanticDiagnostics(
   };
   const unknownObject = (path: string, ep: string, what: string, allowAreas = false): void => {
     const slash = ep.indexOf("/");
-    let message = `Unknown ${what} "${ep}"`;
+    let message = `Unknown ${what} ${q(ep)}`;
     if (slash > 0) {
       const rack = ep.slice(0, slash);
       if (!rackIds.has(rack))
-        message = `${what[0]!.toUpperCase()}${what.slice(1)} "${ep}": "${rack}" is not a rack`;
+        message = `${what[0]!.toUpperCase()}${what.slice(1)} ${q(ep)}: ${q(rack)} is not a rack`;
       else
-        message = `${what[0]!.toUpperCase()}${what.slice(1)} "${ep}": rack "${rack}" has no such slot`;
+        message = `${what[0]!.toUpperCase()}${what.slice(1)} ${q(ep)}: rack ${q(rack)} has no such slot`;
     } else if (ids.has(ep)) {
-      message = `${what[0]!.toUpperCase()}${what.slice(1)} "${ep}" is a ${ids.get(ep)!.kind}, not a drawable object${allowAreas ? "" : ""}`;
+      message = `${what[0]!.toUpperCase()}${what.slice(1)} ${q(ep)} is a ${ids.get(ep)!.kind} and is not allowed here`;
     }
     const cands = allowAreas
       ? [
@@ -203,7 +203,7 @@ export function semanticDiagnostics(
       err(
         "semantic/unknown-group",
         `/nodes/${i}/group`,
-        `Unknown group "${n.group}"`,
+        `Unknown group ${q(n.group)}`,
         didYouMean(n.group, groupIds),
         { id: n.group },
       );
@@ -216,7 +216,7 @@ export function semanticDiagnostics(
       err(
         "semantic/unknown-group",
         `/groups/${i}/parent`,
-        `Unknown parent group "${g.parent}"`,
+        `Unknown parent group ${q(g.parent)}`,
         didYouMean(g.parent, groupIds),
         { id: g.parent },
       );
@@ -248,21 +248,32 @@ export function semanticDiagnostics(
   });
 
   // ---- edges, cables ----------------------------------------------------------------
-  const checkEnds = (list: { from: string; to: string }[], base: string, what: string): void => {
+  const isDcObject = (ep: string): boolean => {
+    if (ep.includes("/")) return slotRefs.has(ep);
+    const k = ids.get(ep)?.kind;
+    return k === "rack" || k === "equipment";
+  };
+  const checkEnds = (
+    list: { from: string; to: string }[],
+    base: string,
+    what: string,
+    ok: (ep: string) => boolean,
+  ): void => {
     list.forEach((e, i) => {
-      if (!isObject(e.from)) unknownObject(`${base}/${i}/from`, e.from, what);
-      if (!isObject(e.to)) unknownObject(`${base}/${i}/to`, e.to, what);
+      if (!ok(e.from)) unknownObject(`${base}/${i}/from`, e.from, what);
+      if (!ok(e.to)) unknownObject(`${base}/${i}/to`, e.to, what);
       if (e.from === e.to)
         err(
           "semantic/self-edge",
           `${base}/${i}/to`,
-          `Connects "${e.from}" to itself`,
+          `Connects ${q(e.from)} to itself`,
           "Point to a different endpoint",
         );
     });
   };
-  checkEnds(edges, "/edges", "node");
-  checkEnds(cables, "/cables", "cable endpoint");
+  // Cables connect DC gear only (racks, equipment, rack/slot); edges connect any object.
+  checkEnds(edges, "/edges", "node", isObject);
+  checkEnds(cables, "/cables", "cable endpoint", isDcObject);
 
   // ---- DC refs ----------------------------------------------------------------------
   const rowIds = new Set(rows.map((r) => r.id));
@@ -273,7 +284,9 @@ export function semanticDiagnostics(
         err(
           "semantic/unknown-node",
           `/rows/${ri}/members/${mi}`,
-          k ? `Row member "${m}" is a ${k}, not a rack or equipment` : `Unknown row member "${m}"`,
+          k
+            ? `Row member ${q(m)} is a ${k}, not a rack or equipment`
+            : `Unknown row member ${q(m)}`,
           didYouMean(m, [...rackIds, ...equipment.map((q) => q.id)]),
           { id: m },
         );
@@ -286,7 +299,7 @@ export function semanticDiagnostics(
         err(
           "semantic/unknown-row",
           `/aisles/${ai}/rows/${ri}`,
-          `Unknown row "${r}"`,
+          `Unknown row ${q(r)}`,
           didYouMean(r, rowIds),
           { id: r },
         );
@@ -302,7 +315,7 @@ export function semanticDiagnostics(
           err(
             "semantic/unknown-edge",
             `${p}/edge`,
-            `Unknown edge "${f.edge}"`,
+            `Unknown edge ${q(f.edge)}`,
             didYouMean(f.edge, edgeIds.keys()) ?? "Edges are referenced by their explicit id",
             { id: f.edge },
           );
@@ -319,7 +332,7 @@ export function semanticDiagnostics(
         err(
           "semantic/self-edge",
           `${p}/to`,
-          `Flow starts and ends at "${f.from}"`,
+          `Flow starts and ends at ${q(f.from)}`,
           "Point to a different endpoint",
         );
     });
@@ -335,7 +348,7 @@ export function semanticDiagnostics(
         err(
           "semantic/unknown-metric",
           `${base}/metrics/${key}`,
-          `Unknown metric "${key}"`,
+          `Unknown metric ${q(key)}`,
           didYouMean(key, metricIds),
           { id: key },
         );
@@ -357,23 +370,25 @@ export function semanticDiagnostics(
       if (!installed.includes(pack)) {
         const near = closest(pack, installed);
         hint = near
-          ? `Did you mean pack "${near}"?`
-          : `Pack "${pack}" is not installed; try: pcosmo icons add ${pack}`;
+          ? `Did you mean pack ${q(near)}?`
+          : `Pack ${q(pack)} is not installed; try: pcosmo icons add ${pack}`;
       } else {
         const m = icons.search(n.icon, 3)[0];
-        hint = m ? `Did you mean "${m.ref}"?` : undefined;
+        hint = m ? `Did you mean ${q(m.ref)}?` : undefined;
       }
       err(
         "semantic/icon-not-installed",
         `/nodes/${i}/icon`,
-        `Icon "${n.icon}" is not installed`,
+        `Icon ${q(n.icon)} is not installed`,
         hint,
         { ref: n.icon },
       );
     });
   }
 
-  // ---- overlapping manual positions -------------------------------------------------
+  // ---- overlapping manual positions
+  // Node footprints are checked here (shared sizes with layout). Rack/equipment footprints belong
+  // to the DC pack, so only exact-tile collisions are rejected for them. -------------------------------------------------
   const placed = nodes.map((n, i) => ({ n, i })).filter((x) => x.n.pos !== undefined);
   for (let b = 1; b < placed.length; b++) {
     const B = placed[b]!;
@@ -387,7 +402,7 @@ export function semanticDiagnostics(
         err(
           "layout/overlap",
           `/nodes/${B.i}/pos`,
-          `Node "${B.n.id}" overlaps "${A.n.id}" at its manual position`,
+          `Node ${q(B.n.id)} overlaps ${q(A.n.id)} at its manual position`,
           'Move it, or drop "pos" to use auto layout',
           { a: A.n.id, b: B.n.id },
         );
@@ -416,7 +431,7 @@ export function semanticDiagnostics(
       err(
         "layout/overlap",
         it.path,
-        `"${it.id}" shares grid position (${key}) with "${other}"`,
+        `${q(it.id)} shares grid position (${key}) with ${q(other)}`,
         "Give each rack or equipment its own tile",
       );
     } else dcPos.set(key, it.id);

@@ -37,12 +37,48 @@ describe("parseSpec", () => {
   test("yaml errors carry line/col; duplicate keys rejected", () => {
     const r = parseSpec("a: 1\nb: [\n", "yaml");
     expect(r.diagnostics[0]?.code).toBe("parse/yaml");
-    expect(r.diagnostics[0]?.params?.line).toBeGreaterThanOrEqual(2);
+    expect(r.diagnostics[0]?.params).toEqual({ line: 3, column: 1 });
     expect(parseSpec("a: 1\na: 2\n", "yaml").diagnostics).toHaveLength(1);
   });
   test("BOM and unknown format", () => {
     expect(parseSpec('﻿{"a":1}', "json").spec).toEqual({ a: 1 });
     expect(parseSpec("{}", "toml" as never).diagnostics[0]?.code).toBe("parse/format");
+  });
+});
+
+describe("union collapse (one diagnostic per location)", () => {
+  const withFlow = (flow: Record<string, unknown>) => ({
+    ...base(),
+    flows: [flow],
+    steps: undefined,
+  });
+  test("flow kind typo", () => {
+    const d = validate(withFlow({ edge: "e1", kind: "nrmal" })).diagnostics;
+    expect(d).toHaveLength(1);
+    expect(d[0]).toMatchObject({
+      code: "schema/enum",
+      path: "/flows/0/kind",
+      suggestion: 'Did you mean "normal"?',
+    });
+  });
+  test("color typo", () => {
+    const d = validate(withFlow({ edge: "e1", color: "bleu" })).diagnostics;
+    expect(d).toHaveLength(1);
+    expect(d[0]).toMatchObject({ code: "semantic/unknown-color", path: "/flows/0/color" });
+  });
+  test("endpoint typo", () => {
+    const d = validate(withFlow({ from: "lb", to: "Bad_Id" })).diagnostics;
+    expect(d).toHaveLength(1);
+    expect(d[0]).toMatchObject({ code: "schema/pattern", path: "/flows/0/to" });
+  });
+  test("two bad flows give one diagnostic each", () => {
+    const s = {
+      ...base(),
+      flows: [{ kind: "x" }, { edge: "e1", kind: "nrmal" }],
+      steps: undefined,
+    };
+    const d = validate(s).diagnostics;
+    expect(d.map((x) => x.path)).toEqual(["/flows/0", "/flows/1/kind"]);
   });
 });
 
@@ -203,6 +239,21 @@ describe("validate: semantic layer", () => {
     expect(c).toContain("semantic/unknown-node@/rows/0/members/2");
     expect(c).toContain("semantic/unknown-row@/aisles/0/rows/0");
     expect(c).toContain("semantic/unknown-node@/cables/0/to");
+  });
+  test("cables connect DC gear only", () => {
+    const dc = {
+      meta: { version: "1" },
+      nodes: [{ id: "n1", type: "server" }],
+      racks: [{ id: "r1", slots: [{ id: "a", at: 1, type: "server-1u" }] }],
+      cables: [{ from: "r1/a", to: "n1" }],
+    };
+    expect(codes(dc)).toEqual(["semantic/unknown-node@/cables/0/to"]);
+  });
+  test("unknown ids are quoted and truncated in messages", () => {
+    const s = base();
+    (s.edges as { to: string }[])[1]!.to = "a".repeat(100);
+    const m = validate(s).diagnostics.find((d) => d.path === "/edges/1/to")?.message ?? "";
+    expect(m.length).toBeLessThan(120);
   });
   test("airflow flows may target aisles; others may not", () => {
     const dc = {

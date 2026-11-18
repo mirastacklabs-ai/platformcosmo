@@ -24,6 +24,9 @@ const ajv = new Ajv2020({ strict: true, allowUnionTypes: true, allErrors: true, 
 ajv.addKeyword({ keyword: "x-revision", schemaType: "string" });
 const compiled = ajv.compile<PlatformCosmoSpec>(schema);
 
+/** The spec schema's `$defs`, for compiling union branches on their own. */
+export const rootDefs = schema.$defs;
+
 /** Raw Ajv run (verbose errors); used by `validate` to build diagnostics. */
 export function runSchema(input: unknown): ErrorObject[] {
   return compiled(input) ? [] : [...(compiled.errors ?? [])];

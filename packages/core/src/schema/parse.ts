@@ -59,20 +59,20 @@ function parseJson(text: string) {
 }
 
 function parseYaml(text: string) {
-  const lineCounter = new LineCounter();
-  const doc = parseDocument(text, {
-    version: "1.2",
-    schema: "core",
-    lineCounter,
-    uniqueKeys: true,
-  });
-  const err = doc.errors[0];
-  if (err) {
-    const pos = err.linePos?.[0] ?? lineCounter.linePos(err.pos[0]);
-    const nice = err.message.split("\n")[0] ?? err.message;
-    return fail("parse/yaml", `Invalid YAML: ${nice}`, pos.line, pos.col);
-  }
   try {
+    const lineCounter = new LineCounter();
+    const doc = parseDocument(text, {
+      version: "1.2",
+      schema: "core",
+      lineCounter,
+      uniqueKeys: true,
+    });
+    const err = doc.errors[0];
+    if (err) {
+      const pos = err.linePos?.[0] ?? lineCounter.linePos(err.pos[0]);
+      const nice = err.message.split("\n")[0] ?? err.message;
+      return fail("parse/yaml", `Invalid YAML: ${nice}`, pos.line, pos.col);
+    }
     return { spec: doc.toJS({ maxAliasCount: 50 }) as unknown, diagnostics: [] as Diagnostic[] };
   } catch (e) {
     return fail("parse/yaml", `Invalid YAML: ${e instanceof Error ? e.message : String(e)}`, 1, 1);

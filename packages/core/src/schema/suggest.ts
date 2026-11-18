@@ -59,3 +59,9 @@ export function didYouMean(input: string, candidates: Iterable<string>): string 
   const m = closest(input, candidates);
   return m === undefined ? undefined : `Did you mean "${m}"?`;
 }
+
+/** JSON-quoted, truncated user text for diagnostic messages (never raw-interpolated). */
+export function q(value: unknown, max = 64): string {
+  const s = typeof value === "string" ? value : String(value);
+  return JSON.stringify(s.length > max ? `${s.slice(0, max)}...` : s);
+}
