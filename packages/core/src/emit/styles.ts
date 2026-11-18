@@ -154,6 +154,8 @@ export function ruleFor(token: string): string | undefined {
     return `stroke-dasharray:${v(`edge-dash-${m[1]}`)}`;
   if ((m = /^cable-(power|network|fiber|management)$/.exec(token)))
     return `stroke:${v(`dc-cable-${m[1]}`)}`;
+  if (token === "leader")
+    return `fill:none;stroke:${v("edge-stroke")};stroke-width:1;stroke-dasharray:2 2`;
   if (token === "arrow") return `fill:${v("edge-stroke")};stroke:none`;
   if (token === "elabel") return `fill:${v("edge-labelFill")};stroke:none`;
   if (token === "bg") return `fill:${v("background")}`;

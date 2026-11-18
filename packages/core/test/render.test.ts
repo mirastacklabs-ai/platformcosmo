@@ -8,11 +8,12 @@ import type {
   ResolvedIcon,
   IconResolver,
   SceneObject,
+  Rect,
   ThemeRegistry,
 } from "../src/contracts/index.js";
 import { emit } from "../src/emit/index.js";
 import { optimize } from "../src/optimize/index.js";
-import { buildModelWithDiagnostics } from "../src/render/model.js";
+import { buildModelWithDiagnostics, nudgeLabel, rectsOverlap } from "../src/render/model.js";
 import {
   buildModel,
   canonicalJson,
@@ -291,36 +292,71 @@ describe("label and overlay polish", () => {
   test("arrowheads live in the labels layer, above the objects", () => {
     const svg = svgOf();
     const labels = svg.indexOf('id="pc-test-ly_labels"');
-    expect(svg.indexOf('<polygon class="pc-test-arrow"')).toBeGreaterThan(labels);
+    expect(svg.indexOf('<polygon class="pc-test-arrow ')).toBeGreaterThan(labels);
     expect(svg.slice(0, labels)).not.toContain("<polygon");
   });
 
-  test("edge labels step aside from other labels", () => {
-    const scene = loadBalancerScene();
-    // put the edge label exactly where the "lb" node label is
-    const lb = buildModel({ ...inputs(), scene }).anchors["lb"]!;
-    const world = scene.edges.map((e) =>
-      e.id === "e_lb_app-1" ? { ...e, labelAnchor: undefined } : e,
+  test("edge labels step aside from other labels and keep a leader line", () => {
+    const base = loadBalancerScene();
+    const m0 = buildModel({ ...inputs(), scene: base });
+    // aim the "50%" edge label exactly at the lb node label (centered under its bbox)
+    const lb = m0.anchors["lb"] as { bbox: Rect; center: { x: number; y: number } };
+    const target = { x: lb.center.x, y: lb.bbox.y + lb.bbox.height + 12 };
+    const z = 0.05;
+    const sum = (target.y + z * m0.projection.zScale) / (m0.projection.tileWidth / 4); // x + y
+    const diff = target.x / (m0.projection.tileWidth / 2); // x - y
+    const labelAnchor = { x: (sum + diff) / 2, y: (sum - diff) / 2, z };
+    const scene = {
+      ...base,
+      edges: base.edges.map((e) => (e.id === "e_lb_app-1" ? { ...e, labelAnchor } : e)),
+    };
+    const svg = emit(buildModel({ ...inputs(), scene }), noopLayer, { font: "system" });
+    const rect =
+      /<rect class="pc-test-elabel" x="([-\d.]+)" y="([-\d.]+)" width="([-\d.]+)" height="([-\d.]+)"/.exec(
+        svg,
+      ) as RegExpExecArray;
+    const [x, y, w, hh] = rect.slice(1).map(Number) as [number, number, number, number];
+    const lbLabel = { x: lb.center.x - 30, y: lb.bbox.y + lb.bbox.height, width: 60, height: 16 };
+    expect(rectsOverlap({ x, y, width: w, height: hh }, lbLabel)).toBe(false);
+    // it moved (the unshifted box would have overlapped) and is tied back to the edge
+    expect(Math.abs(y + hh / 2 - target.y)).toBeGreaterThan(8);
+    expect(svg).toContain('<path class="pc-test-leader"');
+  });
+
+  test("nudgeLabel: no shift when free, a shift when blocked, stays put when boxed in", () => {
+    const box = { x: 0, y: 0, width: 40, height: 16 };
+    expect(nudgeLabel(box, [])).toEqual({ dy: 0, collided: false });
+    const blocked = nudgeLabel(box, [{ x: 0, y: 0, width: 40, height: 16 }]);
+    expect(blocked.collided).toBe(false);
+    expect(blocked.dy).not.toBe(0);
+    expect(rectsOverlap({ ...box, y: blocked.dy }, { x: 0, y: 0, width: 40, height: 16 })).toBe(
+      false,
     );
-    expect(world).toHaveLength(scene.edges.length);
+    // everything within +-3 steps is taken: fall back to the original place
+    const wall = { x: -10, y: -200, width: 80, height: 400 };
+    expect(nudgeLabel(box, [wall])).toEqual({ dy: 0, collided: true });
+  });
+
+  test("arrowheads carry a class derived from their edge id", () => {
+    const svg = svgOf();
+    expect(svg).toContain('<polygon class="pc-test-arrow pc-test-e_e_5fusers_5flb-arrow"');
+  });
+
+  test("group pills are part of the collision set", () => {
+    const scene = loadBalancerScene();
     const m = buildModel({ ...inputs(), scene });
     const svg = emit(m, noopLayer, { font: "system" });
-    const rects = [
-      ...svg.matchAll(
-        /<rect class="pc-test-elabel" x="([-\d.]+)" y="([-\d.]+)" width="([-\d.]+)" height="([-\d.]+)"/g,
-      ),
-    ];
-    expect(rects.length).toBeGreaterThan(0);
-    for (const r of rects) {
-      const [x, y, w, h] = r.slice(1).map(Number) as [number, number, number, number];
-      // not on top of the lb node label (centered under the lb bbox)
-      const lbLabel = { x: lb.center.x - 40, y: lb.bbox.y + lb.bbox.height, width: 80, height: 16 };
-      const overlap =
-        x < lbLabel.x + lbLabel.width &&
-        lbLabel.x < x + w &&
-        y < lbLabel.y + lbLabel.height &&
-        lbLabel.y < y + h;
-      expect(overlap).toBe(false);
+    const pill =
+      /<rect class="pc-test-gpill" x="([-\d.]+)" y="([-\d.]+)" width="([-\d.]+)" height="([-\d.]+)"/.exec(
+        svg,
+      ) as RegExpExecArray;
+    const [x, y, w, hh] = pill.slice(1).map(Number) as [number, number, number, number];
+    const tight = { x, y, width: w, height: hh };
+    for (const r of svg.matchAll(
+      /<rect class="pc-test-elabel" x="([-\d.]+)" y="([-\d.]+)" width="([-\d.]+)" height="([-\d.]+)"/g,
+    )) {
+      const [ex, ey, ew, eh] = r.slice(1).map(Number) as [number, number, number, number];
+      expect(rectsOverlap({ x: ex, y: ey, width: ew, height: eh }, tight)).toBe(false);
     }
   });
 
@@ -364,6 +400,12 @@ describe("label and overlay polish", () => {
       icons,
     });
     expect(emit(m2, noopLayer, { font: "system" })).not.toContain("pc-test-plate");
+    const info = buildModelWithDiagnostics({
+      ...inputs(),
+      scene: { ...scene, objects: [...scene.objects, slab] },
+      icons,
+    }).diagnostics;
+    expect(info.map((d) => `${d.severity}:${d.code}`)).toContain("info:render/icon-too-flat");
   });
 });
 

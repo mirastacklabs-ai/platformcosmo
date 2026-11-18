@@ -146,7 +146,7 @@ describe("emit structure", () => {
     expect(svg).not.toContain(":root");
   });
 
-  test("text uses geometric precision (no hinted, rounded advances at small sizes)", () => {
+  test("text uses geometric precision (no rounded advances at small sizes)", () => {
     expect(svg).toMatch(/#pc-test\{[^}]*text-rendering:geometricPrecision\}/);
   });
 

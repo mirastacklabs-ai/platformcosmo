@@ -133,6 +133,25 @@ export function inputsOf(model: RenderModel): ModelInputs | undefined {
   return registry.get(model);
 }
 
+/** Do two rectangles overlap (touching edges do not count)? */
+export function rectsOverlap(r: Rect, q: Rect): boolean {
+  return r.x < q.x + q.width && q.x < r.x + r.width && r.y < q.y + q.height && q.y < r.y + r.height;
+}
+
+/**
+ * Vertical nudge for a label box so it does not cover `placed` boxes: tries 0, -1, +1, -2, +2,
+ * -3, +3 label heights (+2px gap). When every position collides the label stays put
+ * (`collided: true`) rather than flying off its edge.
+ */
+export function nudgeLabel(box: Rect, placed: readonly Rect[]): { dy: number; collided: boolean } {
+  const step = box.height + 2;
+  for (const k of [0, -1, 1, -2, 2, -3, 3]) {
+    const cand = { ...box, y: box.y + k * step };
+    if (!placed.some((q) => rectsOverlap(cand, q))) return { dy: k * step, collided: false };
+  }
+  return { dy: 0, collided: true };
+}
+
 export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   const { scene, theme, prefix } = inputs;
   const projection = createProjection();
@@ -242,7 +261,12 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       // Too flat to show a legible icon on the front face: draw the solid without one.
       const tooFlat = o.box.size.z * projection.zScale - 8 < 8;
       if (tooFlat) {
-        // no icon, no diagnostic
+        diagnostics.push({
+          severity: "info",
+          code: "render/icon-too-flat",
+          path: "",
+          message: `"${o.id}" is too flat to show its icon legibly; drawn without one.`,
+        });
       } else if (!resolved || (!def && !iconRefs.has(resolved.ref))) {
         diagnostics.push({
           severity: "warning",
@@ -416,30 +440,23 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       const text = fit(e.label, labelSize - 1, false, 90);
       const w = measureText(text, labelSize - 1) + 8;
       const lh = labelSize + 4;
-      const hits = (r: Rect) =>
-        placed.some(
-          (q) =>
-            r.x < q.x + q.width &&
-            q.x < r.x + r.width &&
-            r.y < q.y + q.height &&
-            q.y < r.y + r.height,
-        );
-      let dy = 0;
-      for (const k of [0, -1, 1, -2, 2, -3, 3]) {
-        const cand = {
-          x: anchor.x - w / 2,
-          y: anchor.y - lh / 2 + k * (lh + 2),
-          width: w,
-          height: lh,
-        };
-        if (!hits(cand)) {
-          dy = k * (lh + 2);
-          break;
-        }
-      }
+      const { dy } = nudgeLabel(
+        { x: anchor.x - w / 2, y: anchor.y - lh / 2, width: w, height: lh },
+        placed,
+      );
       const box = { x: anchor.x - w / 2, y: anchor.y - lh / 2 + dy, width: w, height: lh };
       placed.push(box);
       extents.push(box);
+      if (dy !== 0) {
+        // keep a shifted label tied to its edge
+        const edgeY = dy < 0 ? box.y + box.height : box.y;
+        labelNodes.push(
+          h("path", {
+            class: `${P}-leader`,
+            d: `M${fmt(anchor.x)} ${fmt(anchor.y)}L${fmt(anchor.x)} ${fmt(edgeY)}`,
+          }),
+        );
+      }
       labelNodes.push(
         h(
           "g",
@@ -478,11 +495,17 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     // Arrowheads are drawn in the labels layer so objects never cover them.
     if (e.arrow.end) {
       const a = arrowHead(last, prev, 9);
-      if (a) arrowNodes.push(h("polygon", { class: `${P}-arrow`, points: pointsAttr(a) }));
+      if (a)
+        arrowNodes.push(
+          h("polygon", { class: `${P}-arrow ${ids.edge(e.id)}-arrow`, points: pointsAttr(a) }),
+        );
     }
     if (e.arrow.start) {
       const a = arrowHead(first, second, 9);
-      if (a) arrowNodes.push(h("polygon", { class: `${P}-arrow`, points: pointsAttr(a) }));
+      if (a)
+        arrowNodes.push(
+          h("polygon", { class: `${P}-arrow ${ids.edge(e.id)}-arrow`, points: pointsAttr(a) }),
+        );
     }
     return h("g", { id: ids.edge(e.id) }, ...kids);
   }
