@@ -19,6 +19,7 @@
     "publish:dry": "pnpm build && pnpm -r publish --dry-run --no-git-checks",
     "changeset": "changeset",
     "sync:versions": "node scripts/sync-plugin-version.mjs",
+    "gen:examples": "pnpm -F platformcosmo run gen:examples",
     "check:versions": "node scripts/sync-plugin-version.mjs --check",
     "version-packages": "changeset version && pnpm run sync:versions"
   },

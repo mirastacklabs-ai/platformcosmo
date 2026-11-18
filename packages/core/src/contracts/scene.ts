@@ -150,7 +150,8 @@ export interface SceneMetric {
  * One step of the timeline (PLAN §7). Semantics:
  * - `index` is 1-based; output `step-NN` uses it.
  * - `states` and `metrics` are cumulative (base, then each earlier step's changes).
- * - A spec step that lists `flows` (even `[]`) replaces the base flows for that step
+ * - DC pack flows (airflow, power, network) are environmental and active in every step.
+ * - A spec step that lists `flows` (even `[]`) replaces the spec's base flows for that step
  *   only; a step without `flows` shows the base flows. Step flows never carry over.
  * - `focus` applies to that step only; absent = full view (the whole diagram / hall).
  * - The looping timeline plays steps 1..n; the base state is shown only when there are no steps.
@@ -179,6 +180,7 @@ export interface SceneGraph {
   readonly canvas: {
     readonly theme: string;
     readonly grid: boolean;
+    /** Screen units (px) around the drawing; default 32. */
     readonly padding: number;
     readonly aspect: "auto" | `${number}:${number}`;
   };

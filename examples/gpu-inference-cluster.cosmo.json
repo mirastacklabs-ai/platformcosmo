@@ -1,0 +1,60 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "GPU inference cluster",
+    "description": "Requests pass an API gateway and a router to a pool of GPU inference servers, with a feature store and metrics alongside."
+  },
+  "canvas": { "theme": "dark" },
+  "nodes": [
+    { "id": "client", "type": "client", "label": "Clients" },
+    { "id": "gateway", "type": "gateway", "label": "API gateway" },
+    { "id": "router", "type": "lb", "label": "Model router" },
+    { "id": "infer-1", "type": "inference-server", "label": "Inference 1", "group": "gpu" },
+    { "id": "infer-2", "type": "inference-server", "label": "Inference 2", "group": "gpu" },
+    { "id": "gpu-1", "type": "gpu", "label": "GPU node 1", "group": "gpu" },
+    { "id": "gpu-2", "type": "gpu", "label": "GPU node 2", "group": "gpu" },
+    { "id": "features", "type": "feature-store", "label": "Feature store" },
+    { "id": "models", "type": "object-store", "label": "Model registry" },
+    { "id": "metrics", "type": "metrics", "label": "Metrics" }
+  ],
+  "groups": [{ "id": "gpu", "label": "GPU pool", "style": "cluster" }],
+  "edges": [
+    { "id": "client-gateway", "from": "client", "to": "gateway" },
+    { "id": "gateway-router", "from": "gateway", "to": "router" },
+    { "id": "router-infer-1", "from": "router", "to": "infer-1" },
+    { "id": "router-infer-2", "from": "router", "to": "infer-2" },
+    { "id": "infer-1-gpu-1", "from": "infer-1", "to": "gpu-1" },
+    { "id": "infer-2-gpu-2", "from": "infer-2", "to": "gpu-2" },
+    { "id": "features-router", "from": "features", "to": "router", "style": "dashed" },
+    { "id": "models-infer-1", "from": "models", "to": "infer-1", "style": "dotted" },
+    { "id": "models-infer-2", "from": "models", "to": "infer-2", "style": "dotted" },
+    { "id": "infer-1-metrics", "from": "infer-1", "to": "metrics", "style": "dotted" }
+  ],
+  "metrics": [
+    { "id": "gpu-util", "label": "GPU utilization", "value": "45%" },
+    { "id": "p99", "label": "p99 latency", "value": "180 ms" }
+  ],
+  "steps": [
+    {
+      "caption": "Requests are routed across the GPU pool",
+      "flows": [
+        { "edge": "client-gateway" },
+        { "edge": "gateway-router" },
+        { "edge": "router-infer-1" },
+        { "edge": "router-infer-2" }
+      ]
+    },
+    {
+      "caption": "Traffic peaks and the GPUs saturate",
+      "set": { "gpu-1": "degraded", "gpu-2": "degraded" },
+      "flows": [
+        { "edge": "gateway-router", "kind": "heavy" },
+        { "edge": "router-infer-1", "kind": "heavy" },
+        { "edge": "router-infer-2", "kind": "heavy" }
+      ],
+      "metrics": { "gpu-util": "97%", "p99": "940 ms" }
+    }
+  ],
+  "legend": "auto"
+}

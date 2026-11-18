@@ -1,0 +1,18 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "My architecture",
+    "description": "Starter: users reach a web server that reads from a database. Edit the nodes, then run pcosmo build."
+  },
+  "nodes": [
+    { "id": "users", "type": "users", "label": "Users" },
+    { "id": "web", "type": "server", "label": "Web server" },
+    { "id": "db", "type": "sql", "label": "Database" }
+  ],
+  "edges": [
+    { "id": "users-web", "from": "users", "to": "web" },
+    { "id": "web-db", "from": "web", "to": "db" }
+  ],
+  "flows": [{ "edge": "users-web" }, { "edge": "web-db" }]
+}

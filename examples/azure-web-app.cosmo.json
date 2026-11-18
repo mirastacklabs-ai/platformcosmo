@@ -1,0 +1,51 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "Azure web app",
+    "description": "Front Door fronts an App Service that uses Cosmos DB, Key Vault and Blob Storage. Requires the Azure icon pack (pcosmo icons add azure)."
+  },
+  "canvas": { "theme": "light" },
+  "nodes": [
+    { "id": "users", "type": "users", "label": "Users" },
+    { "id": "front", "type": "cdn", "icon": "azure:front-doors", "label": "Front Door" },
+    {
+      "id": "app",
+      "type": "server",
+      "icon": "azure:app-services",
+      "label": "App Service",
+      "group": "rg"
+    },
+    {
+      "id": "cosmos",
+      "type": "nosql",
+      "icon": "azure:azure-cosmos-db",
+      "label": "Cosmos DB",
+      "group": "rg"
+    },
+    {
+      "id": "vault",
+      "type": "secrets",
+      "icon": "azure:key-vaults",
+      "label": "Key Vault",
+      "group": "rg"
+    },
+    {
+      "id": "blob",
+      "type": "object-store",
+      "icon": "azure:storage-accounts",
+      "label": "Blob Storage",
+      "group": "rg"
+    }
+  ],
+  "groups": [{ "id": "rg", "label": "Resource group", "style": "zone" }],
+  "edges": [
+    { "id": "users-front", "from": "users", "to": "front" },
+    { "id": "front-app", "from": "front", "to": "app" },
+    { "id": "app-cosmos", "from": "app", "to": "cosmos" },
+    { "id": "app-vault", "from": "app", "to": "vault", "style": "dotted" },
+    { "id": "app-blob", "from": "app", "to": "blob" }
+  ],
+  "flows": [{ "edge": "users-front" }, { "edge": "front-app" }, { "edge": "app-cosmos" }],
+  "legend": "auto"
+}
