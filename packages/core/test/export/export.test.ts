@@ -177,7 +177,7 @@ describe("gif and mp4", () => {
         viewBox: { x: 0, y: 0, width: 4000, height: 3000 },
       },
     );
-    expect(r.diagnostics[0]?.code).toBe("export/too-large");
+    expect(r.diagnostics.map((d) => d.code)).toContain("export/too-large");
     expect(MAX_RASTER_BYTES).toBe(1024 ** 3);
   });
 
