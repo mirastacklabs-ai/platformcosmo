@@ -1,24 +1,42 @@
 /**
- * Theme token contract (frozen). Themes are data (Track E, `packages/themes`);
+ * Theme token contract (frozen). Themes are data (Track E, `packages/themes`,
+ * which exports `themeRegistry: ThemeRegistry` and `validateTheme: ValidateThemeFn`);
  * the emitter (Track A) turns tokens into CSS custom properties.
  *
  * CSS variable naming rule, shared by emit (A) and animation (B):
  * `--pc-` + the token path joined with `-`, e.g.
  * `categories.compute.top` → `--pc-categories-compute-top`,
- * `states.down.overlay` → `--pc-states-down-overlay`.
- * Numbers are emitted unitless. The light theme's variables are the defaults on
- * the SVG root; the dark theme's override them inside
+ * `states.down.overlay` → `--pc-states-down-overlay`, `palette.red` → `--pc-palette-red`.
+ * Numbers are emitted unitless. Variables are scoped to the diagram root
+ * (`#<ids.root()>`), never `:root`/`svg`, so inlined diagrams don't leak. The light
+ * theme's values are the defaults; the dark theme's override them inside
  * `@media (prefers-color-scheme: dark)` (PLAN §7).
+ *
+ * Trust: custom theme files are untrusted. `validateTheme` must accept only
+ * colors matching `^#[0-9a-fA-F]{3,8}$` or `^rgba?\([0-9., %]+\)$`, a font family
+ * matching `^[A-Za-z0-9 ,'"-]+$`, and finite numbers; the emitter re-checks every value.
  */
-import type { EdgeStyle, FlowKind, GroupStyle, NodeCategory, ObjectState } from "./scene.js";
+import type { Diagnostic } from "./diagnostics.js";
+import type {
+  EdgeStyle,
+  FlowKind,
+  GroupStyle,
+  NodeCategory,
+  ObjectState,
+  PartTone,
+} from "./scene.js";
 
 /** Built-in theme ids (PLAN §10 `--theme`). A file path may name a custom theme. */
 export type ThemeId = "light" | "dark" | "blueprint" | "mono";
 
-/** CSS color string: hex (`#rrggbb` / `#rgb`) or `rgba(...)`. No `url()` ever. */
+/** CSS color string: hex (`#rgb`…`#rrggbbaa`) or `rgb()/rgba()`. Never `url()` or anything else. */
 export type CssColor = string;
 
-/** Four-tone shading for a solid (PLAN anatomy: top / left / right + outline). */
+/** Palette names usable as spec colors (schema `SpecColor` description lists them). */
+export type PaletteName =
+  "blue" | "green" | "red" | "orange" | "yellow" | "purple" | "teal" | "pink" | "gray";
+
+/** Four-tone shading for a solid: top / left / right faces + outline. */
 export interface FaceTones {
   readonly top: CssColor;
   readonly left: CssColor;
@@ -48,7 +66,10 @@ export interface ThemeTokens {
     readonly weightRegular: number;
     readonly weightBold: number;
   };
+  readonly palette: Readonly<Record<PaletteName, CssColor>>;
   readonly categories: Readonly<Record<NodeCategory, FaceTones>>;
+  /** Tones for composite parts (DC devices, frames, floor). */
+  readonly parts: Readonly<Record<PartTone, FaceTones>>;
   readonly groups: Readonly<
     Record<
       GroupStyle,
@@ -70,7 +91,7 @@ export interface ThemeTokens {
   };
   /** Particle color per flow kind. */
   readonly flows: Readonly<Record<FlowKind, CssColor>>;
-  /** State overlays: tint applied over faces, stroke, and overall opacity. */
+  /** State visuals: overlay fill drawn over the object silhouette, outline stroke, overall opacity. */
   readonly states: Readonly<
     Record<
       ObjectState,
@@ -83,20 +104,18 @@ export interface ThemeTokens {
     readonly label: CssColor;
     readonly value: CssColor;
   };
+  readonly caption: { readonly fill: CssColor; readonly text: CssColor };
   readonly badge: { readonly fill: CssColor; readonly text: CssColor };
-  /** Monochrome icons are filled with `color`; `plate` is the backing tile behind any icon. */
+  /** Monochrome icons use `currentColor` = `color`; `plate` is the backing tile behind any icon. */
   readonly icon: { readonly color: CssColor; readonly plate: CssColor };
   /** Data-center pack tones (PLAN §9). */
   readonly dc: {
-    readonly rack: FaceTones;
-    readonly device: FaceTones;
-    readonly equipment: FaceTones;
     readonly led: { readonly ok: CssColor; readonly warn: CssColor; readonly fail: CssColor };
     readonly cable: Readonly<Record<"power" | "network" | "fiber" | "management", CssColor>>;
     readonly coldAisle: CssColor;
     readonly hotAisle: CssColor;
-    readonly floor: FaceTones;
-    readonly perforatedTile: CssColor;
+    readonly containment: CssColor;
+    readonly hall: CssColor;
   };
 }
 
@@ -105,3 +124,9 @@ export interface ThemeRegistry {
   get(id: string): ThemeTokens | undefined;
   list(): readonly string[];
 }
+
+/** Validates an untrusted theme object (custom `--theme <file>`). */
+export type ValidateThemeFn = (input: unknown) => {
+  readonly theme?: ThemeTokens;
+  readonly diagnostics: readonly Diagnostic[];
+};

@@ -204,7 +204,7 @@ platformcosmo/
 |---|---|
 | default | `name.svg` (animated, looping) |
 | `--static` | `name.static.svg` (first frame) |
-| `--steps` | `steps/step-NN.svg` |
+| `--steps` | `name.steps/step-NN.svg` |
 | `--interactive` | `name.interactive.svg` |
 | `--png` | `name.png` |
 | `--gif` / `--mp4` (v1.2) | Optional; needs Puppeteer + ffmpeg |

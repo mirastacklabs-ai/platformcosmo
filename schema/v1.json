@@ -19,12 +19,12 @@
           "const": "1"
         },
         "title": {
-          "type": "string",
-          "maxLength": 200
+          "$ref": "#/$defs/text"
         },
         "description": {
           "type": "string",
-          "maxLength": 2000
+          "maxLength": 2000,
+          "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]*$"
         }
       }
     },
@@ -40,7 +40,8 @@
         },
         "padding": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 1000
         },
         "aspect": {
           "type": "string",
@@ -53,37 +54,43 @@
       "items": {
         "$ref": "#/$defs/node"
       },
-      "minItems": 1
+      "minItems": 1,
+      "maxItems": 500
     },
     "groups": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/group"
-      }
+      },
+      "maxItems": 200
     },
     "edges": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/edge"
-      }
+      },
+      "maxItems": 1000
     },
     "flows": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/flow"
-      }
+      },
+      "maxItems": 200
     },
     "metrics": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/metric"
-      }
+      },
+      "maxItems": 50
     },
     "steps": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/step"
-      }
+      },
+      "maxItems": 99
     },
     "legend": {
       "oneOf": [
@@ -98,14 +105,14 @@
             "required": ["label"],
             "properties": {
               "label": {
-                "type": "string",
-                "maxLength": 200
+                "$ref": "#/$defs/text"
               },
               "color": {
                 "$ref": "#/$defs/color"
               }
             }
-          }
+          },
+          "maxItems": 50
         }
       ]
     },
@@ -114,32 +121,37 @@
       "items": {
         "$ref": "#/$defs/rack"
       },
-      "minItems": 1
+      "minItems": 1,
+      "maxItems": 500
     },
     "equipment": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/equipment"
       },
-      "minItems": 1
+      "minItems": 1,
+      "maxItems": 200
     },
     "rows": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/row"
-      }
+      },
+      "maxItems": 100
     },
     "aisles": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/aisle"
-      }
+      },
+      "maxItems": 100
     },
     "cables": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/cable"
-      }
+      },
+      "maxItems": 2000
     },
     "facility": {
       "$ref": "#/$defs/facility"
@@ -155,7 +167,8 @@
     "color": {
       "title": "SpecColor",
       "type": "string",
-      "pattern": "^(#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6}|[a-z][a-z0-9-]*)$"
+      "pattern": "^(#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6}|[a-z][a-z0-9-]*)$",
+      "description": "Hex (#rgb/#rrggbb) or a theme palette name: blue, green, red, orange, yellow, purple, teal, pink, gray, or a flow kind (normal, heavy, health, failed, airflow, power)."
     },
     "state": {
       "title": "SpecState",
@@ -224,28 +237,16 @@
           "pattern": "^[a-z0-9-]+:[a-z0-9-]+$"
         },
         "label": {
-          "type": "string",
-          "maxLength": 200
+          "$ref": "#/$defs/text"
         },
         "badge": {
-          "type": "string",
-          "maxLength": 200
+          "$ref": "#/$defs/text"
         },
         "size": {
           "enum": ["sm", "md", "lg"]
         },
         "pos": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["x", "y"],
-          "properties": {
-            "x": {
-              "type": "integer"
-            },
-            "y": {
-              "type": "integer"
-            }
-          }
+          "$ref": "#/$defs/gridPos"
         },
         "group": {
           "$ref": "#/$defs/id"
@@ -265,8 +266,7 @@
           "$ref": "#/$defs/id"
         },
         "label": {
-          "type": "string",
-          "maxLength": 200
+          "$ref": "#/$defs/text"
         },
         "style": {
           "enum": ["zone", "vpc", "cluster", "platform"]
@@ -286,14 +286,13 @@
           "$ref": "#/$defs/id"
         },
         "from": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/endpoint"
         },
         "to": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/endpoint"
         },
         "label": {
-          "type": "string",
-          "maxLength": 200
+          "$ref": "#/$defs/text"
         },
         "style": {
           "enum": ["solid", "dashed", "dotted"]
@@ -320,7 +319,8 @@
             },
             "rate": {
               "type": "number",
-              "exclusiveMinimum": 0
+              "exclusiveMinimum": 0,
+              "maximum": 20
             },
             "color": {
               "$ref": "#/$defs/color"
@@ -344,7 +344,8 @@
             },
             "rate": {
               "type": "number",
-              "exclusiveMinimum": 0
+              "exclusiveMinimum": 0,
+              "maximum": 20
             },
             "color": {
               "$ref": "#/$defs/color"
@@ -363,8 +364,7 @@
           "$ref": "#/$defs/id"
         },
         "label": {
-          "type": "string",
-          "maxLength": 200
+          "$ref": "#/$defs/text"
         },
         "value": {
           "type": ["string", "number"]
@@ -377,13 +377,12 @@
       "additionalProperties": false,
       "properties": {
         "caption": {
-          "type": "string",
-          "maxLength": 200
+          "$ref": "#/$defs/text"
         },
         "set": {
           "type": "object",
           "propertyNames": {
-            "$ref": "#/$defs/id"
+            "$ref": "#/$defs/endpoint"
           },
           "additionalProperties": {
             "$ref": "#/$defs/state"
@@ -393,7 +392,8 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/flow"
-          }
+          },
+          "maxItems": 200
         },
         "metrics": {
           "type": "object",
@@ -406,10 +406,11 @@
         },
         "duration": {
           "type": "number",
-          "exclusiveMinimum": 0
+          "exclusiveMinimum": 0,
+          "maximum": 600
         },
         "focus": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/endpoint"
         }
       },
       "minProperties": 1
@@ -452,24 +453,13 @@
           "$ref": "#/$defs/id"
         },
         "label": {
-          "type": "string",
-          "maxLength": 200
+          "$ref": "#/$defs/text"
         },
         "u": {
           "enum": [42, 45, 48]
         },
         "pos": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["x", "y"],
-          "properties": {
-            "x": {
-              "type": "integer"
-            },
-            "y": {
-              "type": "integer"
-            }
-          }
+          "$ref": "#/$defs/gridPos"
         },
         "state": {
           "$ref": "#/$defs/state"
@@ -484,7 +474,8 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/rackSlot"
-          }
+          },
+          "maxItems": 48
         }
       }
     },
@@ -495,7 +486,8 @@
       "required": ["at", "type"],
       "properties": {
         "id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/id",
+          "description": "Defaults to u<at>."
         },
         "at": {
           "type": "integer",
@@ -505,14 +497,14 @@
         "size": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 10
+          "maximum": 10,
+          "description": "Rack units; defaults to the device type height."
         },
         "type": {
           "$ref": "#/$defs/dcSlotType"
         },
         "label": {
-          "type": "string",
-          "maxLength": 200
+          "$ref": "#/$defs/text"
         },
         "state": {
           "$ref": "#/$defs/state"
@@ -532,21 +524,10 @@
           "$ref": "#/$defs/dcEquipmentType"
         },
         "label": {
-          "type": "string",
-          "maxLength": 200
+          "$ref": "#/$defs/text"
         },
         "pos": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["x", "y"],
-          "properties": {
-            "x": {
-              "type": "integer"
-            },
-            "y": {
-              "type": "integer"
-            }
-          }
+          "$ref": "#/$defs/gridPos"
         },
         "state": {
           "$ref": "#/$defs/state"
@@ -563,15 +544,15 @@
           "$ref": "#/$defs/id"
         },
         "label": {
-          "type": "string",
-          "maxLength": 200
+          "$ref": "#/$defs/text"
         },
         "members": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/id"
           },
-          "minItems": 1
+          "minItems": 1,
+          "maxItems": 100
         },
         "facing": {
           "enum": ["front", "back"]
@@ -588,8 +569,7 @@
           "$ref": "#/$defs/id"
         },
         "label": {
-          "type": "string",
-          "maxLength": 200
+          "$ref": "#/$defs/text"
         },
         "kind": {
           "enum": ["cold", "hot"]
@@ -599,8 +579,9 @@
           "items": {
             "$ref": "#/$defs/id"
           },
-          "minItems": 2,
-          "maxItems": 2
+          "minItems": 1,
+          "maxItems": 2,
+          "description": "The one or two rows bounding the aisle."
         },
         "contained": {
           "type": "boolean"
@@ -626,14 +607,13 @@
           "enum": ["power", "network", "fiber", "management"]
         },
         "label": {
-          "type": "string",
-          "maxLength": 200
+          "$ref": "#/$defs/text"
         }
       }
     },
     "endpoint": {
       "title": "SpecEndpoint",
-      "description": "An object id, or rackId/slotId for a rack slot.",
+      "description": "An object id, or rackId/slotId for a device in a rack slot.",
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]*(/[a-z][a-z0-9-]*)?$",
       "maxLength": 129
@@ -651,9 +631,31 @@
         },
         "cableTrays": {
           "enum": ["none", "overhead", "underfloor"]
+        }
+      }
+    },
+    "text": {
+      "title": "SpecText",
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]*$"
+    },
+    "gridPos": {
+      "title": "SpecGridPos",
+      "description": "Manual grid position override (tiles).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": {
+          "type": "integer",
+          "minimum": -1000,
+          "maximum": 1000
         },
-        "busway": {
-          "type": "boolean"
+        "y": {
+          "type": "integer",
+          "minimum": -1000,
+          "maximum": 1000
         }
       }
     }
