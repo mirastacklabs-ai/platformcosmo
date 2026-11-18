@@ -317,4 +317,28 @@ describe("DC merge", () => {
       g.diagnostics.some((d) => d.path === "/edges/1" && d.code === "semantic/unknown-node"),
     ).toBe(true);
   });
+
+  test("rack/front/furniture siblings overlap by design and are not reported", () => {
+    const front: SceneObject = { ...rackObj, id: "r1_front", type: "rack-front" };
+    const tray: SceneObject = { ...rackObj, id: "dc_tray_a", type: "tray" };
+    const g = buildScene(dcSpec(), {
+      dc: { ...dc, buildScene: () => ({ ...frag, objects: [rackObj, front, tray, slotObj] }) },
+    });
+    expect(g.diagnostics.filter((d) => d.code === "layout/overlap")).toEqual([]);
+  });
+
+  test("auto legend labels DC flows by kind (Network for network/fiber cables)", () => {
+    const withFlows: DcSceneFragment = {
+      ...frag,
+      flows: [
+        { id: "dc_f_1", edge: "air", kind: "airflow", rate: 1, reverse: false },
+        { id: "dc_f_2", edge: "c1", kind: "normal", rate: 1, reverse: false },
+        { id: "dc_f_3", edge: "c1", kind: "power", rate: 1, reverse: false },
+      ],
+    };
+    const g = buildScene(dcSpec({ legend: "auto", flows: [] }), {
+      dc: { ...dc, buildScene: () => withFlows },
+    });
+    expect(g.legend.map((l) => l.label)).toEqual(["Network", "Airflow", "Power"]);
+  });
 });

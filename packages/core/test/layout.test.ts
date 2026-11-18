@@ -179,7 +179,7 @@ describe("layoutSpec", () => {
       for (let i = 0; i < 14; i++) {
         const group = rand() < 0.7 ? `g${Math.floor(rand() * 3)}` : undefined;
         const fixedPos =
-          i % 5 === 0 && (group === "g0" || group === undefined)
+          i % 5 === 0 && group === "g0"
             ? { pos: { x: 12 * Math.floor(rand() * 3), y: 12 * Math.floor(rand() * 3) } }
             : {};
         nodes.push(n(`n${i}`, { ...(group ? { group } : {}), ...fixedPos }));
@@ -213,5 +213,13 @@ describe("layoutSpec", () => {
         }
       }
     }
+  });
+
+  test("connected nodes of different sizes share center lines (straight edges)", () => {
+    const nodes = [n("a", { size: "sm" }), n("b", { size: "lg" }), n("c", { size: "md" })];
+    const r = layoutSpec({ nodes, groups: [], edges: [e("a", "b"), e("b", "c")] });
+    const cy = (id: string) => r.nodes.get(id)!.y + r.nodes.get(id)!.d / 2;
+    expect(cy("a")).toBe(cy("b"));
+    expect(cy("b")).toBe(cy("c"));
   });
 });

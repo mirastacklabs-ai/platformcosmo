@@ -27,8 +27,8 @@ export interface LayoutResult {
   readonly groups: ReadonlyMap<string, LayoutRect>;
 }
 
-export const GAP_X = 3;
-export const GAP_Y = 2;
+export const GAP_X = 4.5;
+export const GAP_Y = 3.5;
 export const GROUP_PAD = 1;
 
 const snap = (v: number): number => Math.round(v * 2) / 2;
@@ -239,6 +239,37 @@ export function layoutSpec(spec: Spec): LayoutResult {
       (c) => c.reduce((s, v) => s + items[v]!.d, 0) + Math.max(0, c.length - 1) * GAP_Y,
     );
     const maxD = Math.max(0, ...colD);
+
+    // Vertical alignment: start from centered stacks, then pull every item toward the mean
+    // center of its neighbours (down then up sweeps), keeping column order and minimum gaps, so
+    // connected nodes share center lines and edges run straight.
+    const top = new Array<number>(n).fill(0);
+    columns.forEach((col, l) => {
+      let y = snap((maxD - colD[l]!) / 2);
+      for (const v of col) {
+        top[v] = y;
+        y += items[v]!.d + GAP_Y;
+      }
+    });
+    const place = (l: number, useLayer: (w: number) => boolean): void => {
+      const col = columns[l]!;
+      let floor = -Infinity;
+      for (const v of col) {
+        const ns = neigh[v]!.filter(useLayer);
+        const d = items[v]!.d;
+        const want =
+          ns.length === 0
+            ? top[v]!
+            : snap(ns.reduce((sum, w) => sum + top[w]! + items[w]!.d / 2, 0) / ns.length - d / 2);
+        top[v] = Math.max(want, floor);
+        floor = top[v]! + d + GAP_Y;
+      }
+    };
+    for (let pass = 0; pass < 3; pass++) {
+      for (let l = 1; l < nLayers; l++) place(l, (w) => layer[w]! < l);
+      for (let l = nLayers - 2; l >= 0; l--) place(l, (w) => layer[w]! > l);
+    }
+    const minTop = n === 0 ? 0 : Math.min(...top);
     const out: Item = {
       kind: "group",
       id: containerId ?? "",
@@ -250,11 +281,11 @@ export function layoutSpec(spec: Spec): LayoutResult {
     let x = pad;
     const placedRects: LayoutRect[] = [];
     columns.forEach((col, l) => {
-      let y = pad + snap((maxD - colD[l]!) / 2);
+      let y = pad;
       for (const v of col) {
         const it = items[v]!;
         const ix = x;
-        let iy = y;
+        let iy = Math.max(y, pad + top[v]! - minTop);
         // Root only: keep clear of fixed (manual) nodes, 1 tile margin.
         for (let guard = 0; guard < 2000; guard++) {
           const r: LayoutRect = { x: ix, y: iy, w: it.w, d: it.d };

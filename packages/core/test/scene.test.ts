@@ -159,4 +159,60 @@ describe("buildScene (objects, groups, edges)", () => {
     expect(g.flows[0]!.rate).toBe(flow.rate.default);
     expect(g.timeline[0]!.duration).toBe(defs.step.properties.duration.default);
   });
+
+  test("edges from one source never share a segment (lane offsets)", () => {
+    const r = validate({
+      meta: { version: "1" },
+      nodes: [
+        { id: "lb", type: "lb" },
+        { id: "a1", type: "server" },
+        { id: "a2", type: "server" },
+        { id: "a3", type: "server" },
+      ],
+      edges: [
+        { from: "lb", to: "a1" },
+        { from: "lb", to: "a2" },
+        { from: "lb", to: "a3" },
+      ],
+    });
+    const g = buildScene(r.spec!, {});
+    const segs = g.edges.map((e) => e.path.slice(1).map((p, i) => [e.path[i]!, p] as const));
+    for (let i = 0; i < segs.length; i++) {
+      for (let j = i + 1; j < segs.length; j++) {
+        for (const [a, b] of segs[i]!) {
+          for (const [c, d] of segs[j]!) {
+            const horiz = a.y === b.y && c.y === d.y && a.y === c.y;
+            const vert = a.x === b.x && c.x === d.x && a.x === c.x;
+            if (horiz) {
+              const ov =
+                Math.min(Math.max(a.x, b.x), Math.max(c.x, d.x)) -
+                Math.max(Math.min(a.x, b.x), Math.min(c.x, d.x));
+              expect(ov).toBeLessThanOrEqual(1e-6);
+            }
+            if (vert) {
+              const ov =
+                Math.min(Math.max(a.y, b.y), Math.max(c.y, d.y)) -
+                Math.max(Math.min(a.y, b.y), Math.min(c.y, d.y));
+              expect(ov).toBeLessThanOrEqual(1e-6);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  test("arrows end on the target footprint midpoint, facing the approach", () => {
+    const g = buildScene(lb(), {});
+    for (const e of g.edges) {
+      const t = g.objects.find((o) => o.id === e.to)!.box;
+      const end = e.path[e.path.length - 1]!;
+      const cx = t.origin.x + t.size.x / 2;
+      const cy = t.origin.y + t.size.y / 2;
+      const onX = end.x === t.origin.x || end.x === t.origin.x + t.size.x;
+      const onY = end.y === t.origin.y || end.y === t.origin.y + t.size.y;
+      expect(onX || onY).toBe(true);
+      if (onX) expect(end.y).toBe(cy);
+      else expect(end.x).toBe(cx);
+    }
+  });
 });
