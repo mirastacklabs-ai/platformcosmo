@@ -4,7 +4,7 @@ import { createIconResolver, sanitizeSvg } from "../../core/src/icons/index.js";
 import { expectNoDrift } from "../../icons-base/test/drift.js";
 import { pack } from "../src/index.js";
 
-const ALLOWED = ["CC0-1.0", "MIT", "Apache-2.0"];
+const ALLOWED = ["CC0-1.0", "Apache-2.0"];
 
 describe("icons-simple", () => {
   const resolver = createIconResolver([pack], sanitizeSvg);
@@ -16,7 +16,7 @@ describe("icons-simple", () => {
   test("metadata and trademark notice", () => {
     expect(pack.manifest.pack).toMatchObject({ id: "simple", redistributable: true });
     expect(pack.manifest.pack.trademarkNotice).toMatch(/trademarks of their respective owners/);
-    expect(pack.manifest.icons.length).toBeGreaterThanOrEqual(85);
+    expect(pack.manifest.icons.length).toBeGreaterThanOrEqual(15);
   });
 
   test("only icons with an explicit permissive license are bundled", () => {
@@ -58,21 +58,32 @@ describe("icons-simple", () => {
     const nonCc0 = pack.manifest.icons.filter((e) => e.license !== "CC0-1.0");
     expect(nonCc0.length).toBeGreaterThan(0);
     for (const e of nonCc0) {
-      expect(notice, e.id).toContain(`(simple:${e.id})`);
-      expect(e.sourceUrl, e.id).toMatch(/^https:\/\//);
-      expect(notice, e.id).toContain(e.sourceUrl as string);
+      expect(e.license, e.id).toBe("Apache-2.0");
+      // Each Apache icon has a pinned GitHub source and a recorded upstream NOTICE verdict.
+      expect(e.sourceUrl, e.id).toMatch(
+        /^https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/[0-9a-f]{40}\//,
+      );
+      const start = notice.indexOf(`(simple:${e.id})`);
+      expect(start, e.id).toBeGreaterThan(-1);
+      const block = notice.slice(start, start + 700);
+      expect(block, e.id).toContain(e.sourceUrl as string);
+      expect(block, e.id).toMatch(
+        /no upstream NOTICE \(checked \d{4}-\d{2}-\d{2}, https:\/\/api\.github\.com\/.+\)|upstream NOTICE reproduced verbatim below/,
+      );
     }
-    expect(notice).toContain("Permission is hereby granted, free of charge");
+    // MIT-licensed icons are never bundled (ruling D26).
+    expect(pack.manifest.icons.some((e) => e.license === "MIT")).toBe(false);
+    expect(notice).not.toContain("Permission is hereby granted");
     expect(notice).toContain("Apache License");
     expect(notice).toContain("Version 2.0, January 2004");
-    expect(notice).toMatch(/Linux Foundation trademark usage guidelines/);
+    expect(notice).toMatch(/Linux Foundation trademark usage\s+guidelines/);
   });
 
   test("CNCF/LF-hosted marks carry the Linux Foundation trademark note", () => {
     expect(pack.manifest.pack.trademarkNotice).toMatch(
       /Linux Foundation trademark usage guidelines/,
     );
-    expect(pack.manifest.icons.some((e) => e.id === "fluentd")).toBe(true);
+    expect(pack.manifest.icons.some((e) => e.id === "rook")).toBe(true);
   });
 
   test("notices are shipped", () => {

@@ -6,23 +6,12 @@
     "version": "16.38.0",
     "license": "CC0-1.0",
     "licenseUrl": "https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md",
-    "attribution": "Simple Icons contributors. Only icons whose data entry declares CC0-1.0, MIT or Apache-2.0 are included; each icon's license is recorded in icons.json.",
+    "attribution": "Simple Icons contributors. Only icons whose data entry declares CC0-1.0, or Apache-2.0 with a verified upstream NOTICE status, are included (MIT icons are excluded); each icon's license is recorded in icons.json.",
     "trademarkNotice": "All brand names, logos and marks are trademarks of their respective owners. Their inclusion implies no affiliation or endorsement. See https://github.com/simple-icons/simple-icons/blob/develop/DISCLAIMER.md. Marks of projects hosted by the CNCF or the Linux Foundation (for example Fluentd and Rook) are also subject to the Linux Foundation trademark usage guidelines (https://www.linuxfoundation.org/legal/trademark-usage).",
     "source": "https://github.com/simple-icons/simple-icons",
     "redistributable": true
   },
   "icons": [
-    {
-      "id": "abdownloadmanager",
-      "aliases": ["ab-download-manager", "abdm"],
-      "category": "brand",
-      "provider": "abdownloadmanager",
-      "tags": [],
-      "file": "svg/abdownloadmanager.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://abdownloadmanager.com",
-      "monochrome": true
-    },
     {
       "id": "activitypub",
       "aliases": [],
@@ -57,28 +46,6 @@
       "monochrome": true
     },
     {
-      "id": "airbrake",
-      "aliases": [],
-      "category": "brand",
-      "provider": "airbrake",
-      "tags": [],
-      "file": "svg/airbrake.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://github.com/airbrake/slate/blob/c116f2968bcf4dfda126511de0a2d0f0dc8b6a8e/source/images/logo.svg",
-      "monochrome": true
-    },
-    {
-      "id": "ajv",
-      "aliases": [],
-      "category": "brand",
-      "provider": "ajv",
-      "tags": [],
-      "file": "svg/ajv.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/ajv-validator/ajv/blob/95b15b683dfb60f63c5129b0426629b968d53af8/docs/.vuepress/public/img/ajv.svg",
-      "monochrome": true
-    },
-    {
       "id": "alacritty",
       "aliases": [],
       "category": "brand",
@@ -87,402 +54,6 @@
       "file": "svg/alacritty.svg",
       "license": "Apache-2.0",
       "sourceUrl": "https://github.com/alacritty/alacritty/blob/6d8db6b9dfadd6164c4be7a053f25db8ef6b7998/extra/logo/alacritty-simple.svg",
-      "monochrome": true
-    },
-    {
-      "id": "apache",
-      "aliases": [],
-      "category": "brand",
-      "provider": "apache",
-      "tags": [],
-      "file": "svg/apache.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://www.apache.org/foundation/press/kit",
-      "monochrome": true
-    },
-    {
-      "id": "apacheairflow",
-      "aliases": ["apache-airflow"],
-      "category": "brand",
-      "provider": "apacheairflow",
-      "tags": [],
-      "file": "svg/apacheairflow.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apacheant",
-      "aliases": ["apache-ant"],
-      "category": "brand",
-      "provider": "apacheant",
-      "tags": [],
-      "file": "svg/apacheant.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachearrow",
-      "aliases": ["apache-arrow"],
-      "category": "brand",
-      "provider": "apachearrow",
-      "tags": [],
-      "file": "svg/apachearrow.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://arrow.apache.org/visual_identity",
-      "monochrome": true
-    },
-    {
-      "id": "apacheavro",
-      "aliases": ["apache-avro"],
-      "category": "brand",
-      "provider": "apacheavro",
-      "tags": [],
-      "file": "svg/apacheavro.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachecassandra",
-      "aliases": ["apache-cassandra"],
-      "category": "brand",
-      "provider": "apachecassandra",
-      "tags": [],
-      "file": "svg/apachecassandra.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://www.apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachecloudstack",
-      "aliases": ["apache-cloudstack"],
-      "category": "brand",
-      "provider": "apachecloudstack",
-      "tags": [],
-      "file": "svg/apachecloudstack.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachecordova",
-      "aliases": ["apache-cordova"],
-      "category": "brand",
-      "provider": "apachecordova",
-      "tags": [],
-      "file": "svg/apachecordova.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://cordova.apache.org/artwork",
-      "monochrome": true
-    },
-    {
-      "id": "apachecouchdb",
-      "aliases": ["apache-couchdb"],
-      "category": "brand",
-      "provider": "apachecouchdb",
-      "tags": [],
-      "file": "svg/apachecouchdb.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachedolphinscheduler",
-      "aliases": ["apache-dolphinscheduler"],
-      "category": "brand",
-      "provider": "apachedolphinscheduler",
-      "tags": [],
-      "file": "svg/apachedolphinscheduler.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachedoris",
-      "aliases": ["apache-doris"],
-      "category": "brand",
-      "provider": "apachedoris",
-      "tags": [],
-      "file": "svg/apachedoris.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachedruid",
-      "aliases": ["apache-druid"],
-      "category": "brand",
-      "provider": "apachedruid",
-      "tags": [],
-      "file": "svg/apachedruid.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apacheecharts",
-      "aliases": ["apache-echarts"],
-      "category": "brand",
-      "provider": "apacheecharts",
-      "tags": [],
-      "file": "svg/apacheecharts.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachefreemarker",
-      "aliases": ["apache-freemarker"],
-      "category": "brand",
-      "provider": "apachefreemarker",
-      "tags": [],
-      "file": "svg/apachefreemarker.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://www.apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachegroovy",
-      "aliases": ["apache-groovy"],
-      "category": "brand",
-      "provider": "apachegroovy",
-      "tags": [],
-      "file": "svg/apachegroovy.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apacheguacamole",
-      "aliases": ["apache-guacamole"],
-      "category": "brand",
-      "provider": "apacheguacamole",
-      "tags": [],
-      "file": "svg/apacheguacamole.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachehadoop",
-      "aliases": ["apache-hadoop"],
-      "category": "brand",
-      "provider": "apachehadoop",
-      "tags": [],
-      "file": "svg/apachehadoop.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachehbase",
-      "aliases": ["apache-hbase"],
-      "category": "brand",
-      "provider": "apachehbase",
-      "tags": [],
-      "file": "svg/apachehbase.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachehive",
-      "aliases": ["apache-hive"],
-      "category": "brand",
-      "provider": "apachehive",
-      "tags": [],
-      "file": "svg/apachehive.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachejmeter",
-      "aliases": ["apache-jmeter"],
-      "category": "brand",
-      "provider": "apachejmeter",
-      "tags": [],
-      "file": "svg/apachejmeter.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachekafka",
-      "aliases": ["apache-kafka"],
-      "category": "brand",
-      "provider": "apachekafka",
-      "tags": [],
-      "file": "svg/apachekafka.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachekylin",
-      "aliases": ["apache-kylin"],
-      "category": "brand",
-      "provider": "apachekylin",
-      "tags": [],
-      "file": "svg/apachekylin.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachelucene",
-      "aliases": ["apache-lucene"],
-      "category": "brand",
-      "provider": "apachelucene",
-      "tags": [],
-      "file": "svg/apachelucene.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachemaven",
-      "aliases": ["apache-maven"],
-      "category": "brand",
-      "provider": "apachemaven",
-      "tags": [],
-      "file": "svg/apachemaven.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachenetbeanside",
-      "aliases": ["apache-netbeans-ide"],
-      "category": "brand",
-      "provider": "apachenetbeanside",
-      "tags": [],
-      "file": "svg/apachenetbeanside.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachenifi",
-      "aliases": ["apache-nifi"],
-      "category": "brand",
-      "provider": "apachenifi",
-      "tags": [],
-      "file": "svg/apachenifi.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apacheopenoffice",
-      "aliases": ["apache-openoffice"],
-      "category": "brand",
-      "provider": "apacheopenoffice",
-      "tags": [],
-      "file": "svg/apacheopenoffice.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apacheparquet",
-      "aliases": ["apache-parquet"],
-      "category": "brand",
-      "provider": "apacheparquet",
-      "tags": [],
-      "file": "svg/apacheparquet.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachepdfbox",
-      "aliases": ["apache-pdfbox"],
-      "category": "brand",
-      "provider": "apachepdfbox",
-      "tags": [],
-      "file": "svg/apachepdfbox.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachepulsar",
-      "aliases": ["apache-pulsar"],
-      "category": "brand",
-      "provider": "apachepulsar",
-      "tags": [],
-      "file": "svg/apachepulsar.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apacherocketmq",
-      "aliases": ["apache-rocketmq"],
-      "category": "brand",
-      "provider": "apacherocketmq",
-      "tags": [],
-      "file": "svg/apacherocketmq.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachesolr",
-      "aliases": ["apache-solr"],
-      "category": "brand",
-      "provider": "apachesolr",
-      "tags": [],
-      "file": "svg/apachesolr.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachespark",
-      "aliases": ["apache-spark"],
-      "category": "brand",
-      "provider": "apachespark",
-      "tags": [],
-      "file": "svg/apachespark.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachestorm",
-      "aliases": ["apache-storm"],
-      "category": "brand",
-      "provider": "apachestorm",
-      "tags": [],
-      "file": "svg/apachestorm.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachesuperset",
-      "aliases": ["apache-superset"],
-      "category": "brand",
-      "provider": "apachesuperset",
-      "tags": [],
-      "file": "svg/apachesuperset.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
-      "monochrome": true
-    },
-    {
-      "id": "apachetomcat",
-      "aliases": ["apache-tomcat"],
-      "category": "brand",
-      "provider": "apachetomcat",
-      "tags": [],
-      "file": "svg/apachetomcat.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://apache.org/logos",
       "monochrome": true
     },
     {
@@ -508,39 +79,6 @@
       "monochrome": true
     },
     {
-      "id": "backbonedotjs",
-      "aliases": ["backbone-js"],
-      "category": "brand",
-      "provider": "backbonedotjs",
-      "tags": [],
-      "file": "svg/backbonedotjs.svg",
-      "license": "MIT",
-      "sourceUrl": "https://commons.wikimedia.org/wiki/File:Backbone.js_logo.svg",
-      "monochrome": true
-    },
-    {
-      "id": "bootstrap",
-      "aliases": [],
-      "category": "brand",
-      "provider": "bootstrap",
-      "tags": [],
-      "file": "svg/bootstrap.svg",
-      "license": "MIT",
-      "sourceUrl": "https://getbootstrap.com/docs/5.3/about/brand",
-      "monochrome": true
-    },
-    {
-      "id": "cheerio",
-      "aliases": [],
-      "category": "brand",
-      "provider": "cheerio",
-      "tags": [],
-      "file": "svg/cheerio.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/cheeriojs/cheerio/blob/60b538772c34f2dd93e9c62e410b2751d0a69ff3/website/static/img/orange-c.svg",
-      "monochrome": true
-    },
-    {
       "id": "codeberg",
       "aliases": [],
       "category": "brand",
@@ -549,28 +87,6 @@
       "file": "svg/codeberg.svg",
       "license": "CC0-1.0",
       "sourceUrl": "https://codeberg.org/Codeberg/Design/src/commit/ac514aa9aaa2457d4af3c3e13df3ab136d22a49a/logo/special/codeberg-logo_special_fake-transaprency.svg",
-      "monochrome": true
-    },
-    {
-      "id": "conventionalcommits",
-      "aliases": ["conventional-commits"],
-      "category": "brand",
-      "provider": "conventionalcommits",
-      "tags": [],
-      "file": "svg/conventionalcommits.svg",
-      "license": "MIT",
-      "sourceUrl": "https://www.conventionalcommits.org",
-      "monochrome": true
-    },
-    {
-      "id": "deno",
-      "aliases": [],
-      "category": "brand",
-      "provider": "deno",
-      "tags": [],
-      "file": "svg/deno.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/denoland/docs/blob/5dee713844c7447f80acd4093caa9d350d80bf36/static/img/logo.svg",
       "monochrome": true
     },
     {
@@ -596,50 +112,6 @@
       "monochrome": true
     },
     {
-      "id": "fluentd",
-      "aliases": [],
-      "category": "brand",
-      "provider": "fluentd",
-      "tags": [],
-      "file": "svg/fluentd.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://docs.fluentd.org/quickstart/logo",
-      "monochrome": true
-    },
-    {
-      "id": "githubcopilot",
-      "aliases": ["github-copilot"],
-      "category": "brand",
-      "provider": "githubcopilot",
-      "tags": [],
-      "file": "svg/githubcopilot.svg",
-      "license": "MIT",
-      "sourceUrl": "https://primer.style/foundations/icons/copilot-24",
-      "monochrome": true
-    },
-    {
-      "id": "gleam",
-      "aliases": [],
-      "category": "brand",
-      "provider": "gleam",
-      "tags": [],
-      "file": "svg/gleam.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://gleam.run",
-      "monochrome": true
-    },
-    {
-      "id": "gnubash",
-      "aliases": ["gnu-bash"],
-      "category": "brand",
-      "provider": "gnubash",
-      "tags": [],
-      "file": "svg/gnubash.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/odb/official-bash-logo/tree/61eff022f2dad3c7468f5deb4f06652d15f2c143",
-      "monochrome": true
-    },
-    {
       "id": "gnusocial",
       "aliases": ["gnu-social"],
       "category": "brand",
@@ -648,17 +120,6 @@
       "file": "svg/gnusocial.svg",
       "license": "CC0-1.0",
       "sourceUrl": "https://www.gnu.org/graphics/social.html",
-      "monochrome": true
-    },
-    {
-      "id": "gradleplaypublisher",
-      "aliases": ["gpp", "gradle-play-publisher", "triple-t"],
-      "category": "brand",
-      "provider": "gradleplaypublisher",
-      "tags": [],
-      "file": "svg/gradleplaypublisher.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/Triple-T/gradle-play-publisher/blob/df4eadf1ca6b5bad50e21be0b21816722ed50342/assets/logo.svg",
       "monochrome": true
     },
     {
@@ -684,28 +145,6 @@
       "monochrome": true
     },
     {
-      "id": "iconify",
-      "aliases": [],
-      "category": "brand",
-      "provider": "iconify",
-      "tags": [],
-      "file": "svg/iconify.svg",
-      "license": "MIT",
-      "sourceUrl": "https://iconify.design",
-      "monochrome": true
-    },
-    {
-      "id": "javascript",
-      "aliases": [],
-      "category": "brand",
-      "provider": "javascript",
-      "tags": [],
-      "file": "svg/javascript.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/voodootikigod/logo.js/blob/1544bdeed6d618a6cfe4f0650d04ab8d9cfa76d9/js.svg",
-      "monochrome": true
-    },
-    {
       "id": "jhipster",
       "aliases": [],
       "category": "brand",
@@ -728,17 +167,6 @@
       "monochrome": true
     },
     {
-      "id": "mantine",
-      "aliases": [],
-      "category": "brand",
-      "provider": "mantine",
-      "tags": [],
-      "file": "svg/mantine.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/mantinedev/mantine/blob/f2da0287bfcda19dcf7866f4d03a05d1ee7b49f7/docs/src/images/logo.svg",
-      "monochrome": true
-    },
-    {
       "id": "markdown",
       "aliases": [],
       "category": "brand",
@@ -750,50 +178,6 @@
       "monochrome": true
     },
     {
-      "id": "materialdesignicons",
-      "aliases": ["material-design-icons"],
-      "category": "brand",
-      "provider": "materialdesignicons",
-      "tags": [],
-      "file": "svg/materialdesignicons.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://materialdesignicons.com/icon/vector-square",
-      "monochrome": true
-    },
-    {
-      "id": "nanostores",
-      "aliases": ["nano-stores"],
-      "category": "brand",
-      "provider": "nanostores",
-      "tags": [],
-      "file": "svg/nanostores.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/nanostores/nanostores/blob/7fb5cd871fa00f484ebc866fdf330b56cab2aa20/img/logo-auto.svg",
-      "monochrome": true
-    },
-    {
-      "id": "omarchy",
-      "aliases": [],
-      "category": "brand",
-      "provider": "omarchy",
-      "tags": [],
-      "file": "svg/omarchy.svg",
-      "license": "MIT",
-      "sourceUrl": "https://omarchy.org",
-      "monochrome": true
-    },
-    {
-      "id": "phosphoricons",
-      "aliases": ["phosphor-icons"],
-      "category": "brand",
-      "provider": "phosphoricons",
-      "tags": [],
-      "file": "svg/phosphoricons.svg",
-      "license": "MIT",
-      "sourceUrl": "https://phosphoricons.com",
-      "monochrome": true
-    },
-    {
       "id": "rook",
       "aliases": [],
       "category": "brand",
@@ -802,39 +186,6 @@
       "file": "svg/rook.svg",
       "license": "Apache-2.0",
       "sourceUrl": "https://github.com/rook/artwork/blob/d252db9f43753e6abf64db0ce12d38916a5de464/logo/Rook_Icon.svg",
-      "monochrome": true
-    },
-    {
-      "id": "saltproject",
-      "aliases": ["salt-project"],
-      "category": "brand",
-      "provider": "saltproject",
-      "tags": [],
-      "file": "svg/saltproject.svg",
-      "license": "Apache-2.0",
-      "sourceUrl": "https://saltproject.io",
-      "monochrome": true
-    },
-    {
-      "id": "sanity",
-      "aliases": [],
-      "category": "brand",
-      "provider": "sanity",
-      "tags": [],
-      "file": "svg/sanity.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/sanity-io/logos/blob/e298a1ac2757c83910fe08b496a115bc9aef06bd/src/sanityMonogram.tsx",
-      "monochrome": true
-    },
-    {
-      "id": "setuptools",
-      "aliases": [],
-      "category": "brand",
-      "provider": "setuptools",
-      "tags": [],
-      "file": "svg/setuptools.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/pypa/setuptools/blob/c3f486f0f7ebf8fa141dfd7314cbcaba7370db0b/docs/images/logo.svg",
       "monochrome": true
     },
     {
@@ -857,127 +208,6 @@
       "file": "svg/sourcehut.svg",
       "license": "CC0-1.0",
       "sourceUrl": "https://sourcehut.org/logo/",
-      "monochrome": true
-    },
-    {
-      "id": "sqlalchemy",
-      "aliases": [],
-      "category": "brand",
-      "provider": "sqlalchemy",
-      "tags": [],
-      "file": "svg/sqlalchemy.svg",
-      "license": "MIT",
-      "sourceUrl": "https://commons.wikimedia.org/wiki/File:SQLAlchemy.svg",
-      "monochrome": true
-    },
-    {
-      "id": "stopstalk",
-      "aliases": [],
-      "category": "brand",
-      "provider": "stopstalk",
-      "tags": [],
-      "file": "svg/stopstalk.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/stopstalk/media-resources/blob/265b728c26ba597b957e72134a3b49a10dc0c91d/stopstalk-small-black.svg",
-      "monochrome": true
-    },
-    {
-      "id": "storybook",
-      "aliases": [],
-      "category": "brand",
-      "provider": "storybook",
-      "tags": [],
-      "file": "svg/storybook.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/storybookjs/brand/tree/6f4d67f65f8275c53c310a73a8da6c6e96c8488c",
-      "monochrome": true
-    },
-    {
-      "id": "textual",
-      "aliases": [],
-      "category": "brand",
-      "provider": "textual",
-      "tags": [],
-      "file": "svg/textual.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/Textualize/textual/blob/e66c098588360515864ce88982de494c64d2c097/docs/images/icons/logo%20light%20transparent.svg",
-      "monochrome": true
-    },
-    {
-      "id": "typeorm",
-      "aliases": [],
-      "category": "brand",
-      "provider": "typeorm",
-      "tags": [],
-      "file": "svg/typeorm.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/typeorm/typeorm/blob/e7649d2746f907ff36b1efb600402dedd5f5a499/resources/logo_big.png",
-      "monochrome": true
-    },
-    {
-      "id": "umami",
-      "aliases": [],
-      "category": "brand",
-      "provider": "umami",
-      "tags": [],
-      "file": "svg/umami.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/umami-software/umami/blob/3572df0a09503f357a06fe7f816295ba2c878325/assets/logo.svg",
-      "monochrome": true
-    },
-    {
-      "id": "v",
-      "aliases": [],
-      "category": "brand",
-      "provider": "v",
-      "tags": [],
-      "file": "svg/v.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/vlang/v-logo/blob/eec050c901ed3afefce8cbe56092d55ed6770706/dist/v-logo.svg",
-      "monochrome": true
-    },
-    {
-      "id": "vala",
-      "aliases": [],
-      "category": "brand",
-      "provider": "vala",
-      "tags": [],
-      "file": "svg/vala.svg",
-      "license": "MIT",
-      "sourceUrl": "https://commons.wikimedia.org/wiki/File:Vala_Logo.svg",
-      "monochrome": true
-    },
-    {
-      "id": "vuetify",
-      "aliases": [],
-      "category": "brand",
-      "provider": "vuetify",
-      "tags": [],
-      "file": "svg/vuetify.svg",
-      "license": "MIT",
-      "sourceUrl": "https://vuetifyjs.com/resources/brand-kit",
-      "monochrome": true
-    },
-    {
-      "id": "wayland",
-      "aliases": [],
-      "category": "brand",
-      "provider": "wayland",
-      "tags": [],
-      "file": "svg/wayland.svg",
-      "license": "MIT",
-      "sourceUrl": "https://gitlab.freedesktop.org/wayland/weston/-/blob/77ede00a938b8137bd638ce67b6f58cb52b1d1b0/data/wayland.svg",
-      "monochrome": true
-    },
-    {
-      "id": "zod",
-      "aliases": [],
-      "category": "brand",
-      "provider": "zod",
-      "tags": [],
-      "file": "svg/zod.svg",
-      "license": "MIT",
-      "sourceUrl": "https://github.com/colinhacks/zod/blob/ff89187172ac6aa4a6264592980d1628ee785242/logo/Logo%20White.ai",
       "monochrome": true
     }
   ]

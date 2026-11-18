@@ -1,191 +1,67 @@
-Simple Icons: notices for MIT and Apache-2.0 licensed icons (pack id "simple")
+Simple Icons: notices for Apache-2.0 licensed icons (pack id "simple")
 
-The Simple Icons data declares an explicit license for each icon listed below, but gives no
-license URL or copyright holder. Each icon is copyright its original authors (see the upstream
-source URL listed with it, which is where the authoritative copyright notice lives) and is
-redistributed here, unmodified, under the stated license. Brand names, logos and marks remain
-trademarks of their owners; marks of CNCF or Linux Foundation hosted projects (for example
-Fluentd and Rook) are also subject to the Linux Foundation trademark usage guidelines
-(https://www.linuxfoundation.org/legal/trademark-usage). Icons licensed CC0-1.0 need no notice.
+Only icons that Simple Icons' data marks CC0-1.0 or Apache-2.0 are bundled; MIT-licensed icons are
+not, because MIT requires the copyright notice to travel and the data names no holder. Icons
+licensed CC0-1.0 need no notice. Each Apache-2.0 icon below was checked at development time:
+the root of its upstream repository at the pinned commit in its source URL was listed for a
+NOTICE file. Icons whose upstream could not be verified this way were left out. Each icon is
+copyright its original authors and is redistributed unmodified under Apache-2.0.
 
-================================================================================
-MIT License: "Copyright (c) the authors of each work listed under the upstream source"
-================================================================================
+Brand names, logos and marks remain trademarks of their owners; marks of CNCF or Linux Foundation
+hosted projects (for example Rook) are also subject to the Linux Foundation trademark usage
+guidelines (https://www.linuxfoundation.org/legal/trademark-usage).
 
-Icons:
-  - Ajv (simple:ajv)
-    Upstream source and copyright holders: https://github.com/ajv-validator/ajv/blob/95b15b683dfb60f63c5129b0426629b968d53af8/docs/.vuepress/public/img/ajv.svg
-  - Backbone.js (simple:backbonedotjs)
-    Upstream source and copyright holders: https://commons.wikimedia.org/wiki/File:Backbone.js_logo.svg
-  - Bootstrap (simple:bootstrap)
-    Upstream source and copyright holders: https://getbootstrap.com/docs/5.3/about/brand
-  - Cheerio (simple:cheerio)
-    Upstream source and copyright holders: https://github.com/cheeriojs/cheerio/blob/60b538772c34f2dd93e9c62e410b2751d0a69ff3/website/static/img/orange-c.svg
-  - Conventional Commits (simple:conventionalcommits)
-    Upstream source and copyright holders: https://www.conventionalcommits.org
-  - Deno (simple:deno)
-    Upstream source and copyright holders: https://github.com/denoland/docs/blob/5dee713844c7447f80acd4093caa9d350d80bf36/static/img/logo.svg
-  - GitHub Copilot (simple:githubcopilot)
-    Upstream source and copyright holders: https://primer.style/foundations/icons/copilot-24
-  - GNU Bash (simple:gnubash)
-    Upstream source and copyright holders: https://github.com/odb/official-bash-logo/tree/61eff022f2dad3c7468f5deb4f06652d15f2c143
-  - Gradle Play Publisher (simple:gradleplaypublisher)
-    Upstream source and copyright holders: https://github.com/Triple-T/gradle-play-publisher/blob/df4eadf1ca6b5bad50e21be0b21816722ed50342/assets/logo.svg
-  - Iconify (simple:iconify)
-    Upstream source and copyright holders: https://iconify.design
-  - JavaScript (simple:javascript)
-    Upstream source and copyright holders: https://github.com/voodootikigod/logo.js/blob/1544bdeed6d618a6cfe4f0650d04ab8d9cfa76d9/js.svg
-  - Mantine (simple:mantine)
-    Upstream source and copyright holders: https://github.com/mantinedev/mantine/blob/f2da0287bfcda19dcf7866f4d03a05d1ee7b49f7/docs/src/images/logo.svg
-  - Nano Stores (simple:nanostores)
-    Upstream source and copyright holders: https://github.com/nanostores/nanostores/blob/7fb5cd871fa00f484ebc866fdf330b56cab2aa20/img/logo-auto.svg
-  - Omarchy (simple:omarchy)
-    Upstream source and copyright holders: https://omarchy.org
-  - Phosphor Icons (simple:phosphoricons)
-    Upstream source and copyright holders: https://phosphoricons.com
-  - Sanity (simple:sanity)
-    Upstream source and copyright holders: https://github.com/sanity-io/logos/blob/e298a1ac2757c83910fe08b496a115bc9aef06bd/src/sanityMonogram.tsx
-  - Setuptools (simple:setuptools)
-    Upstream source and copyright holders: https://github.com/pypa/setuptools/blob/c3f486f0f7ebf8fa141dfd7314cbcaba7370db0b/docs/images/logo.svg
-  - SQLAlchemy (simple:sqlalchemy)
-    Upstream source and copyright holders: https://commons.wikimedia.org/wiki/File:SQLAlchemy.svg
-  - StopStalk (simple:stopstalk)
-    Upstream source and copyright holders: https://github.com/stopstalk/media-resources/blob/265b728c26ba597b957e72134a3b49a10dc0c91d/stopstalk-small-black.svg
-  - Storybook (simple:storybook)
-    Upstream source and copyright holders: https://github.com/storybookjs/brand/tree/6f4d67f65f8275c53c310a73a8da6c6e96c8488c
-  - Textual (simple:textual)
-    Upstream source and copyright holders: https://github.com/Textualize/textual/blob/e66c098588360515864ce88982de494c64d2c097/docs/images/icons/logo%20light%20transparent.svg
-  - TypeORM (simple:typeorm)
-    Upstream source and copyright holders: https://github.com/typeorm/typeorm/blob/e7649d2746f907ff36b1efb600402dedd5f5a499/resources/logo_big.png
-  - Umami (simple:umami)
-    Upstream source and copyright holders: https://github.com/umami-software/umami/blob/3572df0a09503f357a06fe7f816295ba2c878325/assets/logo.svg
-  - V (simple:v)
-    Upstream source and copyright holders: https://github.com/vlang/v-logo/blob/eec050c901ed3afefce8cbe56092d55ed6770706/dist/v-logo.svg
-  - Vala (simple:vala)
-    Upstream source and copyright holders: https://commons.wikimedia.org/wiki/File:Vala_Logo.svg
-  - Vuetify (simple:vuetify)
-    Upstream source and copyright holders: https://vuetifyjs.com/resources/brand-kit
-  - Wayland (simple:wayland)
-    Upstream source and copyright holders: https://gitlab.freedesktop.org/wayland/weston/-/blob/77ede00a938b8137bd638ce67b6f58cb52b1d1b0/data/wayland.svg
-  - Zod (simple:zod)
-    Upstream source and copyright holders: https://github.com/colinhacks/zod/blob/ff89187172ac6aa4a6264592980d1628ee785242/logo/Logo%20White.ai
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this
-software and associated documentation files (the "Software"), to deal in the Software without
-restriction, including without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the
-Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or
-substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
-NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
-OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-================================================================================
-Apache License 2.0: copyright held by the authors of each work listed below
-================================================================================
-
-Icons:
-  - AB Download Manager (simple:abdownloadmanager)
-    Upstream source and copyright holders: https://abdownloadmanager.com
+Apache-2.0 icons:
   - AIOHTTP (simple:aiohttp)
-    Upstream source and copyright holders: https://github.com/aio-libs/aiohttp/blob/fb5fe72b1bca3b899af579d376f5fe45745410e4/docs/aiohttp-plain.svg
-  - Airbrake (simple:airbrake)
-    Upstream source and copyright holders: https://github.com/airbrake/slate/blob/c116f2968bcf4dfda126511de0a2d0f0dc8b6a8e/source/images/logo.svg
+    Upstream source: https://github.com/aio-libs/aiohttp/blob/fb5fe72b1bca3b899af579d376f5fe45745410e4/docs/aiohttp-plain.svg
+    no upstream NOTICE (checked 2026-11-18, https://api.github.com/repos/aio-libs/aiohttp/contents/?ref=fb5fe72b1bca3b899af579d376f5fe45745410e4)
   - Alacritty (simple:alacritty)
-    Upstream source and copyright holders: https://github.com/alacritty/alacritty/blob/6d8db6b9dfadd6164c4be7a053f25db8ef6b7998/extra/logo/alacritty-simple.svg
-  - Apache (simple:apache)
-    Upstream source and copyright holders: https://www.apache.org/foundation/press/kit
-  - Apache Airflow (simple:apacheairflow)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Ant (simple:apacheant)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Arrow (simple:apachearrow)
-    Upstream source and copyright holders: https://arrow.apache.org/visual_identity
-  - Apache Avro (simple:apacheavro)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Cassandra (simple:apachecassandra)
-    Upstream source and copyright holders: https://www.apache.org/logos
-  - Apache CloudStack (simple:apachecloudstack)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Cordova (simple:apachecordova)
-    Upstream source and copyright holders: https://cordova.apache.org/artwork
-  - Apache CouchDB (simple:apachecouchdb)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache DolphinScheduler (simple:apachedolphinscheduler)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Doris (simple:apachedoris)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Druid (simple:apachedruid)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache ECharts (simple:apacheecharts)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache FreeMarker (simple:apachefreemarker)
-    Upstream source and copyright holders: https://www.apache.org/logos
-  - Apache Groovy (simple:apachegroovy)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Guacamole (simple:apacheguacamole)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Hadoop (simple:apachehadoop)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache HBase (simple:apachehbase)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Hive (simple:apachehive)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache JMeter (simple:apachejmeter)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Kafka (simple:apachekafka)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Kylin (simple:apachekylin)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Lucene (simple:apachelucene)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Maven (simple:apachemaven)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache NetBeans IDE (simple:apachenetbeanside)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache NiFi (simple:apachenifi)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache OpenOffice (simple:apacheopenoffice)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Parquet (simple:apacheparquet)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache PDFBox (simple:apachepdfbox)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Pulsar (simple:apachepulsar)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache RocketMQ (simple:apacherocketmq)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Solr (simple:apachesolr)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Spark (simple:apachespark)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Storm (simple:apachestorm)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Superset (simple:apachesuperset)
-    Upstream source and copyright holders: https://apache.org/logos
-  - Apache Tomcat (simple:apachetomcat)
-    Upstream source and copyright holders: https://apache.org/logos
+    Upstream source: https://github.com/alacritty/alacritty/blob/6d8db6b9dfadd6164c4be7a053f25db8ef6b7998/extra/logo/alacritty-simple.svg
+    no upstream NOTICE (checked 2026-11-18, https://api.github.com/repos/alacritty/alacritty/contents/?ref=6d8db6b9dfadd6164c4be7a053f25db8ef6b7998)
   - Authelia (simple:authelia)
-    Upstream source and copyright holders: https://github.com/authelia/authelia/blob/8316cd4eb7a6f0778c8f480c61ad76a88416fc3a/docs/static/images/branding/logo.svg
+    Upstream source: https://github.com/authelia/authelia/blob/8316cd4eb7a6f0778c8f480c61ad76a88416fc3a/docs/static/images/branding/logo.svg
+    no upstream NOTICE (checked 2026-11-18, https://api.github.com/repos/authelia/authelia/contents/?ref=8316cd4eb7a6f0778c8f480c61ad76a88416fc3a)
   - OWASP Dependency-Check (simple:dependencycheck)
-    Upstream source and copyright holders: https://github.com/jeremylong/DependencyCheck/blob/8ee82149179c6faeca78727e57039e987c387e26/src/site/resources/images/logo.svg
-  - Fluentd (simple:fluentd)
-    Upstream source and copyright holders: https://docs.fluentd.org/quickstart/logo
-  - Gleam (simple:gleam)
-    Upstream source and copyright holders: https://gleam.run
+    Upstream source: https://github.com/jeremylong/DependencyCheck/blob/8ee82149179c6faeca78727e57039e987c387e26/src/site/resources/images/logo.svg
+    upstream NOTICE reproduced verbatim below (NOTICE.txt; checked 2026-11-18, https://api.github.com/repos/jeremylong/DependencyCheck/contents/?ref=8ee82149179c6faeca78727e57039e987c387e26)
   - JHipster (simple:jhipster)
-    Upstream source and copyright holders: https://github.com/jhipster/jhipster-artwork/blob/1085d85ab6d819b9ef7f6cc710ec8a4977b95e90/logos/JHipster%20bowtie.svg
-  - Material Design Icons (simple:materialdesignicons)
-    Upstream source and copyright holders: https://materialdesignicons.com/icon/vector-square
+    Upstream source: https://github.com/jhipster/jhipster-artwork/blob/1085d85ab6d819b9ef7f6cc710ec8a4977b95e90/logos/JHipster%20bowtie.svg
+    upstream NOTICE reproduced verbatim below (NOTICE; checked 2026-11-18, https://api.github.com/repos/jhipster/jhipster-artwork/contents/?ref=1085d85ab6d819b9ef7f6cc710ec8a4977b95e90)
   - Rook (simple:rook)
-    Upstream source and copyright holders: https://github.com/rook/artwork/blob/d252db9f43753e6abf64db0ce12d38916a5de464/logo/Rook_Icon.svg
-  - Salt Project (simple:saltproject)
-    Upstream source and copyright holders: https://saltproject.io
+    Upstream source: https://github.com/rook/artwork/blob/d252db9f43753e6abf64db0ce12d38916a5de464/logo/Rook_Icon.svg
+    no upstream NOTICE (checked 2026-11-18, https://api.github.com/repos/rook/artwork/contents/?ref=d252db9f43753e6abf64db0ce12d38916a5de464)
+
+Upstream NOTICE files (verbatim):
+
+--- https://api.github.com/repos/jeremylong/DependencyCheck/contents/?ref=8ee82149179c6faeca78727e57039e987c387e26 :: NOTICE.txt ---
+dependency-check
+
+Copyright (c) 2012-2013 Jeremy Long. All Rights Reserved.
+
+The licenses for the software listed below can be found in the META-INF/licenses/[dependency name].
+
+This product includes software developed by The Apache Software Foundation (http://www.apache.org/).
+
+This product includes software developed by Jquery.com (http://jquery.com/).
+
+This product includes software developed by Jonathan Hedley (jsoup.org)
+
+This software contains unmodified binary redistributions for H2 database engine (http://www.h2database.com/), which is dual licensed and available under a modified version of the MPL 1.1 (Mozilla Public License) or under the (unmodified) EPL 1.0 (Eclipse Public License).
+An original copy of the license agreement can be found at: http://www.h2database.com/html/license.html
+
+This product includes data from the Common Weakness Enumeration (CWE): http://cwe.mitre.org/
+
+This product downloads and utilizes data from the National Vulnerability Database hosted by NIST: http://nvd.nist.gov/download.cfm
+
+--- https://api.github.com/repos/jhipster/jhipster-artwork/contents/?ref=1085d85ab6d819b9ef7f6cc710ec8a4977b95e90 :: NOTICE ---
+JHipster
+Copyright 2018-2024 the original author or authors from the JHipster project.
+
+For more information on the JHipster project, see https://www.jhipster.tech/
+
+================================================================================
+Apache License, Version 2.0
+================================================================================
 
 Apache License
                            Version 2.0, January 2004

@@ -1,9 +1,11 @@
 Simple Icons (packages/icons-simple, pack id "simple")
 Source: https://github.com/simple-icons/simple-icons, simple-icons 16.38.0
 
-Only icons whose own entry in data/simple-icons.json declares an explicit license of
-CC0-1.0, MIT or Apache-2.0 are bundled (88 of 3,472; 2 more were left out for exceeding the 8 KB size budget). The absence of a license field is
-NOT treated as permissive. Each icon in packages/icons-simple/icons.json records its own
+Only icons whose own entry in data/simple-icons.json declares CC0-1.0 (12), or Apache-2.0 with
+a verified upstream NOTICE status (6, see NOTICE-SIMPLE-ICONS.txt), are bundled: 18 of 3,472.
+MIT-licensed icons are not bundled (MIT requires the copyright notice to travel; the data names
+no holder), and Apache-2.0 icons whose upstream could not be verified were dropped. The
+absence of a license field is NOT treated as permissive. Each icon in packages/icons-simple/icons.json records its own
 license and source URL. Icons are copied unmodified.
 
 All brand names, logos and marks are trademarks of their respective owners; inclusion

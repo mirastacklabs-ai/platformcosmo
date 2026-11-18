@@ -10,5 +10,5 @@ and are listed under LICENSES/.
 
 Bundled icon sets (notices in LICENSES/): PlatformCosmo base glyphs (Apache-2.0),
 Lucide (ISC, plus MIT for Feather-derived icons), Kubernetes icons (Apache-2.0),
-and the subset of Simple Icons whose per-icon license is CC0-1.0, MIT or Apache-2.0.
+and the subset of Simple Icons whose per-icon license is CC0-1.0 or a verified Apache-2.0 (no MIT).
 Brand and Kubernetes marks are trademarks of their respective owners.
