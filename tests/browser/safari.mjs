@@ -12,6 +12,7 @@
  * tests/browser/out/fixtures), OUT_DIR (default tests/browser/out), GIT_SHA.
  * Results JSON is always written, also after a failure.
  */
+import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { MODES, listSvgs, startServer } from "./server.mjs";
 
@@ -80,15 +81,50 @@ try {
   const exec = (script, args = []) => wd("POST", s("/execute/sync"), { script, args });
   const shot = () => wd("GET", s("/screenshot"));
 
-  await wd("POST", s("/window/rect"), { width: 1280, height: 900, x: 0, y: 0 });
+  console.log("session capabilities:", JSON.stringify(session.capabilities));
+  await wd("POST", s("/window/rect"), { width: 1280, height: 900, x: 0, y: 0 }).catch((e) =>
+    console.log("window/rect failed:", e.message),
+  );
+  // Why a screenshot may be blank: what the page and window actually are.
+  const diag = (label) =>
+    exec(
+      `const img = document.getElementById('el');
+       return {
+         href: location.href, readyState: document.readyState, title: document.title,
+         visibility: document.visibilityState, hasFocus: document.hasFocus(),
+         inner: [innerWidth, innerHeight], outer: [outerWidth, outerHeight], dpr: devicePixelRatio,
+         body: document.body ? document.body.innerHTML.length : -1,
+         img: img && img.tagName === 'IMG' ? [img.complete, img.naturalWidth] : null,
+         reduce: matchMedia('(prefers-reduced-motion: reduce)').matches,
+       }`,
+    ).then(
+      (d) => console.log(`diag ${label}:`, JSON.stringify(d)),
+      (e) => console.log(`diag ${label} failed:`, e.message),
+    );
+  const hash = (b64) => createHash("sha1").update(b64).digest("hex").slice(0, 10);
+  await wd("GET", s("/window/rect")).then((r) => console.log("window rect:", JSON.stringify(r)));
   await go("/blank");
+  await diag("blank");
   const blank = await shot();
+  console.log(`blank screenshot: ${blank.length} bytes b64, sha ${hash(blank)}`);
 
   // What a page and an SVG image document see (Safari cannot emulate, so this is the real value).
   await go("/ref/green");
+  await diag("ref-green");
   const green = await shot();
   await go("/ref/red");
+  await diag("ref-red");
   const red = await shot();
+  console.log(`screenshots: blank ${hash(blank)}, green ${hash(green)}, red ${hash(red)}`);
+  if (green === red || green === blank) {
+    rec(
+      "-",
+      "-",
+      "screenshots reflect the page",
+      "fail",
+      "WebDriver screenshots of different pages are identical (window not rendering?)",
+    );
+  }
   const host = await exec(
     "return {reduce: matchMedia('(prefers-reduced-motion: reduce)').matches, dark: matchMedia('(prefers-color-scheme: dark)').matches}",
   );
@@ -125,6 +161,7 @@ try {
           if (!ready) throw new Error("object document did not load");
         }
         await sleep(300);
+        await diag(`${file}/${mode}`);
         let animated = false;
         let first;
         if (mode === "img") {
