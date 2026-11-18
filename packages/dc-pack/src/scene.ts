@@ -45,7 +45,9 @@ const HALL_MARGIN = 1;
 const RAISED_FLOOR_H = 0.3;
 const SLAB_H = 0.04;
 const GROUP_H = 0.02;
-const MAX_GRID_TILES = 1500;
+const MAX_GRID_TILES = 500;
+/** The tile grid sits strictly below the floor surface so it never competes with objects in depth. */
+const GRID_H = 0.004;
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -455,7 +457,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
         place(it, x, stripY + stripD - it.d, false);
         x += it.w;
       }
-      it.lane = stripY + stripD / 2;
+      it.lane = pos ? it.cy + it.d / 2 : stripY + stripD / 2;
     }
   }
   for (const r of active) {
@@ -840,11 +842,11 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
             id: `tile-${parts.length + 1}`,
             primitive: "slab",
             tone: "floor",
-            box: box(x, y, zBase, 1, 1, 0.004),
+            box: box(x, y, zBase - GRID_H, 1, 1, GRID_H),
           });
         }
       }
-      const gb = box(0, 0, zBase, tilesX, tilesY, 0.004);
+      const gb = box(0, 0, zBase - GRID_H, tilesX, tilesY, GRID_H);
       objects.push({
         ...facilityObject("dc_floor_grid", "floor-grid", gb, "floor", "dc_hall"),
         parts,
@@ -880,7 +882,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     const lanes: { id: string; x1: number; y: number; group: string }[] = [
       ...active.map((r) => ({ id: r.spec.id, x1: r.x1, y: r.y + r.d / 2, group: r.spec.id })),
     ];
-    const stripItems = strip.filter((i) => i.placed);
+    const stripItems = strip.filter((i) => i.placed && !(i.rack?.pos ?? i.equip?.pos));
     if (stripItems.length > 0) {
       lanes.push({
         id: "loose",
@@ -889,8 +891,14 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
         group: "dc_hall",
       });
     }
+    // CRAHs and manually placed strip items hang off their own lane, up to their centre.
+    for (const it of [
+      ...crahs,
+      ...strip.filter((i) => i.placed && (i.rack?.pos ?? i.equip?.pos)),
+    ]) {
+      lanes.push({ id: it.id, x1: it.cx + it.w / 2, y: it.lane, group: "dc_hall" });
+    }
     const laneYs: number[] = lanes.map((l) => l.y + sy);
-    for (const c of crahs) laneYs.push(c.lane + sy);
     for (const l of lanes) {
       const x0 = spineX - 0.25;
       const b = box(x0, l.y + sy - 0.25, trayZ, l.x1 + sx - x0, 0.5, 0.05);
