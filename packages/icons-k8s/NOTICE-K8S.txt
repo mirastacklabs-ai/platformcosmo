@@ -1,0 +1,19 @@
+Kubernetes icons (pack id "k8s")
+
+Source: https://github.com/kubernetes/community/tree/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons
+Copyright The Kubernetes Authors.
+
+The Kubernetes Icons Set is licensed under a choice of either Apache-2.0 or CC-BY-4.0.
+PlatformCosmo uses and redistributes these icons under the Apache License, Version 2.0
+(see the LICENSE file shipped with this package or https://www.apache.org/licenses/LICENSE-2.0).
+
+Modifications (Apache-2.0 section 4(b)): the files in svg/ are the upstream SVGs after
+normalization by PlatformCosmo's sanitizer: editor metadata (Inkscape/Sodipodi/RDF) and
+text elements removed, CSS inlined, ids renamed, numbers rounded to three decimals.
+The artwork itself is unchanged. Control-plane "labeled" icons are not included because
+they differ only by a text label.
+
+Trademark: Kubernetes is a registered trademark of The Linux Foundation. Use of the
+Kubernetes logo as a trademark is subject to the Linux Foundation Trademark Usage
+Guidelines (https://www.linuxfoundation.org/legal/trademark-usage). Inclusion of these
+icons implies no endorsement by The Linux Foundation or the Kubernetes project.

@@ -1,0 +1,42 @@
+{
+  "name": "@platformcosmo/icons-lucide",
+  "version": "0.0.0",
+  "description": "PlatformCosmo icon pack: a curated subset of Lucide (ISC, plus MIT for Feather-derived icons).",
+  "license": "(ISC AND MIT)",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mirastacklabs-ai/platformcosmo.git",
+    "directory": "packages/icons-lucide"
+  },
+  "homepage": "https://platformcosmo.io",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE",
+    "LICENSE-LUCIDE"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@platformcosmo/core": "workspace:*"
+  }
+}
