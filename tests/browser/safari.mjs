@@ -15,6 +15,7 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { diffFraction as pixelDiff } from "./pngdiff.mjs";
 import { MODES, listSvgs, startServer } from "./server.mjs";
 
 const PORT = process.env.SAFARIDRIVER_PORT ?? "4444";
@@ -225,25 +226,8 @@ try {
     probeOk ? "pass" : "fail",
   );
 
-  /** Share of pixels that differ clearly between two PNG screenshots (decoded in the browser). */
-  const diffFraction = async (a, b) => {
-    await go("/blank");
-    const r = await wd("POST", s("/execute/async"), {
-      script: `const x = arguments[0], y = arguments[1], done = arguments[arguments.length - 1];
-        const load = (v) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('decode')); i.src = 'data:image/png;base64,' + v; });
-        Promise.all([load(x), load(y)]).then(([A, B]) => {
-          if (A.naturalWidth !== B.naturalWidth || A.naturalHeight !== B.naturalHeight) return done("size " + A.naturalWidth + "x" + A.naturalHeight + " vs " + B.naturalWidth + "x" + B.naturalHeight);
-          const px = (i) => { const c = document.createElement('canvas'); c.width = i.naturalWidth; c.height = i.naturalHeight; const g = c.getContext('2d'); g.drawImage(i, 0, 0); return g.getImageData(0, 0, c.width, c.height).data; };
-          const p = px(A), q = px(B); let n = 0;
-          for (let k = 0; k < p.length; k += 4) {
-            if (Math.max(Math.abs(p[k] - q[k]), Math.abs(p[k + 1] - q[k + 1]), Math.abs(p[k + 2] - q[k + 2])) > 64) n++;
-          }
-          done(n / (p.length / 4));
-        }).catch((e) => done("error " + (e && e.message)));`,
-      args: [a, b],
-    });
-    return r;
-  };
+  // Share of pixels that differ clearly between two PNG screenshots (decoded in Node).
+  const diffFraction = async (a, b) => pixelDiff(a, b);
 
   if (expectReduce) {
     // Second pass (macOS Reduce Motion ON): every embedding must show the static rest frame, and
