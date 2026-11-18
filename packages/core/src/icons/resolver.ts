@@ -8,6 +8,7 @@ import type {
   ResolvedIcon,
 } from "../contracts/index.js";
 import type { SpecNodeType } from "../schema/types.gen.js";
+import { sanitizedCost } from "./sanitize.js";
 
 interface PackIndex {
   readonly pack: LoadedIconPack;
@@ -170,6 +171,15 @@ export const createIconResolver: CreateIconResolverFn = (packs, sanitize) => {
   rejections.set(resolver, rejectionMap);
   return resolver;
 };
+
+/**
+ * Elements one placement of `ref` renders once `<use>` is expanded (at most the sanitizer's node
+ * cap), so emit can budget icon cost x placements. `undefined` when the ref does not resolve.
+ */
+export function iconCost(resolver: IconResolver, ref: string): number | undefined {
+  const icon = resolver.resolve(ref);
+  return icon ? sanitizedCost(icon.svg) : undefined;
+}
 
 const MAX_QUERY = 64;
 const rejections = new WeakMap<IconResolver, ReadonlyMap<string, string>>();
