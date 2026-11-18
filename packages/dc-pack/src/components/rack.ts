@@ -57,33 +57,15 @@ export const rackDef: DcComponentDef = {
 
     // Back to front: plinth, rear, back posts, PDUs, front posts, top cap.
     k.part("base", "slab", "muted", 0, 0, 0, W, D, RACK_BASE_MM);
-    if (rearDoorHeatExchanger) {
-      k.part(
-        "rear-door",
-        "slab",
-        "glass",
-        0,
-        0,
-        RACK_BASE_MM,
-        W,
-        110,
-        H - RACK_BASE_MM - RACK_TOP_MM,
-      );
-      k.row("rear-fan", 3, "accent", 90, 510, H * 0.4, 60, 60, 4, "cylinder");
-    } else {
-      k.part(
-        "rear-panel",
-        "slab",
-        "muted",
-        0,
-        0,
-        RACK_BASE_MM,
-        W,
-        12,
-        H - RACK_BASE_MM - RACK_TOP_MM,
-      );
-    }
     const bodyH = H - RACK_BASE_MM - RACK_TOP_MM;
+    if (rearDoorHeatExchanger) {
+      // A thin frame (no panel), so devices stay visible from either side.
+      const f = 30;
+      k.part("rear-door", "cube", "accent", 0, 0, RACK_BASE_MM + bodyH - f, W, 110, f);
+      k.part("rear-door-b", "cube", "accent", 0, 0, RACK_BASE_MM, W, 110, f);
+      k.part("rear-door-l", "cube", "accent", 0, 0, RACK_BASE_MM, f, 110, bodyH);
+      k.part("rear-door-r", "cube", "accent", W - f, 0, RACK_BASE_MM, f, 110, bodyH);
+    }
     k.part("post-bl", "cube", "metal", 0, 0, RACK_BASE_MM, post, post, bodyH);
     k.part("post-br", "cube", "metal", W - post, 0, RACK_BASE_MM, post, post, bodyH);
     const pduH = u * U_MM * 0.8;

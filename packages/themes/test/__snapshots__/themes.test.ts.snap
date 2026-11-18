@@ -94,7 +94,7 @@ exports[`built-in themes are immutable and stable > blueprint matches its snapsh
     "labelFill": "#08294d",
     "labelText": "#eaf4ff",
     "stroke": "#cfe4fa",
-    "width": 1.6,
+    "width": 2.2,
   },
   "flows": {
     "airflow": "#8aeaf0",
@@ -340,7 +340,7 @@ exports[`built-in themes are immutable and stable > dark matches its snapshot 1`
     "labelFill": "#1a2233",
     "labelText": "#d3dbea",
     "stroke": "#8fa0bb",
-    "width": 1.6,
+    "width": 2.2,
   },
   "flows": {
     "airflow": "#22d3ee",
@@ -586,7 +586,7 @@ exports[`built-in themes are immutable and stable > light matches its snapshot 1
     "labelFill": "#ffffff",
     "labelText": "#334155",
     "stroke": "#64748b",
-    "width": 1.6,
+    "width": 2.2,
   },
   "flows": {
     "airflow": "#0891b2",
@@ -832,7 +832,7 @@ exports[`built-in themes are immutable and stable > mono matches its snapshot 1`
     "labelFill": "#ffffff",
     "labelText": "#222222",
     "stroke": "#4d4d4d",
-    "width": 1.6,
+    "width": 2.2,
   },
   "flows": {
     "airflow": "#919191",
