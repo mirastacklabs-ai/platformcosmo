@@ -34,13 +34,12 @@ You need [Claude Code](https://code.claude.com) and Node.js >= 22.12 on your `PA
 
    Claude writes a `<name>.cosmo.json` spec in your working directory, validates it,
    builds it, and reports the output paths: `<name>.svg` (animated, looping), plus any
-   extras you ask for (`--static`, `--steps`, `--png`, `--gif`, `--mp4` with ffmpeg,
-   `--interactive`, `--theme dark|blueprint|mono`).
+   extras you ask for (`--static`, `--steps`, `--png`, `--theme dark`).
 
-3. Re-export or tweak later:
+3. Re-export, including GIF, MP4 (needs ffmpeg) and the interactive Play/Step SVG:
 
    ```
-   /platformcosmo:export <name>.cosmo.json --png --steps
+   /platformcosmo:export <name>.cosmo.json --gif --interactive --theme blueprint
    ```
 
 4. Optional: add icons. Bundled: PlatformCosmo, Lucide, Kubernetes and a permissive

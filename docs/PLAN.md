@@ -136,6 +136,11 @@ platformcosmo/
 **Budgets:**
 - Typical diagram: under 150 KB, built in under 500 ms
 - Hard limit: 5k elements, with a warning to split the diagram
+- Data-center halls with rack contents are larger (the gallery `dc-hall` is about 260 KB) and
+  are not "typical"
+
+**Drawing order:** layers per the render contract; the DC pack is the one exception (floors
+in the ground layer, cables depth-sorted with objects, DC particles after objects; DECISIONS D31).
 
 ---
 

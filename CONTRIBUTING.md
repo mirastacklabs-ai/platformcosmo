@@ -23,6 +23,10 @@ PC_NODE_IMAGE=node:22-bookworm-slim scripts/pc install --frozen-lockfile && PC_N
 - No runtime network access in `core` or `cli` (except `icons add`).
 - Keep dependencies minimal and justify any new one in the PR.
 - Every engine module ships with unit tests; update snapshots deliberately.
+- A change to `core` or `cli` also commits the rebuilt plugin bundle and gallery:
+  `scripts/pc run build && scripts/pc run bundle:plugin && scripts/pc run gen:gallery`
+  (CI job `plugin-bundle` checks both, DECISIONS D19). Visual goldens change only with
+  `VISUAL_UPDATE=1 scripts/pc run visual`, reviewed like code.
 
 ## Commits and DCO
 
