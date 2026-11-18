@@ -23,6 +23,12 @@ interface Dev {
 const num = (v: unknown, fallback: number): number =>
   typeof v === "number" && Number.isFinite(v) && v >= 1 ? v : fallback;
 
+/** Front face in a category tone, starting after the LED plate so LEDs sit on `base`. */
+function face(k: Kit, h: number, tone: "metal" | "accent" | "glass" | "muted"): void {
+  k.part("led-plate", "slab", "base", 8, k.depthMm - 4, 3, 34, 4, h - 6);
+  k.part("front", "slab", tone, 44, k.depthMm - 4, 3, 418, 4, h - 6);
+}
+
 /** Status LEDs near the left edge of the front panel. */
 function leds(k: Kit, h: number, n = 2): void {
   for (let i = 0; i < n; i++) {
@@ -50,7 +56,7 @@ function server(type: string, label: string, u: number, depth: number): Dev {
     heightU: u,
     depthMm: depth,
     detail(k, h) {
-      k.part("bezel", "slab", "base", 20, k.depthMm - 4, 3, 442, 4, h - 6);
+      face(k, h, "metal");
       k.row("vent", 3, "muted", 90, 250, 5, 40, Math.max(4, h - 12), 5);
       leds(k, h);
       k.row("drive", u >= 2 ? 6 : 3, "muted", 260, 440, 6, 24, Math.max(6, h - 14), 5);
@@ -84,7 +90,7 @@ const devices: readonly Dev[] = [
     heightU: 4,
     depthMm: 820,
     detail(k, h) {
-      k.part("bezel", "slab", "base", 20, k.depthMm - 4, 3, 442, 4, h - 6);
+      face(k, h, "accent");
       k.row("gpu", 8, "accent", 30, 452, 10, 38, h - 20, 6);
       leds(k, h);
       netPorts(k, h, 4);
@@ -98,6 +104,7 @@ const devices: readonly Dev[] = [
     heightU: 1,
     depthMm: 450,
     detail(k, h) {
+      face(k, h, "glass");
       k.row("port", 12, "metal", 70, 450, 6, 20, Math.max(6, h - 14), 5);
       leds(k, h, 2);
       netPorts(k, h, 4);
@@ -112,6 +119,7 @@ const devices: readonly Dev[] = [
     heightU: 1,
     depthMm: 450,
     detail(k, h) {
+      face(k, h, "glass");
       k.row("port", 16, "metal", 60, 452, 6, 18, Math.max(6, h - 14), 5);
       leds(k, h, 2);
       netPorts(k, h, 4);
@@ -126,6 +134,7 @@ const devices: readonly Dev[] = [
     heightU: 2,
     depthMm: 600,
     detail(k, h) {
+      face(k, h, "glass");
       k.row("port", 16, "metal", 60, 452, 8, 18, Math.max(6, h * 0.35), 5);
       k.row("port-lo", 16, "metal", 60, 452, h * 0.55, 18, Math.max(6, h * 0.35), 5);
       leds(k, h, 3);
@@ -152,8 +161,9 @@ const devices: readonly Dev[] = [
     heightU: 2,
     depthMm: 700,
     detail(k, h) {
-      k.row("bay", 12, "muted", 30, 450, 6, 26, h - 14, 5);
-      k.row("bay-led", 12, "led", 36, 456, 3, 4, 3, 6);
+      face(k, h, "muted");
+      k.row("bay", 12, "base", 50, 450, 6, 24, h - 14, 5);
+      leds(k, h);
       netPorts(k, h, 2);
       psuPorts(k, h);
     },
@@ -165,7 +175,8 @@ const devices: readonly Dev[] = [
     heightU: 2,
     depthMm: 720,
     detail(k, h) {
-      k.row("bay", 24, "glass", 24, 458, 6, 13, h - 14, 5);
+      face(k, h, "muted");
+      k.row("bay", 24, "glass", 50, 458, 6, 12, h - 14, 5);
       leds(k, h);
       netPorts(k, h, 2);
       netPorts(k, h, 2, "fiber");
@@ -179,8 +190,9 @@ const devices: readonly Dev[] = [
     heightU: 4,
     depthMm: 900,
     detail(k, h) {
-      k.row("bay", 12, "muted", 28, 454, 6, 28, h * 0.4, 5);
-      k.row("bay-lo", 12, "muted", 28, 454, h * 0.55, 28, h * 0.4, 5);
+      face(k, h, "muted");
+      k.row("bay", 12, "base", 50, 454, 6, 28, h * 0.4, 5);
+      k.row("bay-lo", 12, "base", 50, 454, h * 0.55, 28, h * 0.4, 5);
       leds(k, h);
       netPorts(k, h, 2);
       psuPorts(k, h);
@@ -236,7 +248,12 @@ function deviceDef(d: Dev): DcComponentDef {
       const h = u * U_MM - GAP_MM;
       const k = new Kit(DEVICE_WIDTH_MM, d.depthMm, h);
       // Chassis first (back-most), then front details in drawing order.
-      k.part("chassis", "cube", "base", 0, 0, 0, DEVICE_WIDTH_MM, d.depthMm - 6, h);
+      // Rear first (back-most): a panel with two power supplies, so racks seen from behind
+      // (rows facing away from the viewer) still show their devices.
+      k.part("rear", "slab", "muted", 10, 0, 3, DEVICE_WIDTH_MM - 20, 4, Math.max(2, h - 6));
+      k.part("rear-psu-a", "cube", "metal", 40, 0, 3, 110, 8, Math.max(2, h - 8));
+      k.part("rear-psu-b", "cube", "metal", 330, 0, 3, 110, 8, Math.max(2, h - 8));
+      k.part("chassis", "cube", "base", 0, 4, 0, DEVICE_WIDTH_MM, d.depthMm - 10, h);
       d.detail(k, h);
       k.airflow();
       return k.done();
