@@ -15,8 +15,6 @@ export {
   rasterize,
   setResvgWasm,
   gifEncoder,
-  createFfmpegEncoder,
-  ffmpegAvailable,
+  validateRenderOptions,
 } from "./export/index.js";
-export type { FfmpegEncoderOptions } from "./export/index.js";
 export { sanitizeSvg, createIconResolver, fetchIconPack } from "./icons/index.js";

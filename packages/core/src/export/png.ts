@@ -38,7 +38,7 @@ export function decodePng(png: Uint8Array): DecodedPng {
     if (type === "IEND") break;
     o += 12 + len;
   }
-  const raw = inflateSync(Buffer.concat(idat));
+  const raw = inflateSync(Buffer.concat(idat), { maxOutputLength: (width * 4 + 1) * height });
   const stride = width * 4;
   const out = new Uint8Array(stride * height);
   for (let y = 0; y < height; y++) {

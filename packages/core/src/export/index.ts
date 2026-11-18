@@ -11,12 +11,12 @@ import type {
   RenderOutput,
 } from "../contracts/index.js";
 import { gifEncoder } from "./gif.js";
+import { validateRenderOptions } from "./options.js";
 import { pngSize } from "./png.js";
 
 export { gifEncoder } from "./gif.js";
 export { rasterize, setResvgWasm } from "./rasterize.js";
-export { buildFfmpegArgs, createFfmpegEncoder, ffmpegAvailable } from "./ffmpeg.js";
-export type { FfmpegEncoderOptions } from "./ffmpeg.js";
+export { validateRenderOptions } from "./options.js";
 
 /** frames x width x height x 4 may not exceed this (PLAN: memory cap). */
 export const MAX_RASTER_BYTES = 1024 ** 3;
@@ -25,19 +25,33 @@ const SVG_MIME = "image/svg+xml";
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");
 
-/** True when the root `<svg>` carries its own width/height (then resvg sizes from those). */
-function hasSizeAttrs(svg: string): boolean {
-  const root = /^<svg\b[^>]*>/.exec(svg.trimStart())?.[0] ?? "";
-  return /\swidth="/.test(root) && /\sheight="/.test(root);
+/**
+ * Pins the root `<svg>` pixel size to the model's view box. A zoomed frame has a smaller
+ * `viewBox`; with fixed width/height resvg renders it at the same pixel size as every other
+ * frame (the zoomed view box keeps the model's aspect ratio).
+ */
+function withRootSize(
+  svg: string,
+  vb: { readonly width: number; readonly height: number },
+): string {
+  return svg.replace(/^(\s*)<svg\b([^>]*)>/, (_m, ws: string, attrs: string) => {
+    const rest = attrs.replace(/\s(?:width|height)="[^"]*"/g, "");
+    return `${ws}<svg width="${vb.width}" height="${vb.height}"${rest}>`;
+  });
 }
 
 export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
+  const invalid = validateRenderOptions(options);
+  if (invalid.some((d) => d.severity === "error")) return { outputs: [], diagnostics: invalid };
   const wanted = new Set<OutputKind>(kinds);
+  if (wanted.has("mp4") && !options.video?.encoder) {
+    throw new Error("mp4 output requires options.video.encoder (the CLI supplies an ffmpeg one)");
+  }
   const outputs: RenderOutput[] = [];
   const diagnostics: Diagnostic[] = [];
   const name = options.name ?? "diagram";
   const speed = options.speed ?? 1;
-  const font = options.font ?? "embed";
+  const font = model.font;
   const finish = (svg: string): string => (options.optimize === false ? svg : deps.optimize(svg));
 
   const svgOutput = (
@@ -103,14 +117,10 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
   let lastPng: Uint8Array | undefined;
   const renderFrame = async (time: number, scale: number): Promise<Uint8Array> => {
     const layer = deps.animator.animate(model, { speed, mode: "frame", time });
-    const svg = deps.emit(model, layer, { font, target: "raster" });
+    const svg = withRootSize(deps.emit(model, layer, { font, target: "raster" }), model.viewBox);
     const key = `${scale}|${svg}`;
     if (lastPng && key === lastSvg) return lastPng;
-    const vb = layer.viewBox ?? model.viewBox;
-    // A zoomed frame has a smaller viewBox: scale up so every frame has the same pixel size.
-    const zoomed = vb.width !== model.viewBox.width && !hasSizeAttrs(svg);
-    const eff = zoomed ? scale * (model.viewBox.width / vb.width) * (1 - 1e-9) : scale;
-    const png = await deps.rasterize(svg, { scale: eff, fonts: model.fontAssets });
+    const png = await deps.rasterize(svg, { scale, fonts: model.fontAssets });
     lastSvg = key;
     lastPng = png;
     return png;
@@ -133,12 +143,21 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
   if (wanted.has("png")) {
     const scale = options.png?.scale ?? 2;
     if (!tooLarge("png", scale, 1)) {
-      outputs.push({
-        kind: "png",
-        path: `${name}.png`,
-        mime: "image/png",
-        data: await renderFrame(options.png?.time ?? 0, scale),
-      });
+      try {
+        outputs.push({
+          kind: "png",
+          path: `${name}.png`,
+          mime: "image/png",
+          data: await renderFrame(options.png?.time ?? 0, scale),
+        });
+      } catch (e) {
+        diagnostics.push({
+          severity: "error",
+          code: "export/raster-failed",
+          path: "",
+          message: `png rasterization failed: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      }
     }
   }
 
@@ -148,26 +167,38 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
     const loop = deps.animator.animate(model, { speed, mode: "loop" }).duration;
     const seconds = Math.min(options.video?.durationSec ?? loop, MAX_VIDEO_SECONDS);
     const count = seconds > 0 ? Math.max(1, Math.round(seconds * fps)) : 1;
+    // Frames are rasterized once and shared by gif and mp4.
+    let frames: Promise<Uint8Array[]> | undefined;
+    const getFrames = (): Promise<Uint8Array[]> =>
+      (frames ??= (async () => {
+        const list: Uint8Array[] = [];
+        for (let i = 0; i < count; i++) list.push(await renderFrame(i / fps, 1));
+        return list;
+      })());
     for (const kind of videoKinds) {
-      if (kind === "mp4" && !options.video?.encoder) {
-        throw new Error(
-          "mp4 output requires options.video.encoder (the CLI supplies an ffmpeg one)",
-        );
-      }
       if (tooLarge(kind, 1, count)) continue;
-      const frames: Uint8Array[] = [];
-      for (let i = 0; i < count; i++) frames.push(await renderFrame(i / fps, 1));
-      const first = frames[0];
-      if (!first) continue;
-      const { width, height } = pngSize(first);
-      const encoder = kind === "mp4" ? options.video?.encoder : gifEncoder;
-      const data = await encoder!.encode(frames, { fps, width, height, format: kind });
-      outputs.push({
-        kind,
-        path: `${name}.${kind}`,
-        mime: kind === "gif" ? "image/gif" : "video/mp4",
-        data,
-      });
+      try {
+        const list = await getFrames();
+        const first = list[0];
+        if (!first) continue;
+        const { width, height } = pngSize(first);
+        const encoder = kind === "mp4" ? options.video?.encoder : gifEncoder;
+        const data = await encoder!.encode(list, { fps, width, height, format: kind });
+        outputs.push({
+          kind,
+          path: `${name}.${kind}`,
+          mime: kind === "gif" ? "image/gif" : "video/mp4",
+          data,
+        });
+      } catch (e) {
+        diagnostics.push({
+          severity: "error",
+          code: "export/encode-failed",
+          path: "",
+          message: `${kind} encoding failed: ${e instanceof Error ? e.message : String(e)}`,
+          params: { kind },
+        });
+      }
     }
   }
 

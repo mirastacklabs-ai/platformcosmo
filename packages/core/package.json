@@ -17,6 +17,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -39,5 +43,8 @@
     "@resvg/resvg-wasm": "2.6.2",
     "ajv": "^8.20.0",
     "gifenc": "1.0.3"
+  },
+  "devDependencies": {
+    "dejavu-fonts-ttf": "2.37.3"
   }
 }
