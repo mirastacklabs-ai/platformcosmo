@@ -86,11 +86,22 @@ function midpoint(pts: readonly Vec2[]): Vec2 {
   return pts[0] ?? { x: 0, y: 0 };
 }
 
-function arrowHead(tip: Vec2, from: Vec2, size: number): Vec2[] | undefined {
+/**
+ * Triangle with its tip exactly at `tip`, pointing along the last non-degenerate segment of
+ * `pts` (walking back from the tip). Undefined when the whole path has no length.
+ */
+function arrowHead(
+  tipIndex: "end" | "start",
+  pts: readonly Vec2[],
+  size: number,
+): Vec2[] | undefined {
+  const order = tipIndex === "end" ? [...pts].reverse() : [...pts];
+  const tip = order[0] as Vec2;
+  const from = order.slice(1).find((q) => Math.hypot(tip.x - q.x, tip.y - q.y) > 1e-6);
+  if (!from) return undefined;
   const dx = tip.x - from.x;
   const dy = tip.y - from.y;
   const len = Math.hypot(dx, dy);
-  if (len < 1e-6) return undefined;
   const ux = dx / len;
   const uy = dy / len;
   const bx = tip.x - ux * size;
@@ -248,6 +259,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
 
     // Icon: upright, flat, centered at the projected anchor (never skewed onto a face).
     const iconNodes: SvgNode[] = [];
+    let aboveTop = bbox.y; // top of the solid or of its floating icon plate
     if (o.icon) {
       const resolved = inputs.icons?.resolve(o.icon.ref);
       let def: SvgNode | undefined;
@@ -258,16 +270,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
           def = undefined; // body failed the emitter's trust check
         }
       }
-      // Too flat to show a legible icon on the front face: draw the solid without one.
-      const tooFlat = o.box.size.z * projection.zScale - 8 < 8;
-      if (tooFlat) {
-        diagnostics.push({
-          severity: "info",
-          code: "render/icon-too-flat",
-          path: "",
-          message: `"${o.id}" is too flat to show its icon legibly; drawn without one.`,
-        });
-      } else if (!resolved || (!def && !iconRefs.has(resolved.ref))) {
+      if (!resolved || (!def && !iconRefs.has(resolved.ref))) {
         diagnostics.push({
           severity: "warning",
           code: "render/icon-unavailable",
@@ -275,19 +278,46 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
           message: `Icon "${o.icon.ref}" for "${o.id}" could not be used; drawn without an icon.`,
         });
       } else {
-        // Plate (icon + 2px each side) stays inside the visible front face / silhouette.
-        const frontH = o.box.size.z * projection.zScale;
-        const s = Math.min(o.icon.size, frontH - 8, bbox.width * 0.6);
-        const a = projection.project(o.icon.anchor);
-        const half = s / 2 + 2;
-        const c = {
-          x: Math.min(Math.max(a.x, bbox.x + half), bbox.x + bbox.width - half),
-          y: Math.min(Math.max(a.y, bbox.y + half), bbox.y + bbox.height - half),
-        };
         const iid = ids.icon(resolved.ref);
         if (def) {
           iconRefs.add(resolved.ref);
           layers.background.push(def);
+        }
+        const frontH = o.box.size.z * projection.zScale;
+        const std = Math.min(o.icon.size, bbox.width * 0.6); // standard size
+        // Shrink on the face down to 0.75x the standard size; below that the plate floats.
+        const floating = frontH - 8 < std * 0.75;
+        let s = std;
+        let c: { x: number; y: number };
+        if (floating) {
+          // Front face too short: the upright plate floats over the top face centre, at the
+          // standard size, with a small shadow on the face (never skewed, never shrunk).
+          const top = projection.project({
+            x: o.box.origin.x + o.box.size.x / 2,
+            y: o.box.origin.y + o.box.size.y / 2,
+            z: o.box.origin.z + o.box.size.z,
+          });
+          c = { x: top.x, y: top.y - s / 2 - 6 };
+          iconNodes.push(
+            h("ellipse", {
+              class: `${P}-shadow`,
+              cx: top.x,
+              cy: top.y,
+              rx: round2(s * 0.42),
+              ry: round2(s * 0.17),
+            }),
+          );
+          extents.push({ x: c.x - s / 2 - 2, y: c.y - s / 2 - 2, width: s + 4, height: s + 4 });
+          aboveTop = Math.min(aboveTop, c.y - s / 2 - 2);
+        } else {
+          // Plate (icon + 2px each side) stays inside the visible front face / silhouette.
+          s = Math.min(std, frontH - 8);
+          const a = projection.project(o.icon.anchor);
+          const half = s / 2 + 2;
+          c = {
+            x: Math.min(Math.max(a.x, bbox.x + half), bbox.x + bbox.width - half),
+            y: Math.min(Math.max(a.y, bbox.y + half), bbox.y + bbox.height - half),
+          };
         }
         iconNodes.push(
           h("rect", {
@@ -331,7 +361,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
           y,
           size: labelSize,
           anchor: "middle",
-          cls: "t-primary",
+          cls: o.source === "dc" ? "t-dc" : "t-primary",
           content: text,
         }),
       );
@@ -345,7 +375,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       const text = fit(o.badge, bs, true, 60);
       const w = measureText(text, bs, "bold") + 10;
       const bh = bs + 6;
-      const by = bbox.y - bh - 2;
+      const by = aboveTop - bh - 2;
       labelNodes.push(
         h(
           "g",
@@ -488,20 +518,16 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     const kids: SvgNode[] = [
       h("path", { id: ids.edgePath(e.id), class: cls.join(" "), d: polylinePath(pts) }),
     ];
-    const last = pts[pts.length - 1] as Vec2;
-    const prev = pts[pts.length - 2] as Vec2;
-    const first = pts[0] as Vec2;
-    const second = pts[1] as Vec2;
     // Arrowheads are drawn in the labels layer so objects never cover them.
     if (e.arrow.end) {
-      const a = arrowHead(last, prev, 9);
+      const a = arrowHead("end", pts, 9);
       if (a)
         arrowNodes.push(
           h("polygon", { class: `${P}-arrow ${ids.edge(e.id)}-arrow`, points: pointsAttr(a) }),
         );
     }
     if (e.arrow.start) {
-      const a = arrowHead(first, second, 9);
+      const a = arrowHead("start", pts, 9);
       if (a)
         arrowNodes.push(
           h("polygon", { class: `${P}-arrow ${ids.edge(e.id)}-arrow`, points: pointsAttr(a) }),
