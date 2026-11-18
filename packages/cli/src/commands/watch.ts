@@ -19,8 +19,6 @@ export async function watchCommand(ctx: Ctx, args: string[]): Promise<number> {
   let running = false;
   let dirty = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  await safeBuild(ctx, s);
-
   const rebuild = async (): Promise<void> => {
     if (running) {
       dirty = true;
@@ -39,6 +37,8 @@ export async function watchCommand(ctx: Ctx, args: string[]): Promise<number> {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => void rebuild(), ctx.deps.watchDebounceMs);
   });
+
+  await rebuild();
 
   await new Promise<void>((done) => {
     const sig = ctx.deps.signal;
