@@ -19,7 +19,7 @@ import type {
   SvgElement,
   SvgNode,
   ThemeTokens,
-} from "../../src/contracts/index.js";
+} from "../../../src/contracts/index.js";
 
 const tones = (top: string, left: string, right: string, stroke = "#334155") => ({
   top,
@@ -415,6 +415,7 @@ export function stripAtRules(css: string): string {
   while (i < css.length) {
     if (css[i] === "@") {
       const open = css.indexOf("{", i);
+      if (open < 0) break;
       let depth = 1;
       let j = open + 1;
       while (j < css.length && depth > 0) {
@@ -445,7 +446,8 @@ export function emit(model: RenderModel, anim: AnimationLayer, options: EmitOpti
     .map(
       (s) =>
         `.${ids.stateClass(s)}{opacity:var(--pc-states-${s}-opacity)}` +
-        `.${ids.stateClass(s)}>.${ids.prefix}-overlay{fill:var(--pc-states-${s}-overlay);stroke:var(--pc-states-${s}-stroke)}`,
+        `.${ids.stateClass(s)}>.${ids.prefix}-overlay{fill:var(--pc-states-${s}-overlay);stroke:var(--pc-states-${s}-stroke)}` +
+        `.${ids.stateClass(s)} .${ids.ledClass()}{fill:var(--pc-dc-led-${s === "degraded" ? "warn" : s === "down" ? "fail" : "ok"})}`,
     )
     .join("\n");
   let css = [varBlock, dark, base, anim.css].filter(Boolean).join("\n");

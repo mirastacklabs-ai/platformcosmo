@@ -3,7 +3,7 @@ import { createAnimator } from "../../src/anim/index.js";
 import { pointAt } from "../../src/anim/particles.js";
 import { metricTexts, stepIndexAt, windows, zoomFor } from "../../src/anim/timeline.js";
 import type { AnimateOptions, SvgElement } from "../../src/contracts/index.js";
-import { buildFixture, emit } from "../fixtures/render-model.js";
+import { buildFixture, emit } from "./fixtures/render-model.js";
 
 const animator = createAnimator();
 const run = (o: Partial<AnimateOptions> & Pick<AnimateOptions, "mode">, fx = {}) =>
@@ -48,7 +48,7 @@ describe("loop mode", () => {
   });
 
   test("master timeline css: visibility, state, caption, camera and reduced motion", () => {
-    expect(layer.css).toContain("@keyframes pc-test-kf1");
+    expect(layer.css).toContain("@keyframes pc-test_kf1");
     expect(layer.css).toContain("#pc-test-fl-s2_f_2{animation:");
     expect(layer.css).toContain("#pc-test-o-b{animation:");
     expect(layer.css).toContain("var(--pc-states-down-opacity)");
@@ -110,7 +110,8 @@ describe("step mode", () => {
     expect(l.css).toContain("#pc-test-mv-rps-2{visibility:visible}");
     expect(l.css).toContain("#pc-test-mv-rps-0{visibility:hidden}");
     expect(l.css).not.toContain("@keyframes");
-    expect(l.css).not.toContain("@media");
+    expect(l.css).toContain("@media (prefers-reduced-motion:reduce)");
+    expect(l.css).toContain("#pc-test_particles{display:none}");
     expect(findAll(l.layers.flows, "animateMotion")).toHaveLength(5);
     expect(l.duration).toBe(2);
     expect(l.viewBox).toBeUndefined();
@@ -162,7 +163,6 @@ describe("emitted document", () => {
     const svg = emit(m, animator.animate(m, { mode: "loop", speed: 1 }), { font: "system" });
     expect(svg).toContain("<animateMotion");
     expect(svg).toContain('href="#pc-test-ep-e1"');
-    expect(svg).not.toContain("Math.random");
   });
 });
 

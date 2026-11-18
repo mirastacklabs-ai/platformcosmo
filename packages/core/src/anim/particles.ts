@@ -28,7 +28,7 @@ export class ParticleColors {
     const value = cssColor(flow);
     let cls = this.byValue.get(value);
     if (cls === undefined) {
-      cls = `${this.prefix}-pc${this.byValue.size + 1}`;
+      cls = `${this.prefix}_pc${this.byValue.size + 1}`;
       this.byValue.set(value, cls);
       this.rules.push(`.${cls}{fill:${value}}`);
     }
@@ -64,7 +64,8 @@ export function smilFlow(
   speed: number,
   colors: ParticleColors,
 ): SvgElement | undefined {
-  if (!model.edgePaths[flow.edge]) return undefined;
+  const path = model.edgePaths[flow.edge];
+  if (!path || path.points.length < 2) return undefined;
   const n = particleCount(flow);
   const period = traversalSeconds(speed);
   const cls = colors.classFor(flow);

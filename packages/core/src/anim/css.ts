@@ -37,7 +37,7 @@ export class Keyframes {
     const body = stops.map(([f, decl]) => `${pct(f)}{${decl}}`).join("");
     let name = this.byBody.get(body);
     if (name === undefined) {
-      name = `${this.prefix}-kf${this.byBody.size + 1}`;
+      name = `${this.prefix}_kf${this.byBody.size + 1}`;
       this.byBody.set(body, name);
       this.order.push(`@keyframes ${name}{${body}}`);
     }

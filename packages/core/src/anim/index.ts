@@ -27,7 +27,9 @@ import {
   inverseCameraTransform,
   metricTexts,
   stateAt,
+  frameViewBox,
   stepIndexAt,
+  transitionSeconds,
   windows,
   zoomFor,
   type Windows,
@@ -154,16 +156,21 @@ function frameLayer(
   time: number,
   colors: ParticleColors,
 ): AnimationLayer {
-  const k = stepIndexAt(win, time);
-  const groups = compact(
-    flowsOfStep(model, k).map((f) => frozenFlow(model, f, speed, time, colors)),
+  const t = Number.isFinite(time) ? time : 0;
+  const k = stepIndexAt(win, t);
+  const groups = compact(flowsOfStep(model, k).map((f) => frozenFlow(model, f, speed, t, colors)));
+  // Same camera curve as the loop's keyframes, so GIF/MP4 frames ease between steps.
+  const viewBox = frameViewBox(
+    model,
+    win,
+    model.scene.timeline.map((s) => zoomFor(model, s)),
+    t,
   );
-  const zoom = zoomFor(model, model.scene.timeline[k]);
   return {
     css: join(colors.css(), staticStepCss(model, k)),
     defs: [],
     layers: wrap(model, groups),
-    ...(zoom ? { viewBox: zoom.viewBox } : {}),
+    ...(viewBox ? { viewBox } : {}),
     duration: 0,
   };
 }
@@ -175,12 +182,18 @@ function stepLayer(
   colors: ParticleColors,
 ): AnimationLayer {
   const count = model.scene.timeline.length;
-  const k = count === 0 ? 0 : Math.min(count, Math.max(1, step ?? 1)) - 1;
+  const wanted = Number.isFinite(step) ? Math.floor(step as number) : 1;
+  const k = count === 0 ? 0 : Math.min(count, Math.max(1, wanted)) - 1;
   const flows = flowsOfStep(model, k);
   const groups = compact(flows.map((f) => smilFlow(model, f, speed, colors)));
   const zoom = zoomFor(model, model.scene.timeline[k]);
+  // SMIL particles cannot be paused by CSS: hide them under reduced motion.
+  const reduced =
+    groups.length > 0
+      ? `@media (prefers-reduced-motion:reduce){\n${model.ids.sel(particlesId(model.ids.prefix))}{display:none}\n}`
+      : "";
   return {
-    css: join(colors.css(), staticStepCss(model, k)),
+    css: join(colors.css(), staticStepCss(model, k), reduced),
     defs: [],
     layers: wrap(model, groups),
     ...(zoom ? { viewBox: zoom.viewBox } : {}),
@@ -204,6 +217,7 @@ function loopLayer(
   const n = tl.length;
   const total = win.total;
   const kf = new Keyframes(ids.prefix);
+  const trs = win.durations.map(transitionSeconds);
   const rules: string[] = [];
   const reduced: string[] = [];
   const loopAnim = (name: string, timing = "step-end") =>
@@ -299,15 +313,18 @@ function loopLayer(
       rules.push(`${cam}{transform-origin:0 0;transform:${transforms[0]}}`);
       if (interactive) rules.push(`${controlsSel}{transform-origin:0 0;transform:${inverses[0]}}`);
     } else {
-      const trs = win.durations.map((d) => Math.min(0.8, 0.25 * d));
+      // 0% shows step 1's view; each transition fills the END of the previous step and lands
+      // exactly on the next step's start, so every step starts at its own view.
       const stops = (list: readonly string[]): [number, string][] => {
-        const out: [number, string][] = [];
-        list.forEach((v, i) => {
-          const prev = list[(i + n - 1) % n] ?? v;
-          out.push([(win.starts[i] ?? 0) / total, `transform:${prev}`]);
-          out.push([((win.starts[i] ?? 0) + (trs[i] ?? 0)) / total, `transform:${v}`]);
-        });
-        out.push([1, `transform:${list[n - 1] ?? IDENTITY_TRANSFORM}`]);
+        const at = (i: number) => list[i] ?? IDENTITY_TRANSFORM;
+        const out: [number, string][] = [[0, `transform:${at(0)}`]];
+        for (let i = 1; i < n; i++) {
+          const start = win.starts[i] ?? 0;
+          out.push([(start - (trs[i - 1] ?? 0)) / total, `transform:${at(i - 1)}`]);
+          out.push([start / total, `transform:${at(i)}`]);
+        }
+        out.push([(total - (trs[n - 1] ?? 0)) / total, `transform:${at(n - 1)}`]);
+        out.push([1, `transform:${at(0)}`]);
         return out;
       };
       const camName = kf.add(stops(transforms));
@@ -317,8 +334,9 @@ function loopLayer(
         rules.push(`${controlsSel}{transform-origin:0 0;${loopAnim(invName, EASE)}}`);
       }
     }
-    reduced.push(`${cam}{transform:none}`);
-    if (interactive) reduced.push(`${controlsSel}{transform:none}`);
+    // Reduced motion pauses at the static frame: step 1's view.
+    reduced.push(`${cam}{transform:${transforms[0]}}`);
+    if (interactive) reduced.push(`${controlsSel}{transform:${inverses[0]}}`);
   }
 
   // Reduced motion: no CSS animation (static first frame), particles hidden (SMIL cannot be paused by CSS).
@@ -341,18 +359,12 @@ function loopLayer(
     const cid = controlIds(ids.prefix, ids.root());
     layers.overlay = [controlNodes(ids.prefix, cid, model.viewBox)];
     controlCssText = controlCss(ids.prefix);
-    const trs = win.durations.map((d) => Math.min(0.8, 0.25 * d));
-    const settled = win.starts.map((s, i) => s + (trs[i] ?? 0));
-    script = interactiveScript(
-      cid,
-      win.starts,
-      settled,
-      total > 0 ? total : traversalSeconds(speed),
-    );
+    script = interactiveScript(cid, win.starts, total > 0 ? total : traversalSeconds(speed));
   }
 
+  // The loop length is the master timeline only if something on it changes value.
   const hasFlows = flowGroups.length > 0;
-  const duration = n > 0 ? total : hasFlows ? traversalSeconds(speed) : 0;
+  const duration = rules.length > 0 ? total : hasFlows ? traversalSeconds(speed) : 0;
   return {
     css: join(colors.css(), controlCssText, kf.css(), rules.join("\n"), reducedCss),
     defs: [],

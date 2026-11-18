@@ -44,19 +44,24 @@ function button(id: string, cls: string, label: string, x: number, y: number): S
   );
 }
 
-/** Control nodes for the `overlay` layer (bottom-left of the view box). */
+/**
+ * Control nodes for the `overlay` layer (bottom-left of the view box). The layer sits inside the
+ * camera group, so under zoom the controls carry the inverse of the camera keyframes (same
+ * timing, same easing) and stay put on screen; transform values are rounded to 4 decimals, so
+ * they can drift by far less than a pixel mid-transition.
+ */
 export function controlNodes(prefix: string, ids: ControlIds, viewBox: Rect): SvgElement {
-  const cls = `${prefix}-btn`;
+  const cls = `${prefix}_btn`;
   const y = viewBox.y + viewBox.height - BTN_H - 12;
   const x = viewBox.x + 12;
-  return el("g", { id: ids.group }, [
+  return el("g", { id: ids.group, role: "group", "aria-label": "Animation controls" }, [
     button(ids.play, cls, "Pause", x, y),
     button(ids.step, cls, "Step", x + BTN_W + GAP, y),
   ]);
 }
 
 export function controlCss(prefix: string): string {
-  const b = `.${prefix}-btn`;
+  const b = `.${prefix}_btn`;
   return [
     `${b}{cursor:pointer;outline:none}`,
     `${b} rect{fill:var(--pc-metric-fill);stroke:var(--pc-metric-stroke);stroke-width:1}`,
@@ -65,11 +70,11 @@ export function controlCss(prefix: string): string {
   ].join("\n");
 }
 
-/** `starts`/`settled` are per-step seconds; `total` the loop length. */
+/** `starts` are per-step start seconds (the camera has already settled on each step's view there); `total` the loop length. */
 export function interactiveScript(
   ids: ControlIds,
   starts: readonly number[],
-  settled: readonly number[],
+
   total: number,
 ): string {
   const nums = (a: readonly number[]) => `[${a.map(t4).join(",")}]`;
@@ -78,7 +83,7 @@ var svg=document.getElementById(${JSON.stringify(ids.root)});
 var play=document.getElementById(${JSON.stringify(ids.play)});
 var step=document.getElementById(${JSON.stringify(ids.step)});
 if(!svg||!play||!step||!svg.getAnimations)return;
-var S=${nums(starts)},R=${nums(settled)},T=${t4(total)},playing=true;
+var S=${nums(starts)},T=${t4(total)},playing=true;
 var label=play.getElementsByTagName("text")[0];
 function anims(){return svg.getAnimations({subtree:true}).filter(function(a){return a.animationName!==undefined;});}
 function now(){var a=anims()[0];return a&&T>0?((a.currentTime/1000)%T+T)%T:0;}
@@ -94,7 +99,7 @@ play.setAttribute("aria-label",p?"Pause":"Play");
 function onStep(){
 if(!S.length)return;
 set(false);
-seek(R[(index()+1)%S.length]);
+seek(S[(index()+1)%S.length]);
 }
 function bind(node,fn){
 node.addEventListener("click",fn);

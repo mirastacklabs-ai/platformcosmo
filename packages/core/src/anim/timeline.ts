@@ -106,15 +106,79 @@ export function metricTexts(
   const shown: number[] = [];
   let prev = String(base);
   let current = 0;
-  timeline.forEach((s, i) => {
+  timeline.forEach((s) => {
     const raw = s.metrics[id];
     const v = raw === undefined ? prev : String(raw);
     if (v !== prev) {
-      current = i + 1;
+      current = s.index;
       ns.push(current);
       prev = v;
     }
     shown.push(current);
   });
   return { ns, shown };
+}
+
+/** Length of the camera transition at the end of a step (it leads into the next step's view). */
+export function transitionSeconds(stepDuration: number): number {
+  return Math.min(0.8, 0.25 * stepDuration);
+}
+
+interface Cam {
+  readonly s: number;
+  readonly tx: number;
+  readonly ty: number;
+}
+
+const camOf = (z: Zoom | undefined): Cam =>
+  z ? { s: z.scale, tx: z.tx, ty: z.ty } : { s: 1, tx: 0, ty: 0 };
+
+/** CSS `cubic-bezier(.4,0,.2,1)`: progress for linear time `x` in 0..1 (bisection, deterministic). */
+export function ease(x: number): number {
+  const bez = (a: number, b: number, u: number) =>
+    3 * a * u * (1 - u) ** 2 + 3 * b * u * u * (1 - u) + u ** 3;
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    if (bez(0.4, 0.2, mid) < x) lo = mid;
+    else hi = mid;
+  }
+  return bez(0, 1, (lo + hi) / 2);
+}
+
+/**
+ * View box of a frame at `time`, following the same curve as the loop's CSS camera keyframes:
+ * hold the step's view, then ease into the next step's view during the step's last transition.
+ * Undefined for the full view.
+ */
+export function frameViewBox(
+  model: RenderModel,
+  w: Windows,
+  zooms: readonly (Zoom | undefined)[],
+  time: number,
+): Rect | undefined {
+  const n = zooms.length;
+  if (n === 0 || w.total <= 0) return undefined;
+  const k = stepIndexAt(w, time);
+  const t = ((time % w.total) + w.total) % w.total;
+  const end = (w.starts[k] ?? 0) + (w.durations[k] ?? 0);
+  const tr = transitionSeconds(w.durations[k] ?? 0);
+  const here = zooms[k];
+  const next = zooms[(k + 1) % n];
+  if (n === 1 || here === next || t < end - tr) return here?.viewBox;
+  const f = ease((t - (end - tr)) / tr);
+  const a = camOf(here);
+  const b = camOf(next);
+  const s = a.s + (b.s - a.s) * f;
+  const tx = a.tx + (b.tx - a.tx) * f;
+  const ty = a.ty + (b.ty - a.ty) * f;
+  if (s <= 1.0001) return undefined;
+  const v = model.viewBox;
+  return {
+    x: r2((v.x - tx) / s),
+    y: r2((v.y - ty) / s),
+    width: r2(v.width / s),
+    height: r2(v.height / s),
+  };
 }
