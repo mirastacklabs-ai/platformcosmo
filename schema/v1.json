@@ -197,7 +197,7 @@
       "title": "SpecColor",
       "type": "string",
       "pattern": "^(#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6}|blue|green|red|orange|yellow|purple|teal|pink|gray|normal|heavy|health|failed|airflow|power)$",
-      "description": "#rgb or #rrggbb hex, a palette name (blue, green, red, orange, yellow, purple, teal, pink, gray) or a flow kind name."
+      "description": "#rgb or #rrggbb hex, a palette name (blue, green, red, orange, yellow, purple, teal, pink, gray) or a flow kind name. Flow kind names: normal, heavy, health, failed, airflow, power."
     },
     "state": {
       "title": "SpecState",
@@ -601,8 +601,7 @@
         },
         "state": {
           "$ref": "#/$defs/state",
-          "description": "Operational state of the device in the slot.",
-          "default": "healthy"
+          "description": "Device state. Omit to inherit the rack state."
         }
       }
     },
@@ -660,8 +659,7 @@
         },
         "facing": {
           "enum": ["front", "back"],
-          "description": "Direction the row's equipment faces: front or back.",
-          "default": "front"
+          "description": "Which side of the rack faces the row front. Omit to derive it from the aisles: rows face their cold aisle and turn their backs to their hot aisle."
         }
       }
     },
@@ -798,7 +796,7 @@
       ]
     }
   },
-  "x-revision": "1.1.1",
+  "x-revision": "1.1.2",
   "anyOf": [
     {
       "required": ["nodes"],
