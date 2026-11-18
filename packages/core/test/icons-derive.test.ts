@@ -1,7 +1,7 @@
 import { strToU8 } from "fflate";
 import { describe, expect, test } from "vitest";
 import type { IconHttpClient } from "../src/index.js";
-import { derivePackSource, fetchIconPack } from "../src/icons/index.js";
+import { PACK_ID_RE, derivePackSource, fetchIconPack } from "../src/icons/index.js";
 
 const d = (u: string) => derivePackSource(new URL(u));
 
@@ -56,6 +56,20 @@ describe("derivePackSource", () => {
     expect(d(u).id).toBe(id);
   });
 
+  test("control characters and bidi overrides never reach the description", () => {
+    for (const u of [
+      "https://github.com/ow%1Bner/rep%1b[31mo/tree/main/ic%E2%80%AEons",
+      "https://github.com/o/r/tree/main/%E2%80%AEevil%E2%81%A6x%C2%85y%7F",
+      "https://example.com/a%1B[31m%E2%80%AE/b%0A",
+    ]) {
+      const { id, description } = d(u);
+      // eslint-disable-next-line no-control-regex
+      expect(description, u).not.toMatch(/[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/);
+      expect(id, u).toMatch(PACK_ID_RE);
+    }
+    expect(d("https://github.com/o/r%1b[31m/tree/main").description).toBe("o/r[31m");
+  });
+
   test("ids always satisfy the pack id rule", () => {
     for (const u of [
       "https://example.com/" + "x".repeat(80) + ".zip",
@@ -100,6 +114,18 @@ describe("fetchIconPack derives the pack id", () => {
     expect(r.pack?.manifest.pack.id).toBe("feather");
     expect(r.pack?.manifest.pack.name).toBe("feathericons/feather (icons)");
     expect(r.pack?.manifest.icons.map((i) => i.id)).toEqual(["user", "users"]);
+  });
+
+  test("URL sources cannot take a provider or bundled pack id", async () => {
+    for (const repo of ["aws", "azure", "gcp", "cncf", "lucide", "cosmo"]) {
+      const r = await fetchIconPack(`https://github.com/x/${repo}/tree/main`, { http });
+      expect(r.pack, repo).toBeUndefined();
+      expect(
+        r.diagnostics.map((x) => x.code),
+        repo,
+      ).toEqual(["icons/reserved-pack-id"]);
+      expect(r.diagnostics[0]?.message).toContain("--id");
+    }
   });
 
   test("an explicit packId still wins", async () => {

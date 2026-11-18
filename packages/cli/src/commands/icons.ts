@@ -33,6 +33,9 @@ Options:
   --packs-dir <dir>   Pack directory (default: $CLAUDE_PLUGIN_DATA/icons or ~/.platformcosmo/icons)
   -h, --help          Show this help
 
+Failures are plain text on stderr with exit code 1 (usage errors exit 2); --json only changes
+the output of a successful add.
+
 The only network access in pcosmo is \`icons add\` with a URL or provider id (https, public
 addresses only, size and time limited).
 `;

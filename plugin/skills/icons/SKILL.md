@@ -58,6 +58,8 @@ validated (below).
    `https://github.com/feathericons/feather/tree/main/icons` becomes `feather`). When the user names the set ("the
    Feather icon set"), pass `--id feather` so the id matches what they will ask for. An id that is already
    installed is an error: pick another `--id` instead of replacing it.
+7. **Failures** are plain text on stderr with exit code 1 (never JSON, even with `--json`, which only changes the
+   output of a successful `add`). Report the message to the user as it is.
 
 ## Custom pack format
 

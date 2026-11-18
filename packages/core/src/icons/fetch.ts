@@ -39,7 +39,8 @@ export const FETCH_LIMITS = {
 } as const;
 
 const RESERVED_PACK_IDS = new Set(["cosmo", "lucide", "k8s", "simple"]);
-const PACK_ID_RE = /^[a-z][a-z0-9-]{0,30}$/;
+/** The one pack id rule (CLI and core): lowercase kebab-case, at most 32 characters. */
+export const PACK_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 class ArchiveError extends Error {
   constructor(
@@ -817,6 +818,25 @@ const GENERIC_SEGMENTS = new Set([
   "tags",
 ]);
 
+/** Removes C0/C1 control characters and bidirectional overrides/isolates from display text. */
+function cleanText(s: string): string {
+  let out = "";
+  for (const ch of s) {
+    const c = ch.codePointAt(0) as number;
+    if (c <= 0x1f || (c >= 0x7f && c <= 0x9f)) continue;
+    if (
+      c === 0x200e ||
+      c === 0x200f ||
+      (c >= 0x202a && c <= 0x202e) ||
+      (c >= 0x2066 && c <= 0x2069)
+    ) {
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 function packIdFrom(s: string): string | undefined {
   const id = kebab(s);
   if (!id) return undefined;
@@ -834,9 +854,9 @@ export function derivePackSource(url: URL): { id: string; description: string } 
     .filter(Boolean)
     .map((s) => {
       try {
-        return decodeURIComponent(s);
+        return cleanText(decodeURIComponent(s));
       } catch {
-        return s;
+        return cleanText(s);
       }
     });
   const host = url.hostname.toLowerCase();
@@ -927,7 +947,8 @@ export const fetchIconPack: FetchIconPackFn = async (source, options) => {
     const gh = chk.url.hostname === "github.com" ? GITHUB_TREE_RE.exec(chk.url.pathname) : null;
     const derived = derivePackSource(chk.url);
     const id = packId ?? derived.id;
-    if (RESERVED_PACK_IDS.has(id))
+    // URL packs must not shadow a bundled pack or a provider id (aws, azure, gcp, cncf).
+    if (RESERVED_PACK_IDS.has(id) || Object.hasOwn(PROVIDERS, id))
       return fail("reserved-pack-id", `pack id "${id}" is reserved; pass --id`);
     const info = (version: string): IconPackInfo => ({
       id,

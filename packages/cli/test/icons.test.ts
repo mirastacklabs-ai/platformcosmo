@@ -222,6 +222,51 @@ describe("icons add prints the pack id and an example ref", () => {
     expect(again.stderr).toContain("--id");
   });
 
+  test("--force replaces only the named pack; other packs and lock entries stay intact", async () => {
+    const dir = await tmp();
+    const packs = join(dir, "p");
+    let svg = "<svg viewBox='0 0 1 1'/>";
+    const core = makeCore({
+      fetchIconPack: (source, o) =>
+        Promise.resolve({
+          pack: iconPack(o.packId ?? "x", svg),
+          lock: {
+            source,
+            resolved: source,
+            integrity: "sha256-x",
+            license: "MIT",
+            redistributable: true,
+            iconCount: 1,
+          },
+          diagnostics: [],
+        }),
+    });
+    const deps = makeDeps(dir, { core });
+    for (const id of ["aaa", "bbb"]) {
+      expect((await run(["icons", "add", url, "--id", id, "--packs-dir", packs], deps)).code).toBe(
+        0,
+      );
+    }
+    const lockBefore = JSON.parse(await readFile(join(packs, LOCKFILE_NAME), "utf8"));
+    const bFile = join(packs, "bbb", "svg", "dot.svg");
+    const bBefore = await readFile(bFile, "utf8");
+
+    svg = "<svg viewBox='0 0 2 2'/>";
+    const noForce = await run(["icons", "add", url, "--id", "aaa", "--packs-dir", packs], deps);
+    expect(noForce.code).toBe(1);
+    expect(await readFile(join(packs, "aaa", "svg", "dot.svg"), "utf8")).toContain("0 0 1 1");
+
+    expect(
+      (await run(["icons", "add", url, "--id", "aaa", "--force", "--packs-dir", packs], deps)).code,
+    ).toBe(0);
+    expect(await readFile(join(packs, "aaa", "svg", "dot.svg"), "utf8")).toContain("0 0 2 2");
+    expect(await readFile(bFile, "utf8")).toBe(bBefore);
+    const lockAfter = JSON.parse(await readFile(join(packs, LOCKFILE_NAME), "utf8"));
+    expect(lockAfter.packs.bbb).toEqual(lockBefore.packs.bbb);
+    expect(lockAfter.packs.aaa.integrity).not.toBe(lockBefore.packs.aaa.integrity);
+    expect(Object.keys(lockAfter.packs).sort()).toEqual(["aaa", "bbb"]);
+  });
+
   test("search --pack restricts results to one pack", async () => {
     const dir = await tmp();
     let seen = "";
