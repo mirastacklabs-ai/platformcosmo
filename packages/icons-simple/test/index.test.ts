@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { createIconResolver, sanitizeSvg } from "../../core/src/icons/index.js";
 import { expectNoDrift } from "../../icons-base/test/drift.js";
@@ -46,6 +46,33 @@ describe("icons-simple", () => {
         expect(r.svg.body).toContain("currentColor");
       }
     }
+  });
+
+  test("every MIT/Apache icon has an entry and the full license texts are shipped", () => {
+    const notice = readFileSync(new URL("../NOTICE-SIMPLE-ICONS.txt", import.meta.url), "utf8");
+    const mirror = readFileSync(
+      new URL("../../../LICENSES/NOTICE-SIMPLE-ICONS.txt", import.meta.url),
+      "utf8",
+    );
+    expect(mirror).toBe(notice);
+    const nonCc0 = pack.manifest.icons.filter((e) => e.license !== "CC0-1.0");
+    expect(nonCc0.length).toBeGreaterThan(0);
+    for (const e of nonCc0) {
+      expect(notice, e.id).toContain(`(simple:${e.id})`);
+      expect(e.sourceUrl, e.id).toMatch(/^https:\/\//);
+      expect(notice, e.id).toContain(e.sourceUrl as string);
+    }
+    expect(notice).toContain("Permission is hereby granted, free of charge");
+    expect(notice).toContain("Apache License");
+    expect(notice).toContain("Version 2.0, January 2004");
+    expect(notice).toMatch(/Linux Foundation trademark usage guidelines/);
+  });
+
+  test("CNCF/LF-hosted marks carry the Linux Foundation trademark note", () => {
+    expect(pack.manifest.pack.trademarkNotice).toMatch(
+      /Linux Foundation trademark usage guidelines/,
+    );
+    expect(pack.manifest.icons.some((e) => e.id === "fluentd")).toBe(true);
   });
 
   test("notices are shipped", () => {

@@ -24,7 +24,8 @@
     "LICENSE",
     "NOTICE",
     "LICENSE-SIMPLE-ICONS.txt",
-    "DISCLAIMER-SIMPLE-ICONS.txt"
+    "DISCLAIMER-SIMPLE-ICONS.txt",
+    "NOTICE-SIMPLE-ICONS.txt"
   ],
   "engines": {
     "node": ">=22.12"

@@ -12,7 +12,7 @@ export const pack: LoadedIconPack = {
       "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0",
       "attribution": "Kubernetes Icons Set, Copyright The Kubernetes Authors, Apache-2.0 (used under the Apache-2.0 option of Apache-2.0 or CC-BY-4.0). Modified: editor metadata removed, numbers rounded.",
       "trademarkNotice": "Kubernetes is a registered trademark of The Linux Foundation; use of the Kubernetes logo as a trademark is subject to the Linux Foundation Trademark Usage Guidelines (https://www.linuxfoundation.org/legal/trademark-usage).",
-      "source": "https://github.com/kubernetes/community/tree/main/icons",
+      "source": "https://github.com/kubernetes/community/tree/07db4ef4ba5a90903f3dd5e35976970dafa1face/icons",
       "redistributable": true
     },
     "icons": [

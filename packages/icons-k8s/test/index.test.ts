@@ -19,6 +19,7 @@ describe("icons-k8s", () => {
     });
     expect(pack.manifest.pack.trademarkNotice).toMatch(/Linux Foundation/);
     expect(pack.manifest.pack.version).toMatch(/^community@[0-9a-f]{12}$/);
+    expect(pack.manifest.pack.source).toMatch(/kubernetes\/community\/tree\/[0-9a-f]{40}\/icons$/);
     expect(pack.manifest.icons.length).toBeGreaterThanOrEqual(30);
   });
 

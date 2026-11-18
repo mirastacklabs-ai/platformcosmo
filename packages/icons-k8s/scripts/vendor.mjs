@@ -1,4 +1,6 @@
-// Dev-time vendoring script (not part of the build). Control-plane "labeled" icons are omitted: their only difference is a text label, which the sanitizer strips.
+// Dev-time vendoring script (not part of the build). Control-plane "labeled" icons are omitted (identical once text is stripped). Fetch the pinned commit (curl -sL https://codeload.github.com/kubernetes/community/tar.gz/<sha> | tar xz --strip-components=1 --include "*/icons/*" into a scratch dir), then from the repo root:
+//   docker run --rm -v "$PWD":/work -w /work node:24.21-bookworm-slim node packages/icons-k8s/scripts/vendor.mjs <scratch> packages/icons-k8s 07db4ef4ba5a90903f3dd5e35976970dafa1face
+//   docker run --rm -v "$PWD":/work -w /work node:24.21-bookworm-slim node packages/icons-base/scripts/gen-pack.mjs packages/icons-k8s
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { sanitizeSvg } from "../../core/src/icons/sanitize.ts";
 
@@ -108,7 +110,7 @@ const manifest = {
       "Kubernetes Icons Set, Copyright The Kubernetes Authors, Apache-2.0 (used under the Apache-2.0 option of Apache-2.0 or CC-BY-4.0). Modified: editor metadata removed, numbers rounded.",
     trademarkNotice:
       "Kubernetes is a registered trademark of The Linux Foundation; use of the Kubernetes logo as a trademark is subject to the Linux Foundation Trademark Usage Guidelines (https://www.linuxfoundation.org/legal/trademark-usage).",
-    source: "https://github.com/kubernetes/community/tree/main/icons",
+    source: `https://github.com/kubernetes/community/tree/${sha}/icons`,
     redistributable: true,
   },
   icons,

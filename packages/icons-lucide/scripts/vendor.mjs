@@ -1,5 +1,7 @@
-// Dev-time vendoring script (not part of the build). See the header of icons.json for the pinned upstream.
-import { readFileSync, readdirSync, writeFileSync, mkdirSync, copyFileSync } from "node:fs";
+// Dev-time vendoring script (not part of the build). Fetch lucide-static 1.75.0 (curl -sL https://registry.npmjs.org/lucide-static/-/lucide-static-1.75.0.tgz | tar xz into a scratch dir -> ./package), then from the repo root:
+//   docker run --rm -v "$PWD":/work -w /work node:24.21-bookworm-slim node packages/icons-lucide/scripts/vendor.mjs <scratch>/package packages/icons-lucide
+//   docker run --rm -v "$PWD":/work -w /work node:24.21-bookworm-slim node packages/icons-base/scripts/gen-pack.mjs packages/icons-lucide
+import { readFileSync, readdirSync, writeFileSync, mkdirSync, copyFileSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 
 const up = process.argv[2]; // lucide-static package dir
@@ -53,6 +55,7 @@ for (const f of files) {
 }
 const tags = JSON.parse(readFileSync(`${up}/tags.json`, "utf8"));
 
+rmSync(`${out}/svg`, { recursive: true, force: true });
 mkdirSync(`${out}/svg`, { recursive: true });
 const icons = [];
 const missing = [];
@@ -83,7 +86,7 @@ for (const [category, list] of Object.entries(groups)) {
     });
   }
 }
-if (missing.length) console.error("MISSING:", missing.join(" "));
+if (missing.length) throw new Error(`missing from lucide-static: ${missing.join(" ")}`);
 icons.sort((a, b) => (a.id < b.id ? -1 : 1));
 const manifest = {
   manifestVersion: 1,

@@ -11,7 +11,7 @@ export const pack: LoadedIconPack = {
       "license": "CC0-1.0",
       "licenseUrl": "https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md",
       "attribution": "Simple Icons contributors. Only icons whose data entry declares CC0-1.0, MIT or Apache-2.0 are included; each icon's license is recorded in icons.json.",
-      "trademarkNotice": "All brand names, logos and marks are trademarks of their respective owners. Their inclusion implies no affiliation or endorsement. See https://github.com/simple-icons/simple-icons/blob/develop/DISCLAIMER.md.",
+      "trademarkNotice": "All brand names, logos and marks are trademarks of their respective owners. Their inclusion implies no affiliation or endorsement. See https://github.com/simple-icons/simple-icons/blob/develop/DISCLAIMER.md. Marks of projects hosted by the CNCF or the Linux Foundation (for example Fluentd and Rook) are also subject to the Linux Foundation trademark usage guidelines (https://www.linuxfoundation.org/legal/trademark-usage).",
       "source": "https://github.com/simple-icons/simple-icons",
       "redistributable": true
     },
