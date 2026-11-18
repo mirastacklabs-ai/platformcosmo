@@ -12,3 +12,21 @@ export { optimize } from "./optimize/index.js";
 export { createAnimator } from "./anim/index.js";
 export { exportOutputs, rasterize, gifEncoder } from "./export/index.js";
 export { sanitizeSvg, createIconResolver, fetchIconPack } from "./icons/index.js";
+
+// Geometry (Track A1): projection and primitive solids.
+export {
+  createProjection,
+  primitiveFaces,
+  primitiveSilhouette,
+  boxCorners,
+  projectBoxBounds,
+  boundsOfPoints,
+  unionRects,
+  convexHull,
+  pointsToPath,
+  faceToPath,
+  round2,
+  fmt,
+  DEFAULT_TILE_WIDTH,
+} from "./geometry/index.js";
+export type { ProjectionOptions, Silhouette } from "./geometry/index.js";
