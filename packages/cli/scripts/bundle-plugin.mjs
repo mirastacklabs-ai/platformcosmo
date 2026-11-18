@@ -8,7 +8,7 @@
 //
 // The output is minified with no path comments, so it is byte-stable for identical sources.
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { build } from "esbuild";
 
@@ -21,8 +21,62 @@ const src = (pkg) => `${root}packages/${pkg}/src/index.ts`;
 const BANNER =
   '/* eslint-disable */\nimport{createRequire as __pcRequire}from"node:module";const require=__pcRequire(import.meta.url);';
 
+// css-tree (via SVGO/csso) loads JSON with createRequire(import.meta.url).require(...), which cannot
+// work once everything is one file. Rewrite those few modules to static JSON imports.
+const inlineRequires = {
+  name: "inline-css-tree-requires",
+  setup(b) {
+    b.onLoad(
+      { filter: /[\\/](?:css-tree|csso)[\\/]lib[\\/](version|data-patch|data)\.js$/ },
+      (args) => {
+        let code = readFileSync(args.path, "utf8");
+        code = code
+          .replace(/import \{ createRequire \} from ['"]module['"];\n?/, "")
+          .replace(/const require = createRequire\(import\.meta\.url\);\n?/, "");
+        const imports = [];
+        code = code.replace(/require\((['"])([^'"]+)\1\)/g, (_m, _q, spec) => {
+          const name = `__req${imports.length}`;
+          imports.push(`import ${name} from ${JSON.stringify(spec)};`);
+          return name;
+        });
+        if (imports.length === 0)
+          throw new Error(`css-tree rewrite found no require() in ${args.path}`);
+        return {
+          contents: `${imports.join("\n")}\n${code}`,
+          loader: "js",
+          resolveDir: dirname(args.path),
+        };
+      },
+    );
+    // core reads the resvg wasm from node_modules unless setResvgWasm ran first (the entry below does).
+    b.onLoad({ filter: /[\\/]export[\\/]rasterize\.ts$/ }, (args) => {
+      const code = readFileSync(args.path, "utf8");
+      const re =
+        /createRequire\(import\.meta\.url\)\.resolve\(\s*"@resvg\/resvg-wasm\/index_bg\.wasm"\s*\)/;
+      if (!re.test(code)) throw new Error("core rasterize.ts changed; update the bundle rewrite");
+      return {
+        contents: code.replace(re, '"<bundled>"'),
+        loader: "ts",
+        resolveDir: dirname(args.path),
+      };
+    });
+  },
+};
+
 const result = await build({
-  entryPoints: [`${root}packages/cli/src/bin.ts`],
+  // Virtual entry: inline the resvg wasm (core would otherwise read it from node_modules at runtime)
+  // and hand it to core before the CLI starts.
+  stdin: {
+    contents: [
+      `import wasm from ${JSON.stringify(`${root}packages/core/node_modules/@resvg/resvg-wasm/index_bg.wasm`)};`,
+      'import { setResvgWasm } from "@platformcosmo/core";',
+      "setResvgWasm(wasm);",
+      'await import("./bin.ts");',
+    ].join("\n"),
+    resolveDir: `${root}packages/cli/src`,
+    sourcefile: "plugin-entry.ts",
+    loader: "ts",
+  },
   outfile,
   absWorkingDir: root,
   write: false,
@@ -43,6 +97,7 @@ const result = await build({
     "@platformcosmo/dc-pack": src("dc-pack"),
     "@platformcosmo/icons-base": src("icons-base"),
   },
+  plugins: [inlineRequires],
   banner: { js: BANNER },
 });
 
@@ -60,7 +115,7 @@ const body = out.startsWith(BANNER) ? out.slice(BANNER.length) : out;
 const bad = /import\.meta\.(url|dirname|filename)|require\.resolve/.exec(body);
 if (bad) {
   console.error(
-    `bundle uses ${bad[0]} outside the banner; inline that asset with a loader or avoid the call`,
+    `bundle uses ${bad[0]} outside the banner (…${body.slice(Math.max(0, bad.index - 120), bad.index + 80)}…); inline that asset with a loader or avoid the call`,
   );
   process.exit(1);
 }
