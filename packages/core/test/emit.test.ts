@@ -89,6 +89,26 @@ const label = (extra: Record<string, string | number> = {}) =>
     "Load <balancer> & co",
   );
 
+describe("id scheme", () => {
+  test("rack, slot devices, _front shell and parts never collide", () => {
+    const ids = createIds("pc-t");
+    const objects = ["r", "r_front", "r/u1", "r/u1_front", "r_5ffront"];
+    const parts = ["front", "front_top", "5ffront", "a_b", "a", "b"];
+    const out: string[] = [];
+    for (const o of objects) {
+      out.push(ids.object(o), ids.overlay(o), ids.group(o), ids.edge(o), ids.edgePath(o));
+      out.push(ids.metric(o), ids.metricValue(o, 0), ids.metricValue(o, 1));
+      for (const f of ["top", "left", "right"] as const) {
+        out.push(ids.face(o, f));
+        for (const part of parts) out.push(ids.face(o, f, part));
+      }
+    }
+    expect(new Set(out).size).toBe(out.length);
+    expect(ids.face("r_front", "top")).toBe("pc-t-f_r_5ffront__top");
+    expect(ids.face("r", "top", "front")).toBe("pc-t-f_r__front__top");
+  });
+});
+
 describe("emit structure", () => {
   const svg = emit(model(), noAnim, browser);
 
@@ -135,7 +155,7 @@ describe("emit structure", () => {
   });
 
   test("hidden edges become paths in defs", () => {
-    expect(svg).toContain('<defs><path id="pc-test-ep_e_a_b" d="M0 0L10 10"/></defs>');
+    expect(svg).toContain('<defs><path id="pc-test-ep_e_5fa_5fb" d="M0 0L10 10"/></defs>');
   });
 
   test("no darkTheme means no media query", () => {
@@ -280,6 +300,15 @@ describe("raster target", () => {
     { font: "embed", target: "raster" },
   );
 
+  test("attributes are checked for leftover var() too", () => {
+    const m = model({ objects: [h("rect", { fill: "var(--other)" })] });
+    expect(() => emit(m, anim, { font: "embed", target: "raster" })).toThrow(/still contains var/);
+    const nested = model({
+      objects: [h("rect", { style: "fill:var(--pc-palette-blue,var(--pc-palette-red))" })],
+    });
+    expect(() => emit(nested, anim, { font: "embed", target: "raster" })).not.toThrow();
+  });
+
   test("literal values only: no var(), media, keyframes or font-face", () => {
     expect(out).not.toContain("var(");
     expect(out).not.toContain("@media");
@@ -362,8 +391,12 @@ describe("embedded font determinism", () => {
   test("golden hashes of the subset font bytes (Node 22 and 24)", () => {
     const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
     const text = "Load balancer 99.9%";
-    expect(sha(subsetTtf(text))).toMatchInlineSnapshot(`"75d7ed2d51a32fc6a345db328348da7fb8e7e8cbbcaf2f68c1fa1eaa67ca9639"`);
-    expect(sha(Buffer.from(subsetWoff2Base64(text), "base64"))).toMatchInlineSnapshot(`"dc222d46bca318138795eaf0ecb471e2fd8411ccfcb625c6237fad0a8a20f63c"`);
+    expect(sha(subsetTtf(text))).toMatchInlineSnapshot(
+      `"75d7ed2d51a32fc6a345db328348da7fb8e7e8cbbcaf2f68c1fa1eaa67ca9639"`,
+    );
+    expect(sha(Buffer.from(subsetWoff2Base64(text), "base64"))).toMatchInlineSnapshot(
+      `"dc222d46bca318138795eaf0ecb471e2fd8411ccfcb625c6237fad0a8a20f63c"`,
+    );
   });
 });
 
