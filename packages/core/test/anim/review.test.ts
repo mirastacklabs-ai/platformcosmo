@@ -37,20 +37,33 @@ describe("camera keyframes", () => {
   const block = /@keyframes \S+\{(0%\{transform:[^@]*?100%\{[^}]*\})\}/.exec(css)?.[1] ?? "";
   const stops = [...block.matchAll(/([\d.]+)%\{transform:([^}]*)\}/g)].map((m) => [m[1], m[2]]);
 
-  test("0% is step 1's view; transitions fill the end of the previous step", () => {
+  test("0% is the overview, eases into step 1's focus, back to the overview at 100%", () => {
     const identity = "translate(0px,0px) scale(1)";
-    expect(stops.map((s) => s[0])).toEqual(["0", "28.125", "37.5", "65.625", "75", "93.75", "100"]);
-    expect(stops[0]![1]).not.toBe(identity);
-    expect(stops[1]![1]).toBe(stops[0]![1]);
-    expect(stops.slice(2, 6).every((s) => s[1] === identity)).toBe(true);
-    expect(stops[6]![1]).toBe(stops[0]![1]);
+    expect(stops.map((s) => s[0])).toEqual([
+      "0",
+      "9.375",
+      "28.125",
+      "37.5",
+      "65.625",
+      "75",
+      "93.75",
+      "100",
+    ]);
+    expect(stops[0]![1]).toBe(identity);
+    expect(stops[1]![1]).not.toBe(identity);
+    expect(stops[2]![1]).toBe(stops[1]![1]); // holds step 1's focus until its end transition
+    expect(stops.slice(3).every((s) => s[1] === identity)).toBe(true);
   });
 
   test("frame mode eases along the same curve", () => {
     const m = buildFixture();
     const zs = m.scene.timeline.map((s) => zoomFor(m, s));
     const w = windows(m.scene.timeline, 1);
+    expect(frameViewBox(m, w, zs, 0)).toBeUndefined(); // overview at rest
     expect(frameViewBox(m, w, zs, 2)).toEqual(zs[0]!.viewBox);
+    const into = frameViewBox(m, w, zs, 0.4)!; // easing into step 1's focus
+    expect(into.width).toBeLessThan(560);
+    expect(into.width).toBeGreaterThan(zs[0]!.viewBox.width);
     const mid = frameViewBox(m, w, zs, 2.6)!;
     expect(mid.width).toBeGreaterThan(zs[0]!.viewBox.width);
     expect(mid.width).toBeLessThan(560);
@@ -72,8 +85,8 @@ describe("states, LEDs, reduced motion, slots", () => {
     const media = css.slice(css.indexOf("@media (prefers-reduced-motion"));
     expect(media).toContain("#pc-test-o-a{opacity:var(--pc-states-degraded-opacity)}");
     expect(media).toContain("#pc-test-o-a .pc-test-led{fill:var(--pc-dc-led-warn)}");
-    expect(media).toMatch(/#pc-test-camera\{transform:translate\(-?[\d.]+px,-?[\d.]+px\) scale\(/);
-    expect(media).not.toContain("transform:none");
+    // D27: reduced motion rests on the overview, not on step 1's zoom
+    expect(media).toContain("#pc-test-camera{transform:none}");
     expect(media).not.toContain("visibility:visible");
   });
 
@@ -149,13 +162,17 @@ describe("robust input", () => {
 
 describe("overlay pinned against camera zoom", () => {
   const loop = run({ mode: "loop" }).css.replace(/\n/g, "");
+  // Inverse keyframes: 0% overview, then step 1's inverse (scale < 1).
   const inverse =
-    /@keyframes (\S+)\{0%\{transform:translate\(([\d.]+)px,([\d.]+)px\) scale\(0\.\d+\)/;
+    /@keyframes (\S+)\{0%\{transform:translate\(0px,0px\) scale\(1\)\}9\.375%\{transform:translate\(-?[\d.]+px,-?[\d.]+px\) scale\(0\.\d+\)/;
 
-  test("caption and metric tiles get the inverse of the camera keyframes", () => {
+  test("caption, metric tiles and legend get the inverse of the camera keyframes", () => {
     const m = inverse.exec(loop);
     expect(m).not.toBeNull();
-    expect(loop).toContain(`#pc-test-cap,#pc-test-m-rps{transform-origin:0 0;animation:${m![1]} `);
+    expect(loop).toContain(".pc-test-legend");
+    expect(loop).toContain(
+      `#pc-test-cap,#pc-test-m-rps,.pc-test-legend{transform-origin:0 0;animation:${m![1]} `,
+    );
     // same stop positions as the camera keyframes
     const stops = (name: string) =>
       [
@@ -167,11 +184,9 @@ describe("overlay pinned against camera zoom", () => {
     expect(stops(m![1]!)).toEqual(stops(camName));
   });
 
-  test("reduced motion pins them to step 1's inverse", () => {
+  test("reduced motion rests on the overview", () => {
     const media = loop.slice(loop.indexOf("@media (prefers-reduced-motion"));
-    expect(media).toMatch(
-      /#pc-test-cap,#pc-test-m-rps\{transform:translate\([\d.]+px,[\d.]+px\) scale\(0\.\d+\)\}/,
-    );
+    expect(media).toContain("#pc-test-cap,#pc-test-m-rps,.pc-test-legend{transform:none}");
   });
 });
 
