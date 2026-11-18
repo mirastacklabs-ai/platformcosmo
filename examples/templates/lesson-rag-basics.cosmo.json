@@ -1,0 +1,50 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "Lesson: retrieval-augmented generation",
+    "description": "Two phases: ingest documents into a vector database, then answer questions by retrieving context for the model."
+  },
+  "canvas": { "theme": "light" },
+  "nodes": [
+    { "id": "docs", "type": "object-store", "label": "Documents", "group": "ingest" },
+    { "id": "embed-ingest", "type": "embedding", "label": "Embedder", "group": "ingest" },
+    { "id": "vectors", "type": "vector-db", "label": "Vector DB" },
+    { "id": "user", "type": "client", "label": "User", "group": "query" },
+    { "id": "retriever", "type": "rag", "label": "Retriever", "group": "query" },
+    { "id": "llm", "type": "llm", "label": "LLM", "group": "query" }
+  ],
+  "groups": [
+    { "id": "ingest", "label": "Ingest (offline)", "style": "zone" },
+    { "id": "query", "label": "Query (online)", "style": "platform" }
+  ],
+  "edges": [
+    { "id": "docs-embed", "from": "docs", "to": "embed-ingest" },
+    { "id": "embed-vectors", "from": "embed-ingest", "to": "vectors" },
+    { "id": "user-retriever", "from": "user", "to": "retriever" },
+    { "id": "retriever-vectors", "from": "retriever", "to": "vectors" },
+    { "id": "retriever-llm", "from": "retriever", "to": "llm" }
+  ],
+  "steps": [
+    {
+      "caption": "Ingest: documents are split, embedded and stored as vectors",
+      "flows": [{ "edge": "docs-embed" }, { "edge": "embed-vectors", "kind": "heavy" }],
+      "set": { "vectors": "highlighted" }
+    },
+    {
+      "caption": "Query: the question reaches the retriever",
+      "flows": [{ "edge": "user-retriever" }],
+      "set": { "vectors": "healthy", "retriever": "highlighted" }
+    },
+    {
+      "caption": "The retriever finds the most similar chunks",
+      "flows": [{ "edge": "retriever-vectors", "kind": "heavy" }],
+      "set": { "vectors": "highlighted" }
+    },
+    {
+      "caption": "The LLM answers using the question plus the retrieved chunks",
+      "flows": [{ "edge": "retriever-llm", "kind": "heavy" }],
+      "set": { "vectors": "healthy", "llm": "highlighted" }
+    }
+  ]
+}

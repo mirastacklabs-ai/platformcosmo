@@ -9,9 +9,9 @@
  * (persistent across plugin updates), else `~/.platformcosmo/icons`. Every pack is verified
  * against its lockfile `integrity` before it is loaded; mismatches are diagnostics, never loaded.
  */
-import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, posix, resolve, sep } from "node:path";
+import { computeIconIntegrity, verifyIconIntegrity } from "@platformcosmo/core";
 import type {
   Diagnostic,
   IconLockEntry,
@@ -19,7 +19,7 @@ import type {
   IconManifest,
   LoadedIconPack,
 } from "@platformcosmo/core";
-import type { Deps } from "./deps.js";
+import { type Deps, Failure } from "./deps.js";
 import { errorDiagnostic } from "./format.js";
 
 export const LOCKFILE_NAME = "platformcosmo-icons.lock.json";
@@ -31,10 +31,20 @@ const MAX_PACK_BYTES = 64 * 1024 * 1024;
 
 export function packsDirFor(deps: Deps, override?: string): string {
   const e = deps.env;
-  if (override) return resolve(deps.cwd, override);
-  if (e["PCOSMO_PACKS_DIR"]) return resolve(deps.cwd, e["PCOSMO_PACKS_DIR"]);
-  if (e["CLAUDE_PLUGIN_DATA"]) return join(e["CLAUDE_PLUGIN_DATA"], "icons");
-  return join(deps.homedir, ".platformcosmo", "icons");
+  let dir: string;
+  if (override) dir = resolve(deps.cwd, override);
+  else if (e["PCOSMO_PACKS_DIR"]) dir = resolve(deps.cwd, e["PCOSMO_PACKS_DIR"]);
+  else if (e["CLAUDE_PLUGIN_DATA"]) dir = join(e["CLAUDE_PLUGIN_DATA"], "icons");
+  else dir = join(deps.homedir, ".platformcosmo", "icons");
+  // A skill passes "${CLAUDE_PLUGIN_DATA}/icons"; when that variable was not substituted the shell
+  // turns it into "/icons" (or leaves a literal "${"). Never use such a directory.
+  if (dir === "/icons" || dir.includes("${")) {
+    throw new Failure(
+      `cli/plugin-data-unset: the icon pack directory "${dir}" looks like an unexpanded \${CLAUDE_PLUGIN_DATA}; ` +
+        "pass a real directory with --packs-dir or set PCOSMO_PACKS_DIR",
+    );
+  }
+  return dir;
 }
 
 /** A manifest file path must be relative, forward-slashed and stay inside the pack. */
@@ -44,37 +54,6 @@ export function isSafeRelPath(p: string): boolean {
   }
   const n = posix.normalize(p);
   return n === p && n !== ".." && !n.startsWith("../") && !n.split("/").includes("..");
-}
-
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const o = value as Record<string, unknown>;
-    return `{${Object.keys(o)
-      .filter((k) => o[k] !== undefined)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-/**
- * `sha256-<base64>` over the canonical (key-sorted) manifest, then each file as
- * `path NUL content NUL` in path order. The CLI always records and verifies this value itself.
- */
-export function computeIntegrity(pack: LoadedIconPack): string {
-  const h = createHash("sha256");
-  h.update(canonical(pack.manifest));
-  h.update("\0");
-  // Exactly what a pack on disk consists of: the manifest and the files it references.
-  for (const path of [...new Set(pack.manifest.icons.map((i) => i.file))].sort()) {
-    h.update(path);
-    h.update("\0");
-    h.update(pack.files[path] ?? "");
-    h.update("\0");
-  }
-  return `sha256-${h.digest("base64")}`;
 }
 
 /** Structural check of an untrusted manifest. Returns problems (empty = ok). */
@@ -185,7 +164,7 @@ export async function loadUserPacks(
       const pack = await readPackDir(join(dir, id));
       if (pack.manifest.pack.id !== id)
         throw new Error("manifest pack.id does not match its folder");
-      if (computeIntegrity(pack) !== entry.integrity) {
+      if (!verifyIconIntegrity(pack, entry.integrity)) {
         diagnostics.push(
           errorDiagnostic(
             "packs/integrity-mismatch",
@@ -216,6 +195,10 @@ function normalizePack(pack: LoadedIconPack): LoadedIconPack {
   for (const ic of manifest.icons) {
     const text = pack.files[ic.file];
     if (text === undefined) throw new Error(`pack is missing file ${ic.file}`);
+    // Files are stored as UTF-8; text that would not read back identically (lone surrogates) is refused.
+    if (Buffer.from(text, "utf8").toString("utf8") !== text) {
+      throw new Error(`${ic.file} is not valid UTF-8 text`);
+    }
     files[ic.file] = text;
   }
   return { manifest, files };
@@ -260,7 +243,7 @@ export async function savePack(
     }
     // Integrity over exactly what landed on disk.
     const written = await readPackDir(tmp);
-    const integrity = computeIntegrity(written);
+    const integrity = computeIconIntegrity(written);
     await rm(target, { recursive: true, force: true });
     await rename(tmp, target);
     const full: IconLockEntry = { ...entry, integrity, iconCount: pack.manifest.icons.length };

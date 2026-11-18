@@ -1,0 +1,59 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "Lesson: blue-green deployment",
+    "description": "Two identical environments: deploy to the idle one, test it, then switch the load balancer. Rolling back is switching again."
+  },
+  "canvas": { "theme": "light" },
+  "nodes": [
+    { "id": "users", "type": "users", "label": "Users" },
+    { "id": "lb", "type": "lb", "label": "Load balancer" },
+    { "id": "blue", "type": "server", "label": "Blue (v1)", "group": "envs" },
+    { "id": "green", "type": "server", "label": "Green (v2)", "group": "envs" },
+    { "id": "pipeline", "type": "pipeline", "label": "Release pipeline" }
+  ],
+  "groups": [{ "id": "envs", "label": "Environments", "style": "cluster" }],
+  "edges": [
+    { "id": "users-lb", "from": "users", "to": "lb" },
+    { "id": "lb-blue", "from": "lb", "to": "blue" },
+    { "id": "lb-green", "from": "lb", "to": "green", "style": "dashed" },
+    { "id": "pipeline-green", "from": "pipeline", "to": "green", "style": "dotted" }
+  ],
+  "steps": [
+    {
+      "caption": "1. Blue serves all traffic",
+      "flows": [
+        { "edge": "users-lb", "kind": "heavy" },
+        { "edge": "lb-blue", "kind": "heavy" }
+      ],
+      "set": { "blue": "highlighted" }
+    },
+    {
+      "caption": "2. The pipeline deploys v2 to Green while Blue keeps serving",
+      "flows": [
+        { "edge": "users-lb" },
+        { "edge": "lb-blue" },
+        { "edge": "pipeline-green", "kind": "heavy" }
+      ],
+      "set": { "blue": "healthy", "green": "degraded" }
+    },
+    {
+      "caption": "3. Green passes its health checks",
+      "flows": [
+        { "edge": "lb-green", "kind": "health" },
+        { "edge": "users-lb" },
+        { "edge": "lb-blue" }
+      ],
+      "set": { "green": "healthy" }
+    },
+    {
+      "caption": "4. The load balancer switches; Blue stays warm for instant rollback",
+      "flows": [
+        { "edge": "users-lb", "kind": "heavy" },
+        { "edge": "lb-green", "kind": "heavy" }
+      ],
+      "set": { "green": "highlighted", "blue": "healthy" }
+    }
+  ]
+}

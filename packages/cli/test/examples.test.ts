@@ -37,6 +37,17 @@ describe("gallery specs", () => {
     expect(r.errors, JSON.stringify(r.errors)).toEqual([]);
   });
 
+  test.each(files("templates").filter((f) => f.startsWith("lesson-")))(
+    "lesson %s has at least 2 steps with captions",
+    (f) => {
+      const spec = JSON.parse(readFileSync(`${root}templates/${f}`, "utf8")) as {
+        steps?: { caption?: string }[];
+      };
+      expect(spec.steps?.length ?? 0).toBeGreaterThanOrEqual(2);
+      for (const s of spec.steps ?? []) expect(s.caption?.length ?? 0).toBeGreaterThan(0);
+    },
+  );
+
   test("src/examples.gen.ts is up to date (run: scripts/pc run gen:examples)", () => {
     const names = (list: readonly { name: string }[]) => list.map((e) => e.name);
     expect(names(examples)).toEqual(files("").map((f) => f.replace(".cosmo.json", "")));

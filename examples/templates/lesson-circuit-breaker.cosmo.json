@@ -1,0 +1,56 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "Lesson: circuit breaker and fallback",
+    "description": "A gateway stops calling a failing service after repeated errors and serves a fallback instead, protecting the rest of the system."
+  },
+  "canvas": { "theme": "light" },
+  "nodes": [
+    { "id": "client", "type": "client", "label": "Client" },
+    { "id": "gateway", "type": "gateway", "label": "Gateway", "badge": "circuit breaker" },
+    { "id": "orders", "type": "server", "label": "Orders service" },
+    { "id": "fallback", "type": "cache", "label": "Fallback cache" }
+  ],
+  "edges": [
+    { "id": "client-gateway", "from": "client", "to": "gateway" },
+    { "id": "gateway-orders", "from": "gateway", "to": "orders" },
+    { "id": "gateway-fallback", "from": "gateway", "to": "fallback", "style": "dashed" }
+  ],
+  "metrics": [{ "id": "errors", "label": "Error rate", "value": "0%" }],
+  "steps": [
+    {
+      "caption": "1. Closed: requests flow to the Orders service",
+      "flows": [{ "edge": "client-gateway" }, { "edge": "gateway-orders" }]
+    },
+    {
+      "caption": "2. Orders starts failing and errors pile up",
+      "set": { "orders": "degraded" },
+      "flows": [{ "edge": "gateway-orders", "kind": "failed" }],
+      "metrics": { "errors": "40%" }
+    },
+    {
+      "caption": "3. Open: the breaker trips and stops calling Orders",
+      "set": { "orders": "down", "gateway": "highlighted" },
+      "flows": [{ "edge": "client-gateway" }],
+      "metrics": { "errors": "40%" }
+    },
+    {
+      "caption": "4. The gateway serves a fallback instead of failing",
+      "set": { "fallback": "highlighted" },
+      "flows": [{ "edge": "client-gateway" }, { "edge": "gateway-fallback", "kind": "heavy" }],
+      "metrics": { "errors": "0%" }
+    },
+    {
+      "caption": "5. Half-open: a probe checks whether Orders has recovered",
+      "set": { "orders": "degraded", "fallback": "healthy", "gateway": "healthy" },
+      "flows": [{ "edge": "gateway-orders", "kind": "health" }]
+    },
+    {
+      "caption": "6. The probe succeeds: the breaker closes and Orders serves traffic again",
+      "set": { "orders": "healthy" },
+      "flows": [{ "edge": "client-gateway" }, { "edge": "gateway-orders" }],
+      "metrics": { "errors": "0%" }
+    }
+  ]
+}

@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { run } from "../src/index.js";
-import { computeIntegrity, loadUserPacks, removePack, savePack } from "../src/packs.js";
+import { loadUserPacks, removePack, savePack } from "../src/packs.js";
 import { SPEC, iconPack, makeCore, makeDeps, tmp } from "./helpers.js";
 
 const ENTRY = { source: "./x", resolved: "x", license: "MIT", redistributable: true };
@@ -98,17 +98,6 @@ describe("--packs-dir reaches the resolver", () => {
 });
 
 describe("pack integrity and installation", () => {
-  test("integrity covers exactly the manifest and referenced files", () => {
-    const base = iconPack();
-    const withExtra = { ...base, files: { ...base.files, "svg/unused.svg": "<svg/>" } };
-    expect(computeIntegrity(withExtra)).toBe(computeIntegrity(base));
-    const withUndefined = {
-      ...base,
-      manifest: { ...base.manifest, pack: { ...base.manifest.pack, licenseUrl: undefined } },
-    };
-    expect(computeIntegrity(withUndefined)).toBe(computeIntegrity(base));
-  });
-
   test("a pack saved with an extra file and an undefined field loads back with a matching hash", async () => {
     const dir = await tmp();
     const base = iconPack();

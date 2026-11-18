@@ -1,0 +1,16 @@
+{
+  "name": "@platformcosmo/docs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "platformcosmo.io documentation site (VitePress).",
+  "scripts": {
+    "docs:prepare": "node scripts/prepare.mjs",
+    "docs:dev": "node scripts/prepare.mjs && vitepress dev",
+    "docs:build": "node scripts/prepare.mjs && vitepress build",
+    "docs:preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4"
+  }
+}

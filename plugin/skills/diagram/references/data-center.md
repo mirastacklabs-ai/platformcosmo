@@ -20,7 +20,7 @@ Floor equipment: `id`, `type` (`ups`, `busway`, `pdu-floor`, `crah`, `in-row-coo
 
 ## rows[], aisles[]
 
-- Row: `id`, `members` (rack and equipment ids, in order), `label`, `facing` (`front | back`).
+- Row: `id`, `members` (rack and equipment ids, in order), `label`. Facing is derived from the aisle a row bounds; leave `facing` out unless the row has no aisle.
 - Aisle: `id`, `kind` (`cold | hot`), `rows` (one or two row ids bounding it), `contained` (bool), `label`.
 
 ## cables[]
