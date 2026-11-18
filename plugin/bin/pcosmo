@@ -1,0 +1,35 @@
+#!/bin/sh
+# pcosmo launcher for the Claude Code plugin: checks Node, then runs the bundled CLI.
+# POSIX sh only. Needs Node >= 22.12 on PATH.
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+  esac
+done
+dir=$(cd "$(dirname "$self")" && pwd) || exit 1
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "pcosmo: Node.js 22.12 or newer is required, but 'node' was not found on PATH." >&2
+  echo "Install it from https://nodejs.org/ and try again." >&2
+  exit 127
+fi
+
+ver=$(node -p 'process.versions.node' 2>/dev/null)
+major=${ver%%.*}
+rest=${ver#*.}
+minor=${rest%%.*}
+case $major$minor in
+  '' | *[!0-9]*)
+    echo "pcosmo: could not determine the Node.js version (got '$ver')." >&2
+    exit 1
+    ;;
+esac
+if [ "$major" -lt 22 ] || { [ "$major" -eq 22 ] && [ "$minor" -lt 12 ]; }; then
+  echo "pcosmo: Node.js 22.12 or newer is required (found $ver)." >&2
+  exit 1
+fi
+
+exec node "$dir/pcosmo.mjs" "$@"

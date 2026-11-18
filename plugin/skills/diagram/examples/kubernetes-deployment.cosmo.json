@@ -1,0 +1,56 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "Kubernetes deployment",
+    "description": "A CI pipeline pushes an image to a registry, a cluster pulls it, and an ingress load balancer routes traffic to the pods of a service."
+  },
+  "canvas": { "theme": "light", "grid": true },
+  "nodes": [
+    { "id": "repo", "type": "repo", "label": "Git repo" },
+    { "id": "ci", "type": "pipeline", "label": "CI pipeline" },
+    { "id": "registry", "type": "registry", "label": "Image registry" },
+    { "id": "users", "type": "users", "label": "Users" },
+    { "id": "ingress", "type": "lb", "label": "Ingress", "group": "cluster" },
+    { "id": "svc", "type": "gateway", "label": "Service", "group": "cluster" },
+    { "id": "pod-1", "type": "pod", "label": "web-1", "group": "cluster" },
+    { "id": "pod-2", "type": "pod", "label": "web-2", "group": "cluster" },
+    { "id": "pod-3", "type": "pod", "label": "web-3", "group": "cluster" },
+    { "id": "metrics", "type": "metrics", "label": "Prometheus", "group": "cluster" }
+  ],
+  "groups": [{ "id": "cluster", "label": "Kubernetes cluster", "style": "cluster" }],
+  "edges": [
+    { "id": "repo-ci", "from": "repo", "to": "ci", "label": "push" },
+    { "id": "ci-registry", "from": "ci", "to": "registry", "label": "image" },
+    { "id": "registry-pod-1", "from": "registry", "to": "pod-1", "style": "dashed" },
+    { "id": "users-ingress", "from": "users", "to": "ingress" },
+    { "id": "ingress-svc", "from": "ingress", "to": "svc" },
+    { "id": "svc-pod-1", "from": "svc", "to": "pod-1" },
+    { "id": "svc-pod-2", "from": "svc", "to": "pod-2" },
+    { "id": "svc-pod-3", "from": "svc", "to": "pod-3" },
+    { "id": "pod-1-metrics", "from": "pod-1", "to": "metrics", "style": "dotted" }
+  ],
+  "steps": [
+    {
+      "caption": "A push triggers the pipeline, which builds and pushes an image",
+      "flows": [{ "edge": "repo-ci" }, { "edge": "ci-registry", "kind": "heavy" }]
+    },
+    {
+      "caption": "The cluster pulls the new image and rolls out pods",
+      "flows": [{ "edge": "registry-pod-1", "kind": "heavy" }],
+      "set": { "pod-1": "highlighted", "pod-2": "degraded", "pod-3": "degraded" }
+    },
+    {
+      "caption": "Every pod is ready and receives traffic through the service",
+      "set": { "pod-1": "healthy", "pod-2": "healthy", "pod-3": "healthy" },
+      "flows": [
+        { "edge": "users-ingress" },
+        { "edge": "ingress-svc" },
+        { "edge": "svc-pod-1" },
+        { "edge": "svc-pod-2" },
+        { "edge": "svc-pod-3" }
+      ]
+    }
+  ],
+  "legend": "auto"
+}
