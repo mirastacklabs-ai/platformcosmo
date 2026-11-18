@@ -19,7 +19,7 @@
 | Schema URL | `https://platformcosmo.io/schema/v1.json` |
 | Spec file | `*.cosmo.json` (YAML `*.cosmo.yaml` accepted, converted to JSON) |
 | License | Apache-2.0, `Copyright 2026 MiraStack Labs`; DCO sign-off for contributions |
-| Runtime | Node >= 20, TypeScript, ESM |
+| Runtime | Node >= 22.12 (Node 20 is EOL as of 2026-04-30 and the toolchain dropped it), TypeScript, ESM; CI tests Node 22 and 24 |
 
 ---
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run pnpm inside a container so nothing is installed on the host.
 # Usage: scripts/pc install | scripts/pc run ci | scripts/pc test ...
-# Override the image with PC_NODE_IMAGE (e.g. node:20-bookworm-slim).
+# Override the image with PC_NODE_IMAGE (e.g. node:22-bookworm-slim).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 IMAGE="${PC_NODE_IMAGE:-node:24.21-bookworm-slim}"

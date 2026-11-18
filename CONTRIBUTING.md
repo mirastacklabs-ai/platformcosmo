@@ -12,7 +12,7 @@ scripts/pc install
 scripts/pc run ci        # format:check, lint, typecheck, check:types-gen, test, publish:dry
 scripts/pc test
 scripts/pc gen:types     # regenerate types from schema/v1.json
-PC_NODE_IMAGE=node:20-bookworm-slim scripts/pc run ci   # Node 20 check
+PC_NODE_IMAGE=node:22-bookworm-slim scripts/pc install --frozen-lockfile && PC_NODE_IMAGE=node:22-bookworm-slim scripts/pc run ci   # Node 22 check (after a clean install)
 ```
 
 ## Rules

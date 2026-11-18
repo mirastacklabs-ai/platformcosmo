@@ -11,7 +11,14 @@ Conventional Commits with DCO sign-off).
 - `scripts/pc run ci` full CI sequence
 - `scripts/pc test` / `lint` / `typecheck` / `format` / `build`
 - `scripts/pc gen:types` regenerate `packages/core/src/schema/types.gen.ts`
-- `PC_NODE_IMAGE=node:20-bookworm-slim scripts/pc run ci` Node 20 check
+- `PC_NODE_IMAGE=node:22-bookworm-slim scripts/pc run ci` Node 22 check (supported: Node >= 22.12; CI matrix 22/24)
+
+## Verifying a Node version: clean install only
+
+`node_modules` is bind-mounted and shared across images, so a run on one Node version can
+silently reuse packages installed under another (this hid an engines failure on Node 20).
+Before claiming a Node version passes: `rm -rf node_modules packages/*/node_modules`, then
+`PC_NODE_IMAGE=<image> scripts/pc install --frozen-lockfile`, then `PC_NODE_IMAGE=<image> scripts/pc run ci`.
 
 ## Layout
 

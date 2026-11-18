@@ -25,7 +25,7 @@
     "NOTICE"
   ],
   "engines": {
-    "node": ">=20.19"
+    "node": ">=22.12"
   },
   "publishConfig": {
     "access": "public",
