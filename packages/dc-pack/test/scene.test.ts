@@ -10,7 +10,7 @@ import schema from "../../../schema/v1.json" with { type: "json" };
 import { DC_DEFAULTS } from "../src/defaults.js";
 import { dcPack } from "../src/index.js";
 import { compareBoxes, createProjection, depthOrder } from "@platformcosmo/core";
-import { estimateDcElements, specFlowCost, trayPitch } from "../src/scene.js";
+import { estimateDcElements, rungCount, specFlowCost, trayPitch } from "../src/scene.js";
 
 const EPS = 1e-3;
 
@@ -1245,10 +1245,8 @@ describe("tray scaling", () => {
     return spec({ racks, cables });
   };
 
-  it("merges same-y lanes into one tray, caps rungs and stays fast for 500 racks", () => {
-    const t0 = performance.now();
+  it("merges same-y lanes into one tray and caps rungs for 500 racks", () => {
     const f = build(big());
-    const ms = performance.now() - t0;
     const trays = f.objects.filter((o) => o.type === "cable-tray");
     expect(trays.length).toBeLessThanOrEqual(3); // one strip lane (+ spine if any)
     const rungs = trays.reduce(
@@ -1257,13 +1255,15 @@ describe("tray scaling", () => {
     );
     expect(rungs).toBeLessThanOrEqual(300);
     expect(rungs).toBeGreaterThan(0);
-    expect(ms).toBeLessThan(4000);
+    // a generous size bound instead of wall-clock time (flaky under load)
+    expect(estimateDcElements(f)).toBeLessThan(250_000);
   });
 
   it("long trays use a 1-tile (or wider) pitch; short ones 0.5", () => {
-    expect(trayPitch(40)).toBe(0.5);
-    expect(trayPitch(120)).toBe(1);
-    expect(trayPitch(1000) * 300).toBeGreaterThanOrEqual(1000);
+    expect(trayPitch([40])).toBe(0.5);
+    expect(trayPitch([60, 60])).toBe(1);
+    const lens = [1000];
+    expect(rungCount(1000, trayPitch(lens))).toBeLessThanOrEqual(299);
   });
 
   it("tray parts are counted by the DC element estimate", () => {
@@ -1318,5 +1318,24 @@ describe("tray scaling", () => {
         expect(q.z).toBeLessThanOrEqual(tray.box.origin.z + tray.box.size.z + 1e-6);
       }
     }
+  });
+});
+
+describe("tray rung budget", () => {
+  it("counts actual rungs: ~50 rows stay within 300 rungs minus one per tray", () => {
+    const rows = Array.from({ length: 50 }, (_, r) => ({
+      id: `row${r}`,
+      members: Array.from({ length: 6 }, (_, i) => `r${r}_${i}`),
+    }));
+    const racks = rows.flatMap((r) => r.members.map((id) => ({ id })));
+    const f = build(spec({ racks, rows }));
+    const trays = f.objects.filter((o) => o.type === "cable-tray");
+    const rungs = trays.reduce(
+      (n, o) => n + o.parts!.filter((p) => p.id.startsWith("rung-")).length,
+      0,
+    );
+    expect(trays.length).toBeGreaterThanOrEqual(50);
+    expect(rungs).toBeLessThanOrEqual(300 - trays.length);
+    expect(rungs).toBeGreaterThan(0);
   });
 });

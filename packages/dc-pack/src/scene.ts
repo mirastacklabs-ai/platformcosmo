@@ -1002,8 +1002,9 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     const laneYs = trayLanes.map((l) => l.y);
     const spineLen =
       new Set(laneYs.map(r4)).size > 1 ? Math.max(...laneYs) - Math.min(...laneYs) + 0.5 : 0;
-    const totalLen = trayLanes.reduce((n, l) => n + (l.xb - l.xa), 0) + spineLen;
-    const pitch = trayPitch(totalLen);
+    const lens = trayLanes.map((l) => l.xb - l.xa);
+    if (spineLen > 0) lens.push(spineLen);
+    const pitch = trayPitch(lens);
     for (const l of trayLanes) {
       const b = box(l.xa, l.y - 0.25, trayZ, l.xb - l.xa, 0.5, 0.05);
       objects.push(trayObject(`dc_tray_${l.id}`, b, "x", l.group, pitch));
@@ -1095,10 +1096,21 @@ export function specFlowCost(spec: PlatformCosmoSpec): number {
 /** Max rungs per hall; long runs widen the rung pitch instead (keeps the SVG element count down). */
 const MAX_TRAY_RUNGS = 300;
 
-/** Rung pitch for a hall with `totalLen` tiles of tray: 0.5, 1 tile above ~100 tiles, then wider. */
-export function trayPitch(totalLen: number): number {
-  let pitch = totalLen > 100 ? 1 : 0.5;
-  while (totalLen / pitch > MAX_TRAY_RUNGS) pitch += 0.5;
+/** Rungs a tray of `len` tiles gets at `pitch` (same loop as `trayObject`). */
+export function rungCount(len: number, pitch: number): number {
+  return len > pitch / 2 ? Math.ceil((len - pitch / 2) / pitch) : 0;
+}
+
+/**
+ * Rung pitch for a hall whose trays have the given lengths: 0.5 tile, 1 tile above ~100 tiles of
+ * tray, then wider until the ACTUAL rung total (per-tray rounding included) fits the budget of
+ * `MAX_TRAY_RUNGS` minus one per tray.
+ */
+export function trayPitch(lens: readonly number[]): number {
+  const total = lens.reduce((n, l) => n + l, 0);
+  const budget = MAX_TRAY_RUNGS - lens.length;
+  let pitch = total > 100 ? 1 : 0.5;
+  while (pitch < 1000 && lens.reduce((n, l) => n + rungCount(l, pitch), 0) > budget) pitch += 0.5;
   return pitch;
 }
 
