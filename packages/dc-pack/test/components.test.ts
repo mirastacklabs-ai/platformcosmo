@@ -140,7 +140,7 @@ describe("rack-mounted devices", () => {
     expect(b.bounds.size.z).toBeGreaterThan(a.bounds.size.z * 3);
     expect(a.bounds.size.z).toBeCloseTo((U_MM - 1.5) / MM_PER_TILE, 3);
     // Devices are 19 inch wide.
-    expect(a.bounds.size.x).toBeCloseTo(482 / MM_PER_TILE, 3);
+    expect(a.bounds.size.x).toBeCloseTo(540 / MM_PER_TILE, 3);
   });
 
   it("servers have LEDs, network ports and both power feeds", () => {

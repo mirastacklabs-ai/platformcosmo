@@ -74,9 +74,25 @@ export class RouteLanes {
   }
 
   /** Coordinates of used lanes (extra grid lines are offered 0.5 beside them, so near-parallel edges separate). */
-  lines(): { h: number[]; v: number[] } {
-    const pick = (m: Map<number, { src: string }[]>): number[] => [...m.keys()].slice(0, 80);
-    return { h: pick(this.h), v: pick(this.v) };
+  lines(win: Rect): { h: number[]; v: number[] } {
+    // Only lanes inside the search window, nearest to its centre first, at most 80 per axis.
+    const mid = (a: number, b: number): number => (Number.isFinite(a + b) ? (a + b) / 2 : 0);
+    const cx = mid(win.x0, win.x1);
+    const cy = mid(win.y0, win.y1);
+    const pick = (
+      m: Map<number, { src: string }[]>,
+      lo: number,
+      hi: number,
+      mid: number,
+    ): number[] =>
+      [...m.keys()]
+        .filter((c) => c >= lo && c <= hi)
+        .sort((a, b) => Math.abs(a - mid) - Math.abs(b - mid) || a - b)
+        .slice(0, 80);
+    return {
+      h: pick(this.h, win.y0, win.y1, cy),
+      v: pick(this.v, win.x0, win.x1, cx),
+    };
   }
 }
 
@@ -110,6 +126,22 @@ const BEND = 2;
 /** Hard caps so a pathological scene falls back instead of stalling. */
 const MAX_GRID = 60000;
 const MAX_EXPANSIONS = 150000;
+
+/** Work counters (deterministic, unlike wall-clock time) so tests can bound router cost. */
+export interface RouterStats {
+  /** A* node expansions across all searches since the last reset. */
+  expansions: number;
+  /** Searches abandoned because the grid or expansion cap was hit. */
+  capHits: number;
+}
+const stats: RouterStats = { expansions: 0, capHits: 0 };
+export function resetRouterStats(): void {
+  stats.expansions = 0;
+  stats.capHits = 0;
+}
+export function getRouterStats(): Readonly<RouterStats> {
+  return { ...stats };
+}
 const BUCKET = 4;
 const r2 = (v: number): number => Math.round(v * 100) / 100;
 
@@ -270,7 +302,7 @@ function search(
     add(r.x1, r.y1);
   }
   if (ctx.lanes && ctx.source !== undefined) {
-    const ln = ctx.lanes.lines();
+    const ln = ctx.lanes.lines(win);
     for (const c of ln.v) {
       xsSet.add(r2(c - 0.5));
       xsSet.add(r2(c + 0.5));
@@ -284,7 +316,10 @@ function search(
   const ys = [...ysSet].sort((a, b) => a - b);
   const nx = xs.length;
   const ny = ys.length;
-  if (nx * ny > MAX_GRID) return undefined;
+  if (nx * ny > MAX_GRID) {
+    stats.capHits++;
+    return undefined;
+  }
   // Bucket index over obstacles so each probe only tests nearby ones.
   const buckets = new Map<number, number[]>();
   const bkey = (cx: number, cy: number): number => (cx + 32768) * 65536 + (cy + 32768);
@@ -386,7 +421,11 @@ function search(
   const finalized = new Set<number>();
   let expansions = 0;
   while (heap.size > 0) {
-    if (++expansions > MAX_EXPANSIONS) return undefined;
+    stats.expansions++;
+    if (++expansions > MAX_EXPANSIONS) {
+      stats.capHits++;
+      return undefined;
+    }
     const popped = heap.pop().id;
     const isFinal = popped < 0;
     const st = isFinal ? -popped - 1 : popped;

@@ -79,7 +79,22 @@ export const rackDef: DcComponentDef = {
     }
     k.part("post-fl", "cube", "metal", 0, D - post, RACK_BASE_MM, post, post, bodyH);
     k.part("post-fr", "cube", "metal", W - post, D - post, RACK_BASE_MM, post, post, bodyH);
-    k.part("top", "slab", "muted", 0, 0, H - RACK_TOP_MM, W, D, RACK_TOP_MM);
+    // Open top frame (rails, no panel) so the devices' top faces show from above.
+    const rail = 40;
+    k.part("top-b", "cube", "muted", 0, 0, H - RACK_TOP_MM, W, rail, RACK_TOP_MM);
+    k.part("top-l", "cube", "muted", 0, rail, H - RACK_TOP_MM, rail, D - 2 * rail, RACK_TOP_MM);
+    k.part(
+      "top-r",
+      "cube",
+      "muted",
+      W - rail,
+      rail,
+      H - RACK_TOP_MM,
+      rail,
+      D - 2 * rail,
+      RACK_TOP_MM,
+    );
+    k.part("top", "cube", "muted", 0, D - rail, H - RACK_TOP_MM, W, rail, RACK_TOP_MM);
 
     k.port("power-a", "power-a", 60, 140, H);
     if (pdu === "dual") k.port("power-b", "power-b", W - 60, 140, H);

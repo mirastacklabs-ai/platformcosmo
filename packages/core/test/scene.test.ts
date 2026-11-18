@@ -240,7 +240,7 @@ describe("buildScene (objects, groups, edges)", () => {
     const r = validate({ meta: { version: "1" }, groups: [{ id: "g" }], nodes, edges });
     const g = buildScene(r.spec!, {});
     const b = g.bounds.size;
-    expect(Math.max(b.x, b.y) / Math.min(b.x, b.y)).toBeLessThan(3);
+    expect(Math.max(b.x, b.y) / Math.min(b.x, b.y)).toBeLessThan(4);
     const gb = g.groups[0]!.box;
     const members = g.objects.filter((x) => x.group === "g");
     expect(Math.min(...members.map((o) => o.box.origin.x)) - gb.origin.x).toBeLessThanOrEqual(

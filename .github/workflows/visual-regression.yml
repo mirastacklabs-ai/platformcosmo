@@ -2,8 +2,8 @@ name: Visual regression
 
 # PLAN §13: render the bundled-icon examples to PNG with the built CLI (resvg, deterministic) and
 # compare with the committed goldens in tests/visual/golden. Update goldens locally with
-# `VISUAL_UPDATE=1 scripts/pc run visual` and commit them. While the gallery is still changing,
-# missing goldens are skipped; set VISUAL_REQUIRE_GOLDENS=1 below once they are committed.
+# `VISUAL_UPDATE=1 scripts/pc run visual` and commit them. Verified identical on Node 22 and 24;
+# a missing golden fails (VISUAL_REQUIRE_GOLDENS).
 
 on:
   push:
@@ -27,8 +27,8 @@ jobs:
           persist-credentials: false
       - run: scripts/pc install --frozen-lockfile
       - run: scripts/pc run visual
-        # env:
-        #   VISUAL_REQUIRE_GOLDENS: "1"
+        env:
+          VISUAL_REQUIRE_GOLDENS: "1"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:

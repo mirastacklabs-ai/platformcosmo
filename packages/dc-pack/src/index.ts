@@ -4,6 +4,7 @@ import { buildDcScene } from "./scene.js";
 import { registry } from "./registry.js";
 
 export { registry } from "./registry.js";
+export { estimateDcElements } from "./scene.js";
 
 /** Slot types mirror the schema's SpecDcSlotType enum. */
 export const slotTypes = [

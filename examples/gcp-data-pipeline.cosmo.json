@@ -3,28 +3,28 @@
   "meta": {
     "version": "1",
     "title": "GCP streaming data pipeline",
-    "description": "Events flow through Pub/Sub and Dataflow into BigQuery and Cloud Storage. Requires the GCP icon pack (pcosmo icons add gcp)."
+    "description": "Events flow through a queue to a Cloud Run ingest service into BigQuery and Cloud Storage, and Looker reads the warehouse. Requires the GCP icon pack (pcosmo icons add gcp)."
   },
   "canvas": { "theme": "light" },
   "nodes": [
     { "id": "apps", "type": "client", "label": "Producers" },
-    { "id": "pubsub", "type": "queue", "icon": "gcp:pub-sub", "label": "Pub/Sub" },
-    { "id": "dataflow", "type": "pipeline", "icon": "gcp:dataflow", "label": "Dataflow" },
+    { "id": "pubsub", "type": "queue", "label": "Pub/Sub" },
+    { "id": "ingest", "type": "function", "icon": "gcp:cloud-run", "label": "Cloud Run ingest" },
     { "id": "bq", "type": "warehouse", "icon": "gcp:bigquery", "label": "BigQuery" },
     { "id": "gcs", "type": "object-store", "icon": "gcp:cloud-storage", "label": "Cloud Storage" },
-    { "id": "bi", "type": "client", "label": "Dashboards" }
+    { "id": "bi", "type": "client", "icon": "gcp:looker", "label": "Looker" }
   ],
   "edges": [
     { "id": "apps-pubsub", "from": "apps", "to": "pubsub" },
-    { "id": "pubsub-dataflow", "from": "pubsub", "to": "dataflow" },
-    { "id": "dataflow-bq", "from": "dataflow", "to": "bq" },
-    { "id": "dataflow-gcs", "from": "dataflow", "to": "gcs", "style": "dashed" },
+    { "id": "pubsub-ingest", "from": "pubsub", "to": "ingest" },
+    { "id": "ingest-bq", "from": "ingest", "to": "bq" },
+    { "id": "ingest-gcs", "from": "ingest", "to": "gcs", "style": "dashed" },
     { "id": "bq-bi", "from": "bq", "to": "bi" }
   ],
   "flows": [
     { "edge": "apps-pubsub", "kind": "heavy" },
-    { "edge": "pubsub-dataflow" },
-    { "edge": "dataflow-bq" }
+    { "edge": "pubsub-ingest" },
+    { "edge": "ingest-bq" }
   ],
   "legend": "auto"
 }

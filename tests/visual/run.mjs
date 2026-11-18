@@ -43,6 +43,11 @@ const cases = [
   ...specs(join(root, "examples"))
     .filter((c) => !PROVIDER_EXAMPLES.has(c.name))
     .map((c) => ({ ...c, golden: join(here, "golden", `${c.name}.png`) })),
+  // Lesson templates (bundled icons only) and the starter spec.
+  ...specs(join(root, "examples", "templates")).map((c) => ({
+    ...c,
+    golden: join(here, "golden", "templates", `${c.name}.png`),
+  })),
   ...specs(join(here, "fixtures")).map((c) => ({
     ...c,
     golden: join(here, "fixtures", "golden", `${c.name}.png`),
