@@ -47,3 +47,14 @@ export type { TextAnchor, TextWeight, TextPathOptions } from "./text/index.js";
 
 // Emit helpers (Track A1).
 export { ICON_DEF_TAG, iconDef, createIds, countElements } from "./emit/index.js";
+
+// Render pipeline pieces (Track A1).
+export {
+  buildModel,
+  createRender,
+  withVariant,
+  specSchema,
+  canonicalJson,
+  defaultIdPrefix,
+} from "./render/index.js";
+export type { ModelInputs, RenderDeps } from "./render/index.js";
