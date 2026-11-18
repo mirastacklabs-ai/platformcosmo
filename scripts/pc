@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Run pnpm inside a container so nothing is installed on the host.
+# Usage: scripts/pc install | scripts/pc run ci | scripts/pc test ...
+# Override the image with PC_NODE_IMAGE (e.g. node:22-bookworm-slim).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+IMAGE="${PC_NODE_IMAGE:-node:24.21-bookworm-slim}"
+TTY=()
+[ -t 1 ] && TTY=(-t)
+exec docker run --rm ${TTY[@]+"${TTY[@]}"} \
+  -v "$PWD":/work -w /work \
+  -v pcosmo-pnpm-store:/pnpm-store \
+  -v pcosmo-corepack:/corepack \
+  -e COREPACK_HOME=/corepack \
+  -e PNPM_STORE_DIR=/pnpm-store -e npm_config_store_dir=/pnpm-store \
+  -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 -e CI="${CI:-}" \
+  "$IMAGE" sh -c 'corepack enable && exec pnpm "$@"' pnpm "$@"

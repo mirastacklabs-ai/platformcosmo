@@ -1,0 +1,13 @@
+{
+  "name": "platformcosmo",
+  "owner": { "name": "MiraStack Labs" },
+  "description": "PlatformCosmo: prompt-to-animated-isometric-SVG architecture diagrams.",
+  "plugins": [
+    {
+      "name": "platformcosmo",
+      "version": "0.0.0",
+      "source": "./plugin",
+      "description": "Turn a prompt into an animated 2.5D isometric SVG architecture diagram."
+    }
+  ]
+}

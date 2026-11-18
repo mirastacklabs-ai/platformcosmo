@@ -1,0 +1,37 @@
+{
+  "name": "platformcosmo-monorepo",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.9",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build": "node scripts/sync-legal.mjs && pnpm -r --workspace-concurrency=1 run build",
+    "test": "pnpm build && vitest run",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "gen:types": "node scripts/gen-types.mjs",
+    "check:types-gen": "node scripts/gen-types.mjs --check",
+    "ci": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm check:types-gen && pnpm check:versions && pnpm test && pnpm publish:dry",
+    "publish:dry": "pnpm build && pnpm -r publish --dry-run --no-git-checks",
+    "changeset": "changeset",
+    "sync:versions": "node scripts/sync-plugin-version.mjs",
+    "check:versions": "node scripts/sync-plugin-version.mjs --check",
+    "version-packages": "changeset version && pnpm run sync:versions"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^3.0.3",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.5",
+    "eslint": "^10.15.0",
+    "json-schema-to-typescript": "^16.0.0",
+    "prettier": "^3.10.1",
+    "tsup": "^9.0.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.73.0",
+    "vitest": "^5.1.1"
+  }
+}
