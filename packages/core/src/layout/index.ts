@@ -105,6 +105,7 @@ export function layoutSpec(spec: Spec): LayoutResult {
   markReach(undefined, 0);
 
   const blockCache = new Map<string, Item>();
+  const anchored = new Set<string>();
 
   function layoutContainer(
     containerId: string | undefined,
@@ -124,7 +125,7 @@ export function layoutSpec(spec: Spec): LayoutResult {
       });
     }
     for (const g of childGroups.get(containerId) ?? []) {
-      if (!reachable.has(g.id)) continue;
+      if (!reachable.has(g.id) || anchored.has(g.id)) continue;
       let b = blockCache.get(g.id);
       if (!b) {
         b = layoutContainer(g.id, GROUP_PAD, []);
@@ -274,13 +275,74 @@ export function layoutSpec(spec: Spec): LayoutResult {
     return out;
   }
 
-  const fixedRects = spec.nodes
+  const fixedRects: LayoutRect[] = spec.nodes
     .filter((n) => n.pos !== undefined)
     .map((n) => ({ x: n.pos!.x, y: n.pos!.y, w: footprintOf(n), d: footprintOf(n) }));
+
+  // Top-level groups that (transitively) hold manually positioned nodes are "anchored": their
+  // rect is the fixed members' bounding box plus the packed auto content placed to its right.
+  // The whole rect is computed before packing and acts as a fixed obstacle for everything else.
+  const topOf = (gid: string | undefined): string | undefined => {
+    let g = gid;
+    const seen = new Set<string>();
+    while (g !== undefined && !seen.has(g)) {
+      seen.add(g);
+      const p = parentOfGroup.get(g);
+      if (p === undefined) return g;
+      g = p;
+    }
+    return undefined;
+  };
+  const fixedByTop = new Map<string, SpecNode[]>();
+  for (const n of spec.nodes) {
+    if (n.pos === undefined) continue;
+    const t = topOf(nodeGroup.get(n.id));
+    if (t === undefined || !reachable.has(t)) continue;
+    const list = fixedByTop.get(t) ?? [];
+    list.push(n);
+    fixedByTop.set(t, list);
+  }
+  for (const t of fixedByTop.keys()) anchored.add(t);
+  const anchoredNodes = new Map<string, LayoutRect>();
+  const anchoredGroups = new Map<string, LayoutRect>();
+  for (const g of spec.groups) {
+    const fixedList = fixedByTop.get(g.id);
+    if (!fixedList) continue;
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const n of fixedList) {
+      const f = footprintOf(n);
+      x0 = Math.min(x0, n.pos!.x);
+      y0 = Math.min(y0, n.pos!.y);
+      x1 = Math.max(x1, n.pos!.x + f);
+      y1 = Math.max(y1, n.pos!.y + f);
+    }
+    const block = layoutContainer(g.id, GROUP_PAD, []);
+    const hasAuto = block.nodes.size > 0 || block.groups.size > 0;
+    const bx = x1 + GROUP_PAD;
+    const by = y0 - GROUP_PAD;
+    for (const [id, r] of block.nodes) anchoredNodes.set(id, { ...r, x: r.x + bx, y: r.y + by });
+    for (const [id, r] of block.groups) anchoredGroups.set(id, { ...r, x: r.x + bx, y: r.y + by });
+    const rx1 = hasAuto ? Math.max(x1 + GROUP_PAD, bx + block.w) : x1 + GROUP_PAD;
+    const ry1 = hasAuto ? Math.max(y1 + GROUP_PAD, by + block.d) : y1 + GROUP_PAD;
+    const rect: LayoutRect = {
+      x: x0 - GROUP_PAD,
+      y: Math.min(y0 - GROUP_PAD, hasAuto ? by : Infinity),
+      w: rx1 - (x0 - GROUP_PAD),
+      d: 0,
+    };
+    rect.d = ry1 - rect.y;
+    anchoredGroups.set(g.id, rect);
+    fixedRects.push(rect);
+  }
 
   const root = layoutContainer(undefined, 0, fixedRects);
   const nodes = new Map<string, LayoutRect>(root.nodes);
   const groups = new Map<string, LayoutRect>(root.groups);
+  for (const [id, r] of anchoredNodes) nodes.set(id, r);
+  for (const [id, r] of anchoredGroups) groups.set(id, r);
   for (const n of spec.nodes) {
     if (n.pos !== undefined) {
       const f = footprintOf(n);

@@ -194,7 +194,7 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
     },
     canvas: {
       theme: spec.canvas?.theme ?? "light",
-      grid: spec.canvas?.grid ?? true,
+      grid: spec.canvas?.grid ?? false,
       padding: spec.canvas?.padding ?? 32,
       aspect: (spec.canvas?.aspect ?? "auto") as SceneGraph["canvas"]["aspect"],
     },

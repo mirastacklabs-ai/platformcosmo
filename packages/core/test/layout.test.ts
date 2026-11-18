@@ -170,4 +170,48 @@ describe("layoutSpec", () => {
       }
     }
   });
+
+  test("property: groups holding manual positions never overlap other items", () => {
+    for (let seed = 200; seed < 240; seed++) {
+      const rand = rng(seed);
+      const groups: SpecGroup[] = [{ id: "g0" }, { id: "g1" }, { id: "g2", parent: "g0" }];
+      const nodes: SpecNode[] = [];
+      for (let i = 0; i < 14; i++) {
+        const group = rand() < 0.7 ? `g${Math.floor(rand() * 3)}` : undefined;
+        const fixedPos =
+          i % 5 === 0 && (group === "g0" || group === undefined)
+            ? { pos: { x: 12 * Math.floor(rand() * 3), y: 12 * Math.floor(rand() * 3) } }
+            : {};
+        nodes.push(n(`n${i}`, { ...(group ? { group } : {}), ...fixedPos }));
+      }
+      // (Documented limitation: nested groups or several groups holding fixed nodes can collide;
+      // buildScene reports those as layout/overlap warnings.)
+      // Fixed nodes can legitimately collide when the random positions coincide: skip those seeds.
+      const fixed = nodes.filter((x) => x.pos);
+      if (new Set(fixed.map((x) => `${x.pos!.x},${x.pos!.y}`)).size !== fixed.length) continue;
+      const edges = [e("n1", "n2"), e("n2", "n3"), e("n3", "n6"), e("n6", "n7")];
+      const r = layoutSpec({ nodes, groups, edges });
+      // Auto nodes never overlap any other node, and never sit inside a group they do not belong to.
+      const anc = (gid: string | undefined): string[] => {
+        const out: string[] = [];
+        while (gid !== undefined) {
+          out.push(gid);
+          gid = groups.find((g) => g.id === gid)?.parent;
+        }
+        return out;
+      };
+      for (const a of nodes) {
+        if (a.pos) continue;
+        for (const b of nodes) {
+          if (a.id !== b.id)
+            expect(hit(r.nodes.get(a.id)!, r.nodes.get(b.id)!), `${a.id}/${b.id}`).toBe(false);
+        }
+        for (const g of groups) {
+          if (!anc(a.group).includes(g.id)) {
+            expect(hit(r.nodes.get(a.id)!, r.groups.get(g.id)!), `${a.id} in ${g.id}`).toBe(false);
+          }
+        }
+      }
+    }
+  });
 });

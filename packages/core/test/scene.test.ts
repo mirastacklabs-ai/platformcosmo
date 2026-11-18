@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { buildScene, validate } from "../src/index.js";
 import type { PlatformCosmoSpec, SpecNodeType } from "../src/index.js";
+import schema from "../../../schema/v1.json" with { type: "json" };
 import { NODE_TYPES } from "../src/scene/categories.js";
 
 const lb = (): PlatformCosmoSpec => {
@@ -53,7 +54,7 @@ describe("buildScene (objects, groups, edges)", () => {
     expect(o("users").box.size.x).toBe(2);
     expect(o("db").category).toBe("data");
     expect(o("db").primitive).toBe("cylinder");
-    expect(g.canvas).toEqual({ theme: "light", grid: true, padding: 32, aspect: "auto" });
+    expect(g.canvas).toEqual({ theme: "light", grid: false, padding: 32, aspect: "auto" });
     expect(g.groups.map((x) => `${x.level}:${x.id}`)).toEqual(["0:web", "1:inner"]);
     expect(g.groups.find((x) => x.id === "web")!.style).toBe("vpc");
     expect(g.groups.find((x) => x.id === "inner")!.style).toBe("zone");
@@ -124,5 +125,32 @@ describe("buildScene (objects, groups, edges)", () => {
     const g = buildScene(lb(), { icons });
     expect(g.objects[0]!.icon?.ref).toBe("lucide:server");
     expect(buildScene(lb(), {}).objects[0]!.icon).toBeUndefined();
+  });
+
+  test("engine defaults equal the schema `default`s (non-DC fields)", () => {
+    const defs = schema.$defs as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const canvas = (schema.properties as any).canvas.properties; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const r = validate({
+      meta: { version: "1" },
+      groups: [{ id: "g" }],
+      nodes: [
+        { id: "a", type: "server", group: "g" },
+        { id: "b", type: "server" },
+      ],
+      edges: [{ from: "a", to: "b" }],
+    });
+    const g = buildScene(r.spec!, {});
+    expect(g.canvas).toEqual({
+      theme: canvas.theme.default,
+      grid: canvas.grid.default,
+      padding: canvas.padding.default,
+      aspect: canvas.aspect.default,
+    });
+    const a = g.objects.find((o) => o.id === "a")!;
+    expect(a.state).toBe(defs.node.properties.state.default);
+    expect(a.box.size.x).toBe({ sm: 1, md: 2, lg: 3 }[defs.node.properties.size.default as "md"]);
+    expect(g.groups[0]!.style).toBe(defs.group.properties.style.default);
+    expect(g.edges[0]!.style).toBe(defs.edge.properties.style.default);
+    expect(g.edges[0]!.bidirectional).toBe(defs.edge.properties.bidirectional.default);
   });
 });
