@@ -3,8 +3,64 @@
 # package installs; they must run in a container via scripts/pc.
 # Best-effort guardrail, not a sandbox. Works on bash 3.2+ (macOS) and bash 5. Deps: bash, jq.
 # Any parse problem allows the command (never wedge the session).
+#
+# Known bypasses (accepted, this is not a sandbox):
+#   - command substitution inside double quotes: echo "$(npm i)"  (quoted text is treated as data)
+#   - wrapper options that take an argument: nice -n 10 node x.js  (the "10" is taken as the command)
+#   - wrappers not in the wrapper list: timeout 5 node x.js, watch node x.js
+#   - indirection: eval "$var", scripts that call node internally, aliases, absolute-path tricks
 
 DENY=""
+
+# find_heredoc <line>: returns 0 and sets HD_TERM/HD_DASH if the line opens a heredoc.
+# Ignores << inside quotes, in comments, in here-strings (<<<) and in arithmetic ((a<<b)).
+find_heredoc() {
+  local s="$1" n=${#1} i c mode="" pre rest open close q
+  local sq="'" dq='"'
+  local re='^(-?)[[:space:]]*(\\|'"$sq"'|'"$dq"')?([A-Za-z0-9_.-]+)'
+  for ((i = 0; i < n; i++)); do
+    c="${s:i:1}"
+    case "$mode" in
+    s) [ "$c" = "$sq" ] && mode="" ;;
+    d)
+      if [ "$c" = "\\" ]; then i=$((i + 1)); elif [ "$c" = "$dq" ]; then mode=""; fi
+      ;;
+    *)
+      case "$c" in
+      "\\") i=$((i + 1)) ;;
+      "$sq") mode=s ;;
+      "$dq") mode=d ;;
+      "#")
+        if [ "$i" -eq 0 ]; then return 1; fi
+        case "${s:i-1:1}" in " " | $'\t' | ";" | "&" | "|" | "(" | ")") return 1 ;; esac
+        ;;
+      "<")
+        if [ "${s:i+1:1}" = "<" ]; then
+          if [ "${s:i+2:1}" = "<" ]; then
+            i=$((i + 2))
+          else
+            pre="${s:0:i}"
+            open="${pre//[!(]/}"
+            close="${pre//[!)]/}"
+            if [ "${#open}" -le "${#close}" ] || [[ $pre != *"(("* ]]; then
+              rest="${s:i+2}"
+              if [[ $rest =~ $re ]]; then
+                HD_TERM="${BASH_REMATCH[3]}"
+                HD_DASH=0
+                [ -n "${BASH_REMATCH[1]}" ] && HD_DASH=1
+                return 0
+              fi
+            fi
+            i=$((i + 1))
+          fi
+        fi
+        ;;
+      esac
+      ;;
+    esac
+  done
+  return 1
+}
 
 # check_cmd <command-string> <depth>: returns 0 and sets DENY if it must be blocked.
 check_cmd() {
@@ -15,7 +71,6 @@ check_cmd() {
 
   # 1. Remove heredoc bodies (keep the line that opens them).
   local stripped="" line l term="" dash=0
-  local re="(^|[^<])<<(-?)[[:space:]]*[${sq}${dq}]?([A-Za-z_][A-Za-z0-9_]*)"
   while IFS= read -r line || [ -n "$line" ]; do
     if [ -n "$term" ]; then
       l="$line"
@@ -24,15 +79,14 @@ check_cmd() {
       continue
     fi
     stripped="$stripped$line$nl"
-    if [[ $line =~ $re ]]; then
-      term="${BASH_REMATCH[3]}"
-      dash=0
-      [ -n "${BASH_REMATCH[2]}" ] && dash=1
+    if find_heredoc "$line"; then
+      term="$HD_TERM"
+      dash="$HD_DASH"
     fi
   done <<<"$s"
 
   # 2. Replace quoted strings with placeholders __Q<n>__ (contents kept in Q).
-  local res="" buf="" mode="" i n=${#stripped} c idx
+  local res="" buf="" mode="" i n=${#stripped} c idx p
   for ((i = 0; i < n; i++)); do
     c="${stripped:i:1}"
     case "$mode" in
@@ -49,6 +103,17 @@ check_cmd() {
       "$dq")
         mode=d
         buf=""
+        ;;
+      "#")
+        # A # that starts a word begins a comment: skip to end of line.
+        if [ "$i" -eq 0 ]; then p=" "; else p="${stripped:i-1:1}"; fi
+        case "$p" in
+        " " | "$tab" | "$nl" | ";" | "&" | "|" | "(" | ")")
+          while [ "$i" -lt "$n" ] && [ "${stripped:i:1}" != "$nl" ]; do i=$((i + 1)); done
+          res+="$nl"
+          ;;
+        *) res+="$c" ;;
+        esac
         ;;
       *) res+="$c" ;;
       esac
@@ -87,7 +152,7 @@ check_cmd() {
   done
 
   # 4. Inspect each segment.
-  local seg k nw word base wrap payload j q rest
+  local seg k nw word base wrap payload j q rest out
   local -a w
   set -f
   while IFS= read -r seg; do
@@ -100,6 +165,10 @@ check_cmd() {
       if [[ $word =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
         k=$((k + 1))
         continue
+      fi
+      if [ "$word" = command ] && [[ ${w[k + 1]:-} == -[vV] ]]; then
+        k=$nw # presence check (command -v X): nothing is executed
+        break
       fi
       case "$word" in
       sudo | env | command | exec | time | nice | nohup | xargs | '!' | if | then | else | elif | do | while | until)
@@ -165,7 +234,14 @@ check_cmd() {
       rest="${w[*]:k+1}"
       for ((j = ${#Q[@]} - 1; j >= 0; j--)); do
         q="${Q[j]}"
-        rest="${rest//__Q${j}__/$q}"
+        # Manual replace: ${rest//pat/"$q"} is wrong on bash 3.2 (literal quotes) and
+        # bash 5.2 mishandles & in an unquoted replacement, so avoid pattern substitution.
+        out=""
+        while [[ $rest == *"__Q${j}__"* ]]; do
+          out+="${rest%%__Q${j}__*}$q"
+          rest="${rest#*__Q${j}__}"
+        done
+        rest="$out$rest"
       done
       if [ -n "$rest" ] && check_cmd "$rest" $((depth + 1)); then return 0; fi
       ;;
@@ -180,6 +256,11 @@ main() {
   input="$(cat)" || exit 0
   cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null)" || exit 0
   [ -z "$cmd" ] && exit 0
+  # Fast path: nothing that could be denied appears anywhere in the raw command.
+  case "$cmd" in
+  *node* | *npm* | *npx* | *yarn* | *corepack* | *bun* | *deno* | *tsc* | *tsx* | *tsup* | *esbuild* | *vitest* | *eslint* | *prettier* | *changeset* | *brew* | *pip* | *gem* | *cargo* | *go*) ;;
+  *) exit 0 ;;
+  esac
   if check_cmd "$cmd" 0; then
     jq -n --arg t "$DENY" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:("Host execution of " + $t + " is blocked in this repo: run it in a container via scripts/pc (see CLAUDE.md).")}}'
   fi
