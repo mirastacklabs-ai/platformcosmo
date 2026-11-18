@@ -44,3 +44,7 @@ export {
   fontAssets,
 } from "./text/index.js";
 export type { TextAnchor, TextWeight, TextPathOptions } from "./text/index.js";
+
+// Emit helpers (Track A1).
+// `iconDef` is internal to the engine: it turns sanitizer output into SvgRaw, so it is not public API.
+export { ICON_DEF_TAG, createIds, countElements } from "./emit/index.js";
