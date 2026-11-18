@@ -393,7 +393,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     const y1 = Math.max(...r.items.map((i) => i.cy + i.d));
     r.y = Math.min(...r.items.map((i) => i.cy));
     r.d = y1 - r.y;
-    for (const it of r.items) it.lane = r.y + r.d / 2;
+    for (const it of r.items) it.lane = r.y - 0.5;
   };
   for (const r of active) fixRowExtents(r);
 
@@ -443,7 +443,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
       if (g.y1 > g.y0) y = g.y0;
     }
     for (const it of crahs) {
-      place(it, rowsMinX - 1 - it.w, y, false);
+      place(it, rowsMinX - 2 - it.w, y, false);
       it.lane = y + it.d / 2;
       y += it.d;
     }
@@ -621,7 +621,8 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
         : ["post-fl", "post-fr", "top"];
       const worldParts = built.parts.map((q) => ({ ...q, box: tb(q.box, p) }));
       const isNear = (id: string): boolean =>
-        nearIds.some((n) => (n.endsWith("-") ? id.startsWith(n) : id === n));
+        nearIds.some((n) => (n.endsWith("-") ? id.startsWith(n) : id === n)) ||
+        id.startsWith("top");
       const shellParts = worldParts.filter((q) => isNear(q.id));
       const bodyParts = worldParts.filter((q) => !isNear(q.id));
       const rackPorts: RefPort[] = built.ports.map((q) => ({
@@ -750,7 +751,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     // A's group label sits at the group box's low-x/high-y corner. The row group is therefore
     // the one-tile end cap on the viewer (+x) side of the row, which puts the label at the row
     // end in the aisle, never on equipment. Focus still covers the member boxes.
-    const rb = slab(r.x1 + 0.5, r.y, r.x1 + 1.5, r.y + r.d); // label clear of rack labels; hall grows by whole tiles
+    const rb = slab(r.x1 + 0.5, r.y, r.x1 + 1.5, r.y + r.d + 0.5); // label clear of rack labels; hall grows by whole tiles
     groups.push({
       id: r.spec.id,
       kind: "row",
@@ -798,7 +799,44 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     if (a.spec.contained ?? DC_DEFAULTS.aisleContained) {
       const z = rowTop(a.rows);
       const b = box(a.x0 + sx, a.y0 + sy, z, a.x1 - a.x0, a.y1 - a.y0, 0.04);
-      objects.push(facilityObject(`dc_roof_${a.spec.id}`, "containment", b, "glass", a.spec.id));
+      // A see-through frame (rails only) so the top devices stay visible through the roof.
+      const w = 0.1;
+      const rails: ScenePart[] = [
+        {
+          id: "rail-b",
+          primitive: "slab",
+          tone: "glass",
+          box: box(b.origin.x, b.origin.y, z, b.size.x, w, 0.04),
+        },
+        {
+          id: "rail-f",
+          primitive: "slab",
+          tone: "glass",
+          box: box(b.origin.x, b.origin.y + b.size.y - w, z, b.size.x, w, 0.04),
+        },
+        {
+          id: "rail-l",
+          primitive: "slab",
+          tone: "glass",
+          box: box(b.origin.x, b.origin.y + w, z, w, b.size.y - 2 * w, 0.04),
+        },
+        {
+          id: "rail-r",
+          primitive: "slab",
+          tone: "glass",
+          box: box(b.origin.x + b.size.x - w, b.origin.y + w, z, w, b.size.y - 2 * w, 0.04),
+        },
+        {
+          id: "rail-m",
+          primitive: "slab",
+          tone: "glass",
+          box: box(b.origin.x + w, b.origin.y + b.size.y / 2 - w / 2, z, b.size.x - 2 * w, w, 0.04),
+        },
+      ];
+      objects.push({
+        ...facilityObject(`dc_roof_${a.spec.id}`, "containment", b, "glass", a.spec.id),
+        parts: rails,
+      });
       top = Math.max(top, z + 0.04);
     }
   }
@@ -924,7 +962,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
         id: r.spec.id,
         xa: spineX - 0.25,
         xb: r.x1 + sx,
-        y: r.y + r.d / 2 + sy,
+        y: r.y - 0.5 + sy,
         group: r.spec.id,
       }),
     );
