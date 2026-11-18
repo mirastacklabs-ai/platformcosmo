@@ -216,17 +216,17 @@ export const emit: EmitFn = (
         c.attrs.id.startsWith(dcFlowPrefix);
       const dc = node.children.filter(isDc);
       if (dc.length === 0 || typeof node.attrs?.id !== "string") return node;
+      if (dcGroupId) throw new Error("expected a single particles wrapper with DC flows");
       dcGroupId = `${node.attrs.id}_dc`;
       dcParticles.push(h("g", { id: dcGroupId }, ...dc));
       return { ...node, children: node.children.filter((c) => !isDc(c)) };
     }),
   );
-  // Reduced motion hides the particles wrapper; hide the DC wrapper alongside it.
+  // Reduced motion: in animated output the DC wrapper gets its own hide rule (CSS cannot pause
+  // SMIL), next to the animator's rule for the main particles wrapper.
   let animationCss = animation.css;
-  if (dcGroupId) {
-    const wrapperId = dcGroupId.slice(0, -"_dc".length);
-    const rule = `${ids.sel(wrapperId)}{display:none}`;
-    animationCss = animationCss.replaceAll(rule, `${rule}\n${ids.sel(dcGroupId)}{display:none}`);
+  if (dcGroupId && animation.duration > 0) {
+    animationCss += `\n@media (prefers-reduced-motion:reduce){${ids.sel(dcGroupId)}{display:none}}`;
   }
 
   // 3. Used classes and text, for rules and fonts.

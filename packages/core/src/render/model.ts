@@ -294,24 +294,41 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   const arrowNodes: SvgNode[] = [];
   const placed: Rect[] = []; // label boxes, so edge labels can step aside
 
+  let openSeg: { edgeId: string; id: string; cls: string; pts: Vec2[] } | undefined;
+  const flushSeg = () => {
+    if (!openSeg) return;
+    layers.objects.push(
+      h("path", { id: openSeg.id, class: openSeg.cls, d: polylinePath(openSeg.pts) }),
+    );
+    openSeg = undefined;
+  };
   for (const id of [...floorIds, ...order]) {
     const seg = cableSegments.get(id);
     if (seg) {
       const [i] = id.split("#").slice(-1);
+      const pa = projection.project(seg.a);
+      const pb = projection.project(seg.b);
+      // Pieces of one cable that stay adjacent after sorting merge back into one path.
+      if (openSeg && openSeg.edgeId === seg.edge.id) {
+        const last = openSeg.pts[openSeg.pts.length - 1] as Vec2;
+        if (last.x === pa.x && last.y === pa.y) {
+          openSeg.pts.push(pb);
+          continue;
+        }
+      }
+      flushSeg();
       const cls = [`${P}-edge`, `${P}-edge-${seg.edge.style}`];
       if (seg.edge.cableKind) cls.push(`${P}-cable-${seg.edge.cableKind}`);
       cls.push(`${ids.edge(seg.edge.id)}-seg`);
-      const pa = projection.project(seg.a);
-      const pb = projection.project(seg.b);
-      layers.objects.push(
-        h("path", {
-          id: `${ids.edge(seg.edge.id)}__s${i}`,
-          class: cls.join(" "),
-          d: polylinePath([pa, pb]),
-        }),
-      );
+      openSeg = {
+        edgeId: seg.edge.id,
+        id: `${ids.edge(seg.edge.id)}__s${i}`,
+        cls: cls.join(" "),
+        pts: [pa, pb],
+      };
       continue;
     }
+    flushSeg();
     const o = objectById.get(id) as SceneObject;
     const target = FLOOR_TYPES.has(o.type) ? floorNodes : layers.objects;
     const faceNodes: SvgNode[] = [];
@@ -494,6 +511,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       placed.push(r);
     }
   }
+
+  flushSeg();
 
   // ---- Groups --------------------------------------------------------------------------
   for (const g of orderGroups(scene.groups)) {

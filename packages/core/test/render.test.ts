@@ -11,6 +11,7 @@ import type {
   Rect,
   ThemeRegistry,
 } from "../src/contracts/index.js";
+import { createAnimator } from "../src/anim/index.js";
 import { emit, h } from "../src/emit/index.js";
 import { optimize } from "../src/optimize/index.js";
 import {
@@ -645,11 +646,83 @@ describe("DC layering (D31): floors flat, cables depth-sorted, particles on top"
     expect(at('id="pc-test-fl_dc_5ff_5f1"')).toBeGreaterThan(at('id="pc-test-ly_dcflows"'));
     expect(at('id="pc-test-fl_dc_5ff_5f2"')).toBeLessThan(at('id="pc-test-ly_labels"'));
     expect(at('id="pc-test_particles_dc"')).toBeGreaterThan(at('id="pc-test-ly_objects"'));
-    // reduced motion hides both wrappers
-    expect(svg).toContain("#pc-test_particles{display:none}\n#pc-test_particles_dc{display:none}");
+    // reduced motion: the DC wrapper gets its own rule (animated output: duration > 0)
+    expect(svg).toContain(
+      "@media (prefers-reduced-motion:reduce){#pc-test_particles_dc{display:none}}",
+    );
     // no duplicate ids
     const found = [...svg.matchAll(/ id="([^"]+)"/g)].map((m) => m[1] as string);
     expect(new Set(found).size).toBe(found.length);
+  });
+
+  test("frame output (no animation) adds no reduced-motion rule for the DC wrapper", () => {
+    const frame: AnimationLayer = {
+      css: "",
+      defs: [],
+      layers: {
+        flows: [h("g", { id: "pc-test_particles" }, h("g", { id: "pc-test-fl_dc_5ff_5f1" }))],
+      },
+      duration: 0,
+    };
+    const svg = emit(buildModel({ ...inputs(), scene: dcScene() }), frame, { font: "system" });
+    expect(svg).toContain('id="pc-test_particles_dc"');
+    expect(svg).not.toContain("prefers-reduced-motion");
+  });
+
+  test("a second wrapper with DC flows is rejected", () => {
+    const two: AnimationLayer = {
+      css: "",
+      defs: [],
+      layers: {
+        flows: [
+          h("g", { id: "pc-test_particles" }, h("g", { id: "pc-test-fl_dc_5ff_5f1" })),
+          h("g", { id: "pc-test_other" }, h("g", { id: "pc-test-fl_dc_5ff_5f2" })),
+        ],
+      },
+      duration: 1,
+    };
+    expect(() =>
+      emit(buildModel({ ...inputs(), scene: dcScene() }), two, { font: "system" }),
+    ).toThrow(/single particles wrapper/);
+  });
+
+  test("with the real animator (loop), reduced motion hides both particle wrappers", () => {
+    const m = buildModel({
+      ...inputs(),
+      scene: {
+        ...dcScene(),
+        flows: [
+          ...dcScene().flows,
+          { id: "f_1", edge: "a1", kind: "normal" as const, rate: 1, reverse: false },
+        ],
+      },
+    });
+    const layer = createAnimator().animate(m, { speed: 1, mode: "loop" });
+    const svg = emit(m, layer, { font: "system" });
+    const media = svg.slice(svg.indexOf("@media (prefers-reduced-motion:reduce)"));
+    expect(svg).toContain('id="pc-test_particles_dc"');
+    expect(svg).toContain('id="pc-test_particles"');
+    expect(media).toContain("#pc-test_particles{display:none}");
+    expect(media).toContain("#pc-test_particles_dc{display:none}");
+    // the DC wrapper holds only the dc_f_ flow, the main one the other flow
+    const dcBlock = /<g id="pc-test_particles_dc">([^]*?)<\/g><\/g>/.exec(svg)?.[1] ?? "";
+    expect(dcBlock).toContain("pc-test-fl_dc_5ff_5f1");
+    expect(dcBlock).not.toContain("pc-test-fl_f_5f1");
+  });
+
+  test("a cable that stays adjacent after sorting is one merged path", () => {
+    const scene = dcScene();
+    const only = {
+      ...scene,
+      objects: scene.objects.filter((o) => o.id === "floor"),
+    };
+    const svg = emit(buildModel({ ...inputs(), scene: only }), particles, { font: "system" });
+    const segs = [...svg.matchAll(/<path id="pc-test-e_c1__s\d+"/g)];
+    expect(segs).toHaveLength(1);
+    // the merged path still runs the whole way (5 tiles = 6 points)
+    expect(/<path id="pc-test-e_c1__s0"[^>]* d="([^"]+)"/.exec(svg)?.[1]?.match(/L/g)?.length).toBe(
+      5,
+    );
   });
 
   test("scenes without DC flows keep the plain contract layer order", () => {
@@ -668,7 +741,7 @@ describe("DC layering (D31): floors flat, cables depth-sorted, particles on top"
   test("painted cable segments share a per-edge class", () => {
     const svg = emit(buildModel({ ...inputs(), scene: dcScene() }), particles, { font: "system" });
     const segs = [...svg.matchAll(/<path id="pc-test-e_c1__s(\d+)" class="([^"]*)"/g)];
-    expect(segs.length).toBeGreaterThan(1);
+    expect(segs.length).toBeGreaterThanOrEqual(1);
     for (const m of segs) expect(m[2]).toContain("pc-test-e_c1-seg");
   });
 
