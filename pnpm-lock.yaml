@@ -56,6 +56,15 @@ importers:
       '@platformcosmo/icons-base':
         specifier: workspace:*
         version: link:../icons-base
+      '@platformcosmo/icons-k8s':
+        specifier: workspace:*
+        version: link:../icons-k8s
+      '@platformcosmo/icons-lucide':
+        specifier: workspace:*
+        version: link:../icons-lucide
+      '@platformcosmo/icons-simple':
+        specifier: workspace:*
+        version: link:../icons-simple
       '@platformcosmo/themes':
         specifier: workspace:*
         version: link:../themes

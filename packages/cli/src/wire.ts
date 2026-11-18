@@ -9,6 +9,9 @@ import * as core from "@platformcosmo/core";
 import type { DcPack, LoadedIconPack, ThemeRegistry, ValidateThemeFn } from "@platformcosmo/core";
 import * as dcPackModule from "@platformcosmo/dc-pack";
 import * as iconsBase from "@platformcosmo/icons-base";
+import * as iconsK8s from "@platformcosmo/icons-k8s";
+import * as iconsLucide from "@platformcosmo/icons-lucide";
+import * as iconsSimple from "@platformcosmo/icons-simple";
 import * as themesModule from "@platformcosmo/themes";
 import type { Deps } from "./deps.js";
 import { createFfmpegEncoder } from "./ffmpeg.js";
@@ -18,7 +21,10 @@ const named = <T>(mod: unknown, key: string): T | undefined =>
   (mod as Record<string, unknown>)[key] as T | undefined;
 
 export function defaultDeps(): Deps {
-  const basePack = named<LoadedIconPack>(iconsBase, "pack");
+  // Every redistributable pack ships with the CLI, in precedence order (provider packs are user-installed).
+  const bundledPacks = [iconsBase, iconsLucide, iconsK8s, iconsSimple]
+    .map((m) => named<LoadedIconPack>(m, "pack"))
+    .filter((p): p is LoadedIconPack => p !== undefined);
   return {
     core: {
       parseSpec: core.parseSpec,
@@ -32,7 +38,7 @@ export function defaultDeps(): Deps {
     themes: named<ThemeRegistry>(themesModule, "themeRegistry"),
     validateTheme: named<ValidateThemeFn>(themesModule, "validateTheme"),
     dcPack: named<DcPack>(dcPackModule, "dcPack"),
-    bundledPacks: basePack ? [basePack] : [],
+    bundledPacks,
     http: createIconHttpClient(),
     env: process.env,
     cwd: process.cwd(),
