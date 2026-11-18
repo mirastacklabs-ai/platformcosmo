@@ -1,2 +1,2 @@
-/** Placeholder until M3 (icon manifest and bundled glyphs). */
-export const iconPack = { name: "icons-base", icons: [] as string[] } as const;
+/** PlatformCosmo base glyphs: original Apache-2.0 icons with defaults for every semantic node type. */
+export { pack } from "./pack.gen.js";

@@ -70,9 +70,17 @@ importers:
         specifier: workspace:*
         version: link:../core
 
-  packages/icons-base: {}
+  packages/icons-base:
+    dependencies:
+      '@platformcosmo/core':
+        specifier: workspace:*
+        version: link:../core
 
-  packages/themes: {}
+  packages/themes:
+    dependencies:
+      '@platformcosmo/core':
+        specifier: workspace:*
+        version: link:../core
 
 packages:
 
