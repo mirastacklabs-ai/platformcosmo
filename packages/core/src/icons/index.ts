@@ -1,11 +1,7 @@
-/** Entry point owned by Track C (stub until implemented). */
-import type { CreateIconResolverFn, FetchIconPackFn, SvgSanitizer } from "../contracts/index.js";
+/** Icon system entry points (Track C). */
+import type { FetchIconPackFn } from "../contracts/index.js";
 
-export const sanitizeSvg: SvgSanitizer = () => {
-  throw new Error("not implemented: owned by Track C");
-};
-export const createIconResolver: CreateIconResolverFn = () => {
-  throw new Error("not implemented: owned by Track C");
-};
+export { sanitizeSvg } from "./sanitize.js";
+export { createIconResolver, iconRejections } from "./resolver.js";
 export const fetchIconPack: FetchIconPackFn = () =>
-  Promise.reject(new Error("not implemented: owned by Track C"));
+  Promise.reject(new Error("not implemented: lands in the fetch PR"));

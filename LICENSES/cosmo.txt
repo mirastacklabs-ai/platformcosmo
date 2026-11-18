@@ -1,0 +1,4 @@
+PlatformCosmo base glyphs (packages/icons-base, pack id "cosmo")
+
+Original artwork created for PlatformCosmo, licensed under the Apache License 2.0
+(see /LICENSE). No third-party artwork is included in this pack.

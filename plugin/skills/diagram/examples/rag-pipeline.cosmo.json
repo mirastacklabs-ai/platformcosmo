@@ -1,0 +1,65 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "RAG pipeline",
+    "description": "A question is embedded, matched against a vector database, and the retrieved context is passed to an LLM behind a guardrail."
+  },
+  "canvas": { "theme": "light" },
+  "nodes": [
+    { "id": "client", "type": "client", "label": "Chat client" },
+    { "id": "gateway", "type": "gateway", "label": "API gateway" },
+    { "id": "rag", "type": "rag", "label": "RAG orchestrator", "group": "ai" },
+    { "id": "embed", "type": "embedding", "label": "Embedding model", "group": "ai" },
+    { "id": "vectors", "type": "vector-db", "label": "Vector DB", "group": "data" },
+    { "id": "docs", "type": "object-store", "label": "Document store", "group": "data" },
+    { "id": "llm", "type": "llm", "label": "LLM", "group": "ai" },
+    { "id": "guard", "type": "guardrail", "label": "Guardrail", "group": "ai" }
+  ],
+  "groups": [
+    { "id": "ai", "label": "Inference", "style": "platform" },
+    { "id": "data", "label": "Knowledge base", "style": "zone" }
+  ],
+  "edges": [
+    { "id": "client-gateway", "from": "client", "to": "gateway" },
+    { "id": "gateway-rag", "from": "gateway", "to": "rag" },
+    { "id": "rag-embed", "from": "rag", "to": "embed" },
+    { "id": "rag-vectors", "from": "rag", "to": "vectors" },
+    { "id": "docs-vectors", "from": "docs", "to": "vectors", "style": "dashed", "label": "ingest" },
+    { "id": "rag-llm", "from": "rag", "to": "llm" },
+    { "id": "llm-guard", "from": "llm", "to": "guard" },
+    { "id": "guard-client", "from": "guard", "to": "client", "style": "dotted" }
+  ],
+  "metrics": [{ "id": "latency", "label": "Latency", "value": "0 ms" }],
+  "steps": [
+    {
+      "caption": "1. The question arrives",
+      "flows": [{ "edge": "client-gateway" }, { "edge": "gateway-rag" }],
+      "focus": "rag"
+    },
+    {
+      "caption": "2. It is embedded into a vector",
+      "flows": [{ "edge": "rag-embed" }],
+      "set": { "embed": "highlighted" }
+    },
+    {
+      "caption": "3. Nearest chunks are retrieved",
+      "flows": [{ "edge": "rag-vectors", "kind": "heavy" }],
+      "set": { "embed": "healthy", "vectors": "highlighted" },
+      "metrics": { "latency": "40 ms" }
+    },
+    {
+      "caption": "4. The LLM answers using the retrieved context",
+      "flows": [{ "edge": "rag-llm", "kind": "heavy" }],
+      "set": { "vectors": "healthy", "llm": "highlighted" },
+      "metrics": { "latency": "620 ms" }
+    },
+    {
+      "caption": "5. The guardrail checks the answer before it is returned",
+      "flows": [{ "edge": "llm-guard" }, { "edge": "guard-client" }],
+      "set": { "llm": "healthy", "guard": "highlighted" },
+      "metrics": { "latency": "680 ms" }
+    }
+  ],
+  "legend": "auto"
+}
