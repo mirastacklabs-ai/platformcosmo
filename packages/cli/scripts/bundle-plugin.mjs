@@ -134,11 +134,56 @@ function packageRoots() {
 
 function licenseText(dir) {
   const names = readdirSync(dir).filter((n) => /^(licen[sc]e|copying|notice)(\.|$)/i.test(n));
-  names.sort();
+  names.sort(cmp);
   return names.map((n) => readFileSync(join(dir, n), "utf8").replace(/\r\n/g, "\n").trim());
 }
 
+// Plain code-unit order (locale independent, byte-stable across machines).
+function cmp(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+const licensesDir = fileURLToPath(new URL("./licenses/", import.meta.url));
+const spdx = (id) => readFileSync(`${licensesDir}${id}.txt`, "utf8").replace(/\r\n/g, "\n").trim();
+const VENDORED = new Set(["MIT", "ISC", "BSD-3-Clause", "Apache-2.0", "MPL-2.0"]);
+
+// Packages that may ship no usable license information; each needs a reason. Everything else must
+// either ship a license file or declare one of the vendored SPDX ids plus an author.
+const ALLOWLIST = {};
+
+// Embedded binary assets that carry their own license obligations (they are not JS inputs).
+const WASM_NOTICE = {
+  "@resvg/resvg-wasm": {
+    source:
+      "Source Code Form: https://github.com/yisibl/resvg-js/tree/v2.6.2 (unmodified); license: https://mozilla.org/MPL/2.0/",
+    license: "MPL-2.0",
+    extra: () => readFileSync(`${licensesDir}resvg-wasm-rust-crates.md`, "utf8").trim(),
+  },
+};
+
+function normalizeRepo(r) {
+  let u = typeof r === "string" ? r : (r?.url ?? "");
+  u = u
+    .trim()
+    .replace(/^git\+/, "")
+    .replace(/^git:\/\//, "https://")
+    .replace(/^ssh:\/\/git@/, "https://");
+  u = u
+    .replace(/^git@github\.com:/, "https://github.com/")
+    .replace(/^github:/, "https://github.com/");
+  if (/^[\w.-]+\/[\w.-]+$/.test(u)) u = `https://github.com/${u}`;
+  return u.replace(/\.git$/, "").replace(/\/$/, "");
+}
+
+function authorName(pj) {
+  const a = pj.author ?? pj.contributors?.[0];
+  if (!a) return "";
+  const n = typeof a === "string" ? a : (a.name ?? "");
+  return n.replace(/\s*[<(].*$/, "").trim();
+}
+
 function notices() {
+  const problems = [];
   const pkgs = packageRoots()
     .map((rel) => {
       const dir = join(root, rel);
@@ -146,9 +191,7 @@ function notices() {
       return { dir, pj };
     })
     .filter(({ pj }) => !String(pj.name).startsWith("@platformcosmo/"))
-    .sort((a, b) =>
-      `${a.pj.name}@${a.pj.version}`.localeCompare(`${b.pj.name}@${b.pj.version}`, "en"),
-    );
+    .sort((x, y) => cmp(`${x.pj.name}@${x.pj.version}`, `${y.pj.name}@${y.pj.version}`));
   const lines = [
     "# Third-party notices",
     "",
@@ -156,29 +199,44 @@ function notices() {
     "the third-party packages listed below, in full with their copyright and license text. This file is",
     "generated from the bundle's inputs (`scripts/pc run bundle:plugin`); do not edit it.",
     "",
-    "Packages such as `@resvg/resvg-wasm` (MPL-2.0, covers the WebAssembly binary only) and SVGO (MIT) are",
-    "included, with their full text, only once they are part of the bundle.",
-    "",
   ];
   for (const { dir, pj } of pkgs) {
+    const id = `${pj.name}@${pj.version}`;
+    const wasm = WASM_NOTICE[pj.name];
     const license =
-      typeof pj.license === "string"
+      wasm?.license ??
+      (typeof pj.license === "string"
         ? pj.license
         : (pj.license?.type ??
-          (pj.licenses ? pj.licenses.map((l) => l.type).join(" OR ") : "UNKNOWN"));
-    const repo = typeof pj.repository === "string" ? pj.repository : (pj.repository?.url ?? "");
+          (pj.licenses ? pj.licenses.map((l) => l.type).join(" OR ") : "UNKNOWN")));
+    const repo = normalizeRepo(pj.repository);
     lines.push(`## ${pj.name} ${pj.version}`, "", `License: ${license}`);
-    if (repo) lines.push(`Source: ${repo.replace(/^git\+/, "")}`);
+    if (repo) lines.push(`Source: ${repo}`);
+    if (wasm) lines.push(wasm.source);
     lines.push("");
-    const texts = licenseText(dir);
+    let texts = licenseText(dir);
+    if (wasm) texts = [spdx(wasm.license), wasm.extra()];
     if (texts.length === 0) {
-      lines.push(
-        `(The package ships no license file; its package.json declares ${license}.` +
-          `${pj.author ? ` Author: ${typeof pj.author === "string" ? pj.author : pj.author.name}.` : ""})`,
-        "",
-      );
+      const author = authorName(pj);
+      if (ALLOWLIST[id]) {
+        lines.push(`(No license text; allowlisted: ${ALLOWLIST[id]})`, "");
+      } else if (VENDORED.has(license) && author) {
+        texts = [spdx(license).replace("{{copyright}}", author)];
+      } else {
+        problems.push(
+          `${id}: no license file and cannot derive one (license "${license}", author "${author}")`,
+        );
+      }
+    } else if (license === "UNKNOWN" && !ALLOWLIST[id]) {
+      problems.push(`${id}: no license declared in package.json`);
     }
     for (const t of texts) lines.push("~~~~text", t, "~~~~", "");
+  }
+  if (problems.length > 0) {
+    console.error(
+      `third-party notices cannot be generated:\n  ${problems.join("\n  ")}\nAdd a vendored license text or an ALLOWLIST entry (with a reason) in bundle-plugin.mjs.`,
+    );
+    process.exit(1);
   }
   return `${lines.join("\n").trimEnd()}\n`;
 }
