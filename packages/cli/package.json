@@ -46,6 +46,9 @@
     "@platformcosmo/core": "workspace:*",
     "@platformcosmo/dc-pack": "workspace:*",
     "@platformcosmo/icons-base": "workspace:*",
+    "@platformcosmo/icons-k8s": "workspace:*",
+    "@platformcosmo/icons-lucide": "workspace:*",
+    "@platformcosmo/icons-simple": "workspace:*",
     "@platformcosmo/themes": "workspace:*"
   },
   "devDependencies": {

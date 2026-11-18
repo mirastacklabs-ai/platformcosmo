@@ -174,6 +174,8 @@ export interface HttpClientOptions {
   transport?: Transport;
   /** Default 5. */
   maxRedirects?: number;
+  /** Time allowed for one connection attempt to produce response headers, default 5000 ms. */
+  connectTimeoutMs?: number;
 }
 
 const REDIRECT = new Set([301, 302, 303, 307, 308]);
@@ -198,7 +200,10 @@ export function checkUrl(raw: string): URL {
   return url;
 }
 
-async function vet(url: URL, resolve: Resolver): Promise<string> {
+async function vet(
+  url: URL,
+  resolve: Resolver,
+): Promise<{ host: string; addrs: readonly string[] }> {
   const host = url.hostname.startsWith("[") ? url.hostname.slice(1, -1) : url.hostname;
   let addrs: readonly string[];
   if (isIP(host)) addrs = [host];
@@ -217,7 +222,7 @@ async function vet(url: URL, resolve: Resolver): Promise<string> {
       `${host} resolves to a non-public address (${bad}); refusing to connect`,
     );
   }
-  return addrs[0]!;
+  return { host, addrs };
 }
 
 /** Rejects when `signal` aborts, so a stalled DNS lookup cannot outlive the overall timeout. */
@@ -232,6 +237,10 @@ export function createIconHttpClient(options: HttpClientOptions = {}): IconHttpC
   const resolve = options.resolve ?? defaultResolver;
   const transport = options.transport ?? defaultTransport;
   const maxRedirects = options.maxRedirects ?? 5;
+  const connectTimeoutMs = options.connectTimeoutMs ?? 5000;
+  // Last address that worked per host: a dead first address (typically unroutable IPv6) is paid for once,
+  // not once per request.
+  const preferred = new Map<string, string>();
 
   return {
     async get(rawUrl, { maxBytes, timeoutMs }) {
@@ -244,21 +253,54 @@ export function createIconHttpClient(options: HttpClientOptions = {}): IconHttpC
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       const timedOut = () => new HttpPolicyError("timeout", `request exceeded ${timeoutMs} ms`);
+      const cleanups: (() => void)[] = [];
       try {
         let url = checkUrl(rawUrl);
         for (let hop = 0; ; hop++) {
-          const ip = await Promise.race([vet(url, resolve), aborted(controller.signal, timedOut)]);
-          let res: TransportResponse;
-          try {
-            res = await transport({
-              url,
-              ip,
-              signal: controller.signal,
-              headers: { "user-agent": "pcosmo", accept: "*/*", "accept-encoding": "identity" },
-            });
-          } catch (e) {
-            if (controller.signal.aborted) throw timedOut();
-            throw new HttpPolicyError("network", `request failed: ${(e as Error).message}`);
+          const { host, addrs } = await Promise.race([
+            vet(url, resolve),
+            aborted(controller.signal, timedOut),
+          ]);
+          // Every address was vetted. Try the one that last worked, then IPv4, then IPv6; an attempt that
+          // cannot produce headers within connectTimeoutMs moves on to the next address.
+          const first = preferred.get(host);
+          const ordered = [
+            ...addrs.filter((a) => a === first),
+            ...addrs.filter((a) => a !== first && isIP(a) === 4),
+            ...addrs.filter((a) => a !== first && isIP(a) !== 4),
+          ];
+          let res: TransportResponse | undefined;
+          let lastError: unknown;
+          for (const ip of ordered) {
+            const attempt = new AbortController();
+            const link = () => attempt.abort();
+            controller.signal.addEventListener("abort", link, { once: true });
+            cleanups.push(() => controller.signal.removeEventListener("abort", link));
+            const headerTimer = setTimeout(
+              () => attempt.abort(),
+              Math.min(connectTimeoutMs, timeoutMs),
+            );
+            try {
+              res = await transport({
+                url,
+                ip,
+                signal: attempt.signal,
+                headers: { "user-agent": "pcosmo", accept: "*/*", "accept-encoding": "identity" },
+              });
+              preferred.set(host, ip);
+              break;
+            } catch (e) {
+              if (controller.signal.aborted) throw timedOut();
+              lastError = e;
+            } finally {
+              clearTimeout(headerTimer);
+            }
+          }
+          if (!res) {
+            throw new HttpPolicyError(
+              "network",
+              `request failed: ${lastError instanceof Error ? lastError.message : "no address reachable"}`,
+            );
           }
           if (REDIRECT.has(res.status)) {
             res.destroy?.();
@@ -326,6 +368,7 @@ export function createIconHttpClient(options: HttpClientOptions = {}): IconHttpC
         }
       } finally {
         clearTimeout(timer);
+        for (const c of cleanups) c();
       }
     },
   };

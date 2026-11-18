@@ -49,6 +49,19 @@ jobs:
           name: browser-check
           path: tests/browser/out
       - run: sudo safaridriver --enable
+      - name: Prepare the macOS session (Reduce Motion off, display awake)
+        run: |
+          sw_vers
+          echo "reduceMotion before: $(defaults read com.apple.universalaccess reduceMotion 2>&1)"
+          defaults write com.apple.universalaccess reduceMotion -bool false || true
+          sudo defaults write com.apple.universalaccess reduceMotion -bool false || true
+          defaults write com.apple.Accessibility ReduceMotionEnabled -int 0 || true
+          echo "reduceMotion after: $(defaults read com.apple.universalaccess reduceMotion 2>&1)"
+          echo "AllowRemoteAutomation: $(defaults read com.apple.Safari AllowRemoteAutomation 2>&1)"
+          # keep the display awake so Safari renders
+          (caffeinate -disu -t 900 &)
+          system_profiler SPDisplaysDataType | head -15 || true
+          screencapture -x /tmp/screen.png && ls -l /tmp/screen.png || echo "screencapture failed"
       - name: Run Safari checks
         run: |
           safaridriver -p 4444 &
