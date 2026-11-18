@@ -1,3 +1,4 @@
+/* global fetch */
 // Dev-time vendoring script (not part of the build); regenerates svg/, icons.json, the license
 // files and NOTICE-SIMPLE-ICONS.txt (also mirrored to LICENSES/). Needs the simple-icons npm
 // package, e.g. `curl -sL https://registry.npmjs.org/simple-icons/-/simple-icons-16.38.0.tgz | tar xz`
