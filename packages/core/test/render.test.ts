@@ -605,10 +605,62 @@ describe("DC layering (D31): floors flat, cables depth-sorted, particles on top"
     expect(edgesBlock).not.toContain("pc-test-cable-power");
   });
 
-  test("layer order stays the contract order, also for DC scenes", () => {
-    const dc = emit(buildModel({ ...inputs(), scene: dcScene() }), particles, { font: "system" });
+  test("DC particles are drawn after the objects layer, other particles stay below it (D31)", () => {
+    const both: AnimationLayer = {
+      css: "@media (prefers-reduced-motion:reduce){\n#pc-test_particles{display:none}\n}",
+      defs: [],
+      layers: {
+        flows: [
+          h(
+            "g",
+            { id: "pc-test_particles" },
+            h("g", { id: "pc-test-fl_f_5f1" }),
+            h("g", { id: "pc-test-fl_dc_5ff_5f1" }),
+            h("g", { id: "pc-test-fl_dc_5ff_5f2" }),
+          ),
+        ],
+      },
+      duration: 1,
+    };
+    const svg = emit(buildModel({ ...inputs(), scene: dcScene() }), both, { font: "system" });
+    const at = (needle: string) => {
+      const i = svg.indexOf(needle);
+      expect(i, needle).toBeGreaterThan(-1);
+      return i;
+    };
+    // contract layer ids stay in contract order; the DC group is inserted after objects
+    const order = [
+      "background",
+      "groups",
+      "edges",
+      "flows",
+      "objects",
+      "dcflows",
+      "labels",
+      "overlay",
+    ].map((l) => at(`id="pc-test-ly_${l}"`));
+    expect(order.every((i, k) => k === 0 || i > (order[k - 1] as number))).toBe(true);
+    // non-DC particles are inside the flows layer (before objects), DC ones after objects
+    expect(at('id="pc-test-fl_f_5f1"')).toBeLessThan(at('id="pc-test-ly_objects"'));
+    expect(at('id="pc-test-fl_dc_5ff_5f1"')).toBeGreaterThan(at('id="pc-test-ly_dcflows"'));
+    expect(at('id="pc-test-fl_dc_5ff_5f2"')).toBeLessThan(at('id="pc-test-ly_labels"'));
+    expect(at('id="pc-test_particles_dc"')).toBeGreaterThan(at('id="pc-test-ly_objects"'));
+    // reduced motion hides both wrappers
+    expect(svg).toContain("#pc-test_particles{display:none}\n#pc-test_particles_dc{display:none}");
+    // no duplicate ids
+    const found = [...svg.matchAll(/ id="([^"]+)"/g)].map((m) => m[1] as string);
+    expect(new Set(found).size).toBe(found.length);
+  });
+
+  test("scenes without DC flows keep the plain contract layer order", () => {
+    const plainParticles: AnimationLayer = {
+      ...particles,
+      layers: { flows: [h("g", { id: "pc-test_particles" }, h("g", { id: "pc-test-fl_f_5f1" }))] },
+    };
+    const svg = emit(buildModel(inputs()), plainParticles, { font: "system" });
+    expect(svg).not.toContain("ly_dcflows");
     const order = ["background", "groups", "edges", "flows", "objects", "labels", "overlay"].map(
-      (l) => dc.indexOf(`id="pc-test-ly_${l}"`),
+      (l) => svg.indexOf(`id="pc-test-ly_${l}"`),
     );
     expect(order.every((i, k) => i > 0 && (k === 0 || i > (order[k - 1] as number)))).toBe(true);
   });

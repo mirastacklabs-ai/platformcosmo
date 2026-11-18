@@ -199,6 +199,36 @@ export const emit: EmitFn = (
   }
   const defsExtra = animDefs.map(finish).filter((n): n is SvgNode => n !== null);
 
+  // D31: particles of DC flows (`dc_f_*`) are drawn after the objects layer so floors and
+  // trays cannot cover them; every other flow stays in the contract `flows` layer. The split
+  // is by flow id (`ids.flow`), so the animator's ids and selectors are untouched.
+  const dcFlowPrefix = ids.flow("dc_f_");
+  const dcParticles: SvgNode[] = [];
+  let dcGroupId: string | undefined;
+  layers.set(
+    "flows",
+    (layers.get("flows") ?? []).map((node) => {
+      if (typeof node === "string" || "raw" in node || !node.children) return node;
+      const isDc = (c: SvgNode) =>
+        typeof c !== "string" &&
+        !("raw" in c) &&
+        typeof c.attrs?.id === "string" &&
+        c.attrs.id.startsWith(dcFlowPrefix);
+      const dc = node.children.filter(isDc);
+      if (dc.length === 0 || typeof node.attrs?.id !== "string") return node;
+      dcGroupId = `${node.attrs.id}_dc`;
+      dcParticles.push(h("g", { id: dcGroupId }, ...dc));
+      return { ...node, children: node.children.filter((c) => !isDc(c)) };
+    }),
+  );
+  // Reduced motion hides the particles wrapper; hide the DC wrapper alongside it.
+  let animationCss = animation.css;
+  if (dcGroupId) {
+    const wrapperId = dcGroupId.slice(0, -"_dc".length);
+    const rule = `${ids.sel(wrapperId)}{display:none}`;
+    animationCss = animationCss.replaceAll(rule, `${rule}\n${ids.sel(dcGroupId)}{display:none}`);
+  }
+
   // 3. Used classes and text, for rules and fonts.
   const used = new Set<string>();
   let regularText = "";
@@ -247,7 +277,7 @@ export const emit: EmitFn = (
   if (raster) {
     css.push(...rules.map((r) => inlineVars(r, vars)));
     css.push(
-      stripAtRules(inlineVars(animation.css, vars), [
+      stripAtRules(inlineVars(animationCss, vars), [
         "media",
         "font-face",
         "keyframes",
@@ -256,7 +286,7 @@ export const emit: EmitFn = (
     );
   } else {
     css.push(...rules);
-    css.push(animation.css);
+    css.push(animationCss);
   }
   const cssText = css.filter((s) => s.trim() !== "").join("\n");
 
@@ -276,9 +306,17 @@ export const emit: EmitFn = (
   const camera = h(
     "g",
     { id: ids.camera() },
-    ...LAYERS.map((l) =>
-      h("g", { id: `${prefix}-ly_${l}`, class: `${prefix}-layer` }, ...(layers.get(l) ?? [])),
-    ),
+    ...LAYERS.flatMap((l) => {
+      const group = h(
+        "g",
+        { id: `${prefix}-ly_${l}`, class: `${prefix}-layer` },
+        ...(layers.get(l) ?? []),
+      );
+      // DC particles sit right after the objects layer, before labels.
+      return l === "objects" && dcParticles.length > 0
+        ? [group, h("g", { id: `${prefix}-ly_dcflows`, class: `${prefix}-layer` }, ...dcParticles)]
+        : [group];
+    }),
   );
   const root = h(
     "svg",
