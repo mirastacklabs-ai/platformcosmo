@@ -10,6 +10,7 @@
  * against its lockfile `integrity` before it is loaded; mismatches are diagnostics, never loaded.
  */
 import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { PACK_ID_RE } from "@platformcosmo/core";
 import { dirname, isAbsolute, join, posix, resolve, sep } from "node:path";
 import { computeIconIntegrity, verifyIconIntegrity } from "@platformcosmo/core";
 import type {
@@ -23,7 +24,7 @@ import { type Deps, Failure } from "./deps.js";
 import { errorDiagnostic } from "./format.js";
 
 export const LOCKFILE_NAME = "platformcosmo-icons.lock.json";
-export const PACK_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
+export { PACK_ID_RE };
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_SVG_BYTES = 1024 * 1024;
 const MAX_FILES = 20_000;
@@ -228,7 +229,9 @@ export async function savePack(
       () => false,
     ));
   if (exists && !overwrite) {
-    throw new Error(`icon pack "${id}" is already installed (use --force to replace it)`);
+    throw new Error(
+      `icon pack "${id}" is already installed; choose another id with --id <name> (or pass --force to replace it)`,
+    );
   }
   await mkdir(dir, { recursive: true });
   const tmp = resolve(dir, `.tmp-${id}-${process.pid}-${Date.now()}`);

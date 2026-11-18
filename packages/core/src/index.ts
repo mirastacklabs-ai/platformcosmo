@@ -22,6 +22,7 @@ export {
   computeIconIntegrity,
   iconRejections,
   iconCost,
+  PACK_ID_RE,
   verifyIconIntegrity,
   PROVIDER_IDS,
   PROVIDER_TERMS,

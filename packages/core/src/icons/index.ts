@@ -5,7 +5,9 @@ export {
   fetchIconPack,
   checkHttpsUrl,
   readZipDirectory,
+  derivePackSource,
   FETCH_LIMITS,
+  PACK_ID_RE,
   PROVIDER_IDS,
   PROVIDER_TERMS,
 } from "./fetch.js";

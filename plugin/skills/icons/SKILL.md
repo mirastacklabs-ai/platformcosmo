@@ -51,8 +51,15 @@ validated (below).
    into a repository or commit them. Rendered diagrams that use the icons are fine to share.
 4. **Integrity:** user packs are verified against a lockfile on every use. If `list` reports an integrity mismatch,
    tell the user and suggest removing the pack and adding it again.
-5. After adding a pack, show 3 to 5 example refs from `pcosmo icons search <term> --packs-dir ...` so the user can
-   use them as `icon: "pack:name"` on a node.
+5. After adding a pack, read the pack id that `add` printed (`installed <id> ...` and the example ref) and use refs of
+   the form `<id>:<icon>`. Show 3 to 5 example refs from `pcosmo icons search <term> --pack <id> --packs-dir ...` so the
+   user can use them as `icon: "<id>:<name>"` on a node.
+6. **Pack ids:** without `--id`, a URL source gets the repository or file name as its id (for example
+   `https://github.com/feathericons/feather/tree/main/icons` becomes `feather`). When the user names the set ("the
+   Feather icon set"), pass `--id feather` so the id matches what they will ask for. An id that is already
+   installed is an error: pick another `--id` instead of replacing it.
+7. **Failures** are plain text on stderr with exit code 1 (never JSON, even with `--json`, which only changes the
+   output of a successful `add`). Report the message to the user as it is.
 
 ## Custom pack format
 
