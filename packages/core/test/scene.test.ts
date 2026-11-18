@@ -129,6 +129,7 @@ describe("buildScene (objects, groups, edges)", () => {
 
   test("engine defaults equal the schema `default`s (non-DC fields)", () => {
     const defs = schema.$defs as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const flow = defs.flow.oneOf[0].properties;
     const canvas = (schema.properties as any).canvas.properties; // eslint-disable-line @typescript-eslint/no-explicit-any
     const r = validate({
       meta: { version: "1" },
@@ -138,6 +139,8 @@ describe("buildScene (objects, groups, edges)", () => {
         { id: "b", type: "server" },
       ],
       edges: [{ from: "a", to: "b" }],
+      flows: [{ from: "a", to: "b" }],
+      steps: [{ caption: "s" }],
     });
     const g = buildScene(r.spec!, {});
     expect(g.canvas).toEqual({
@@ -152,5 +155,8 @@ describe("buildScene (objects, groups, edges)", () => {
     expect(g.groups[0]!.style).toBe(defs.group.properties.style.default);
     expect(g.edges[0]!.style).toBe(defs.edge.properties.style.default);
     expect(g.edges[0]!.bidirectional).toBe(defs.edge.properties.bidirectional.default);
+    expect(g.flows[0]!.kind).toBe(flow.kind.default);
+    expect(g.flows[0]!.rate).toBe(flow.rate.default);
+    expect(g.timeline[0]!.duration).toBe(defs.step.properties.duration.default);
   });
 });

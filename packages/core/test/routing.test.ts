@@ -101,6 +101,33 @@ describe("routeEdge", () => {
     expect(orthogonal(r.path)).toBe(true);
   });
 
+  test("blocked fallback stays axis-aligned, also for raised ports", () => {
+    const target = box(10, 10);
+    const walls = [
+      box(9.1, 9.1, 0.5, 3.8),
+      box(12.4, 9.1, 0.5, 3.8),
+      box(9.1, 9.1, 3.8, 0.5),
+      box(9.1, 12.4, 3.8, 0.5),
+    ];
+    const r = routeEdge(
+      { box: box(0, 0, 1, 1, 3), ports: [{ x: 1, y: 0.5, z: 1.5 }] },
+      { box: target },
+      walls,
+    );
+    expect(r.blocked).toBe(true);
+    expect(orthogonal(r.path)).toBe(true);
+  });
+
+  test("many obstacles stay fast and orthogonal (caps and bucket index)", () => {
+    const obstacles: Box3[] = [];
+    for (let i = 0; i < 400; i++)
+      obstacles.push(box(3 + (i % 20) * 4, -40 + Math.floor(i / 20) * 4, 2, 2));
+    const t0 = Date.now();
+    const r = routeEdge({ box: box(0, 0) }, { box: box(90, 5) }, obstacles);
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(orthogonal(r.path)).toBe(true);
+  });
+
   test("deterministic", () => {
     const o = [box(3, -1, 2, 4), box(3, 5, 2, 2)];
     const a = JSON.stringify(routeEdge({ box: box(0, 0) }, { box: box(8, 3) }, o));

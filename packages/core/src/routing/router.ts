@@ -37,6 +37,10 @@ interface Terminal {
 const CLEAR = 0.5;
 const STUB = 0.5;
 const BEND = 2;
+/** Hard caps so a pathological scene falls back instead of stalling. */
+const MAX_GRID = 60000;
+const MAX_EXPANSIONS = 150000;
+const BUCKET = 4;
 const r2 = (v: number): number => Math.round(v * 100) / 100;
 
 const rectOf = (b: Box3): Rect => ({
@@ -146,7 +150,7 @@ function search(
   to: Terminal[],
   own: Rect[],
   obstacles: Rect[],
-): { pts: { x: number; y: number }[]; src: number; dst: number } | undefined {
+): { pts: { x: number; y: number }[]; src: number; dst: number } | "no-terminal" | undefined {
   const xsSet = new Set<number>();
   const ysSet = new Set<number>();
   const add = (x: number, y: number): void => {
@@ -166,6 +170,39 @@ function search(
   const ys = [...ysSet].sort((a, b) => a - b);
   const nx = xs.length;
   const ny = ys.length;
+  if (nx * ny > MAX_GRID) return undefined;
+  // Bucket index over obstacles so each probe only tests nearby ones.
+  const buckets = new Map<number, number[]>();
+  const bkey = (cx: number, cy: number): number => (cx + 32768) * 65536 + (cy + 32768);
+  obstacles.forEach((r, i) => {
+    for (let cx = Math.floor(r.x0 / BUCKET); cx <= Math.floor(r.x1 / BUCKET); cx++) {
+      for (let cy = Math.floor(r.y0 / BUCKET); cy <= Math.floor(r.y1 / BUCKET); cy++) {
+        const k = bkey(cx, cy);
+        const list = buckets.get(k);
+        if (list) list.push(i);
+        else buckets.set(k, [i]);
+      }
+    }
+  });
+  const stamp = new Int32Array(obstacles.length);
+  let tick = 0;
+  const anyObstacleHit = (ax: number, ay: number, bx: number, by: number): boolean => {
+    tick++;
+    const x0 = Math.floor(Math.min(ax, bx) / BUCKET);
+    const x1 = Math.floor(Math.max(ax, bx) / BUCKET);
+    const y0 = Math.floor(Math.min(ay, by) / BUCKET);
+    const y1 = Math.floor(Math.max(ay, by) / BUCKET);
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cy = y0; cy <= y1; cy++) {
+        for (const i of buckets.get(bkey(cx, cy)) ?? []) {
+          if (stamp[i] === tick) continue;
+          stamp[i] = tick;
+          if (strictHit(ax, ay, bx, by, obstacles[i]!, false)) return true;
+        }
+      }
+    }
+    return false;
+  };
   const idx = (ix: number, iy: number): number => ix * ny + iy;
   const xi = new Map(xs.map((v, i) => [v, i]));
   const yi = new Map(ys.map((v, i) => [v, i]));
@@ -174,13 +211,11 @@ function search(
     const x = xs[ix]!;
     const y = ys[iy]!;
     for (const r of own) if (strictHit(x, y, x, y, r, true)) return true;
-    for (const r of obstacles) if (strictHit(x, y, x, y, r, false)) return true;
-    return false;
+    return anyObstacleHit(x, y, x, y);
   };
   const segBlocked = (ax: number, ay: number, bx: number, by: number): boolean => {
     for (const r of own) if (strictHit(ax, ay, bx, by, r, true)) return true;
-    for (const r of obstacles) if (strictHit(ax, ay, bx, by, r, false)) return true;
-    return false;
+    return anyObstacleHit(ax, ay, bx, by);
   };
 
   const srcNodes: { id: number; t: number }[] = [];
@@ -195,7 +230,7 @@ function search(
     const iy = yi.get(t.stub.y)!;
     if (!nodeBlocked(ix, iy) && !dstNodes.has(idx(ix, iy))) dstNodes.set(idx(ix, iy), k);
   });
-  if (srcNodes.length === 0 || dstNodes.size === 0) return undefined;
+  if (srcNodes.length === 0 || dstNodes.size === 0) return "no-terminal";
 
   // State = node * 3 + dir (0 = along x, 1 = along y, 2 = start).
   const total = nx * ny * 3;
@@ -223,7 +258,9 @@ function search(
       heap.push(h(s.id), seq++, st);
     }
   }
+  let expansions = 0;
   while (heap.size > 0) {
+    if (++expansions > MAX_EXPANSIONS) return undefined;
     const { id: st } = heap.pop();
     const node = Math.floor(st / 3);
     const dir = st % 3;
@@ -294,6 +331,7 @@ export function routeEdge(
     };
     const local = all.filter((r) => strictHit(win.x0, win.y0, win.x1, win.y1, r, false));
     const found = search(fromT, toT, own, local);
+    if (found === "no-terminal") break; // wider windows only add obstacles
     if (!found) continue;
     const a = fromT[found.src]!;
     const b = toT[found.dst]!;
@@ -305,11 +343,18 @@ export function routeEdge(
     pts.push(b.at);
     return { path: simplify(pts), blocked: false };
   }
-  // Fallback: direct L through the facing sides (ignores obstacles).
+  // Fallback: axis-aligned L through the first terminals (ignores obstacles). Raised ports drop
+  // to the ground plane first so every segment stays on one axis.
   const a = fromT[0]!.at;
   const b = toT[0]!.at;
   return {
-    path: simplify([a, { x: b.x, y: a.y, z: 0 }, b]),
+    path: simplify([
+      a,
+      { x: a.x, y: a.y, z: 0 },
+      { x: b.x, y: a.y, z: 0 },
+      { x: b.x, y: b.y, z: 0 },
+      b,
+    ]),
     blocked: true,
   };
 }

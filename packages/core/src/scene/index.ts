@@ -18,14 +18,7 @@ import type {
 import { layoutSpec } from "../layout/index.js";
 import { routeEdge } from "../routing/router.js";
 import { particleCount, PARTICLE_LIMIT } from "../schema/semantic.js";
-import type {
-  PlatformCosmoSpec,
-  SpecFlow,
-  SpecNode,
-  SpecRack,
-  SpecCable,
-  SpecFacility,
-} from "../schema/types.gen.js";
+import type { PlatformCosmoSpec, SpecFlow, SpecNode } from "../schema/types.gen.js";
 import { NODE_TYPES, PRIMITIVE_HEIGHT } from "./categories.js";
 import { NODE_HEIGHT, footprintOf } from "./sizes.js";
 
@@ -120,27 +113,6 @@ function resolveColor(c: string | undefined): string | undefined {
   return PALETTE.has(c) ? `palette:${c}` : `flow:${c}`;
 }
 
-/** Schema defaults the DC pack may rely on (applied before `DcPack.buildScene`). */
-function withDcDefaults(spec: PlatformCosmoSpec): PlatformCosmoSpec {
-  const racks = spec.racks?.map((r): SpecRack => ({ ...r, u: r.u ?? 42, pdu: r.pdu ?? "dual" }));
-  const cables = spec.cables?.map((c): SpecCable => ({ ...c, kind: c.kind ?? "network" }));
-  const facility: SpecFacility | undefined =
-    spec.facility === undefined
-      ? undefined
-      : {
-          ...spec.facility,
-          raisedFloor: spec.facility.raisedFloor ?? true,
-          perforatedTiles: spec.facility.perforatedTiles ?? true,
-          cableTrays: spec.facility.cableTrays ?? "overhead",
-        };
-  return {
-    ...spec,
-    ...(racks ? { racks: racks as never } : {}),
-    ...(cables ? { cables } : {}),
-    ...(facility ? { facility } : {}),
-  } as PlatformCosmoSpec;
-}
-
 const hasDcContent = (s: PlatformCosmoSpec): boolean =>
   s.racks !== undefined ||
   s.equipment !== undefined ||
@@ -158,7 +130,7 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
   // ---- DC fragment --------------------------------------------------------------------
   let frag: DcSceneFragment | undefined;
   if (hasDcContent(spec)) {
-    if (context.dc) frag = context.dc.buildScene(withDcDefaults(spec));
+    if (context.dc) frag = context.dc.buildScene(spec);
     else {
       diagnostics.push({
         severity: "error",
@@ -304,7 +276,15 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
   edgesSpec.forEach((e, i) => {
     const id = e.id ?? uniqueId(`e_${encodeEnd(e.from)}_${encodeEnd(e.to)}`);
     const routed = route(e.from, e.to);
-    if (!routed) return;
+    if (!routed) {
+      diagnostics.push({
+        severity: "error",
+        code: "semantic/unknown-node",
+        path: `/edges/${i}`,
+        message: `Edge ${JSON.stringify(id)} has an endpoint with no geometry (${JSON.stringify(boxes.has(e.from) ? e.to : e.from)})`,
+      });
+      return;
+    }
     if (routed.blocked) {
       diagnostics.push({
         severity: "warning",
@@ -410,22 +390,42 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
   const flows: SceneFlow[] = [...baseFlows, ...(frag?.flows ?? [])];
 
   // ---- timeline ---------------------------------------------------------------------------
-  const states: Record<string, ObjectState> = {};
+  const states: Record<string, ObjectState> = Object.create(null) as Record<string, ObjectState>;
   for (const o of allObjects) states[o.id] = o.state;
-  const metricVals: Record<string, string | number> = {};
+  const metricVals: Record<string, string | number> = Object.create(null) as Record<
+    string,
+    string | number
+  >;
   for (const m of spec.metrics ?? []) metricVals[m.id] = m.value;
-  const focusTargets: Record<string, Box3> = {};
-  const focusSource: Record<string, Box3> = { ...(frag?.focusTargets ?? {}) };
-  for (const o of objects) focusSource[o.id] = o.box;
-  for (const g of groups) focusSource[g.id] = g.box;
-  for (const k of Object.keys(focusSource).sort()) focusTargets[k] = focusSource[k]!;
+  const focusTargets: Record<string, Box3> = Object.create(null) as Record<string, Box3>;
+  const focusSource = new Map<string, Box3>(Object.entries(frag?.focusTargets ?? {}));
+  for (const o of allObjects) focusSource.set(o.id, o.box); // every object box, slots included
+  for (const g of groups) focusSource.set(g.id, g.box);
+  for (const k of [...focusSource.keys()].sort()) focusTargets[k] = focusSource.get(k)!;
 
+  const rackSpecs = new Map((spec.racks ?? []).map((r) => [r.id, r]));
   const timeline: SceneStep[] = [];
   const stepOwnFlows: SceneFlow[] = [];
   (spec.steps ?? []).forEach((s, si) => {
-    for (const [k, v] of Object.entries(s.set ?? {})) if (k in states) states[k] = v;
+    // Rack-wide `set` also covers the front shell and slot devices without their own spec state;
+    // explicit slot keys in the same step are applied last and win.
+    const entries = Object.entries(s.set ?? {});
+    const apply = (k: string, v: ObjectState): void => {
+      if (Object.hasOwn(states, k)) states[k] = v;
+    };
+    for (const [k, v] of entries) {
+      const rack = rackSpecs.get(k);
+      if (!rack) continue;
+      apply(k, v);
+      apply(`${k}_front`, v);
+      for (const sl of rack.slots ?? []) {
+        if (sl.state === undefined) apply(`${k}/${sl.id ?? `u${sl.at}`}`, v);
+      }
+    }
+    for (const [k, v] of entries) if (!rackSpecs.has(k)) apply(k, v);
     for (const [k, v] of Object.entries(s.metrics ?? {})) metricVals[k] = v;
-    let stepFlows: readonly SceneFlow[] = flows;
+    // Step flows hold spec flows only; DC flows (dc_f_*) live in scene.flows alone.
+    let stepFlows: readonly SceneFlow[] = baseFlows;
     if (s.flows !== undefined) {
       const list: SceneFlow[] = [];
       s.flows.forEach((f, fi) => {
@@ -436,12 +436,12 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
       stepOwnFlows.push(...list);
     }
     let focus: string | undefined = s.focus;
-    if (focus !== undefined && !(focus in focusTargets)) {
+    if (focus !== undefined && !Object.hasOwn(focusTargets, focus)) {
       diagnostics.push({
         severity: "warning",
         code: "semantic/unknown-focus",
         path: `/steps/${si}/focus`,
-        message: `Focus target "${focus}" has no geometry; showing the full view`,
+        message: `Focus target ${JSON.stringify(focus)} has no geometry; showing the full view`,
       });
       focus = undefined;
     }
@@ -449,9 +449,9 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
       index: si + 1,
       ...(s.caption === undefined ? {} : { caption: s.caption }),
       duration: s.duration ?? 3,
-      states: { ...states },
+      states: Object.assign(Object.create(null), states) as Record<string, ObjectState>,
       flows: stepFlows,
-      metrics: { ...metricVals },
+      metrics: Object.assign(Object.create(null), metricVals) as Record<string, string | number>,
       ...(focus === undefined ? {} : { focus }),
     });
   });

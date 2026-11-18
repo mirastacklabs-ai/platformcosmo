@@ -189,7 +189,7 @@ describe("DC merge", () => {
       return frag;
     },
   };
-  const dcSpec = () =>
+  const dcSpec = (more: Record<string, unknown> = {}) =>
     spec({
       racks: [{ id: "r1", slots: [{ id: "srv", at: 1, type: "server-1u" }] }],
       cables: [{ id: "c1", from: "r1/srv", to: "r1" }],
@@ -199,6 +199,7 @@ describe("DC merge", () => {
         { id: "e3", from: "app-1", to: "r1" },
       ],
       flows: [{ edge: "c1" }],
+      ...more,
     });
 
   test("nodes go +x of the hall with a 2 tile gap; merged ordering", () => {
@@ -228,15 +229,61 @@ describe("DC merge", () => {
     expect(e3.path[e3.path.length - 2]).toEqual({ x: 1, y: 1, z: 0 });
   });
 
-  test("schema defaults are applied before the DC pack sees the spec", () => {
+  test("the DC pack receives the spec as given (defaults are owned by the DC pack)", () => {
     buildScene(dcSpec(), { dc });
-    expect(seen?.racks?.[0]).toMatchObject({ u: 42, pdu: "dual" });
-    expect(seen?.cables?.[0]?.kind).toBe("network");
-    expect(seen?.facility).toEqual({
-      raisedFloor: true,
-      perforatedTiles: true,
-      cableTrays: "overhead",
+    expect(seen?.racks?.[0]).not.toHaveProperty("u");
+    expect(seen?.cables?.[0]).not.toHaveProperty("kind");
+  });
+
+  test("rack set applies to the front shell and inheriting slots; explicit slot set wins", () => {
+    const frag2: DcSceneFragment = {
+      ...frag,
+      objects: [
+        ...frag.objects,
+        { ...rackObj, id: "r1_front", type: "rack-front" },
+        { ...slotObj, id: "r1/own" },
+      ],
+    };
+    const s = dcSpec({
+      racks: [
+        {
+          id: "r1",
+          slots: [
+            { id: "srv", at: 1, type: "server-1u" },
+            { id: "own", at: 2, type: "server-1u", state: "degraded" },
+          ],
+        },
+      ],
+      steps: [{ set: { r1: "down" } }, { set: { r1: "highlighted", "r1/srv": "healthy" } }],
     });
+    const g = buildScene(s, { dc: { ...dc, buildScene: () => frag2 } });
+    expect(g.timeline[0]!.states).toMatchObject({
+      r1: "down",
+      r1_front: "down",
+      "r1/srv": "down",
+      "r1/own": "healthy",
+    });
+    expect(g.timeline[1]!.states).toMatchObject({
+      r1: "highlighted",
+      r1_front: "highlighted",
+      "r1/srv": "healthy",
+    });
+  });
+
+  test("DC flows live only in scene.flows; steps hold spec flows only", () => {
+    const g = buildScene(
+      dcSpec({ steps: [{ flows: [{ edge: "c1", rate: 2 }] }, { caption: "x" }, { flows: [] }] }),
+      { dc },
+    );
+    expect(g.timeline[0]!.flows.map((f) => f.id)).toEqual(["s1_f_1"]);
+    expect(g.timeline[1]!.flows.map((f) => f.id)).toEqual(["f_1"]);
+    expect(g.timeline[2]!.flows.map((f) => f.id)).toEqual([]);
+    expect(g.flows.map((f) => f.id)).toContain("dc_f_1");
+  });
+
+  test("every object box (slots included) is a focus target", () => {
+    const g = buildScene(dcSpec(), { dc });
+    for (const o of g.objects) expect(g.focusTargets).toHaveProperty([o.id]);
   });
 
   test("DC content without a pack is an error diagnostic", () => {
@@ -262,5 +309,12 @@ describe("DC merge", () => {
   test("deterministic", () => {
     const a = JSON.stringify(buildScene(dcSpec(), { dc }));
     expect(a).toBe(JSON.stringify(buildScene(dcSpec(), { dc })));
+  });
+
+  test("edge to an endpoint without geometry reports a diagnostic at /edges/i", () => {
+    const g = buildScene(dcSpec(), { dc: { ...dc, buildScene: () => ({ ...frag, objects: [] }) } });
+    expect(
+      g.diagnostics.some((d) => d.path === "/edges/1" && d.code === "semantic/unknown-node"),
+    ).toBe(true);
   });
 });
