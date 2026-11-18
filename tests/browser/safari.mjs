@@ -114,6 +114,23 @@ try {
     );
   const hash = (b64) => createHash("sha1").update(b64).digest("hex").slice(0, 10);
   await wd("GET", s("/window/rect")).then((r) => console.log("window rect:", JSON.stringify(r)));
+  // The window can stay unpainted for a while after the session starts: wait (bounded) until a
+  // page with a red square renders differently from the empty page.
+  await go("/blank");
+  const w0 = await shot();
+  for (let i = 0; i < 10; i++) {
+    await go("/ref/red");
+    if ((await shot()) !== w0) {
+      console.log(`window painted after ${i} retries`);
+      break;
+    }
+    console.log(`window not painted yet (attempt ${i + 1}); maximizing and waiting`);
+    await wd("POST", s("/window/maximize"), {}).catch((e) =>
+      console.log("maximize failed:", e.message),
+    );
+    await sleep(2000);
+    await go("/blank");
+  }
   await go("/blank");
   await diag("blank");
   const blank = await shot();

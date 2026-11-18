@@ -48,6 +48,11 @@ run_pass() { # pass-name reduced(0|1)
 }
 
 (caffeinate -disu -t 1800 &) # keep the display awake so Safari renders
+# Touch the display stack first: without it the Safari window stayed unpainted (blank
+# screenshots) on the runner; with it (as in the passing PR #37 run) it rendered.
+sw_vers
+system_profiler SPDisplaysDataType | head -15 || true
+screencapture -x /tmp/screen.png && ls -l /tmp/screen.png || echo "screencapture failed"
 
 set_reduce_motion off || exit 1
 start_driver || exit 1
