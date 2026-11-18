@@ -2,10 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://platformcosmo.io/schema/v1.json",
   "title": "PlatformCosmoSpec",
-  "description": "Draft v1 schema (M0). Subject to change until v1.0.",
+  "description": "PlatformCosmo spec, format major version 1. Draft until v1.0.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["meta", "nodes"],
+  "required": ["meta"],
   "properties": {
     "$schema": {
       "type": "string"
@@ -108,6 +108,41 @@
           }
         }
       ]
+    },
+    "racks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rack"
+      },
+      "minItems": 1
+    },
+    "equipment": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/equipment"
+      },
+      "minItems": 1
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/row"
+      }
+    },
+    "aisles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/aisle"
+      }
+    },
+    "cables": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/cable"
+      }
+    },
+    "facility": {
+      "$ref": "#/$defs/facility"
     }
   },
   "$defs": {
@@ -214,6 +249,9 @@
         },
         "group": {
           "$ref": "#/$defs/id"
+        },
+        "state": {
+          "$ref": "#/$defs/state"
         }
       }
     },
@@ -232,6 +270,9 @@
         },
         "style": {
           "enum": ["zone", "vpc", "cluster", "platform"]
+        },
+        "parent": {
+          "$ref": "#/$defs/id"
         }
       }
     },
@@ -275,7 +316,7 @@
               "$ref": "#/$defs/id"
             },
             "kind": {
-              "enum": ["normal", "heavy", "health", "failed"]
+              "$ref": "#/$defs/flowKind"
             },
             "rate": {
               "type": "number",
@@ -299,7 +340,7 @@
               "$ref": "#/$defs/id"
             },
             "kind": {
-              "enum": ["normal", "heavy", "health", "failed"]
+              "$ref": "#/$defs/flowKind"
             },
             "rate": {
               "type": "number",
@@ -366,9 +407,276 @@
         "duration": {
           "type": "number",
           "exclusiveMinimum": 0
+        },
+        "focus": {
+          "$ref": "#/$defs/id"
         }
       },
       "minProperties": 1
+    },
+    "flowKind": {
+      "title": "SpecFlowKind",
+      "enum": ["normal", "heavy", "health", "failed", "airflow", "power"]
+    },
+    "dcSlotType": {
+      "title": "SpecDcSlotType",
+      "enum": [
+        "server-1u",
+        "server-2u",
+        "server-4u",
+        "blade-chassis",
+        "gpu-node",
+        "switch-tor",
+        "switch-leaf",
+        "switch-spine",
+        "patch-panel",
+        "storage-shelf",
+        "storage-flash",
+        "storage-jbod",
+        "pdu-1u",
+        "ups-2u",
+        "blank"
+      ]
+    },
+    "dcEquipmentType": {
+      "title": "SpecDcEquipmentType",
+      "enum": ["ups", "busway", "pdu-floor", "crah", "in-row-cooler", "cdu", "tape-library"]
+    },
+    "rack": {
+      "title": "SpecRack",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "u": {
+          "enum": [42, 45, 48]
+        },
+        "pos": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": {
+            "x": {
+              "type": "integer"
+            },
+            "y": {
+              "type": "integer"
+            }
+          }
+        },
+        "state": {
+          "$ref": "#/$defs/state"
+        },
+        "pdu": {
+          "enum": ["none", "single", "dual"]
+        },
+        "rearDoorHeatExchanger": {
+          "type": "boolean"
+        },
+        "slots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rackSlot"
+          }
+        }
+      }
+    },
+    "rackSlot": {
+      "title": "SpecRackSlot",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "type"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "at": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 48
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "type": {
+          "$ref": "#/$defs/dcSlotType"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "state": {
+          "$ref": "#/$defs/state"
+        }
+      }
+    },
+    "equipment": {
+      "title": "SpecEquipment",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "$ref": "#/$defs/dcEquipmentType"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "pos": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": {
+            "x": {
+              "type": "integer"
+            },
+            "y": {
+              "type": "integer"
+            }
+          }
+        },
+        "state": {
+          "$ref": "#/$defs/state"
+        }
+      }
+    },
+    "row": {
+      "title": "SpecRow",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "members"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 1
+        },
+        "facing": {
+          "enum": ["front", "back"]
+        }
+      }
+    },
+    "aisle": {
+      "title": "SpecAisle",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "rows"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "kind": {
+          "enum": ["cold", "hot"]
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "contained": {
+          "type": "boolean"
+        }
+      }
+    },
+    "cable": {
+      "title": "SpecCable",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "from": {
+          "$ref": "#/$defs/endpoint"
+        },
+        "to": {
+          "$ref": "#/$defs/endpoint"
+        },
+        "kind": {
+          "enum": ["power", "network", "fiber", "management"]
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        }
+      }
+    },
+    "endpoint": {
+      "title": "SpecEndpoint",
+      "description": "An object id, or rackId/slotId for a rack slot.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(/[a-z][a-z0-9-]*)?$",
+      "maxLength": 129
+    },
+    "facility": {
+      "title": "SpecFacility",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "raisedFloor": {
+          "type": "boolean"
+        },
+        "perforatedTiles": {
+          "type": "boolean"
+        },
+        "cableTrays": {
+          "enum": ["none", "overhead", "underfloor"]
+        },
+        "busway": {
+          "type": "boolean"
+        }
+      }
     }
-  }
+  },
+  "x-revision": "1.1.0",
+  "anyOf": [
+    {
+      "required": ["nodes"],
+      "properties": {
+        "nodes": true
+      }
+    },
+    {
+      "required": ["racks"],
+      "properties": {
+        "racks": true
+      }
+    },
+    {
+      "required": ["equipment"],
+      "properties": {
+        "equipment": true
+      }
+    }
+  ]
 }

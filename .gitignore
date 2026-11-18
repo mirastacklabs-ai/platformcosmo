@@ -8,3 +8,7 @@ coverage/
 # copied from repo root at build time (scripts/sync-legal.mjs)
 packages/*/LICENSE
 packages/*/NOTICE
+
+# Local git worktrees and personal Claude settings
+.worktrees/
+.claude/settings.local.json
