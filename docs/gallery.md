@@ -18,7 +18,7 @@ Every diagram here is rendered by `pcosmo build` from the spec shown below it. C
   <h2>{{ g.title }}</h2>
   <p v-if="g.id === 'provider'">
     These use AWS, Azure and GCP icons. Install the packs with <code>pcosmo icons add aws</code>, <code>azure</code> or
-    <code>gcp</code>; the packs themselves are never redistributed.
+    <code>gcp</code>; the packs themselves are never redistributed. Provider terms allow using these icons in architecture diagrams, training and documentation; see each provider's terms. AWS, Azure, Google Cloud, Kubernetes and the brands in Simple Icons are trademarks of their owners; use does not imply endorsement.
   </p>
   <article v-for="item in data.filter((d) => d.group === g.id)" :key="item.name" class="gallery-item">
     <h3>{{ item.title }}</h3>

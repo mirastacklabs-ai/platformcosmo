@@ -43,8 +43,14 @@
     },
     {
       "caption": "5. Half-open: a probe checks whether Orders has recovered",
-      "set": { "orders": "healthy", "fallback": "healthy", "gateway": "healthy" },
+      "set": { "orders": "degraded", "fallback": "healthy", "gateway": "healthy" },
       "flows": [{ "edge": "gateway-orders", "kind": "health" }]
+    },
+    {
+      "caption": "6. The probe succeeds: the breaker closes and Orders serves traffic again",
+      "set": { "orders": "healthy" },
+      "flows": [{ "edge": "client-gateway" }, { "edge": "gateway-orders" }],
+      "metrics": { "errors": "0%" }
     }
   ]
 }

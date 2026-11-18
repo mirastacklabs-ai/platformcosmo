@@ -61,7 +61,7 @@ swap the active flows, update metrics and zoom to an object. The animated SVG lo
 ## Versioning
 
 `meta.version` is the format's major version (`"1"`). Within a major, changes only add optional fields and enum
-values. The schema also has a revision (`x-revision`), currently `1.1.0`. An older engine rejects fields it does
+values. The schema also has a revision (`x-revision` in the schema file). An older engine rejects fields it does
 not know and tells you to upgrade. Breaking changes need a new major and `pcosmo migrate`.
 
 ## Data-center specs

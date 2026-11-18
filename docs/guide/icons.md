@@ -23,7 +23,7 @@ pcosmo icons add gcp
 pcosmo icons search "load balancer"
 ```
 
-Diagrams that use these icons are fine to share. The packs themselves stay in your user directory
+Provider terms allow using these icons in architecture diagrams, training and documentation; see each provider's terms. The packs themselves stay in your user directory
 (`~/.platformcosmo/icons`) and should not be committed or redistributed.
 
 ## Custom packs
@@ -67,3 +67,7 @@ pcosmo icons add https://example.com/icons.zip
   changed on disk is not loaded; remove and add it again.
 
 `add` is the only command that uses the network.
+
+## Trademarks
+
+AWS, Azure, Google Cloud, Kubernetes and the brands in Simple Icons are trademarks of their owners; use does not imply endorsement.

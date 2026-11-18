@@ -31,6 +31,10 @@ export default defineConfig({
       { text: "Gallery", link: "/gallery" },
     ],
     socialLinks: [{ icon: "github", link: "https://github.com/mirastacklabs-ai/platformcosmo" }],
-    footer: { message: "Apache-2.0", copyright: "Copyright 2026 MiraStack Labs" },
+    footer: {
+      message:
+        "Apache-2.0. AWS, Azure, Google Cloud, Kubernetes and the brands in Simple Icons are trademarks of their owners; use does not imply endorsement.",
+      copyright: "Copyright 2026 MiraStack Labs",
+    },
   },
 });
