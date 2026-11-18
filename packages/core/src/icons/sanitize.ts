@@ -264,6 +264,10 @@ function valueOk(name: string, value: string): boolean {
 
 // --- CSS inlining ---------------------------------------------------------------
 
+const MAX_RULES = 512;
+const MAX_SELECTORS_PER_RULE = 16;
+const MAX_CLASSES_PER_NODE = 64;
+
 interface CssRule {
   readonly tag: string | undefined;
   readonly classes: readonly string[];
@@ -272,18 +276,21 @@ interface CssRule {
   readonly decls: readonly (readonly [string, string])[];
 }
 
+/** Report-safe label: only `[\w-]` characters survive in the name part. */
+function label(kind: string, name: string): string {
+  return `${kind}:${name.replace(/[^\w-]/g, "_").slice(0, 40)}`;
+}
+
 function parseDecls(text: string, removed: Set<string>): [string, string][] {
   const out: [string, string][] = [];
   for (const part of text.split(";")) {
     const idx = part.indexOf(":");
     if (idx < 1) continue;
     const prop = part.slice(0, idx).trim().toLowerCase();
-    const val = part
-      .slice(idx + 1)
-      .replace(/!important\s*$/i, "")
-      .trim();
+    let val = part.slice(idx + 1).trim();
+    if (val.toLowerCase().endsWith("!important")) val = val.slice(0, -10).trim();
     if (!PRESENTATION.has(prop)) {
-      removed.add(`css-property:${prop.slice(0, 40)}`);
+      removed.add(label("css-property", prop));
       continue;
     }
     out.push([prop, val]);
@@ -291,21 +298,51 @@ function parseDecls(text: string, removed: Set<string>): [string, string][] {
   return out;
 }
 
+/** Linear comment stripper (an unterminated comment swallows the rest, as in CSS). */
+function stripComments(css: string): string {
+  let out = "";
+  let i = 0;
+  for (;;) {
+    const s = css.indexOf("/*", i);
+    if (s < 0) return out + css.slice(i);
+    out += `${css.slice(i, s)} `;
+    const e = css.indexOf("*/", s + 2);
+    if (e < 0) return out;
+    i = e + 2;
+  }
+}
+
+const SELECTOR_RE = /^([A-Za-z][\w-]*|\*)?((?:\.[A-Za-z_][\w-]*)*)$/;
+
 function parseStyleSheet(css: string, removed: Set<string>, startOrder: number): CssRule[] {
-  const text = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const text = stripComments(css);
   if (text.includes("@") || /url\s*\(/i.test(text.replace(URL_REF_RE, "")) || text.includes("\\")) {
     removed.add("style:unsafe-css");
     return [];
   }
   const rules: CssRule[] = [];
-  const re = /([^{}]+)\{([^{}]*)\}/g;
-  let m: RegExpExecArray | null;
   let order = startOrder;
-  while ((m = re.exec(text))) {
-    const decls = parseDecls(m[2] ?? "", removed);
-    for (const sel of (m[1] ?? "").split(",")) {
+  let i = 0;
+  for (;;) {
+    const open = text.indexOf("{", i);
+    if (open < 0) break;
+    const close = text.indexOf("}", open + 1);
+    if (close < 0) break;
+    const nested = text.indexOf("{", open + 1);
+    if (nested >= 0 && nested < close) {
+      removed.add("style:nested-block");
+      break;
+    }
+    if (order >= MAX_RULES) {
+      removed.add("style:rule-limit");
+      break;
+    }
+    const decls = parseDecls(text.slice(open + 1, close), removed);
+    const selectors = text.slice(i, open).split(",");
+    if (selectors.length > MAX_SELECTORS_PER_RULE) removed.add("style:selector-limit");
+    for (const sel of selectors.slice(0, MAX_SELECTORS_PER_RULE)) {
       const s = sel.trim();
-      const sm = /^([A-Za-z][\w-]*|\*)?((?:\.[A-Za-z_][\w-]*)*)$/.exec(s);
+      const sm = SELECTOR_RE.exec(s);
       if (!s || !sm) {
         removed.add("css-selector");
         continue;
@@ -320,8 +357,31 @@ function parseStyleSheet(css: string, removed: Set<string>, startOrder: number):
         decls,
       });
     }
+    i = close + 1;
   }
   return rules;
+}
+
+/** Rules pre-indexed by first class, tag and a universal bucket. */
+interface RuleIndex {
+  readonly byTag: Map<string, CssRule[]>;
+  readonly byClass: Map<string, CssRule[]>;
+  readonly universal: CssRule[];
+}
+
+function indexRules(rules: readonly CssRule[]): RuleIndex {
+  const idx: RuleIndex = { byTag: new Map(), byClass: new Map(), universal: [] };
+  const push = (m: Map<string, CssRule[]>, k: string, r: CssRule): void => {
+    const l = m.get(k);
+    if (l) l.push(r);
+    else m.set(k, [r]);
+  };
+  for (const r of rules) {
+    if (r.classes[0] !== undefined) push(idx.byClass, r.classes[0], r);
+    else if (r.tag !== undefined) push(idx.byTag, r.tag, r);
+    else idx.universal.push(r);
+  }
+  return idx;
 }
 
 function collectStyleText(node: XNode, out: string[]): void {
@@ -343,7 +403,7 @@ interface KNode {
 
 interface Ctx {
   readonly removed: Set<string>;
-  readonly rules: readonly CssRule[];
+  readonly rules: RuleIndex;
   readonly monochrome: boolean;
   uses: number;
   readonly seenIds: Set<string>;
@@ -351,11 +411,15 @@ interface Ctx {
 
 function effectiveAttrs(node: XNode, ctx: Ctx): Map<string, string> {
   const attrs = new Map(node.attrs);
-  const classes = (attrs.get("class") ?? "").split(/\s+/).filter(Boolean);
-  const matching = ctx.rules
+  const classes = new Set(
+    (attrs.get("class") ?? "").split(/\s+/).filter(Boolean).slice(0, MAX_CLASSES_PER_NODE),
+  );
+  const candidates = new Set<CssRule>(ctx.rules.universal);
+  for (const r of ctx.rules.byTag.get(node.name) ?? []) candidates.add(r);
+  for (const c of classes) for (const r of ctx.rules.byClass.get(c) ?? []) candidates.add(r);
+  const matching = [...candidates]
     .filter(
-      (r) =>
-        (r.tag === undefined || r.tag === node.name) && r.classes.every((c) => classes.includes(c)),
+      (r) => (r.tag === undefined || r.tag === node.name) && r.classes.every((c) => classes.has(c)),
     )
     .sort((a, b) => a.specificity - b.specificity || a.order - b.order);
   for (const r of matching) for (const [k, v] of r.decls) attrs.set(k, v);
@@ -366,11 +430,19 @@ function effectiveAttrs(node: XNode, ctx: Ctx): Map<string, string> {
   return attrs;
 }
 
+/**
+ * Monochrome mode: fills and strokes become `currentColor` (`none`, `inherit`, `transparent`
+ * and `currentColor` are kept; gradient paint servers keep their url but their `stop-color`s
+ * are rewritten to `currentColor` so the result stays single-colored).
+ */
 function monoValue(name: string, value: string): string {
+  if (name === "stop-color") return "currentColor";
   if (
     (name === "fill" || name === "stroke") &&
     value !== "none" &&
     value !== "inherit" &&
+    value !== "transparent" &&
+    value !== "currentColor" &&
     !/url\(/i.test(value)
   ) {
     return "currentColor";
@@ -408,15 +480,15 @@ function keepAttrs(
         node.name === "pattern";
       const ok = takesHref && (isImage ? DATA_IMG_RE.test(value) : /^#[^\s#]+$/.test(value));
       if (ok && !out.some(([k]) => k === "href")) out.push(["href", value]);
-      else ctx.removed.add(`attr:${name}`);
+      else ctx.removed.add(label("attr", name));
       continue;
     }
     if (!PRESENTATION.has(name) && !GEOMETRY.has(name)) {
-      ctx.removed.add(`attr:${name.slice(0, 40)}`);
+      ctx.removed.add(label("attr", name));
       continue;
     }
     if (!valueOk(name, value)) {
-      ctx.removed.add(`attr:${name}`);
+      ctx.removed.add(label("attr", name));
       continue;
     }
     out.push([name, ctx.monochrome ? monoValue(name, value) : value]);
@@ -426,11 +498,11 @@ function keepAttrs(
 
 function sanitizeNode(node: XNode, ctx: Ctx): KNode | undefined {
   if (!ELEMENTS.has(node.name)) {
-    ctx.removed.add(`element:${node.name.slice(0, 40)}`);
+    ctx.removed.add(label("element", node.name));
     return undefined;
   }
   if (node.name === "use" && ++ctx.uses > MAX_USE) {
-    ctx.removed.add("element:use(limit)");
+    ctx.removed.add("element:use-limit");
     return undefined;
   }
   const attrs = keepAttrs(node, effectiveAttrs(node, ctx), ctx, false);
@@ -441,6 +513,71 @@ function sanitizeNode(node: XNode, ctx: Ctx): KNode | undefined {
     if (k) children.push(k);
   }
   return { name: node.name, attrs, children };
+}
+
+/** Upper bound on rendered instances once every `<use>` is expanded. */
+const MAX_EXPANDED = 20_000;
+
+/**
+ * Defeats `<use>` amplification: a `<use>` whose target is (or contains) another `<use>` or a
+ * `<pattern>` is dropped, so nesting cannot multiply; the expanded node count is then capped by
+ * dropping the last remaining `<use>` elements.
+ */
+function pruneUses(kept: KNode[], removed: Set<string>): KNode[] {
+  const byId = new Map<string, KNode>();
+  const uses: KNode[] = [];
+  const walk = (ns: readonly KNode[]): void => {
+    for (const n of ns) {
+      for (const [k, v] of n.attrs) if (k === "id") byId.set(v, n);
+      if (n.name === "use") uses.push(n);
+      walk(n.children);
+    }
+  };
+  walk(kept);
+  if (uses.length === 0) return kept;
+  const risky = new Map<KNode, boolean>();
+  const isRisky = (n: KNode): boolean => {
+    const c = risky.get(n);
+    if (c !== undefined) return c;
+    const r = n.name === "use" || n.name === "pattern" || n.children.some(isRisky);
+    risky.set(n, r);
+    return r;
+  };
+  const size = new Map<KNode, number>();
+  const sizeOf = (n: KNode): number => {
+    const c = size.get(n);
+    if (c !== undefined) return c;
+    let s = 1;
+    for (const ch of n.children) s += sizeOf(ch);
+    size.set(n, s);
+    return s;
+  };
+  const targetOf = (u: KNode): KNode | undefined => {
+    const href = u.attrs.find(([k]) => k === "href")?.[1];
+    return href === undefined ? undefined : byId.get(href.slice(1));
+  };
+  const drop = new Set<KNode>();
+  for (const u of uses) {
+    const t = targetOf(u);
+    if (t && isRisky(t)) drop.add(u);
+  }
+  let total = kept.reduce((s, n) => s + sizeOf(n), 0);
+  const live = uses.filter((u) => !drop.has(u));
+  const cost = (u: KNode): number => {
+    const t = targetOf(u);
+    return t ? sizeOf(t) : 0;
+  };
+  total += live.reduce((s, u) => s + cost(u), 0);
+  while (total > MAX_EXPANDED && live.length) {
+    const u = live.pop() as KNode;
+    total -= cost(u);
+    drop.add(u);
+  }
+  if (drop.size === 0) return kept;
+  removed.add("element:use-limit");
+  const filter = (ns: readonly KNode[]): KNode[] =>
+    ns.filter((n) => !drop.has(n)).map((n) => ({ ...n, children: filter(n.children) }));
+  return filter(kept);
 }
 
 // --- serialization ---------------------------------------------------------------
@@ -499,7 +636,7 @@ function serialize(
     for (const [k, v] of n.attrs) {
       const mv = k === "id" ? ids.get(v) : mapRefs(k, v, ids);
       if (mv === undefined) {
-        removed.add(`dangling:${k}`);
+        removed.add(label("dangling", k));
         if (k === "href" && n.name === "use") drop = true; // a <use> without target is meaningless
         continue;
       }
@@ -552,7 +689,7 @@ export const sanitizeSvg: SvgSanitizer = (input, options): SanitizeResult => {
     for (const t of styleTexts) rules.push(...parseStyleSheet(t, removed, rules.length));
     const ctx: Ctx = {
       removed,
-      rules,
+      rules: indexRules(rules),
       monochrome: options?.monochrome === true,
       uses: 0,
       seenIds: new Set(),
@@ -563,12 +700,13 @@ export const sanitizeSvg: SvgSanitizer = (input, options): SanitizeResult => {
     const wrapper = keepAttrs(root, rootAttrs, ctx, true).filter(([k]) => PRESENTATION.has(k));
     if (ctx.monochrome && !wrapper.some(([k]) => k === "fill"))
       wrapper.unshift(["fill", "currentColor"]);
-    const kept: KNode[] = [];
+    const built: KNode[] = [];
     for (const c of root.children) {
       if (typeof c === "string") continue;
       const k = sanitizeNode(c, ctx);
-      if (k) kept.push(k);
+      if (k) built.push(k);
     }
+    const kept = pruneUses(built, removed);
     const order: string[] = [];
     collectIds(kept, order);
     const ids = new Map<string, string>();

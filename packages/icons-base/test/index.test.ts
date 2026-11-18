@@ -1,16 +1,26 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { createIconResolver, sanitizeSvg } from "../../core/src/icons/index.js";
+import type { SpecNodeType } from "../../core/src/index.js";
 import { pack } from "../src/index.js";
+import { expectNoDrift } from "./drift.js";
 
-// Mirrors the SpecNodeType enum in the schema (41 semantic types).
-// prettier-ignore
-const NODE_TYPES = [
-  "server", "vm", "container", "pod", "function", "lb", "gateway", "cdn", "dns", "firewall", "vpc",
-  "sql", "nosql", "cache", "object-store", "warehouse", "queue", "stream", "users", "client", "mobile",
-  "metrics", "logs", "traces", "repo", "pipeline", "registry", "iam", "secrets", "waf", "llm",
-  "embedding", "vector-db", "gpu", "inference-server", "agent", "tool", "rag", "guardrail",
-  "feature-store", "training-job",
-] as const;
+// The semantic node types come from the schema itself (single source of truth).
+function findNodeTypes(node: unknown): string[] | undefined {
+  if (node && typeof node === "object") {
+    const o = node as Record<string, unknown>;
+    if (o.title === "SpecNodeType" && Array.isArray(o.enum)) return o.enum as string[];
+    for (const v of Object.values(o)) {
+      const r = findNodeTypes(v);
+      if (r) return r;
+    }
+  }
+  return undefined;
+}
+const schema: unknown = JSON.parse(
+  readFileSync(new URL("../../../schema/v1.json", import.meta.url), "utf8"),
+);
+const NODE_TYPES = (findNodeTypes(schema) ?? []) as SpecNodeType[];
 
 describe("icons-base", () => {
   const resolver = createIconResolver([pack], sanitizeSvg);
@@ -22,6 +32,10 @@ describe("icons-base", () => {
       redistributable: true,
     });
     expect(NODE_TYPES).toHaveLength(41);
+  });
+
+  test("generated module matches icons.json and svg/ (run gen-pack.mjs after editing sources)", () => {
+    expectNoDrift(pack, new URL("../", import.meta.url));
   });
 
   test("defines a default icon for all 41 node types, each resolvable", () => {

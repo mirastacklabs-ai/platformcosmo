@@ -3,19 +3,11 @@
 // Deterministic: sorted keys, light whitespace minification only (sanitizing happens at runtime).
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { minify } from "./minify.mjs";
 
 const dir = process.argv[2];
 if (!dir) throw new Error("usage: gen-pack.mjs <package dir>");
 const manifest = JSON.parse(readFileSync(join(dir, "icons.json"), "utf8"));
-
-const minify = (s) =>
-  (s.charCodeAt(0) === 0xfeff ? s.slice(1) : s)
-    .replace(/<\?xml[\s\S]*?\?>/g, "")
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/>\s+</g, "><")
-    .replace(/\s+/g, " ")
-    .replace(/ ?\/>/g, "/>")
-    .trim();
 
 const files = {};
 for (const icon of [...manifest.icons].sort((a, b) => (a.file < b.file ? -1 : 1))) {

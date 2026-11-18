@@ -80,6 +80,7 @@ export const createIconResolver: CreateIconResolverFn = (packs, sanitize) => {
   }
 
   const cache = new Map<string, ResolvedIcon | undefined>();
+  const rejectionMap = new Map<string, string>();
 
   const lookup = (idx: PackIndex, name: string): IconEntry | undefined => {
     const k = norm(name);
@@ -93,6 +94,7 @@ export const createIconResolver: CreateIconResolverFn = (packs, sanitize) => {
     const raw = idx.pack.files[entry.file];
     if (raw !== undefined) {
       const r = sanitize(raw, { monochrome: entry.monochrome });
+      if (!r.ok) rejectionMap.set(ref, r.reason);
       if (r.ok) {
         const attribution = idx.pack.manifest.pack.attribution;
         out = {
@@ -128,13 +130,17 @@ export const createIconResolver: CreateIconResolverFn = (packs, sanitize) => {
         const d = idx.pack.manifest.defaults?.[type];
         if (d === undefined) continue;
         const c = d.indexOf(":");
-        const e = lookup(idx, c === -1 ? d : d.slice(c + 1));
-        if (e) return `${idx.pack.manifest.pack.id}:${e.id}`;
+        // A prefixed default names its pack; skip it when that pack is not installed.
+        const target =
+          c === -1 ? idx : indexes.find((p) => p.pack.manifest.pack.id === norm(d.slice(0, c)));
+        if (!target) continue;
+        const e = lookup(target, c === -1 ? d : d.slice(c + 1));
+        if (e) return `${target.pack.manifest.pack.id}:${e.id}`;
       }
       return undefined;
     },
     search(query, limit = 10) {
-      let q = norm(query);
+      let q = norm(query.slice(0, MAX_QUERY));
       let only: string | undefined;
       const c = q.indexOf(":");
       if (c !== -1) {
@@ -161,5 +167,17 @@ export const createIconResolver: CreateIconResolverFn = (packs, sanitize) => {
       return indexes.map((i) => i.pack.manifest.pack.id);
     },
   };
+  rejections.set(resolver, rejectionMap);
   return resolver;
 };
+
+const MAX_QUERY = 64;
+const rejections = new WeakMap<IconResolver, ReadonlyMap<string, string>>();
+
+/**
+ * Icons the sanitizer refused, as `ref -> reason`, for icons resolved so far by `resolver`
+ * (populated lazily). Lets callers report why `resolve` returned `undefined`.
+ */
+export function iconRejections(resolver: IconResolver): ReadonlyMap<string, string> {
+  return rejections.get(resolver) ?? new Map();
+}
