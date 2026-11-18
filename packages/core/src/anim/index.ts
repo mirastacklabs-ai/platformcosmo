@@ -24,6 +24,7 @@ import {
 } from "./particles.js";
 import {
   cameraStops,
+  transitionSeconds,
   cameraTransform,
   inverseCameraTransform,
   metricTexts,
@@ -362,7 +363,15 @@ function loopLayer(
     const cid = controlIds(ids.prefix, ids.root());
     layers.overlay = [controlNodes(ids.prefix, cid, model.viewBox)];
     controlCssText = controlCss(ids.prefix);
-    script = interactiveScript(cid, win.starts, total > 0 ? total : traversalSeconds(speed));
+    const targets = win.starts.map((s, i) =>
+      i === 0 && zooms[0] ? transitionSeconds(win.durations[0] ?? 0) : s,
+    );
+    script = interactiveScript(
+      cid,
+      win.starts,
+      targets,
+      total > 0 ? total : traversalSeconds(speed),
+    );
   }
 
   // The loop length is the master timeline only if something on it changes value.

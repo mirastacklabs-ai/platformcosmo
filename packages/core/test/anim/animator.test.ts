@@ -96,7 +96,7 @@ describe("interactive mode", () => {
     expect(layer.css).toContain(",#pc-test_controls{transform-origin:0 0;animation:");
   });
   test("step starts and settle times embedded", () => {
-    expect(layer.script).toContain("S=[0,3,6]");
+    expect(layer.script).toContain("S=[0,3,6],G=[0.75,3,6]"); // Step to 1 pauses on its focus
     expect(layer.script).toContain("T=8");
   });
 });
