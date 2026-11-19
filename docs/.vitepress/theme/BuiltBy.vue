@@ -17,8 +17,8 @@ import MiraLogo from "./MiraLogo.vue";
         <MiraLogo wordmark />
       </a>
       <p>
-        PlatformCosmo is built by the engineering team at MiraStack Labs, which hosts and runs
-        open-weight AI capacity and publishes the infrastructure it depends on as open source.
+        PlatformCosmo is built by the engineering team at MiraStack Labs and released as open
+        source under the Apache-2.0 license.
       </p>
       <a class="pc-btn" href="https://www.mirastacklabs.ai" target="_blank" rel="noopener"
         >Visit MiraStack Labs</a
