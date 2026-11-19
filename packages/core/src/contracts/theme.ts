@@ -64,7 +64,8 @@ export interface ThemeTokens {
     readonly family: string;
     /**
      * CSS font-family list for technical text: badges, metric values, edge labels and part details
-     * (D51). Omitted: `family` is used for everything. Embedded like `family`.
+     * (D51). The embedded font's family name comes first. Omitted: technical text is measured and
+     * embedded with the display face (`family`).
      */
     readonly mono?: string;
     readonly label: number;

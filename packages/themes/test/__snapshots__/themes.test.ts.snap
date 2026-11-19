@@ -255,15 +255,15 @@ exports[`built-in themes are immutable and stable > dark matches its snapshot 1`
     "text": "#0a0a0a",
   },
   "caption": {
-    "fill": "#e6e6e6",
-    "text": "#0a0a0a",
+    "fill": "#1c1c1c",
+    "text": "#e6e6e6",
   },
   "categories": {
     "ai": {
-      "left": "#1b5e57",
-      "right": "#13423d",
-      "stroke": "#0e2f2c",
-      "top": "#3f7872",
+      "left": "#2f7d74",
+      "right": "#215851",
+      "stroke": "#183f3a",
+      "top": "#50928a",
     },
     "cicd": {
       "left": "#4fa89d",
@@ -317,7 +317,7 @@ exports[`built-in themes are immutable and stable > dark matches its snapshot 1`
   "colorScheme": "dark",
   "dc": {
     "cable": {
-      "fiber": "#f5c518",
+      "fiber": "#7fe8da",
       "management": "#8f8f8f",
       "network": "#2bd4bf",
       "power": "#ff671f",
@@ -344,12 +344,12 @@ exports[`built-in themes are immutable and stable > dark matches its snapshot 1`
     "width": 2.2,
   },
   "flows": {
-    "airflow": "#22d3ee",
+    "airflow": "#5ad7e6",
     "failed": "#ff6b6b",
     "health": "#4ade80",
-    "heavy": "#e6e6e6",
+    "heavy": "#ff671f",
     "normal": "#2bd4bf",
-    "power": "#ff671f",
+    "power": "#fbbf24",
   },
   "font": {
     "badge": 10,
@@ -467,8 +467,8 @@ exports[`built-in themes are immutable and stable > dark matches its snapshot 1`
   "states": {
     "degraded": {
       "opacity": 1,
-      "overlay": "#f59e0b59",
-      "stroke": "#fbbf24",
+      "overlay": "#ff671f4d",
+      "stroke": "#ff671f",
     },
     "down": {
       "opacity": 0.8,
@@ -482,8 +482,8 @@ exports[`built-in themes are immutable and stable > dark matches its snapshot 1`
     },
     "highlighted": {
       "opacity": 1,
-      "overlay": "#ff671f40",
-      "stroke": "#ff671f",
+      "overlay": "#ffffff33",
+      "stroke": "#ffffff",
     },
   },
   "text": {
@@ -564,7 +564,7 @@ exports[`built-in themes are immutable and stable > light matches its snapshot 1
   "colorScheme": "light",
   "dc": {
     "cable": {
-      "fiber": "#e6b800",
+      "fiber": "#4fb3a8",
       "management": "#8a8a86",
       "network": "#00695f",
       "power": "#e8590c",
@@ -591,12 +591,12 @@ exports[`built-in themes are immutable and stable > light matches its snapshot 1
     "width": 2.2,
   },
   "flows": {
-    "airflow": "#0891b2",
+    "airflow": "#0f9fa8",
     "failed": "#dc2626",
     "health": "#16a34a",
-    "heavy": "#1c1c1c",
+    "heavy": "#fa5f14",
     "normal": "#00695f",
-    "power": "#e8590c",
+    "power": "#a16207",
   },
   "font": {
     "badge": 10,
@@ -645,7 +645,7 @@ exports[`built-in themes are immutable and stable > light matches its snapshot 1
   "id": "light",
   "metric": {
     "fill": "#ffffff",
-    "label": "#5e5e5e",
+    "label": "#4a4a4a",
     "stroke": "#cfcdc5",
     "value": "#0a0a0a",
   },
@@ -714,8 +714,8 @@ exports[`built-in themes are immutable and stable > light matches its snapshot 1
   "states": {
     "degraded": {
       "opacity": 1,
-      "overlay": "#f59e0b59",
-      "stroke": "#d97706",
+      "overlay": "#ff671f40",
+      "stroke": "#ff671f",
     },
     "down": {
       "opacity": 0.8,
@@ -729,8 +729,8 @@ exports[`built-in themes are immutable and stable > light matches its snapshot 1
     },
     "highlighted": {
       "opacity": 1,
-      "overlay": "#ff671f33",
-      "stroke": "#ff671f",
+      "overlay": "#ffffff59",
+      "stroke": "#0a0a0a",
     },
   },
   "text": {

@@ -265,14 +265,16 @@ describe("fonts", () => {
     expect(assets.map((a) => a.family)).toEqual([
       "Oswald",
       "Oswald",
+      "Oswald",
       "JetBrains Mono",
       "JetBrains Mono",
     ]);
     for (const [a, family, sub] of [
       [assets[0], "Oswald", "Regular"],
-      [assets[1], "Oswald", "SemiBold"],
-      [assets[2], "JetBrains Mono", "Regular"],
-      [assets[3], "JetBrains Mono", "Bold"],
+      [assets[1], "Oswald", "Medium"],
+      [assets[2], "Oswald", "SemiBold"],
+      [assets[3], "JetBrains Mono", "Regular"],
+      [assets[4], "JetBrains Mono", "Bold"],
     ] as const) {
       const name = Buffer.from(parseFont(a?.sfnt as Uint8Array).tables.get("name") as Uint8Array);
       expect(name.includes(utf16(family))).toBe(true);
@@ -298,6 +300,17 @@ describe("fonts", () => {
       ".pc-test-tm{font-family:var(--pc-font-mono)}",
     );
     expect(emit(m, noAnim, { font: "outline" })).not.toContain("<text");
+  });
+
+  test("arrows (missing in Oswald) embed in the mono subset and outline via the mono face", () => {
+    const m = model({ labels: [h("text", { x: 0, y: 0, "font-size": 12 }, "A→B")] });
+    const out = emit(m, noAnim, browser);
+    expect(out).toContain('font-family:"pc-test-display","pc-test-mono",var(--pc-font-family)');
+    const b64 = /font-family:"pc-test-mono";[^}]*base64,([A-Za-z0-9+/=]+)/.exec(out)?.[1] as string;
+    expect(decodeWoff2(b64).cmap.has(0x2192)).toBe(true);
+    const o = emit(m, noAnim, { font: "outline" });
+    expect(o).not.toContain("<text");
+    expect(o).toMatch(/<path[^>]* d="M/);
   });
 
   test("system mode embeds nothing; text content is escaped", () => {
@@ -343,6 +356,19 @@ describe("raster target", () => {
       objects: [h("rect", { style: "fill:var(--pc-palette-blue,var(--pc-palette-red))" })],
     });
     expect(() => emit(nested, anim, { font: "embed", target: "raster" })).not.toThrow();
+  });
+
+  test("raster outlines text that needs the mono fallback (arrows) and keeps the rest as text", () => {
+    const m = model({
+      labels: [
+        h("text", { x: 0, y: 0, "font-size": 12 }, "A→B"),
+        h("text", { x: 0, y: 20, "font-size": 12 }, "plain"),
+      ],
+    });
+    const out = emit(m, anim, { font: "embed", target: "raster" });
+    expect(out).toContain(">plain</text>");
+    expect(out).not.toContain("A→B");
+    expect(out).toMatch(/<path[^>]* d="M/);
   });
 
   test("literal values only: no var(), media, keyframes or font-face", () => {

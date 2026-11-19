@@ -99,9 +99,8 @@ describe.each(all.map((t) => [t.id, t] as const))("contrast: %s", (_id, t: Theme
     }
   });
 
-  it("inverse text reads on badge and caption fills", () => {
+  it("inverse text reads on the badge fill", () => {
     expect(contrastOn(t.text.inverse, t.badge.fill, bg)).toBeGreaterThanOrEqual(min);
-    expect(contrastOn(t.text.inverse, t.caption.fill, bg)).toBeGreaterThanOrEqual(min);
   });
 
   it("group labels stay readable nested 3 deep (worst case all one style)", () => {

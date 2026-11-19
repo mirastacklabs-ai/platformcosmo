@@ -153,6 +153,7 @@ export function ruleFor(token: string): string | undefined {
   if (token === "t-caption") return `fill:${v("caption-text")}`;
   if (token === "t-badge") return `fill:${v("badge-text")}`;
   if (token === "tm") return `font-family:${v("font-mono")}`;
+  if (token === "tw") return "font-weight:500";
   if (token === "tb") return `font-weight:${v("font-weightBold")}`;
   if (token === "edge")
     return `fill:none;stroke:${v("edge-stroke")};stroke-width:${v("edge-width")};stroke-linejoin:round;stroke-linecap:round`;
@@ -170,7 +171,8 @@ export function ruleFor(token: string): string | undefined {
   if (token === "grid")
     return `fill:none;stroke:${v("grid-stroke")};stroke-opacity:${v("grid-opacity")};stroke-width:1`;
   if (token === "metric") return `fill:${v("metric-fill")};stroke:${v("metric-stroke")}`;
-  if (token === "capbox") return `fill:${v("caption-fill")};stroke:none`;
+  if (token === "capbox")
+    return `fill:${v("caption-fill")};stroke:${v("badge-fill")};stroke-width:1`;
   if (token === "badgebox") return `fill:${v("badge-fill")};stroke:none`;
   if (token === "plate") return `fill:${v("icon-plate")};stroke:none`;
   if (token === "icon") return `color:${v("icon-color")}`;

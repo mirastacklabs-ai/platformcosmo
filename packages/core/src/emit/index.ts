@@ -9,7 +9,14 @@ import type {
   SvgRaw,
 } from "../contracts/index.js";
 import { fmt } from "../geometry/index.js";
-import { subsetWoff2Base64, textToPath, type TextAnchor, type TextFamily } from "../text/index.js";
+import {
+  EMBED_MONO_FAMILY,
+  fallbackText,
+  subsetWoff2Base64,
+  textToPath,
+  type TextAnchor,
+  type TextFamily,
+} from "../text/index.js";
 import {
   classRules,
   declarations,
@@ -90,6 +97,10 @@ function textOf(el: SvgElement): string {
 function isBold(el: SvgElement, prefix: string): boolean {
   const w = Number(el.attrs?.["font-weight"]);
   return classesOf(el).includes(`${prefix}-tb`) || (Number.isFinite(w) && w >= 600);
+}
+
+function isMedium(el: SvgElement, prefix: string): boolean {
+  return classesOf(el).includes(`${prefix}-tw`);
 }
 
 function isMono(el: SvgElement, prefix: string): boolean {
@@ -177,15 +188,18 @@ export const emit: EmitFn = (
     return changed ? { ...el, attrs } : el;
   };
   const outline: Mapper = (el) => {
-    if (options.font !== "outline" || el.tag !== "text") return el;
+    if (el.tag !== "text") return el;
     const a = el.attrs ?? {};
     const text = textOf(el);
+    // Raster text with fallback glyphs (arrows) is outlined: resvg would pick one face for the
+    // whole run, so per-glyph fallback only stays identical to the SVG when drawn as paths.
+    if (options.font !== "outline" && !(raster && fallbackText(text) !== "")) return el;
     const bold = isBold(el, prefix);
     const { d } = textToPath(text, {
       x: Number(a.x ?? 0),
       y: Number(a.y ?? 0),
       size: Number(a["font-size"] ?? 12),
-      weight: bold ? "bold" : "regular",
+      weight: bold ? "bold" : isMedium(el, prefix) ? "medium" : "regular",
       family: isMono(el, prefix) ? "mono" : "display",
       anchor: (a["text-anchor"] as TextAnchor | undefined) ?? "start",
     });
@@ -236,17 +250,23 @@ export const emit: EmitFn = (
 
   // 3. Used classes and text, for rules and fonts.
   const used = new Set<string>();
-  const text: Record<TextFamily, { regular: string; bold: string }> = {
-    display: { regular: "", bold: "" },
-    mono: { regular: "", bold: "" },
+  const text: Record<TextFamily, { regular: string; medium: string; bold: string }> = {
+    display: { regular: "", medium: "", bold: "" },
+    mono: { regular: "", medium: "", bold: "" },
   };
   const scan = (n: SvgNode): void =>
     walk(n, (el) => {
       for (const c of classesOf(el)) used.add(c);
       if (el.tag === "text") {
-        const t = text[isMono(el, prefix) ? "mono" : "display"];
-        if (isBold(el, prefix)) t.bold += textOf(el);
-        else t.regular += textOf(el);
+        const content = textOf(el);
+        const mono = isMono(el, prefix);
+        const bold = isBold(el, prefix);
+        const t = text[mono ? "mono" : "display"];
+        if (bold) t.bold += content;
+        else if (!mono && isMedium(el, prefix)) t.medium += content;
+        else t.regular += content;
+        // Code points the display face lacks are drawn with the mono face (fallback).
+        if (!mono) text.mono[bold ? "bold" : "regular"] += fallbackText(content);
       }
     });
   for (const nodes of layers.values()) nodes.forEach(scan);
@@ -259,14 +279,15 @@ export const emit: EmitFn = (
   // their lists) so several inlined diagrams with different glyph subsets never share a global
   // family name.
   const embedFamily = { display: `${prefix}-display`, mono: `${prefix}-mono` } as const;
-  const used_ = (f: TextFamily) => text[f].regular !== "" || text[f].bold !== "";
+  const used_ = (f: TextFamily) =>
+    text[f].regular !== "" || text[f].medium !== "" || text[f].bold !== "";
   const embedding = options.font === "embed";
   const embedded = {
     display: embedding && used_("display"),
     mono: embedding && used_("mono"),
   };
   const rootFamily = embedded.display
-    ? `"${embedFamily.display}",var(--pc-font-family)`
+    ? `"${embedFamily.display}",${embedded.mono ? `"${embedFamily.mono}",` : ""}var(--pc-font-family)`
     : "var(--pc-font-family)";
   const rootRule = (v: ReadonlyMap<string, string>) =>
     `#${ids.root()}{${declarations(v)};font-family:${rootFamily};font-weight:var(--pc-font-weightRegular);text-rendering:geometricPrecision}`;
@@ -278,16 +299,17 @@ export const emit: EmitFn = (
         css.push(`@media (prefers-color-scheme:dark){#${ids.root()}{${declarations(diff)}}}`);
       }
     }
-    const face = (f: TextFamily, w: number, t: string, kind: "regular" | "bold") =>
+    const face = (f: TextFamily, w: number, t: string, kind: "regular" | "medium" | "bold") =>
       `@font-face{font-family:"${embedFamily[f]}";font-style:normal;font-weight:${w};src:url(data:font/woff2;base64,${subsetWoff2Base64(t, kind, f)}) format("woff2")}`;
     for (const f of ["display", "mono"] as const) {
       if (!embedded[f]) continue;
       if (text[f].regular !== "") css.push(face(f, 400, text[f].regular, "regular"));
+      if (text[f].medium !== "") css.push(face(f, 500, text[f].medium, "medium"));
       if (text[f].bold !== "") css.push(face(f, 700, text[f].bold, "bold"));
     }
   } else {
     css.push(
-      `#${ids.root()}{font-family:${family};font-weight:${vars.get("--pc-font-weightRegular") ?? "400"}}`,
+      `#${ids.root()}{font-family:${family},"${EMBED_MONO_FAMILY}";font-weight:${vars.get("--pc-font-weightRegular") ?? "400"}}`,
     );
   }
   const rules = [

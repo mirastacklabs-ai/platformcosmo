@@ -30,6 +30,18 @@ describe("measurement", () => {
     expect(weightFace(700)).toBe("bold");
   });
 
+  test("display text falls back to the mono face for glyphs Oswald lacks", () => {
+    const arrow = measureText("→", 20);
+    expect(arrow).toBeCloseTo(measureText("→", 20, "regular", "mono"), 6);
+    expect(arrow).toBeGreaterThan(5);
+    expect(textToPath("a→b", { x: 0, y: 0, size: 20 }).width).toBeCloseTo(
+      measureText("a→b", 20),
+      6,
+    );
+    // The medium and bold display faces fall back too (bold uses the mono Bold).
+    expect(measureText("→", 20, "bold")).toBeCloseTo(measureText("→", 20, "bold", "mono"), 6);
+  });
+
   test("line metrics are positive", () => {
     const m = lineMetrics(12);
     expect(m.ascent).toBeGreaterThan(8);
@@ -39,8 +51,9 @@ describe("measurement", () => {
 
   test("reports glyphs outside the vendored subset", () => {
     expect(missingGlyphs("Café 5×…")).toEqual([]);
-    expect(missingGlyphs("→")).toEqual([0x2192]); // Oswald has no arrows
+    expect(missingGlyphs("→")).toEqual([]); // Oswald has no arrows: the mono face covers it
     expect(missingGlyphs("→", "mono")).toEqual([]);
+    expect(missingGlyphs("日→")).toEqual([0x65e5]);
     expect(missingGlyphs("日本")).toEqual([0x65e5, 0x672c]);
   });
 });
@@ -115,8 +128,9 @@ describe("subsetting", () => {
 
   test("raster font assets are TTF faces", () => {
     const assets = fontAssets();
-    expect(assets.map((a) => a.weight)).toEqual([400, 600, 400, 700]);
+    expect(assets.map((a) => a.weight)).toEqual([400, 500, 600, 400, 700]);
     expect(assets.map((a) => a.family)).toEqual([
+      "Oswald",
       "Oswald",
       "Oswald",
       "JetBrains Mono",

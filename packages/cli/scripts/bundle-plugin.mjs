@@ -7,6 +7,7 @@
 //   node packages/cli/scripts/bundle-plugin.mjs --check    fail when either committed file is stale
 //
 // The output is minified with no path comments, so it is byte-stable for identical sources.
+import { Buffer } from "node:buffer";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
@@ -281,6 +282,14 @@ function notices() {
     );
   }
   return `${lines.join("\n").trimEnd()}\n`;
+}
+// Size guard: the bundle was 5,382,188 bytes with the brand fonts (5,353,952 before); fail past +10%.
+const MAX_BUNDLE_BYTES = 5_920_000;
+if (Buffer.byteLength(out) > MAX_BUNDLE_BYTES) {
+  console.error(
+    `plugin/bin/pcosmo.mjs is ${Buffer.byteLength(out)} bytes, over the ${MAX_BUNDLE_BYTES} guard; check for an accidental dependency or asset.`,
+  );
+  process.exit(1);
 }
 const noticesText = notices();
 

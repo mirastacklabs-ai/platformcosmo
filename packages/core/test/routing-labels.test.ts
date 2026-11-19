@@ -47,13 +47,16 @@ function emittedBoxes(svg: string): Box[] {
   const out: Box[] = [];
   for (const m of svg.matchAll(/<text\b([^>]*)>([^<]*)<\/text>/g)) {
     const a = attrsOf(m[1]!);
-    if (a.visibility === "hidden" || !/-t-primary$/.test(a.class ?? "")) continue;
+    if (a.visibility === "hidden" || !/-t-primary(?: |$)/.test(a.class ?? "")) continue;
     const x = Number(a.x);
     const y = Number(a.y);
     const size = Number(a["font-size"]);
     if (![x, y, size].every(Number.isFinite)) continue;
     const text = m[2]!.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
-    const w = measureText(text, size);
+    const cls = a.class ?? "";
+    const weight = /-tb(?: |$)/.test(cls) ? "bold" : /-tw(?: |$)/.test(cls) ? "medium" : "regular";
+    const family = /-tm(?: |$)/.test(cls) ? "mono" : "display";
+    const w = measureText(text, size, weight, family);
     const x0 = a["text-anchor"] === "middle" ? x - w / 2 : a["text-anchor"] === "end" ? x - w : x;
     out.push({ what: `label "${text}"`, box: { x: x0, y: y - size, width: w, height: size + 4 } });
   }

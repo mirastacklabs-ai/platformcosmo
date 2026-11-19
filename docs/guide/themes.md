@@ -25,10 +25,10 @@ optional and falls back to `font.family`.
 
 ## Fonts
 
-| Role                                                    | Family         | Faces           |
-| ------------------------------------------------------- | -------------- | --------------- |
-| Node labels, group pills, titles, legend, step captions | Oswald         | 400, 600 (bold) |
-| Badges, metric labels and values, edge labels           | JetBrains Mono | 400, 700 (bold) |
+| Role                                                    | Family         | Faces                              |
+| ------------------------------------------------------- | -------------- | ---------------------------------- |
+| Node labels, group pills, titles, legend, step captions | Oswald         | 400, 500 (node labels), 600 (bold) |
+| Badges, metric labels and values, edge labels           | JetBrains Mono | 400, 700 (bold)                    |
 
 Both are SIL OFL 1.1, bundled as Latin subsets (`packages/core/assets/fonts/PROVENANCE.txt`).
 `--font` modes:
@@ -40,8 +40,10 @@ Both are SIL OFL 1.1, bundled as Latin subsets (`packages/core/assets/fonts/PROV
   `"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`).
 
 PNG, GIF and MP4 export load both faces, so raster output matches the SVG. Oswald has no arrow
-glyphs (`→`); the engine warns (`render/missing-glyph`) and browsers fall back to the next
-family in the stack.
+glyphs (`→`): such characters are drawn, measured and embedded with JetBrains Mono, and raster
+output outlines those labels so all targets match. `render/missing-glyph` warns only when neither
+face has the character. Label, badge, metric, caption and legend sizes grow with the scene width
+(about width / 100 px, up to 2.2x) so wide diagrams stay legible when shown small.
 
 ## Node category colours (light / dark)
 
@@ -56,8 +58,7 @@ Teal is the primary family, neutral ink and greys fill the rest; no category use
 | `observability` | `#7a7a76` | `#747474` | mid grey            |
 | `cicd`          | `#1f8f82` | `#4fa89d` | medium teal         |
 | `security`      | `#0a0a0a` | `#d9d9d9` | ink (white in dark) |
-| `ai`            | `#2f5f5a` | `#1b5e57` | dark slate teal     |
+| `ai`            | `#2f5f5a` | `#2f7d74` | dark slate teal     |
 | `dc`            | `#a4aaa6` | `#8a928e` | cool grey           |
 
-State colours stay semantic: `degraded` amber, `down` red, `highlighted` orange. Light-theme
-`power` flows use a darker orange (`#e8590c`) because `#ff671f` is under 3:1 on white.
+State colours: `degraded` is a signal-orange outline with an orange tint, `down` red, `highlighted` an ink (light) or white (dark) outline. `heavy` flows are signal orange (`#fa5f14` on light, where `#ff671f` is just under 3:1 on white); `power` flows are amber.
