@@ -30,6 +30,9 @@ describe("top level", () => {
     expect((await run(["build", "a.json", "--bogus"], deps)).code).toBe(2);
     expect((await run(["build", "a.json", "--font", "wingdings"], deps)).code).toBe(2);
     expect((await run(["build", "a.json", "--speed", "fast"], deps)).code).toBe(2);
+    const m = await run(["build", "a.json", "--motion", "js"], deps);
+    expect(m.code).toBe(2);
+    expect(m.stderr).toContain("--motion must be smil or css");
   });
 
   test("an unexpected throw is an internal error (3)", async () => {
@@ -204,6 +207,8 @@ describe("build", () => {
         "outline",
         "--speed",
         "2",
+        "--motion",
+        "css",
         "--scale",
         "3",
         "--time",
@@ -224,6 +229,7 @@ describe("build", () => {
     expect(o).toMatchObject({
       font: "outline",
       speed: 2,
+      motion: "css",
       png: { scale: 3, time: 1.5 },
       optimize: false,
       idPrefix: "x1",

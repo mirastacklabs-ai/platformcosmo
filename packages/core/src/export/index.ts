@@ -77,6 +77,7 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
   const diagnostics: Diagnostic[] = [];
   const name = options.name ?? "diagram";
   const speed = options.speed ?? 1;
+  const motion = options.motion ?? "smil";
   const font = model.font;
   const finish = (svg: string): string => (options.optimize === false ? svg : deps.optimize(svg));
 
@@ -122,7 +123,7 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
         "steps",
         `${name}.steps/step-${pad2(i)}.svg`,
         m,
-        deps.animator.animate(m, { speed, mode: "step", step: i }),
+        deps.animator.animate(m, { speed, motion, mode: "step", step: i }),
         i,
       );
     }
@@ -134,7 +135,7 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
       "interactive",
       `${name}.interactive.svg`,
       m,
-      deps.animator.animate(m, { speed, mode: "interactive" }),
+      deps.animator.animate(m, { speed, motion, mode: "interactive" }),
     );
   }
 
@@ -193,7 +194,7 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
   const videoKinds = (["gif", "mp4"] as const).filter((k) => wanted.has(k));
   if (videoKinds.length > 0) {
     const fps = options.video?.fps ?? 24;
-    const loop = deps.animator.animate(model, { speed, mode: "loop" }).duration;
+    const loop = deps.animator.animate(model, { speed, motion, mode: "loop" }).duration;
     const wantedSeconds = options.video?.durationSec ?? loop;
     const seconds = Math.min(wantedSeconds, MAX_VIDEO_SECONDS);
     if (options.video?.durationSec === undefined && wantedSeconds > MAX_VIDEO_SECONDS) {

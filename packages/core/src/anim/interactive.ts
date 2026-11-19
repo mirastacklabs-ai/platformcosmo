@@ -91,7 +91,8 @@ if(!svg||!play||!step||!svg.getAnimations)return;
 var S=${nums(starts)},G=${nums(targets)},T=${t4(total)},playing=true;
 var label=play.getElementsByTagName("text")[0];
 function anims(){return svg.getAnimations({subtree:true}).filter(function(a){return a.animationName!==undefined;});}
-function now(){var a=anims()[0];return a&&T>0?((a.currentTime/1000)%T+T)%T:0;}
+function isParticle(a){var t=a.effect&&a.effect.target;return !!t&&t.tagName==="circle";}
+function now(){var l=anims(),a=l.filter(function(x){return !isParticle(x);})[0]||l[0];return a&&T>0?((a.currentTime/1000)%T+T)%T:0;}
 function index(){var t=now(),k=0;for(var i=0;i<S.length;i++)if(t>=S[i])k=i;return k;}
 function seek(t){anims().forEach(function(a){a.currentTime=t*1000;});if(svg.setCurrentTime)svg.setCurrentTime(t);}
 function set(p){

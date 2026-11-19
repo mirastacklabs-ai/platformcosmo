@@ -1,6 +1,12 @@
 import { UnsafePathError, writeInside } from "../fsafe.js";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import type { Diagnostic, FontMode, OutputKind, RenderOptions } from "@platformcosmo/core";
+import type {
+  Diagnostic,
+  FontMode,
+  MotionMode,
+  OutputKind,
+  RenderOptions,
+} from "@platformcosmo/core";
 import { type Parsed, flag, num, parse, str } from "../args.js";
 import { loadSpec, makeResolver, resolveTheme, specBaseName } from "../common.js";
 import { type Ctx, EXIT, UsageError } from "../deps.js";
@@ -17,6 +23,7 @@ export const BUILD_OPTIONS = {
   theme: { type: "string" },
   font: { type: "string" },
   speed: { type: "string" },
+  motion: { type: "string" },
   out: { type: "string", short: "o" },
   name: { type: "string" },
   scale: { type: "string" },
@@ -45,6 +52,8 @@ Options:
   --theme <t>       light | dark | blueprint | mono | path to a theme JSON file
   --font <mode>     embed (default) | outline | system
   --speed <n>       animation speed multiplier, 0 < n <= 10 (default 1)
+  --motion <m>      particle motion: smil (default) | css (CSS offset-path, no SMIL elements;
+                    for hosts that strip SMIL but keep <style>)
   -o, --out <dir>   output directory (default: the spec's directory)
   --name <name>     base file name (default: spec file name without .cosmo.json)
   --scale <n>       PNG scale (default 2)      --time <s>      PNG animation time (default 0)
@@ -64,6 +73,7 @@ export interface BuildSettings {
   themeArg?: string | undefined;
   font?: FontMode | undefined;
   speed?: number | undefined;
+  motion?: MotionMode | undefined;
   outDir: string;
   name: string;
   scale?: number | undefined;
@@ -89,6 +99,10 @@ export function settingsFrom(ctx: Ctx, p: Parsed): BuildSettings {
   if (font !== undefined && font !== "embed" && font !== "outline" && font !== "system") {
     throw new UsageError("--font must be embed, outline or system");
   }
+  const motion = str(p, "motion");
+  if (motion !== undefined && motion !== "smil" && motion !== "css") {
+    throw new UsageError("--motion must be smil or css");
+  }
   const out = str(p, "out");
   return {
     file,
@@ -96,6 +110,7 @@ export function settingsFrom(ctx: Ctx, p: Parsed): BuildSettings {
     themeArg: str(p, "theme"),
     font: font as FontMode | undefined,
     speed: num(p, "speed"),
+    motion: motion as MotionMode | undefined,
     outDir: out ? resolve(ctx.deps.cwd, out) : dirname(resolve(ctx.deps.cwd, file)),
     name: str(p, "name") ?? specBaseName(file),
     scale: num(p, "scale"),
@@ -159,6 +174,7 @@ export async function buildOnce(ctx: Ctx, s: BuildSettings): Promise<number> {
   options.icons = resolver;
   if (s.font) options.font = s.font;
   if (s.speed !== undefined) options.speed = s.speed;
+  if (s.motion !== undefined) options.motion = s.motion;
   if (s.idPrefix !== undefined) options.idPrefix = s.idPrefix;
   if (s.scale !== undefined || s.time !== undefined) {
     options.png = {
