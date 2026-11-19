@@ -5,10 +5,11 @@
  * into ffmpeg's stdin one at a time (D33), so memory is bounded by one frame.
  */
 import { spawn as nodeSpawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { StreamingVideoEncoder, VideoSink } from "./stream.js";
+import type { VideoEncoder, VideoSink } from "../contracts/index.js";
+import { MAX_OUTPUT_BYTES, OutputTooLargeError } from "./stream.js";
 
 export interface FfmpegEncoderOptions {
   /** Executable name or path, default `ffmpeg`. */
@@ -17,6 +18,10 @@ export interface FfmpegEncoderOptions {
   readonly crf?: number;
   /** Kill ffmpeg and fail after this many ms, default 10 minutes. */
   readonly timeoutMs?: number;
+  /** Pad colour for odd frame sizes, e.g. `white` (the CLI uses it for light diagrams). */
+  readonly padColor?: string;
+  /** Fail with `export/too-large` when the mp4 is bigger than this, default 1 GiB. */
+  readonly maxOutputBytes?: number;
   /** Injection point for tests. */
   readonly spawn?: typeof nodeSpawn;
 }
@@ -26,6 +31,8 @@ export function buildFfmpegArgs(opts: {
   readonly fps: number;
   readonly outPath: string;
   readonly crf: number;
+  /** Colour of the 1 px pad that makes odd sizes even (ffmpeg colour name), default ffmpeg black. */
+  readonly padColor?: string;
 }): string[] {
   return [
     "-hide_banner",
@@ -42,7 +49,7 @@ export function buildFfmpegArgs(opts: {
     "pipe:0",
     // yuv420p needs even dimensions
     "-vf",
-    "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+    `pad=ceil(iw/2)*2:ceil(ih/2)*2${opts.padColor ? `:color=${opts.padColor}` : ""}`,
     "-c:v",
     "libx264",
     "-pix_fmt",
@@ -61,13 +68,14 @@ export function buildFfmpegArgs(opts: {
   ];
 }
 
-export function createFfmpegEncoder(options: FfmpegEncoderOptions = {}): StreamingVideoEncoder {
+export function createFfmpegEncoder(options: FfmpegEncoderOptions = {}): VideoEncoder {
   const bin = options.ffmpegPath ?? "ffmpeg";
   const spawn = options.spawn ?? nodeSpawn;
   const crf = options.crf ?? 18;
   if (!Number.isFinite(crf) || crf < 0 || crf > 51) throw new Error("ffmpeg crf must be in 0..51");
   const timeoutMs = options.timeoutMs ?? 600_000;
-  const open: StreamingVideoEncoder["open"] = async (o) => {
+  const maxOutput = options.maxOutputBytes ?? MAX_OUTPUT_BYTES;
+  const open: NonNullable<VideoEncoder["open"]> = async (o) => {
     if (o.format !== "mp4") {
       throw new Error(`the ffmpeg encoder only produces mp4, not ${o.format}`);
     }
@@ -76,7 +84,12 @@ export function createFfmpegEncoder(options: FfmpegEncoderOptions = {}): Streami
     const session = startFfmpeg(
       spawn,
       bin,
-      buildFfmpegArgs({ fps: o.fps, outPath, crf }),
+      buildFfmpegArgs({
+        fps: o.fps,
+        outPath,
+        crf,
+        ...(options.padColor ? { padColor: options.padColor } : {}),
+      }),
       timeoutMs,
     );
     const cleanup = (): Promise<void> => rm(dir, { recursive: true, force: true });
@@ -85,14 +98,17 @@ export function createFfmpegEncoder(options: FfmpegEncoderOptions = {}): Streami
       async finish() {
         try {
           await session.end();
+          const size = (await stat(outPath)).size;
+          if (size > maxOutput) throw new OutputTooLargeError(size, maxOutput);
           return new Uint8Array(await readFile(outPath));
         } finally {
           await cleanup();
         }
       },
-      abort() {
-        session.kill();
-        void cleanup();
+      async abort() {
+        // Wait for ffmpeg to be gone before removing its output directory.
+        await session.kill().catch(() => undefined);
+        await cleanup().catch(() => undefined);
       },
     };
     return sink;
@@ -105,7 +121,7 @@ export function createFfmpegEncoder(options: FfmpegEncoderOptions = {}): Streami
         for (const f of frames) await sink.write(f);
         return await sink.finish();
       } catch (e) {
-        sink.abort();
+        await sink.abort();
         throw e;
       }
     },
@@ -129,7 +145,8 @@ interface FfmpegSession {
   write(frame: Uint8Array): Promise<void>;
   /** Closes stdin and resolves on exit code 0. */
   end(): Promise<void>;
-  kill(): void;
+  /** SIGKILLs ffmpeg and resolves once it has exited (or after a short grace period). */
+  kill(): Promise<void>;
 }
 
 function startFfmpeg(
@@ -182,9 +199,19 @@ function startFfmpeg(
     stdin.on("error", () => undefined); // surfaced through the exit code
   }
   const wait = (): Promise<void> => new Promise<void>((r) => waiters.push(r));
-  const kill = (): void => {
+  const kill = async (): Promise<void> => {
     clearTimeout(timer);
-    if (!exited) p.kill("SIGKILL");
+    if (exited) return;
+    const gone = new Promise<void>((r) => waiters.push(r));
+    p.kill("SIGKILL");
+    let grace: NodeJS.Timeout | undefined;
+    await Promise.race([
+      gone,
+      new Promise<void>((r) => {
+        grace = setTimeout(r, 2000);
+      }),
+    ]);
+    clearTimeout(grace);
   };
   return {
     async write(frame) {
@@ -203,14 +230,14 @@ function startFfmpeg(
           waiters.push(done);
         });
         if (failure) {
-          kill();
+          void kill();
           throw failure;
         }
       }
     },
     async end() {
       if (failure) {
-        kill();
+        await kill();
         throw failure;
       }
       if (!exited) {

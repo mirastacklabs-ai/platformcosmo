@@ -238,7 +238,7 @@ describe("ffmpeg encoder hardening", () => {
     const enc = createFfmpegEncoder({ spawn: (() => p) as never, timeoutMs: 5000 });
     // Deterministic: the process only exists after open() resolved, and the writer is parked on
     // backpressure (write() returned false) before ffmpeg is made to exit.
-    const sink = await enc.open(o);
+    const sink = await enc.open!(o);
     let settled = false;
     const blocked = sink.write(new Uint8Array([1])).then(
       () => {

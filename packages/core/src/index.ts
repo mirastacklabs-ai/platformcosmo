@@ -17,7 +17,6 @@ export {
   gifEncoder,
   validateRenderOptions,
 } from "./export/index.js";
-export type { StreamingVideoEncoder, VideoSink, VideoSinkOptions } from "./export/index.js";
 export { sanitizeSvg, createIconResolver, fetchIconPack } from "./icons/index.js";
 export {
   computeIconIntegrity,

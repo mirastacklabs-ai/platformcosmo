@@ -1,27 +1,20 @@
 /**
- * Streaming video encoding (D33). The frozen `VideoEncoder` contract takes every frame at once;
- * an encoder that also implements `open` is fed one frame at a time instead, so memory stays
- * bounded by a single frame. Encoders without `open` still work: frames are buffered for them.
+ * Streaming helpers for `VideoEncoder.open` (D33). Internal: the types live in the contract.
  */
-import type { VideoEncoder } from "../contracts/index.js";
+import type { VideoEncoder, VideoSink, VideoSinkOptions } from "../contracts/index.js";
 
-export type VideoSinkOptions = Parameters<VideoEncoder["encode"]>[1];
+/** Encoded output (the gif/mp4 file) may not exceed this. */
+export const MAX_OUTPUT_BYTES = 1024 ** 3;
 
-/** Receives PNG frames in order. `write` resolves once the frame was consumed (backpressure). */
-export interface VideoSink {
-  write(frame: Uint8Array): Promise<void>;
-  /** Ends the stream and returns the finished file. */
-  finish(): Promise<Uint8Array>;
-  /** Drops everything (kills child processes); must be safe to call at any point. */
-  abort(): void;
-}
-
-export interface StreamingVideoEncoder extends VideoEncoder {
-  open(options: VideoSinkOptions): Promise<VideoSink> | VideoSink;
-}
-
-export function isStreamingEncoder(e: VideoEncoder): e is StreamingVideoEncoder {
-  return typeof (e as Partial<StreamingVideoEncoder>).open === "function";
+/** Thrown by an encoder whose finished output would exceed its cap; reported as `export/too-large`. */
+export class OutputTooLargeError extends Error {
+  constructor(
+    readonly bytes: number,
+    readonly cap: number,
+  ) {
+    super(`encoded output is ${bytes} bytes, over the ${cap} byte cap`);
+    this.name = "OutputTooLargeError";
+  }
 }
 
 /** Sink for plain `VideoEncoder`s: collects the frames, encodes on `finish`. */

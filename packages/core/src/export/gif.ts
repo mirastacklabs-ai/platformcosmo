@@ -6,7 +6,8 @@
 import * as gifencNs from "gifenc";
 import type { Palette } from "gifenc";
 import { decodePng } from "./png.js";
-import type { StreamingVideoEncoder, VideoSink, VideoSinkOptions } from "./stream.js";
+import type { VideoEncoder, VideoSink, VideoSinkOptions } from "../contracts/index.js";
+import { MAX_OUTPUT_BYTES, OutputTooLargeError } from "./stream.js";
 
 function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   return a.length === b.length && Buffer.compare(a, b) === 0;
@@ -23,7 +24,7 @@ const gifenc = (
 const { GIFEncoder, applyPalette, quantize } = gifenc;
 
 /** Streaming GIF sink: one frame decoded, quantized and written at a time. */
-function openGif(options: VideoSinkOptions): VideoSink {
+function openGif(options: VideoSinkOptions, maxOutputBytes: number): VideoSink {
   if (options.format !== "gif") {
     throw new Error(`gifEncoder cannot encode ${options.format}; supply an encoder for it`);
   }
@@ -50,6 +51,8 @@ function openGif(options: VideoSinkOptions): VideoSink {
         palette: prev.palette,
         delay: centis(index++) * 10,
       });
+      const size = gif.bytesView().length;
+      if (size > maxOutputBytes) throw new OutputTooLargeError(size, maxOutputBytes);
     },
     async finish() {
       if (index === 0) throw new Error("no frames to encode");
@@ -62,16 +65,21 @@ function openGif(options: VideoSinkOptions): VideoSink {
   };
 }
 
-export const gifEncoder: StreamingVideoEncoder = {
-  open: openGif,
-  async encode(frames, options) {
-    const sink = openGif(options);
-    try {
-      for (const f of frames) await sink.write(f);
-      return await sink.finish();
-    } catch (e) {
-      sink.abort();
-      throw e;
-    }
-  },
-};
+/** Built-in GIF encoder; `maxOutputBytes` (default 1 GiB) is injectable for tests. */
+export function createGifEncoder(maxOutputBytes = MAX_OUTPUT_BYTES): VideoEncoder {
+  return {
+    open: (options) => openGif(options, maxOutputBytes),
+    async encode(frames, options) {
+      const sink = openGif(options, maxOutputBytes);
+      try {
+        for (const f of frames) await sink.write(f);
+        return await sink.finish();
+      } catch (e) {
+        await sink.abort();
+        throw e;
+      }
+    },
+  };
+}
+
+export const gifEncoder: VideoEncoder = createGifEncoder();

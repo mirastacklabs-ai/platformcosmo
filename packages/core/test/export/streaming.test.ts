@@ -1,11 +1,18 @@
 import { EventEmitter } from "node:events";
+import { existsSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { createAnimator } from "../../src/anim/index.js";
-import type { RenderModel, RenderOptions } from "../../src/contracts/index.js";
+import type {
+  RenderModel,
+  RenderOptions,
+  VideoEncoder,
+  VideoSink,
+} from "../../src/contracts/index.js";
 import { createFfmpegEncoder } from "../../src/export/ffmpeg.js";
-import { gifEncoder } from "../../src/export/gif.js";
+import { createGifEncoder, gifEncoder } from "../../src/export/gif.js";
 import { exportOutputs, rasterize } from "../../src/export/index.js";
-import type { StreamingVideoEncoder, VideoSink } from "../../src/export/stream.js";
+import { OutputTooLargeError } from "../../src/export/stream.js";
 import { buildFixture, emit, withVariant } from "../anim/fixtures/render-model.js";
 
 vi.setConfig({ testTimeout: 60_000 });
@@ -29,7 +36,7 @@ describe("streaming export (D33)", () => {
     let written = 0;
     let peak = 0;
     let encodeCalls = 0;
-    const encoder: StreamingVideoEncoder = {
+    const encoder: VideoEncoder = {
       encode: async () => {
         encodeCalls++;
         return new Uint8Array();
@@ -58,7 +65,7 @@ describe("streaming export (D33)", () => {
   test("gif and mp4 at one rate share a single pass", async () => {
     let rendered = 0;
     const seen: Record<string, number> = { gif: 0, mp4: 0 };
-    const mp4: StreamingVideoEncoder = {
+    const mp4: VideoEncoder = {
       encode: async () => new Uint8Array(),
       open: (): VideoSink => ({
         write: async () => {
@@ -81,7 +88,7 @@ describe("streaming export (D33)", () => {
 
   test("a failing sink aborts, reports, and leaves the other output intact", async () => {
     let aborted = 0;
-    const mp4: StreamingVideoEncoder = {
+    const mp4: VideoEncoder = {
       encode: async () => new Uint8Array(),
       open: (): VideoSink => ({
         write: async () => {
@@ -144,7 +151,132 @@ describe("streaming export (D33)", () => {
       video: { fps: 1, durationSec: 121 },
     });
     expect(long.outputs).toHaveLength(0);
-    expect(long.diagnostics[0]).toMatchObject({ severity: "error" });
+    expect(long.diagnostics[0]).toMatchObject({
+      code: "options/invalid-video-duration",
+      severity: "error",
+    });
+  });
+
+  test("an encoder without open keeps the whole-clip 1 GiB cap", async () => {
+    let rendered = 0;
+    const model: RenderModel = {
+      ...buildFixture(),
+      viewBox: { x: 0, y: 0, width: 4000, height: 3000 }, // 48 MB a frame, 24 frames > 1 GiB
+    };
+    const encoder: VideoEncoder = { encode: async () => new Uint8Array([1]) };
+    const r = await exportOutputs(
+      model,
+      ["mp4"],
+      depsWith(() => rendered++),
+      { video: { fps: 24, durationSec: 1, encoder } },
+    );
+    expect(rendered).toBe(0);
+    expect(r.outputs).toHaveLength(0);
+    expect(r.diagnostics[0]).toMatchObject({ code: "export/too-large" });
+    expect(r.diagnostics[0]!.message).toContain("whole clip");
+  });
+
+  test("output cap: a sink reporting an oversized result becomes export/too-large", async () => {
+    const encoder: VideoEncoder = {
+      encode: async () => new Uint8Array(),
+      open: (): VideoSink => ({
+        write: async () => undefined,
+        finish: async () => {
+          throw new OutputTooLargeError(2048, 1024);
+        },
+        abort: () => undefined,
+      }),
+    };
+    const r = await exportOutputs(
+      buildFixture(),
+      ["mp4"],
+      depsWith(() => undefined),
+      { video: { fps: 1, durationSec: 1, encoder } },
+    );
+    expect(r.outputs).toHaveLength(0);
+    expect(r.diagnostics[0]).toMatchObject({ code: "export/too-large", severity: "error" });
+  });
+
+  test("gif encoder enforces an injected output cap while writing", async () => {
+    const frames: Uint8Array[] = [];
+    const d = depsWith(() => undefined);
+    await exportOutputs(
+      buildFixture(),
+      ["png"],
+      { ...d, rasterize: async (s, o) => (frames.push(await rasterize(s, o)), frames[0]!) },
+      { png: { scale: 1 } },
+    );
+    const png = frames[0]!;
+    const { pngSize } = await import("../../src/export/png.js");
+    const { width, height } = pngSize(png);
+    const sink = createGifEncoder(50).open!({ fps: 1, width, height, format: "gif" }) as VideoSink;
+    await expect(sink.write(png)).rejects.toBeInstanceOf(OutputTooLargeError);
+  });
+});
+
+describe("ffmpeg abort, hang and output cap", () => {
+  type Proc = EventEmitter & {
+    stdin: EventEmitter & { write: (b: Uint8Array) => boolean; end: () => void };
+    stderr: EventEmitter;
+    kill: (sig?: string) => boolean;
+  };
+  /** `exitOnKill`: a real process dies on SIGKILL; a hung fake never does. */
+  function proc(opts: { exitOnKill: boolean; backpressure?: boolean; outBytes?: number }) {
+    let outPath = "";
+    const p = new EventEmitter() as Proc;
+    p.stdin = Object.assign(new EventEmitter(), {
+      write: () => !opts.backpressure,
+      end: () => {
+        if (opts.outBytes !== undefined) writeFileSync(outPath, Buffer.alloc(opts.outBytes));
+        setImmediate(() => p.emit("close", 0));
+      },
+    });
+    p.stderr = new EventEmitter();
+    p.kill = () => {
+      if (opts.exitOnKill) setImmediate(() => p.emit("close", null));
+      return true;
+    };
+    const spawn = ((_bin: string, args: string[]) => {
+      outPath = args.at(-1)!;
+      return p;
+    }) as never;
+    return { spawn, dir: () => dirname(outPath) };
+  }
+  const o = { fps: 1, width: 2, height: 2, format: "mp4" } as const;
+
+  test("abort on a live ffmpeg waits for its exit, removes the temp dir, never rejects", async () => {
+    const unhandled: unknown[] = [];
+    const on = (e: unknown) => unhandled.push(e);
+    process.on("unhandledRejection", on);
+    try {
+      const f = proc({ exitOnKill: true });
+      const sink = await createFfmpegEncoder({ spawn: f.spawn }).open!(o);
+      await sink.write(new Uint8Array(4));
+      expect(existsSync(f.dir())).toBe(true);
+      await sink.abort();
+      expect(existsSync(f.dir())).toBe(false);
+      await sink.abort(); // idempotent
+      await new Promise((r) => setImmediate(r));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", on);
+    }
+  });
+
+  test("a hung ffmpeg (stops reading, never exits) fails with a timeout and cleans up", async () => {
+    const f = proc({ exitOnKill: false, backpressure: true });
+    const sink = await createFfmpegEncoder({ spawn: f.spawn, timeoutMs: 50 }).open!(o);
+    await expect(sink.write(new Uint8Array(4))).rejects.toThrow(/timed out/);
+    await sink.abort();
+    expect(existsSync(f.dir())).toBe(false);
+  });
+
+  test("mp4 larger than the output cap is an OutputTooLargeError", async () => {
+    const f = proc({ exitOnKill: true, outBytes: 50 });
+    const sink = await createFfmpegEncoder({ spawn: f.spawn, maxOutputBytes: 10 }).open!(o);
+    await sink.write(new Uint8Array(4));
+    await expect(sink.finish()).rejects.toBeInstanceOf(OutputTooLargeError);
+    expect(existsSync(f.dir())).toBe(false);
   });
 });
 
@@ -168,7 +300,7 @@ describe("core ffmpeg streaming session", () => {
   test("writes each frame to stdin as it arrives", async () => {
     const { p, written } = fakeProc();
     const enc = createFfmpegEncoder({ spawn: (() => p) as never });
-    const sink = await enc.open({ fps: 1, width: 2, height: 2, format: "mp4" });
+    const sink = await enc.open!({ fps: 1, width: 2, height: 2, format: "mp4" });
     await sink.write(new Uint8Array(5));
     await sink.write(new Uint8Array(7));
     expect(written).toEqual([5, 7]); // delivered before finish
@@ -178,7 +310,7 @@ describe("core ffmpeg streaming session", () => {
   test("stderr tail and exit code reach the error; abort kills the process", async () => {
     const { p } = fakeProc();
     const enc = createFfmpegEncoder({ spawn: (() => p) as never });
-    const sink = await enc.open({ fps: 1, width: 2, height: 2, format: "mp4" });
+    const sink = await enc.open!({ fps: 1, width: 2, height: 2, format: "mp4" });
     (p.stderr as EventEmitter).emit("data", Buffer.from("Invalid data found"));
     p.emit("close", 3);
     await expect(sink.write(new Uint8Array(1))).rejects.toThrow(/code 3: Invalid data found/);
