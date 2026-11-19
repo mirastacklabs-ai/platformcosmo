@@ -8,7 +8,9 @@ on:
     paths:
       - "docs/**"
       - "schema/**"
-      - "examples/gallery/**"
+      - "examples/**"
+      - "packages/**"
+      - "plugin/skills/**"
       - ".github/workflows/docs-pages.yml"
   workflow_dispatch:
 
@@ -42,7 +44,7 @@ jobs:
           path: docs/.vitepress/dist
 
   deploy:
-    if: vars.PAGES_ENABLED == 'true'
+    if: vars.PAGES_ENABLED == 'true' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10

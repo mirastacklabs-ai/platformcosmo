@@ -54,5 +54,9 @@ but deploys only when the repository variable `PAGES_ENABLED` is `true`. Human s
    `2606:50c0:8001::153`, `2606:50c0:8002::153`, `2606:50c0:8003::153`), and a `CNAME`
    for `www` pointing at the organization's Pages host. Then enable "Enforce HTTPS" in Pages settings.
 
+4. Settings > Environments > `github-pages` > Deployment branches: restrict to `main`.
+5. Verify `platformcosmo.io` under the organization's Settings > Pages > Verified domains, so
+   nobody else can claim the domain if the Pages site is later removed (subdomain takeover).
+
 The workflow writes the `CNAME` file into the build output. The schema is served at its
 `$id`, `https://platformcosmo.io/schema/v1.json`; CI checks it is byte-identical to `schema/v1.json`.
