@@ -2,7 +2,7 @@
   "name": "platformcosmo",
   "version": "0.0.0",
   "description": "Turn a prompt into an animated 2.5D isometric SVG architecture diagram.",
-  "author": { "name": "MiraStack Labs" },
+  "author": { "name": "MIRASTACK LABS PRIVATE LIMITED" },
   "homepage": "https://platformcosmo.io",
   "repository": "https://github.com/mirastacklabs-ai/platformcosmo",
   "license": "Apache-2.0",

@@ -9,7 +9,7 @@
 | Item | Value |
 |---|---|
 | Product | PlatformCosmo |
-| Publisher | MiraStack Labs |
+| Publisher | MIRASTACK LABS PRIVATE LIMITED |
 | GitHub repo | `mirastacklabs-ai/platformcosmo` |
 | Claude Code plugin | `platformcosmo` |
 | Commands | `/platformcosmo:diagram`, `/platformcosmo:icons`, `/platformcosmo:export` |
@@ -18,7 +18,7 @@
 | Docs | `platformcosmo.io` |
 | Schema URL | `https://platformcosmo.io/schema/v1.json` |
 | Spec file | `*.cosmo.json` (YAML `*.cosmo.yaml` accepted, converted to JSON) |
-| License | Apache-2.0, `Copyright 2026 MiraStack Labs`; DCO sign-off for contributions |
+| License | Apache-2.0, `Copyright 2026 MIRASTACK LABS PRIVATE LIMITED`; DCO sign-off for contributions |
 | Runtime | Node >= 22.12 (Node 20 is EOL as of 2026-04-30 and the toolchain dropped it), TypeScript, ESM; CI tests Node 22 and 24 |
 
 ---
