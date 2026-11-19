@@ -9,6 +9,30 @@ export default defineConfig({
   cleanUrls: true,
   cacheDir: "node_modules/.vitepress/cache",
   lastUpdated: false,
+  appearance: true, // follows the system until the visitor uses the toggle
+  head: [
+    ["link", { rel: "icon", type: "image/svg+xml", href: "/brand/mirastack-labs-mark.svg" }],
+    [
+      "link",
+      {
+        rel: "preload",
+        href: "/fonts/oswald-400.woff2",
+        as: "font",
+        type: "font/woff2",
+        crossorigin: "",
+      },
+    ],
+    [
+      "link",
+      {
+        rel: "preload",
+        href: "/fonts/oswald-600.woff2",
+        as: "font",
+        type: "font/woff2",
+        crossorigin: "",
+      },
+    ],
+  ],
   themeConfig: {
     nav: [
       { text: "Guide", link: "/guide/getting-started" },
@@ -32,10 +56,6 @@ export default defineConfig({
       { text: "Gallery", link: "/gallery" },
     ],
     socialLinks: [{ icon: "github", link: "https://github.com/mirastacklabs-ai/platformcosmo" }],
-    footer: {
-      message:
-        "Apache-2.0. AWS, Azure, Google Cloud, Kubernetes and the brands in Simple Icons are trademarks of their owners; use does not imply endorsement.",
-      copyright: "Copyright 2026 MiraStack Labs",
-    },
+    // The footer (credit, license, trademark note) is theme/SiteFooter.vue so it shows on every page.
   },
 });
