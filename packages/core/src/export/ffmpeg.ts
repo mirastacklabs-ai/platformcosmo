@@ -1,13 +1,14 @@
 /**
  * ffmpeg-backed `VideoEncoder` for mp4 (Node only). The CLI builds one and passes it as
  * `RenderOptions.video.encoder`; core itself never spawns processes. Output depends on the
- * system ffmpeg, so mp4 is the one output that is not byte-reproducible.
+ * system ffmpeg, so mp4 is the one output that is not byte-reproducible. Frames are streamed
+ * into ffmpeg's stdin one at a time (D33), so memory is bounded by one frame.
  */
 import { spawn as nodeSpawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { VideoEncoder } from "../contracts/index.js";
+import type { StreamingVideoEncoder, VideoSink } from "./stream.js";
 
 export interface FfmpegEncoderOptions {
   /** Executable name or path, default `ffmpeg`. */
@@ -60,24 +61,52 @@ export function buildFfmpegArgs(opts: {
   ];
 }
 
-export function createFfmpegEncoder(options: FfmpegEncoderOptions = {}): VideoEncoder {
+export function createFfmpegEncoder(options: FfmpegEncoderOptions = {}): StreamingVideoEncoder {
   const bin = options.ffmpegPath ?? "ffmpeg";
   const spawn = options.spawn ?? nodeSpawn;
   const crf = options.crf ?? 18;
   if (!Number.isFinite(crf) || crf < 0 || crf > 51) throw new Error("ffmpeg crf must be in 0..51");
   const timeoutMs = options.timeoutMs ?? 600_000;
+  const open: StreamingVideoEncoder["open"] = async (o) => {
+    if (o.format !== "mp4") {
+      throw new Error(`the ffmpeg encoder only produces mp4, not ${o.format}`);
+    }
+    const dir = await mkdtemp(join(tmpdir(), "pcosmo-"));
+    const outPath = join(dir, "out.mp4");
+    const session = startFfmpeg(
+      spawn,
+      bin,
+      buildFfmpegArgs({ fps: o.fps, outPath, crf }),
+      timeoutMs,
+    );
+    const cleanup = (): Promise<void> => rm(dir, { recursive: true, force: true });
+    const sink: VideoSink = {
+      write: (frame) => session.write(frame),
+      async finish() {
+        try {
+          await session.end();
+          return new Uint8Array(await readFile(outPath));
+        } finally {
+          await cleanup();
+        }
+      },
+      abort() {
+        session.kill();
+        void cleanup();
+      },
+    };
+    return sink;
+  };
   return {
+    open,
     async encode(frames, o) {
-      if (o.format !== "mp4") {
-        throw new Error(`the ffmpeg encoder only produces mp4, not ${o.format}`);
-      }
-      const dir = await mkdtemp(join(tmpdir(), "pcosmo-"));
-      const outPath = join(dir, "out.mp4");
+      const sink = await open(o);
       try {
-        await run(spawn, bin, buildFfmpegArgs({ fps: o.fps, outPath, crf }), frames, timeoutMs);
-        return new Uint8Array(await readFile(outPath));
-      } finally {
-        await rm(dir, { recursive: true, force: true });
+        for (const f of frames) await sink.write(f);
+        return await sink.finish();
+      } catch (e) {
+        sink.abort();
+        throw e;
       }
     },
   };
@@ -95,63 +124,103 @@ export async function ffmpegAvailable(
   });
 }
 
-function run(
+interface FfmpegSession {
+  /** Resolves when the frame was accepted (after `drain` under backpressure). */
+  write(frame: Uint8Array): Promise<void>;
+  /** Closes stdin and resolves on exit code 0. */
+  end(): Promise<void>;
+  kill(): void;
+}
+
+function startFfmpeg(
   spawn: typeof nodeSpawn,
   bin: string,
   args: readonly string[],
-  frames: readonly Uint8Array[],
   timeoutMs: number,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const p = spawn(bin, [...args], { stdio: ["pipe", "ignore", "pipe"] });
-    let stderr = "";
-    let closed = false;
-    const timer = setTimeout(() => {
-      p.kill("SIGKILL");
-      reject(new Error(`ffmpeg timed out after ${timeoutMs} ms`));
-    }, timeoutMs);
-    p.stderr?.on("data", (d: Buffer) => {
-      stderr = (stderr + d.toString()).slice(-2000);
-    });
-    p.on("error", (e: NodeJS.ErrnoException) => {
-      clearTimeout(timer);
-      closed = true;
-      reject(
-        e.code === "ENOENT"
-          ? new Error(`ffmpeg not found (${bin}); install it or point to it with its path option`)
-          : e,
-      );
-    });
-    p.on("close", (code) => {
-      clearTimeout(timer);
-      closed = true;
-      if (code === 0) resolve();
-      else reject(new Error(`ffmpeg exited with code ${code}: ${stderr.trim()}`));
-    });
-    const stdin = p.stdin;
-    if (!stdin) {
-      clearTimeout(timer);
-      reject(new Error("ffmpeg stdin unavailable"));
-      return;
+): FfmpegSession {
+  const p = spawn(bin, [...args], { stdio: ["pipe", "ignore", "pipe"] });
+  let stderr = "";
+  let failure: Error | undefined;
+  let exited = false;
+  let exitCode: number | null | undefined;
+  const waiters: (() => void)[] = [];
+  const settle = (): void => {
+    for (const w of waiters.splice(0)) w();
+  };
+  const timer = setTimeout(() => {
+    failure ??= new Error(`ffmpeg timed out after ${timeoutMs} ms`);
+    p.kill("SIGKILL");
+    settle();
+  }, timeoutMs);
+  p.stderr?.on("data", (d: Buffer) => {
+    stderr = (stderr + d.toString()).slice(-2000);
+  });
+  p.on("error", (e: NodeJS.ErrnoException) => {
+    clearTimeout(timer);
+    exited = true;
+    failure ??=
+      e.code === "ENOENT"
+        ? new Error(`ffmpeg not found (${bin}); install it or point to it with its path option`)
+        : e;
+    settle();
+  });
+  p.on("close", (code) => {
+    clearTimeout(timer);
+    exited = true;
+    exitCode = code;
+    if (code !== 0) {
+      failure ??= new Error(`ffmpeg exited with code ${code}: ${stderr.trim()}`);
     }
+    settle();
+  });
+  const stdin = p.stdin;
+  if (!stdin) {
+    clearTimeout(timer);
+    p.kill("SIGKILL");
+    failure = new Error("ffmpeg stdin unavailable");
+  } else {
     stdin.on("error", () => undefined); // surfaced through the exit code
-    void (async () => {
-      for (const f of frames) {
-        if (closed) return;
-        if (!stdin.write(f)) {
-          // Wake on drain or when the process goes away, so a dead ffmpeg cannot hang the writer.
-          await new Promise<void>((r) => {
-            const done = () => {
-              stdin.off("drain", done);
-              p.off("close", done);
-              r();
-            };
-            stdin.once("drain", done);
-            p.once("close", done);
-          });
+  }
+  const wait = (): Promise<void> => new Promise<void>((r) => waiters.push(r));
+  const kill = (): void => {
+    clearTimeout(timer);
+    if (!exited) p.kill("SIGKILL");
+  };
+  return {
+    async write(frame) {
+      if (failure) throw failure;
+      if (exited) throw new Error(`ffmpeg exited early with code ${exitCode}: ${stderr.trim()}`);
+      if (!stdin!.write(frame)) {
+        // Wake on drain or when the process goes away, so a dead ffmpeg cannot hang the writer.
+        await new Promise<void>((r) => {
+          const done = (): void => {
+            stdin!.off("drain", done);
+            const i = waiters.indexOf(done);
+            if (i >= 0) waiters.splice(i, 1);
+            r();
+          };
+          stdin!.once("drain", done);
+          waiters.push(done);
+        });
+        if (failure) {
+          kill();
+          throw failure;
         }
       }
-      if (!closed) stdin.end();
-    })();
-  });
+    },
+    async end() {
+      if (failure) {
+        kill();
+        throw failure;
+      }
+      if (!exited) {
+        const closed = wait();
+        stdin!.end();
+        await closed;
+      }
+      clearTimeout(timer);
+      if (failure) throw failure;
+    },
+    kill,
+  };
 }
