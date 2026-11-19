@@ -339,7 +339,9 @@ export type RasterizeFn = (
 
 /**
  * Builds every non-`animated` output (B). `render()` (A) calls it with its own stages.
- * Memory cap: frames × width × height × 4 ≤ 1 GiB, otherwise an `export/too-large` error.
+ * GIF/MP4 frames are rendered and encoded one at a time (streamed into the GIF encoder and
+ * ffmpeg stdin), so memory is bounded by one frame, not the whole clip (D33). Limits, else an
+ * `export/too-large` error: one frame width × height × 4 ≤ 256 MiB; frames ≤ fps × 120 s.
  */
 export type ExportFn = (
   model: RenderModel,
