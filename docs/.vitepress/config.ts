@@ -1,6 +1,6 @@
 import { defineConfig } from "vitepress";
 
-// PLAN.md is the internal implementation plan and is never published.
+// PLAN.md (implementation plan) and design/ (internal design specs) are never published.
 export default defineConfig({
   title: "platformcosmo",
   // Same pattern as the sibling MIRASTACK LABS sites: "<product>: <page> | MIRASTACK LABS".
@@ -21,7 +21,7 @@ export default defineConfig({
       ["meta", { name: "twitter:description", content: desc }],
     ];
   },
-  srcExclude: ["PLAN.md", "**/PLAN.md"],
+  srcExclude: ["PLAN.md", "**/PLAN.md", "design/**"],
   cleanUrls: true,
   cacheDir: "node_modules/.vitepress/cache",
   lastUpdated: false,
