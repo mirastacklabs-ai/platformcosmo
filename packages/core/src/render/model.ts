@@ -30,7 +30,13 @@ import {
   round2,
   unionRects,
 } from "../geometry/index.js";
-import { fontAssets, measureText, missingGlyphs, type TextAnchor } from "../text/index.js";
+import {
+  fontAssets,
+  measureText,
+  missingGlyphs,
+  type TextAnchor,
+  type TextFamily,
+} from "../text/index.js";
 
 /** Everything `buildModel` needs; kept so `withVariant` can rebuild under another id prefix. */
 export interface ModelInputs {
@@ -116,8 +122,14 @@ function arrowHead(
 }
 
 /** Shorten `text` with an ellipsis so it fits `maxWidth` at `size`. */
-function fit(text: string, size: number, bold: boolean, maxWidth: number): string {
-  const w = (s: string) => measureText(s, size, bold ? "bold" : "regular");
+function fit(
+  text: string,
+  size: number,
+  bold: boolean,
+  maxWidth: number,
+  family: TextFamily = "display",
+): string {
+  const w = (s: string) => measureText(s, size, bold ? "bold" : "regular", family);
   if (w(text) <= maxWidth) return text;
   const chars = Array.from(text);
   while (chars.length > 1 && w(`${chars.join("")}…`) > maxWidth) chars.pop();
@@ -205,7 +217,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   const P = prefix;
   const diagnostics: Diagnostic[] = [];
   const labelSize = theme.font.label;
-  const allText: string[] = [];
+  const displayText: string[] = [];
+  const monoText: string[] = [];
 
   const textEl = (o: {
     id?: string;
@@ -215,10 +228,12 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     anchor?: TextAnchor;
     cls: string;
     bold?: boolean;
+    /** Technical text (D51): JetBrains Mono role. */
+    mono?: boolean;
     hidden?: boolean;
     content: string;
   }) => {
-    allText.push(o.content);
+    (o.mono ? monoText : displayText).push(o.content);
     return h(
       "text",
       {
@@ -227,7 +242,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
         y: o.y,
         "font-size": o.size,
         ...(o.anchor && o.anchor !== "start" ? { "text-anchor": o.anchor } : {}),
-        class: `${P}-${o.cls}${o.bold ? ` ${P}-tb` : ""}`,
+        class: `${P}-${o.cls}${o.bold ? ` ${P}-tb` : ""}${o.mono ? ` ${P}-tm` : ""}`,
         ...(o.hidden ? { visibility: "hidden" } : {}),
       },
       o.content,
@@ -479,8 +494,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     }
     if (o.badge) {
       const bs = theme.font.badge;
-      const text = fit(o.badge, bs, true, 60);
-      const w = measureText(text, bs, "bold") + 10;
+      const text = fit(o.badge, bs, true, 96, "mono");
+      const w = measureText(text, bs, "bold", "mono") + 10;
       const bh = bs + 6;
       const by = aboveTop - bh - 2;
       labelNodes.push(
@@ -493,7 +508,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
             y: by,
             width: w,
             height: bh,
-            rx: bh / 2,
+            rx: 3,
           }),
           textEl({
             x: center.x,
@@ -502,6 +517,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
             anchor: "middle",
             cls: "t-badge",
             bold: true,
+            mono: true,
             content: text,
           }),
         ),
@@ -548,7 +564,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
             y: pill.y,
             width: pill.width,
             height: pill.height,
-            rx: ph / 2,
+            rx: 4,
           }),
           textEl({
             x: pill.x + pill.width - 6,
@@ -578,8 +594,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     extents.push(boundsOfPoints(pts));
     if (e.label) {
       const anchor = e.labelAnchor ? projection.project(e.labelAnchor) : midpoint(pts);
-      const text = fit(e.label, labelSize - 1, false, 90);
-      const w = measureText(text, labelSize - 1) + 8;
+      const text = fit(e.label, labelSize - 1, false, 90, "mono");
+      const w = measureText(text, labelSize - 1, "regular", "mono") + 8;
       const lh = labelSize + 4;
       const { dy } = nudgeLabel(
         { x: anchor.x - w / 2, y: anchor.y - lh / 2, width: w, height: lh },
@@ -616,6 +632,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
             size: labelSize - 1,
             anchor: "middle",
             cls: "t-edge",
+            mono: true,
             content: text,
           }),
         ),
@@ -680,9 +697,14 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
         prev = v;
       }
     }
-    const lab = fit(m.label, 10, false, 140);
-    const vw = Math.max(...texts.map((t) => measureText(t.text, 15, "bold")));
-    return { id: m.id, label: lab, texts, width: Math.max(measureText(lab, 10), vw) + 20 };
+    const lab = fit(m.label, 10, false, 140, "mono");
+    const vw = Math.max(...texts.map((t) => measureText(t.text, 15, "bold", "mono")));
+    return {
+      id: m.id,
+      label: lab,
+      texts,
+      width: Math.max(measureText(lab, 10, "regular", "mono"), vw) + 20,
+    };
   });
   const tilesW = tiles.reduce((s, t) => s + t.width + 8, 8);
 
@@ -723,9 +745,16 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
           y: r.y,
           width: r.width,
           height: r.height,
-          rx: 5,
+          rx: 4,
         }),
-        textEl({ x: r.x + 10, y: r.y + 13, size: 10, cls: "t-metric-label", content: t.label }),
+        textEl({
+          x: r.x + 10,
+          y: r.y + 13,
+          size: 10,
+          cls: "t-metric-label",
+          mono: true,
+          content: t.label,
+        }),
         ...t.texts.map((tx2) =>
           textEl({
             id: ids.metricValue(t.id, tx2.n),
@@ -734,6 +763,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
             size: 15,
             cls: "t-metric-value",
             bold: true,
+            mono: true,
             hidden: tx2.n !== 0,
             content: tx2.text,
           }),
@@ -771,7 +801,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
           y: captionRect.y,
           width: captionRect.width,
           height: captionRect.height,
-          rx: 6,
+          rx: 4,
         }),
         ...captionSteps.map((s, i) =>
           textEl({
@@ -866,7 +896,12 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       height: round2(r.height + 2 * MARGIN_FOCUS + labelSize + 6),
     };
   }
-  const missing = missingGlyphs(allText.join(""));
+  const missing = [
+    ...new Set([
+      ...missingGlyphs(displayText.join(""), "display"),
+      ...missingGlyphs(monoText.join(""), "mono"),
+    ]),
+  ].sort((a, b) => a - b);
   if (missing.length > 0) {
     diagnostics.push({
       severity: "warning",

@@ -37,7 +37,7 @@
     "provenance": true
   },
   "scripts": {
-    "build": "tsup && mkdir -p dist/LICENSES dist/schema && cp ../../LICENSES/Inter-OFL-1.1.txt dist/LICENSES/Inter-OFL-1.1.txt && cp ../../schema/v1.json dist/schema/v1.json",
+    "build": "tsup && mkdir -p dist/LICENSES dist/schema && cp ../../LICENSES/Oswald-OFL-1.1.txt ../../LICENSES/JetBrainsMono-OFL-1.1.txt dist/LICENSES/ && cp ../../schema/v1.json dist/schema/v1.json",
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {

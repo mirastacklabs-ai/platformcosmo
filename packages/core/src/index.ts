@@ -51,6 +51,7 @@ export { depthOrder, compareBoxes, depthKey, orderGroups } from "./depth/index.j
 export type { DepthItem } from "./depth/index.js";
 export {
   EMBED_FAMILY,
+  EMBED_MONO_FAMILY,
   measureText,
   missingGlyphs,
   lineMetrics,
@@ -58,7 +59,7 @@ export {
   subsetWoff2Base64,
   fontAssets,
 } from "./text/index.js";
-export type { TextAnchor, TextWeight, TextPathOptions } from "./text/index.js";
+export type { TextAnchor, TextWeight, TextFamily, TextPathOptions } from "./text/index.js";
 
 // Emit helpers (Track A1).
 // `iconDef` is internal to the engine: it turns sanitizer output into SvgRaw, so it is not public API.

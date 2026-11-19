@@ -54,7 +54,7 @@ describe("buildScene (objects, groups, edges)", () => {
     expect(o("users").box.size.x).toBe(2);
     expect(o("db").category).toBe("data");
     expect(o("db").primitive).toBe("cylinder");
-    expect(g.canvas).toEqual({ theme: "light", grid: false, padding: 32, aspect: "auto" });
+    expect(g.canvas).toEqual({ theme: "light", grid: true, padding: 32, aspect: "auto" });
     expect(g.groups.map((x) => `${x.level}:${x.id}`)).toEqual(["0:web", "1:inner"]);
     expect(g.groups.find((x) => x.id === "web")!.style).toBe("vpc");
     expect(g.groups.find((x) => x.id === "inner")!.style).toBe("zone");

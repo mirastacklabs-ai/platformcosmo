@@ -221,10 +221,10 @@ describe("fonts", () => {
   test("embed adds a diagram-scoped WOFF2 face only when text is present", () => {
     const withText = emit(model({ labels: [label()] }), noAnim, browser);
     expect(withText).toMatch(
-      /@font-face\{font-family:"pc-test-inter";[^}]*data:font\/woff2;base64,/,
+      /@font-face\{font-family:"pc-test-display";[^}]*data:font\/woff2;base64,/,
     );
-    expect(withText).not.toContain('font-family:"Inter"');
-    expect(withText).toContain('font-family:"pc-test-inter",var(--pc-font-family)');
+    expect(withText).not.toContain('font-family:"Oswald"');
+    expect(withText).toContain('font-family:"pc-test-display",var(--pc-font-family)');
     expect(withText).not.toContain("font-weight:700;src");
     const bold = emit(
       model({ labels: [label({ class: "pc-test-t-primary pc-test-tb" })] }),
@@ -244,9 +244,9 @@ describe("fonts", () => {
     const other = { ...m, ids: createIds("pc-other") };
     const a = emit(m, noAnim, browser);
     const b = emit(other, noAnim, browser);
-    expect(a).toContain('"pc-test-inter"');
-    expect(b).toContain('"pc-other-inter"');
-    expect(b).not.toContain("pc-test-inter");
+    expect(a).toContain('"pc-test-display"');
+    expect(b).toContain('"pc-other-display"');
+    expect(b).not.toContain("pc-test-display");
   });
 
   test("font-weight >= 600 counts as bold; tspans are rejected", () => {
@@ -259,16 +259,45 @@ describe("fonts", () => {
     ).toThrow(/plain text/);
   });
 
-  test("vendored TTFs are named Inter / Bold", () => {
+  test("vendored TTFs are named Oswald / JetBrains Mono, Regular / bold", () => {
     const utf16 = (s: string) => Buffer.from(s, "utf16le").swap16();
-    for (const [a, sub] of [
-      [fontAssets()[0], "Regular"],
-      [fontAssets()[1], "Bold"],
+    const assets = fontAssets();
+    expect(assets.map((a) => a.family)).toEqual([
+      "Oswald",
+      "Oswald",
+      "JetBrains Mono",
+      "JetBrains Mono",
+    ]);
+    for (const [a, family, sub] of [
+      [assets[0], "Oswald", "Regular"],
+      [assets[1], "Oswald", "SemiBold"],
+      [assets[2], "JetBrains Mono", "Regular"],
+      [assets[3], "JetBrains Mono", "Bold"],
     ] as const) {
       const name = Buffer.from(parseFont(a?.sfnt as Uint8Array).tables.get("name") as Uint8Array);
-      expect(name.includes(utf16("Inter"))).toBe(true);
+      expect(name.includes(utf16(family))).toBe(true);
       expect(name.includes(utf16(sub))).toBe(true);
     }
+  });
+
+  test("mono text embeds its own family and rule; roles do not share faces", () => {
+    const m = model({
+      labels: [
+        label(),
+        h("text", { x: 0, y: 0, "font-size": 10, class: "pc-test-t-badge pc-test-tm" }, "MTU 9216"),
+      ],
+    });
+    const out = emit(m, noAnim, browser);
+    expect(out).toMatch(/@font-face\{font-family:"pc-test-mono";/);
+    expect(out).toContain('.pc-test-tm{font-family:"pc-test-mono",var(--pc-font-mono)}');
+    const b64 = /font-family:"pc-test-mono";[^}]*base64,([A-Za-z0-9+/=]+)/.exec(out)?.[1] as string;
+    const cps = (t: string) =>
+      [...new Set(Array.from(t, (c) => c.codePointAt(0) as number))].sort((a, b) => a - b);
+    expect([...decodeWoff2(b64).cmap.keys()].sort((a, b) => a - b)).toEqual(cps(" MTU 9216"));
+    expect(emit(m, noAnim, { font: "system" })).toContain(
+      ".pc-test-tm{font-family:var(--pc-font-mono)}",
+    );
+    expect(emit(m, noAnim, { font: "outline" })).not.toContain("<text");
   });
 
   test("system mode embeds nothing; text content is escaped", () => {
@@ -399,10 +428,10 @@ describe("embedded font determinism", () => {
     const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
     const text = "Load balancer 99.9%";
     expect(sha(subsetTtf(text))).toMatchInlineSnapshot(
-      `"75d7ed2d51a32fc6a345db328348da7fb8e7e8cbbcaf2f68c1fa1eaa67ca9639"`,
+      `"d2ff2175e82a34aea73f45edcd4c686f009a2747564b5b6ef942f4cecdcde061"`,
     );
     expect(sha(Buffer.from(subsetWoff2Base64(text), "base64"))).toMatchInlineSnapshot(
-      `"dc222d46bca318138795eaf0ecb471e2fd8411ccfcb625c6237fad0a8a20f63c"`,
+      `"7c30d6c59b2cc9fc3298d6406abd7f9873cf7dd5f29137ebcfafe3e98325447e"`,
     );
   });
 });

@@ -38,7 +38,9 @@ describe("measurement", () => {
   });
 
   test("reports glyphs outside the vendored subset", () => {
-    expect(missingGlyphs("Café → 5×")).toEqual([]);
+    expect(missingGlyphs("Café 5×…")).toEqual([]);
+    expect(missingGlyphs("→")).toEqual([0x2192]); // Oswald has no arrows
+    expect(missingGlyphs("→", "mono")).toEqual([]);
     expect(missingGlyphs("日本")).toEqual([0x65e5, 0x672c]);
   });
 });
@@ -113,9 +115,14 @@ describe("subsetting", () => {
 
   test("raster font assets are TTF faces", () => {
     const assets = fontAssets();
-    expect(assets.map((a) => a.weight)).toEqual([400, 700]);
+    expect(assets.map((a) => a.weight)).toEqual([400, 600, 400, 700]);
+    expect(assets.map((a) => a.family)).toEqual([
+      "Oswald",
+      "Oswald",
+      "JetBrains Mono",
+      "JetBrains Mono",
+    ]);
     for (const a of assets) {
-      expect(a.family).toBe("Inter");
       expect(Buffer.from(a.sfnt.subarray(0, 4)).readUInt32BE(0)).toBe(0x00010000);
     }
   });

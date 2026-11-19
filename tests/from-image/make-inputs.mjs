@@ -1,6 +1,6 @@
 // Deterministic generator for the from-image test inputs (flat diagrams + a whiteboard-style sketch).
 // Run in a container: scripts/pc exec node tests/from-image/make-inputs.mjs
-// Renders SVG -> PNG with the repo's resvg-wasm and Inter. No network, no randomness beyond a seeded PRNG.
+// Renders SVG -> PNG with the repo's resvg-wasm and Oswald. No network, no randomness beyond a seeded PRNG.
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { createRequire } from "node:module";
@@ -13,8 +13,8 @@ const coreReq = createRequire(join(root, "packages", "core", "package.json"));
 const wasmPath = coreReq.resolve("@resvg/resvg-wasm/index_bg.wasm");
 const { Resvg, initWasm } = await import(pathToFileURL(join(dirname(wasmPath), "index.mjs")).href);
 await initWasm(await readFile(wasmPath));
-const font = await readFile(join(root, "packages/core/assets/fonts/Inter-Regular.latin.ttf"));
-const fontBold = await readFile(join(root, "packages/core/assets/fonts/Inter-Bold.latin.ttf"));
+const font = await readFile(join(root, "packages/core/assets/fonts/Oswald-Regular.latin.ttf"));
+const fontBold = await readFile(join(root, "packages/core/assets/fonts/Oswald-SemiBold.latin.ttf"));
 
 const W = 1000;
 const H = 600;
@@ -52,7 +52,7 @@ function link(a, b) {
 // ---------- flat style ----------
 function flat({ title, boxes, edges, groups = [] }) {
   const out = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="Inter">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="Oswald">`,
     `<defs><marker id="ah" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#475569"/></marker></defs>`,
     `<rect width="${W}" height="${H}" fill="#ffffff"/>`,
     `<text x="24" y="38" font-size="22" font-weight="700" fill="#0f172a">${esc(title)}</text>`,
@@ -147,7 +147,7 @@ function whiteboard() {
   const rnd = mulberry32(20240607);
   const j = (n) => (rnd() - 0.5) * 2 * n;
   const out = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="Inter">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="Oswald">`,
     `<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fafaf7"/><stop offset="1" stop-color="#eceae2"/></linearGradient></defs>`,
     `<rect width="${W}" height="${H}" fill="url(#bg)"/>`,
     `<rect x="6" y="6" width="${W - 12}" height="${H - 12}" fill="none" stroke="#b8b8b0" stroke-width="6" rx="6"/>`,
@@ -243,8 +243,8 @@ for (const [name, svg] of Object.entries(files)) {
     font: {
       fontBuffers: [font, fontBold],
       loadSystemFonts: false,
-      defaultFontFamily: "Inter",
-      sansSerifFamily: "Inter",
+      defaultFontFamily: "Oswald",
+      sansSerifFamily: "Oswald",
     },
   });
   const img = r.render();

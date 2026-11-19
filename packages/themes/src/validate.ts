@@ -27,6 +27,7 @@ const SHAPE: ObjShape = {
   text: { primary: "color", secondary: "color", inverse: "color" },
   font: {
     family: "font-family",
+    mono: "font-family",
     label: "size",
     badge: "size",
     caption: "size",
@@ -78,6 +79,9 @@ const SHAPE: ObjShape = {
     hall: "color",
   },
 };
+
+/** Tokens a theme may omit (pointer paths); everything else in SHAPE is required. */
+const OPTIONAL = new Set(["/font/mono"]);
 
 const COLOR_HEX = /^#[0-9a-fA-F]{3,8}$/;
 const COLOR_FN = /^rgba?\([0-9., %]+\)$/;
@@ -245,6 +249,7 @@ function walk(shape: ObjShape, input: unknown, path: string, ctx: Ctx): unknown 
     const sub = shape[k]!;
     const p = ptr(path, k);
     if (!Object.hasOwn(input, k)) {
+      if (OPTIONAL.has(p)) continue;
       diags.push({
         severity: "error",
         code: "theme/missing-key",

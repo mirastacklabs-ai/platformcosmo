@@ -259,7 +259,14 @@ function notices() {
     ["k8s", "Kubernetes icons (icon pack `k8s`): Apache-2.0; Linux Foundation trademark note"],
     ["simple-icons", "Simple Icons (icon pack `simple`): license summary and trademark notice"],
     ["NOTICE-SIMPLE-ICONS", "Simple Icons: per-icon notices for the Apache-2.0 icons"],
-    ["Inter-OFL-1.1", "Inter font subsets embedded for text rendering: SIL OFL 1.1"],
+    [
+      "Oswald-OFL-1.1",
+      "Oswald font subsets embedded for text rendering (display text): SIL OFL 1.1",
+    ],
+    [
+      "JetBrainsMono-OFL-1.1",
+      "JetBrains Mono font subsets embedded for text rendering (technical text): SIL OFL 1.1",
+    ],
   ];
   lines.push("# Bundled icon packs and fonts", "");
   for (const [file, title] of BUNDLED_ASSETS) {
