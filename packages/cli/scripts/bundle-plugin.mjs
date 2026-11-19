@@ -205,7 +205,7 @@ function notices() {
   const lines = [
     "# Third-party notices",
     "",
-    "`bin/pcosmo.mjs` is a single-file bundle of PlatformCosmo (Apache-2.0, Copyright 2026 MiraStack Labs) and",
+    "`bin/pcosmo.mjs` is a single-file bundle of PlatformCosmo (Apache-2.0, Copyright 2026 MIRASTACK LABS PRIVATE LIMITED) and",
     "the third-party packages listed below, in full with their copyright and license text. This file is",
     "generated from the bundle's inputs (`scripts/pc run bundle:plugin`); do not edit it.",
     "",

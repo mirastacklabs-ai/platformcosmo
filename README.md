@@ -81,7 +81,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/PLAN.md](docs/PLAN.md) and
 
 ## License
 
-Apache-2.0, Copyright 2026 MiraStack Labs. See [LICENSE](LICENSE), [NOTICE](NOTICE),
+Apache-2.0, Copyright 2026 MIRASTACK LABS PRIVATE LIMITED. See [LICENSE](LICENSE), [NOTICE](NOTICE),
 [LICENSES/](LICENSES) and [plugin/THIRD_PARTY_NOTICES.md](plugin/THIRD_PARTY_NOTICES.md).
 
 ## Trademarks
