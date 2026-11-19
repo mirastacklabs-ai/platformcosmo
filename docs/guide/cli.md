@@ -35,10 +35,15 @@ JSON pointer into the spec and, where possible, a suggestion. `--strict` treats 
 | `--theme light\|dark\|blueprint\|mono\|<file>` | built-in theme or a custom theme JSON file               |
 | `--font embed\|outline\|system`                | how text is embedded (default `embed`)                   |
 | `--speed <n>`                                  | animation speed multiplier, `0 < n <= 10`                |
+| `--motion smil\|css`                           | particle motion: `smil` (default) or CSS `offset-path`   |
 | `-o, --out <dir>`, `--name <name>`             | where and under what name to write                       |
 | `--no-optimize`                                | skip the SVGO pass                                       |
 | `--id-prefix <p>`                              | prefix for SVG ids; the default is derived from the spec |
 | `--json`                                       | machine-readable result                                  |
+
+`--motion css` replaces the SMIL particle animation (`<animateMotion>`) with CSS `offset-path` keyframes, so the SVG has no
+SMIL elements. Use it when the host strips SMIL but keeps `<style>`; timing, particle counts and reduced-motion
+behaviour match `smil`, and static, PNG and GIF/MP4 output are unchanged.
 
 The same spec and options always produce byte-identical files.
 

@@ -3,7 +3,7 @@
  * `2 / speed` seconds whatever the path length, evenly staggered with negative `begin` offsets.
  */
 import type { RenderModel, SceneFlow, SvgElement, Vec2 } from "../contracts/index.js";
-import { el, r2, t4 } from "./css.js";
+import { type Keyframes, el, r2, t4 } from "./css.js";
 
 const HEX = /^#[0-9a-fA-F]{3,8}$/;
 const NAME = /^[a-z][a-z-]*$/;
@@ -52,6 +52,14 @@ function cssColor(flow: SceneFlow): string {
   return `var(--pc-flows-${NAME.test(flow.kind) ? flow.kind : "normal"})`;
 }
 
+/** Class of every CSS-motion particle circle (B-owned, derived from the id prefix). */
+export function particleClass(prefix: string): string {
+  return `${prefix}_pt`;
+}
+
+/** Path data the CSS `path("…")` string may carry: commands, numbers and separators only. */
+const SAFE_D = /^[MLHVCSQTAZmlhvcsqtaz0-9.,\s+eE-]*$/;
+
 /** Wrapper id for all particles (contains `_`, which spec ids cannot). */
 export function particlesId(prefix: string): string {
   return `${prefix}_particles`;
@@ -86,6 +94,44 @@ export function smilFlow(
     circles.push(el("circle", { r: R, class: cls }, [motion]));
   }
   return el("g", { id: model.ids.flow(flow.id) }, circles);
+}
+
+/**
+ * CSS particles for one flow (motion `css`, D32): the same staggered circles, each drawn at its
+ * local origin and moved by `offset-path` + an `offset-distance` keyframe animation. The path is
+ * the edge path in screen space, the same coordinate system as the `flows` layer. Reverse flows
+ * run the keyframes with `animation-direction:reverse`; the phase offset is a negative delay.
+ * Returns the group and the rules to add to the layer CSS (no SMIL elements).
+ */
+export function cssFlow(
+  model: RenderModel,
+  flow: SceneFlow,
+  speed: number,
+  colors: ParticleColors,
+  kf: Keyframes,
+): { node: SvgElement; css: string } | undefined {
+  const path = model.edgePaths[flow.edge];
+  if (!path || path.points.length < 2 || !SAFE_D.test(path.d)) return undefined;
+  const n = particleCount(flow);
+  const period = traversalSeconds(speed);
+  const cls = `${colors.classFor(flow)} ${particleClass(model.ids.prefix)}`;
+  const pt = `.${particleClass(model.ids.prefix)}`;
+  const name = kf.add([
+    [0, "offset-distance:0%"],
+    [1, "offset-distance:100%"],
+  ]);
+  const sel = model.ids.sel(model.ids.flow(flow.id));
+  const rules = [
+    `${sel}>${pt}{offset-path:path("${path.d}");offset-rotate:0deg;offset-distance:0%;animation:${name} ${t4(period)}s linear infinite${flow.reverse ? " reverse" : ""}}`,
+  ];
+  const circles: SvgElement[] = [];
+  for (let k = 0; k < n; k++) {
+    circles.push(el("circle", { r: R, class: cls }));
+    const offset = (k * period) / n;
+    if (offset !== 0)
+      rules.push(`${sel}>${pt}:nth-child(${k + 1}){animation-delay:-${t4(offset)}s}`);
+  }
+  return { node: el("g", { id: model.ids.flow(flow.id) }, circles), css: rules.join("\n") };
 }
 
 /** Frozen particles for one flow at `time` (frame mode): plain circles at computed positions. */

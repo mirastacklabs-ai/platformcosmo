@@ -53,6 +53,9 @@ export function validateRenderOptions(options: RenderOptions | undefined): Diagn
   if (o.speed !== undefined && !(isNum(o.speed) && o.speed > 0 && o.speed <= 10)) {
     out.push(err("options/invalid-speed", "/speed", "speed must be a number in (0, 10]."));
   }
+  if (o.motion !== undefined && o.motion !== "smil" && o.motion !== "css") {
+    out.push(err("options/invalid-motion", "/motion", 'motion must be "smil" or "css".'));
+  }
   const scale = o.png?.scale;
   if (scale !== undefined && !(isNum(scale) && scale > 0 && scale <= 8)) {
     out.push(

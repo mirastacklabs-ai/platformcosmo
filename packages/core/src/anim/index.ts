@@ -17,7 +17,9 @@ import { Keyframes, el, stopsFor, t4 } from "./css.js";
 import { controlCss, controlIds, controlNodes, interactiveScript } from "./interactive.js";
 import {
   ParticleColors,
+  cssFlow,
   frozenFlow,
+  particleClass,
   particlesId,
   smilFlow,
   traversalSeconds,
@@ -66,14 +68,15 @@ function animate(model: RenderModel, options: AnimateOptions): AnimationLayer {
   const timeline = model.scene.timeline;
   const win = windows(timeline, speed);
   const colors = new ParticleColors(model.ids.prefix);
+  const css = options.motion === "css";
 
   switch (options.mode) {
     case "frame":
       return frameLayer(model, speed, win, options.time ?? 0, colors);
     case "step":
-      return stepLayer(model, speed, options.step, colors);
+      return stepLayer(model, speed, options.step, colors, css);
     default:
-      return loopLayer(model, speed, win, colors, options.mode === "interactive");
+      return loopLayer(model, speed, win, colors, options.mode === "interactive", css);
   }
 }
 
@@ -149,6 +152,12 @@ function flowsOfStep(model: RenderModel, k: number): readonly SceneFlow[] {
   return [...(tl[k]?.flows.filter((f) => !isDcFlow(f)) ?? []), ...flows.filter(isDcFlow)];
 }
 
+/** CSS motion needs `offset-path`; without it the particles would sit at the origin, so hide them. */
+function supportsGuard(model: RenderModel): string {
+  const g = particlesId(model.ids.prefix);
+  return `@supports not (offset-path:path("M0 0")){\n${model.ids.sel(g)},${model.ids.sel(`${g}_dc`)}{display:none}\n}`;
+}
+
 function wrap(model: RenderModel, flowGroups: SvgElement[]): AnimationLayer["layers"] {
   return flowGroups.length === 0
     ? {}
@@ -198,20 +207,37 @@ function stepLayer(
   speed: number,
   step: number | undefined,
   colors: ParticleColors,
+  css: boolean,
 ): AnimationLayer {
   const count = model.scene.timeline.length;
   const wanted = Number.isFinite(step) ? Math.floor(step as number) : 1;
   const k = count === 0 ? 0 : Math.min(count, Math.max(1, wanted)) - 1;
   const flows = flowsOfStep(model, k);
-  const groups = compact(flows.map((f) => smilFlow(model, f, speed, colors)));
+  const kf = new Keyframes(model.ids.prefix);
+  const flowCss: string[] = [];
+  const groups = compact(
+    flows.map((f) => {
+      if (!css) return smilFlow(model, f, speed, colors);
+      const c = cssFlow(model, f, speed, colors, kf);
+      if (c) flowCss.push(c.css);
+      return c?.node;
+    }),
+  );
   const zoom = zoomFor(model, model.scene.timeline[k]);
-  // SMIL particles cannot be paused by CSS: hide them under reduced motion.
+  // Particles are hidden under reduced motion (SMIL cannot be paused by CSS; CSS ones match it).
   const reduced =
     groups.length > 0
       ? `@media (prefers-reduced-motion:reduce){\n${model.ids.sel(particlesId(model.ids.prefix))}{display:none}\n}`
       : "";
   return {
-    css: join(colors.css(), staticStepCss(model, k), reduced),
+    css: join(
+      colors.css(),
+      kf.css(),
+      ...flowCss,
+      css && groups.length > 0 ? supportsGuard(model) : "",
+      staticStepCss(model, k),
+      reduced,
+    ),
     defs: [],
     layers: wrap(model, groups),
     ...(zoom ? { viewBox: zoom.viewBox } : {}),
@@ -229,6 +255,7 @@ function loopLayer(
   win: Windows,
   colors: ParticleColors,
   interactive: boolean,
+  css: boolean,
 ): AnimationLayer {
   const { ids } = model;
   const tl = model.scene.timeline;
@@ -254,8 +281,16 @@ function loopLayer(
     });
   }
   const flowGroups: SvgElement[] = [];
+  const particleRules: string[] = [];
   for (const { flow, steps } of flowById.values()) {
-    const g = smilFlow(model, flow, speed, colors);
+    let g: SvgElement | undefined;
+    if (css) {
+      const c = cssFlow(model, flow, speed, colors, kf);
+      g = c?.node;
+      if (c) particleRules.push(c.css);
+    } else {
+      g = smilFlow(model, flow, speed, colors);
+    }
     if (!g) continue;
     flowGroups.push(g);
     if (n > 0 && steps.length < n) {
@@ -371,6 +406,7 @@ function loopLayer(
       win.starts,
       targets,
       total > 0 ? total : traversalSeconds(speed),
+      particleClass(ids.prefix),
     );
   }
 
@@ -378,7 +414,15 @@ function loopLayer(
   const hasFlows = flowGroups.length > 0;
   const duration = rules.length > 0 ? total : hasFlows ? traversalSeconds(speed) : 0;
   return {
-    css: join(colors.css(), controlCssText, kf.css(), rules.join("\n"), reducedCss),
+    css: join(
+      colors.css(),
+      controlCssText,
+      kf.css(),
+      particleRules.join("\n"),
+      css && flowGroups.length > 0 ? supportsGuard(model) : "",
+      rules.join("\n"),
+      reducedCss,
+    ),
     defs: [],
     layers,
     ...(script !== undefined ? { script } : {}),

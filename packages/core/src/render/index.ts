@@ -83,9 +83,15 @@ export function defaultIdPrefix(
     readonly font: string;
     readonly speed: number;
     readonly optimize: boolean;
+    /** Only hashed when not the default `smil`, so existing prefixes stay unchanged (D32). */
+    readonly motion?: string;
   },
 ): string {
-  const digest = createHash("sha256").update(canonicalJson({ spec, options })).digest("hex");
+  const { motion, ...rest } = options;
+  const hashed = motion !== undefined && motion !== "smil" ? { ...rest, motion } : rest;
+  const digest = createHash("sha256")
+    .update(canonicalJson({ spec, options: hashed }))
+    .digest("hex");
   return `pc-${digest.slice(0, 8)}`;
 }
 
@@ -217,6 +223,7 @@ export function createRender(deps: RenderDeps): RenderFn {
 
       const font = options.font ?? "embed";
       const speed = options.speed ?? 1;
+      const motion = options.motion ?? "smil";
       const doOptimize = options.optimize !== false;
       const prefix =
         options.idPrefix ??
@@ -226,6 +233,7 @@ export function createRender(deps: RenderDeps): RenderFn {
           font,
           speed,
           optimize: doOptimize,
+          ...(motion === "css" ? { motion } : {}),
         });
 
       const built = buildModelWithDiagnostics({
@@ -246,7 +254,7 @@ export function createRender(deps: RenderDeps): RenderFn {
       let elements = 0;
 
       if (kinds.includes("animated")) {
-        const layer = animator.animate(model, { speed, mode: "loop" });
+        const layer = animator.animate(model, { speed, motion, mode: "loop" });
         const raw = deps.emit(model, layer, { font });
         elements = countElements(raw);
         outputs.push({
