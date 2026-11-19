@@ -83,8 +83,44 @@ describe("schema 1.2.0 guard", () => {
       "/racks/0/programs",
       "/racks/0/slots/0/assembly",
       "/racks/0/slots/0/closeup",
-      "/steps/1/assembly",
+      "/steps/1/assembly/0",
+      "/steps/1/assembly/1",
       "/storyboards",
+    ]);
+  });
+
+  test("actions are gated by their target: lifting 1a alone keeps rack and slot actions gated", () => {
+    const spec = {
+      ...everything,
+      steps: [
+        {
+          assembly: [{ explode: "f" }, { explode: "r1" }, { implode: "r1/s" }, { explode: "a" }],
+        },
+      ],
+    } as unknown as PlatformCosmoSpec;
+    const lifted1a = { phase1a: false, phase1b: true, phase2: true, phase3: true };
+    const steps = unsupportedDiagnostics(spec, lifted1a)
+      .map((d) => d.path)
+      .filter((p) => p.startsWith("/steps"));
+    expect(steps).toEqual(["/steps/0/assembly/1", "/steps/0/assembly/2", "/steps/0/assembly/3"]);
+  });
+
+  test("part paths and close-up paths in an otherwise 1.1 spec are rejected", () => {
+    const spec = {
+      meta: { version: "1" },
+      racks: [{ id: "r1", slots: [{ id: "srv", at: 1, type: "server-1u" }] }],
+      steps: [
+        { focus: "r1/srv/x" },
+        { focus: "r1/srv/closeup" },
+        { set: { "r1/srv/closeup/board": "down", "r1/srv": "degraded" } },
+      ],
+    };
+    const r = validate(spec);
+    expect(r.valid).toBe(false);
+    expect(at(spec)).toEqual([
+      "/steps/0/focus",
+      "/steps/1/focus",
+      "/steps/2/set/r1~1srv~1closeup~1board",
     ]);
   });
 

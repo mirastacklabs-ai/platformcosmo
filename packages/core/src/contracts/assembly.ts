@@ -522,8 +522,12 @@ export interface AssemblyDrawItem {
   readonly path: string;
   /** DOM copies of this item (≥ 1); copy 0 is the canonical one (§9.4). */
   readonly copies: number;
-  /** Static clip (face-exit clipping, §9.5) per copy, by copy index; absent = none. */
-  readonly clips?: Readonly<Record<number, string>>;
+  /**
+   * Clip per copy, by copy index (face-exit or insert clip, §9.5): the clip path id and the
+   * clipping solid's item key. The clip is static in the SOLID's frame, so it sits on a wrapper
+   * that carries the solid's track (`partHost`), outside the leaf's own motion; absent = none.
+   */
+  readonly clips?: Readonly<Record<number, { readonly clip: string; readonly solid: string }>>;
 }
 
 /** A time window with one valid back-to-front order (§9.3). Times: loop seconds, speed 1. */
@@ -563,14 +567,22 @@ export interface OpacityKey {
 /**
  * Tracks of one copy. Each property animates on its OWN nested wrapper, so CSS animations never
  * fight over one property and opacities multiply (§9.4):
- * `<g id=partMotion>` (transform) > `<g id=partVisible>` (visibility) > `<g id=partFade>`
- * (opacity) > [`<g clip-path>` static, when clipped] > the object-like part group (state class,
- * whose opacity comes from the state CSS). A wrapper without a track is omitted.
+ * [`<g id=partHost>` (transform: the clipping solid's track) > `<g clip-path>` (static in the
+ * solid's frame)] > `<g id=partMotion>` (transform) > `<g id=partVisible>` (visibility) >
+ * `<g id=partFade>` (opacity) > the object-like part group (state class, whose opacity comes
+ * from the state CSS). The bracketed pair exists only for clipped copies; `partHost` is omitted
+ * when the solid is static. A wrapper without a track is omitted.
  * Sorted by t; first key at t = 0, last at the loop end. Identical tracks share keyframes.
  */
 export interface PartTrack {
   /** Copy key (`item` or `item__c<k>`). */
   readonly copy: string;
+  /** Clipped copies only: the clipping solid's screen track (its copy-0 motion); else empty. */
+  readonly host: readonly TrackKey[];
+  /**
+   * The leaf's screen translation; for clipped copies RELATIVE to `host` (leaf track minus solid
+   * track), so the clip stays fixed to the solid while the leaf moves through it.
+   */
   readonly motion: readonly TrackKey[];
   readonly visibility: readonly VisibilityKey[];
   readonly opacity: readonly OpacityKey[];
@@ -578,7 +590,7 @@ export interface PartTrack {
 
 /** Pose of every motion group at one time (frame mode, per-step outputs, static). */
 export interface AssemblyFrameState {
-  /** `partMotion` id → SVG `transform` attribute value (`translate(x y)`), only when non-zero. */
+  /** `partHost` / `partMotion` id → SVG `transform` value (`translate(x y)`), only when non-zero. */
   readonly transforms: Readonly<Record<string, string>>;
   /** `partVisible` ids hidden at this time (unused copies, enclosed or not-yet-built parts). */
   readonly hidden: readonly string[];
@@ -620,6 +632,8 @@ export interface AssemblyRenderModel {
  * `createIds` returns `IdScheme & AssemblyIdScheme` once implemented.
  */
 export interface AssemblyIdScheme {
+  /** Outer transform wrapper of a clipped copy: carries the clipping solid's track. */
+  partHost(item: string, copy?: number): string;
   /** Transform wrapper of an item copy (copy 0 has no suffix). */
   partMotion(item: string, copy?: number): string;
   /** Visibility wrapper of an item copy. */

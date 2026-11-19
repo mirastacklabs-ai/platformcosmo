@@ -14,13 +14,16 @@ export type GuardGroup = "phase1a" | "phase1b" | "phase2" | "phase3";
 
 /** Field groups not rendered yet, by the phase that lifts them (tracks §0). */
 export const UNRENDERED: Readonly<Record<GuardGroup, boolean>> = {
-  /** Phase 1a, figure mode: `images`, `figures`, explode/implode actions. */
+  /** Phase 1a, figure mode: `images`, `figures`, explode/implode actions on figures. */
   phase1a: true,
-  /** Phase 1b, plans and basic explode: `assemblies`. */
+  /** Phase 1b, plans and basic explode: `assemblies`, actions on assemblies, part paths. */
   phase1b: true,
-  /** Phase 2, server → rack → hall: rack `programs`, slot `assembly`, `closeup`, build programs and build/unbuild actions. */
+  /**
+   * Phase 2, server → rack → hall: rack `programs`, slot `assembly`, `closeup` (fields and
+   * `…/closeup` paths), actions on racks and slots, build programs and build/unbuild actions.
+   */
   phase2: true,
-  /** Phase 3: `storyboards`, build steps `from: "callout"` and `subBuild`. */
+  /** Phase 3: `storyboards` (and actions on them), build steps `from: "callout"` and `subBuild`. */
   phase3: true,
 };
 
@@ -90,17 +93,43 @@ export function unsupportedDiagnostics(
   }
   if (groups.phase3 && spec.storyboards !== undefined) flag("/storyboards", "storyboards");
 
+  // Step actions are gated by their TARGET's kind, so each phase lifts only its own actions.
+  const roots = new Map<string, GuardGroup>();
+  for (const r of spec.racks ?? []) roots.set(r.id, "phase2");
+  for (const a of spec.assemblies ?? []) roots.set(a.id, "phase1b");
+  for (const f of spec.figures ?? []) roots.set(f.id, "phase1a");
+  for (const b of spec.storyboards ?? []) roots.set(b.id, "phase3");
+  const pathGate = (path: string): boolean => {
+    const segs = path.split("/");
+    if (groups.phase2 && segs.includes("closeup")) return true; // close-up levels (phase 2)
+    const kind = roots.get(segs[0] as string);
+    // Unknown roots are left to semantic validation once phase 1a is lifted.
+    return kind === undefined ? groups.phase1a : groups[kind];
+  };
+  const ptr = (key: string): string => key.replace(/~/g, "~0").replace(/\//g, "~1");
+
   (spec.steps ?? []).forEach((step, i) => {
-    if (step.assembly === undefined) return;
-    if (groups.phase1a) {
-      flag(`/steps/${i}/assembly`, "assembly");
-      return;
-    }
-    if (!groups.phase2) return;
-    step.assembly.forEach((a, j) => {
-      if ("build" in a) flag(`/steps/${i}/assembly/${j}`, "build");
-      if ("unbuild" in a) flag(`/steps/${i}/assembly/${j}`, "unbuild");
+    (step.assembly ?? []).forEach((a, j) => {
+      const at = `/steps/${i}/assembly/${j}`;
+      if ("build" in a || "unbuild" in a) {
+        const target = "build" in a ? a.build : a.unbuild;
+        const storyboard = roots.get(target.split("/")[0] as string) === "phase3";
+        if (storyboard ? groups.phase3 : groups.phase2 || pathGate(target)) {
+          flag(at, "build" in a ? "build" : "unbuild");
+        }
+        return;
+      }
+      const target = "explode" in a ? a.explode : a.implode;
+      if (pathGate(target)) flag(at, "explode" in a ? "explode" : "implode");
     });
+    // Part paths (two or more `/`) and close-up paths only exist with 1.2.0 content.
+    const deep = (path: string, at: string): void => {
+      const segs = path.split("/");
+      if (groups.phase2 && segs.includes("closeup")) flag(at, path);
+      else if (segs.length > 2 && pathGate(path)) flag(at, path);
+    };
+    if (step.focus !== undefined) deep(step.focus, `/steps/${i}/focus`);
+    for (const key of Object.keys(step.set ?? {})) deep(key, `/steps/${i}/set/${ptr(key)}`);
   });
 
   if (groups.phase2) {
