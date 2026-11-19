@@ -56,7 +56,8 @@ jobs:
 
   visual:
     needs: changes
-    if: needs.changes.outputs.engine == 'true'
+    # Matrix job: NOT skipped at job level (a skipped matrix job reports an unexpanded name, which
+    # leaves the required check pending). It starts, and every step is gated on engine instead.
     name: visual (${{ matrix.image }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -70,8 +71,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - run: scripts/pc install --frozen-lockfile
-      - run: scripts/pc run visual
+      - if: needs.changes.outputs.engine == 'true'
+        run: scripts/pc install --frozen-lockfile
+      - if: needs.changes.outputs.engine == 'true'
+        run: scripts/pc run visual
         env:
           VISUAL_REQUIRE_GOLDENS: "1"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
