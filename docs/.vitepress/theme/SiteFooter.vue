@@ -5,11 +5,7 @@ import MiraLogo from "./MiraLogo.vue";
 <template>
   <footer class="pc-footer">
     <div class="pc-footer-inner">
-      <a
-        class="pc-footer-logo"
-        href="/"
-        aria-label="MIRASTACK LABS, home"
-      >
+      <a class="pc-footer-logo" href="/" aria-label="MIRASTACK LABS, home">
         <MiraLogo wordmark />
       </a>
       <p class="pc-footer-tag">
