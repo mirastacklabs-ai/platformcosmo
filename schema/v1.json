@@ -184,6 +184,41 @@
     "facility": {
       "$ref": "#/$defs/facility",
       "description": "Facility-wide settings: raised floor, perforated tiles and cable trays."
+    },
+    "assemblies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/assembly"
+      },
+      "minItems": 1,
+      "maxItems": 50,
+      "description": "Component-driven units (an engine, a server, a brick model) built from parts, with programmable explode and build programs (schema 1.2.0)."
+    },
+    "images": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/image"
+      },
+      "maxItems": 256,
+      "description": "Images that parts and storyboards use: local files next to the spec or inline base64 data, never URLs (schema 1.2.0)."
+    },
+    "storyboards": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/storyboard"
+      },
+      "minItems": 1,
+      "maxItems": 10,
+      "description": "Flat build storyboards made from a document's own step renders and part thumbnails; build forward and back only, no explode (schema 1.2.0)."
+    },
+    "figures": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/figure"
+      },
+      "minItems": 1,
+      "maxItems": 20,
+      "description": "Document figures animated in their own drawn plane: cut-out sprites move between the drawn exploded and seated positions (schema 1.2.0)."
     }
   },
   "$defs": {
@@ -452,13 +487,13 @@
         "set": {
           "type": "object",
           "propertyNames": {
-            "$ref": "#/$defs/endpoint"
+            "$ref": "#/$defs/partPath"
           },
           "additionalProperties": {
             "$ref": "#/$defs/state"
           },
           "maxProperties": 1000,
-          "description": "State changes from this step onward (cumulative), keyed by object id or rackId/slotId."
+          "description": "State changes from this step onward (cumulative), keyed by object id, rackId/slotId or an assembly part path (assemblyId/partId/...)."
         },
         "flows": {
           "type": "array",
@@ -487,8 +522,17 @@
           "default": 3
         },
         "focus": {
-          "$ref": "#/$defs/endpoint",
-          "description": "Id to zoom to for this step only (object, rackId/slotId, group, row, aisle); omit for the full view."
+          "$ref": "#/$defs/partPath",
+          "description": "Id to zoom to for this step only (object, rackId/slotId, group, row, aisle, assembly, assembly part path or storyboard); omit for the full view. An assembly target frames its pose at the end of the step."
+        },
+        "assembly": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/assemblyAction"
+          },
+          "minItems": 1,
+          "maxItems": 20,
+          "description": "Explode, implode, build or unbuild actions played in this step, in order (each starts when the previous one ends unless it sets start). Poses are cumulative across steps."
         }
       },
       "minProperties": 1
@@ -566,6 +610,14 @@
           },
           "maxItems": 48,
           "description": "Devices placed in the rack's rack units."
+        },
+        "programs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/program"
+          },
+          "maxItems": 8,
+          "description": "Explode programs for the rack as an assembly; selectors address slot ids, slot types (type:server-2u) and the rack's own parts. Without one the rack has the built-in drawers program (schema 1.2.0)."
         }
       }
     },
@@ -602,6 +654,14 @@
         "state": {
           "$ref": "#/$defs/state",
           "description": "Device state. Omit to inherit the rack state."
+        },
+        "assembly": {
+          "$ref": "#/$defs/id",
+          "description": "Id of a template assembly (template: true) that is the device's internals; the device gets a removable lid and the template is placed inside at true scale (schema 1.2.0)."
+        },
+        "closeup": {
+          "$ref": "#/$defs/id",
+          "description": "Assembly (template), figure or storyboard drawn instead of this when a step focuses it or anything inside it; cross-fades at the focus transition."
         }
       }
     },
@@ -755,6 +815,1194 @@
         }
       }
     },
+    "partPath": {
+      "title": "SpecPartPath",
+      "description": "An id, or up to 8 ids joined by / that address a rack slot (rackId/slotId) or an assembly part (assemblyId/partId/...).",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(/[a-z][a-z0-9-]*){0,7}$",
+      "maxLength": 520
+    },
+    "vec3": {
+      "title": "SpecVec3",
+      "description": "[x, y, z] in the assembly's units: x runs to the lower right of the screen, y to the lower left, z up.",
+      "type": "array",
+      "items": {
+        "type": "number",
+        "minimum": -100000,
+        "maximum": 100000
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "size3": {
+      "title": "SpecSize3",
+      "description": "[width along x, depth along y, height along z] in the assembly's units, each > 0.",
+      "type": "array",
+      "items": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "maximum": 100000
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "pixelRect": {
+      "title": "SpecPixelRect",
+      "description": "[x, y, width, height] in image pixels (SVG images: viewBox units), from the top-left corner.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 16384
+      },
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "direction": {
+      "title": "SpecDirection",
+      "description": "Where a part travels. Presets: away (from the surface it mates with; the default), up, down, +x, -x, +y, -y, +z, -z (axes of the assembly frame), out (away from the parent's centre, snapped to the nearest horizontal axis), radial (away from the parent's centre in the horizontal plane, not snapped), axis (along the part's own cylinder or shaft axis, away from the parent's centre), drawer (toward the assembly front, like a rack device sliding out) and lift (up, stacked in layers so every layer clears the one below). Or an explicit [x, y, z] vector.",
+      "oneOf": [
+        {
+          "enum": [
+            "away",
+            "up",
+            "down",
+            "+x",
+            "-x",
+            "+y",
+            "-y",
+            "+z",
+            "-z",
+            "out",
+            "radial",
+            "axis",
+            "drawer",
+            "lift"
+          ]
+        },
+        {
+          "$ref": "#/$defs/vec3"
+        }
+      ]
+    },
+    "distance": {
+      "title": "SpecDistance",
+      "description": "How far a part travels: a number in the assembly's units, \"auto\" (clear its seat and every part it stacks with, plus the program gap) or a multiple of the auto distance such as \"1.5x\".",
+      "oneOf": [
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        {
+          "type": "string",
+          "pattern": "^(auto|(0|[1-9][0-9]?)(\\.[0-9]{1,2})?x)$"
+        }
+      ]
+    },
+    "easing": {
+      "title": "SpecEasing",
+      "description": "Motion easing. All are monotonic (no overshoot), so a part never leaves the segment between its two poses.",
+      "enum": ["linear", "ease", "ease-in", "ease-out", "ease-in-out"]
+    },
+    "selector": {
+      "title": "SpecPartSelector",
+      "description": "Selects parts of the program's assembly: a part path relative to the assembly (head/cam-intake), a glob (cyl-*, head/**, dimm-?), or tag:<tag>, type:<type>, role:<role>, id:<glob>. * matches within one path segment, ** any number of segments, ? one character. A selected sub-assembly moves as one unit.",
+      "type": "string",
+      "pattern": "^((id|tag|type|role):)?[a-z0-9*?][a-z0-9*?/-]*$",
+      "maxLength": 140
+    },
+    "selectors": {
+      "title": "SpecPartSelectors",
+      "description": "Union of selectors.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/selector"
+      },
+      "minItems": 1,
+      "maxItems": 64
+    },
+    "source": {
+      "title": "SpecSource",
+      "description": "Provenance of an image or a part taken from a document. Shown in the credits line when attribution or license is set; never fetched, never a link.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "document": {
+          "$ref": "#/$defs/text",
+          "description": "Document title or file name the content was taken from."
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "description": "1-based page number in the document."
+        },
+        "figure": {
+          "$ref": "#/$defs/text",
+          "description": "Figure, table or step reference inside the page."
+        },
+        "license": {
+          "$ref": "#/$defs/text",
+          "description": "License of the source content, an SPDX id such as CC-BY-4.0 or free text."
+        },
+        "attribution": {
+          "$ref": "#/$defs/text",
+          "description": "Attribution text the license requires, shown in the credits line."
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 2000,
+          "pattern": "^https?://[^\\s<>\"']+$",
+          "description": "Where the document is published; printed as text in the credits, never fetched."
+        }
+      }
+    },
+    "image": {
+      "title": "SpecImage",
+      "description": "An image asset. src is a file path relative to the spec's directory (no .., no absolute paths, no URLs) or an inline data:image/(png|jpeg|webp|svg+xml);base64 URI. Formats are checked by magic bytes; metadata is dropped; SVG goes through the icon sanitizer.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "src"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id",
+          "description": "Unique image id that parts and storyboards reference."
+        },
+        "src": {
+          "type": "string",
+          "maxLength": 350000,
+          "pattern": "^(data:image/(png|jpeg|webp|svg\\+xml);base64,[A-Za-z0-9+/]+={0,2}|(?![/\\\\])(?!.*(^|/)\\.\\.(/|$))[A-Za-z0-9._ /-]+\\.(png|jpg|jpeg|webp|svg|PNG|JPG|JPEG|WEBP|SVG))$",
+          "description": "Relative file path (png, jpg, jpeg, webp, svg) or an inline base64 data URI of up to about 256 KiB."
+        },
+        "crop": {
+          "$ref": "#/$defs/pixelRect",
+          "description": "Part of the image to use, applied as an SVG viewport (the full file is embedded; use pcosmo assets crop to cut the file itself)."
+        },
+        "alt": {
+          "$ref": "#/$defs/text",
+          "description": "Short description used in the SVG desc and the credits line."
+        },
+        "source": {
+          "$ref": "#/$defs/source",
+          "description": "Document provenance and license of the image."
+        }
+      }
+    },
+    "partImage": {
+      "title": "SpecPartImage",
+      "description": "An image on a part: an image id (shown as an upright billboard), or an object with face, crop and fit.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/id"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ref"],
+          "properties": {
+            "ref": {
+              "$ref": "#/$defs/id",
+              "description": "Id of an entry in images."
+            },
+            "face": {
+              "enum": ["billboard", "top", "left", "right"],
+              "description": "billboard: upright and never skewed, scaled to the part's screen silhouette; top, left (+y) or right (+x): a decal mapped onto that face of the part's box.",
+              "default": "billboard"
+            },
+            "crop": {
+              "$ref": "#/$defs/pixelRect",
+              "description": "Overrides the image's crop for this part."
+            },
+            "fit": {
+              "enum": ["contain", "cover", "stretch"],
+              "description": "How the image fills its face or silhouette.",
+              "default": "contain"
+            }
+          }
+        }
+      ]
+    },
+    "partOverride": {
+      "title": "SpecPartOverride",
+      "description": "Per-part changes inside one stage.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "direction": {
+          "$ref": "#/$defs/direction",
+          "description": "Direction for this part only."
+        },
+        "distance": {
+          "$ref": "#/$defs/distance",
+          "description": "Distance for this part only."
+        },
+        "delay": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 60,
+          "description": "Extra seconds before this part starts, at speed 1."
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9999,
+          "description": "Rank in the stage's stagger order (lower moves first); ties keep the stage order."
+        }
+      }
+    },
+    "stage": {
+      "title": "SpecStage",
+      "description": "One stage of an explode program: which parts move, where, how far and when.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parts"],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/text",
+          "description": "Stage name, used in captions written by the skill and in diagnostics."
+        },
+        "parts": {
+          "$ref": "#/$defs/selectors",
+          "description": "Parts this stage moves."
+        },
+        "except": {
+          "$ref": "#/$defs/selectors",
+          "description": "Parts removed from the selection."
+        },
+        "direction": {
+          "$ref": "#/$defs/direction",
+          "description": "Travel direction for every selected part.",
+          "default": "away"
+        },
+        "distance": {
+          "$ref": "#/$defs/distance",
+          "description": "Travel distance for every selected part.",
+          "default": "auto"
+        },
+        "order": {
+          "enum": [
+            "spec",
+            "outside-in",
+            "inside-out",
+            "top-down",
+            "bottom-up",
+            "front-first",
+            "back-first"
+          ],
+          "description": "Stagger order: spec order, by distance from the assembly centre, by height, or by nearness to the viewer.",
+          "default": "spec"
+        },
+        "stagger": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Seconds between the starts of consecutive parts, at speed 1.",
+          "default": 0.08
+        },
+        "delay": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 60,
+          "description": "Seconds before the stage starts, at speed 1.",
+          "default": 0
+        },
+        "duration": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 60,
+          "description": "Seconds each part travels, at speed 1.",
+          "default": 0.8
+        },
+        "easing": {
+          "$ref": "#/$defs/easing",
+          "description": "Motion easing of each part.",
+          "default": "ease-in-out"
+        },
+        "with": {
+          "enum": ["after", "previous"],
+          "description": "after: start when the previous stage ends; previous: start together with it.",
+          "default": "after"
+        },
+        "labels": {
+          "enum": ["show", "hide"],
+          "description": "Show each moved part's label (with a leader line) once it arrives.",
+          "default": "show"
+        },
+        "leaders": {
+          "type": "boolean",
+          "description": "Draw leader lines from labels to their parts.",
+          "default": true
+        },
+        "details": {
+          "type": "boolean",
+          "description": "Also show each part's detail lines under its label.",
+          "default": false
+        },
+        "fade": {
+          "enum": ["none", "unselected", "others"],
+          "description": "Dim parts this stage does not move (unselected) or everything outside the assembly (others) while the stage is shown.",
+          "default": "none"
+        },
+        "overrides": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/partPath"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/partOverride"
+          },
+          "maxProperties": 200,
+          "description": "Per-part direction, distance, delay or order, keyed by part path relative to the assembly."
+        }
+      }
+    },
+    "buildStep": {
+      "title": "SpecBuildStep",
+      "description": "One build step: parts appear at an origin and travel to their seats.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["add"],
+      "properties": {
+        "number": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9999,
+          "description": "Step number printed in the document (booklet step), shown in the caption and the parts callout."
+        },
+        "caption": {
+          "$ref": "#/$defs/text",
+          "description": "Caption for the build step."
+        },
+        "add": {
+          "$ref": "#/$defs/selectors",
+          "description": "Parts added in this step."
+        },
+        "from": {
+          "oneOf": [
+            {
+              "enum": ["above", "callout", "outside", "+x", "-x", "+y", "-y"]
+            },
+            {
+              "$ref": "#/$defs/vec3"
+            }
+          ],
+          "description": "Where added parts come from: above their seat, the parts callout (fly from the callout box, then drop), outside the model bounds along their nearest free side, an axis, or an explicit vector.",
+          "default": "above"
+        },
+        "distance": {
+          "$ref": "#/$defs/distance",
+          "description": "Travel distance from the origin to the seat.",
+          "default": "auto"
+        },
+        "subBuild": {
+          "$ref": "#/$defs/partPath",
+          "description": "Sub-assembly (part path) built first at a staging spot beside the model by its own build program, then attached as one unit."
+        },
+        "program": {
+          "$ref": "#/$defs/id",
+          "description": "Build program of the sub-assembly to play for subBuild; default its first build program."
+        },
+        "view": {
+          "enum": [0, 90, 180, 270],
+          "description": "Rotate the view about the vertical axis (degrees, quarter turns only) from this step on, like a booklet's rotate-model hint. Assembly-only specs."
+        },
+        "callout": {
+          "type": "boolean",
+          "description": "Show the parts callout (count x part thumbnail) for this step.",
+          "default": true
+        },
+        "duration": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 60,
+          "description": "Seconds each part travels, at speed 1.",
+          "default": 0.6
+        },
+        "stagger": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Seconds between consecutive parts, at speed 1.",
+          "default": 0.1
+        },
+        "easing": {
+          "$ref": "#/$defs/easing",
+          "description": "Motion easing of each part.",
+          "default": "ease-out"
+        }
+      }
+    },
+    "program": {
+      "title": "SpecProgram",
+      "description": "An explode program (ordered stages) or a build program (ordered build steps).",
+      "oneOf": [
+        {
+          "title": "SpecExplodeProgram",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "stages"],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id",
+              "description": "Program id, unique within its assembly or sub-assembly."
+            },
+            "kind": {
+              "const": "explode",
+              "description": "Explode program (the default kind)."
+            },
+            "label": {
+              "$ref": "#/$defs/text",
+              "description": "Program name."
+            },
+            "gap": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100000,
+              "description": "Clearance between parts after an auto-distance move, in the assembly's units; default 10% of the assembly's largest extent."
+            },
+            "stages": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/stage"
+              },
+              "minItems": 1,
+              "maxItems": 32,
+              "description": "Stages in order; explode to stage k plays stages 1..k, implode plays them backwards."
+            }
+          }
+        },
+        {
+          "title": "SpecBuildProgram",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "steps"],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id",
+              "description": "Program id, unique within its assembly or sub-assembly."
+            },
+            "kind": {
+              "const": "build",
+              "description": "Build program."
+            },
+            "label": {
+              "$ref": "#/$defs/text",
+              "description": "Program name."
+            },
+            "steps": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/buildStep"
+              },
+              "minItems": 1,
+              "maxItems": 500,
+              "description": "Build steps in order; parts not added by any step are the base and are present from the start."
+            }
+          }
+        }
+      ]
+    },
+    "part": {
+      "title": "SpecPart",
+      "description": "A part of an assembly: a primitive or pack shape, optionally image-fed, or a sub-assembly with its own parts.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id",
+          "description": "Unique among its siblings; the part's path is the ids from the assembly down, joined by /."
+        },
+        "label": {
+          "$ref": "#/$defs/text",
+          "description": "Name shown when the part is exploded."
+        },
+        "detail": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          },
+          "maxItems": 6,
+          "description": "Detail lines shown under the label when a stage enables details."
+        },
+        "badge": {
+          "$ref": "#/$defs/text",
+          "description": "Short badge text."
+        },
+        "type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "maxLength": 64,
+          "description": "Free part type such as cpu, dimm, piston or valve, used by type: selectors, callouts and the suggestion heuristics."
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "maxItems": 16,
+          "uniqueItems": true,
+          "description": "Tags for tag: selectors."
+        },
+        "role": {
+          "enum": ["body", "cover", "fastener", "internal", "cable", "shell"],
+          "description": "Structural role used by the suggestion heuristics: body (never moves by default), cover (lids, panels), fastener, internal, cable or shell (open container)."
+        },
+        "shape": {
+          "type": "string",
+          "pattern": "^(box|plate|cylinder|ring|shaft|prism|wedge|tray|card|sprite|[a-z0-9-]+:[a-z0-9-]+)$",
+          "maxLength": 129,
+          "description": "Primitive (box, plate, cylinder, ring, shaft, prism, wedge, tray, card, sprite) or a pack shape such as dc:server-2u, hw:dimm, auto:piston, brick:brick. Ignored for sub-assemblies.",
+          "default": "box"
+        },
+        "at": {
+          "$ref": "#/$defs/vec3",
+          "description": "Minimum corner of the part's (rotated) box in its parent's frame; default [0, 0, 0]."
+        },
+        "size": {
+          "$ref": "#/$defs/size3",
+          "description": "Extent of the unrotated part; pack shapes have a default size, sub-assemblies default to their parts' bounds."
+        },
+        "axis": {
+          "enum": ["x", "y", "z"],
+          "description": "Axis of a cylinder, ring or shaft.",
+          "default": "z"
+        },
+        "rotate": {
+          "enum": [0, 90, 180, 270],
+          "description": "Quarter-turn rotation about the vertical axis (degrees); 90 and 270 swap width and depth.",
+          "default": 0
+        },
+        "params": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z][a-zA-Z0-9]*$",
+            "maxLength": 32
+          },
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "number",
+                "minimum": -100000,
+                "maximum": 100000
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]*$",
+                "maxLength": 64
+              }
+            ]
+          },
+          "maxProperties": 32,
+          "description": "Shape parameters for a pack shape (for example studs or hollow for brick shapes)."
+        },
+        "tone": {
+          "enum": ["base", "accent", "muted", "glass", "metal", "led"],
+          "description": "Theme material of a primitive part.",
+          "default": "base"
+        },
+        "color": {
+          "$ref": "#/$defs/color",
+          "description": "#rgb or #rrggbb hex, a palette name or a flow kind name; overrides tone."
+        },
+        "image": {
+          "$ref": "#/$defs/partImage",
+          "description": "Image shown on the part (billboard or face decal)."
+        },
+        "state": {
+          "$ref": "#/$defs/state",
+          "description": "Initial state; omit to inherit the parent's."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "description": "Repeat the part count times; copies get ids <id>-1 ... <id>-n and are offset by pitch.",
+          "default": 1
+        },
+        "pitch": {
+          "$ref": "#/$defs/vec3",
+          "description": "Offset between repeated copies, in the parent's units."
+        },
+        "mates": {
+          "$ref": "#/$defs/partPath",
+          "description": "Sibling part (path relative to the parent) this part sits on or in; the away direction leaves its contact face. Inferred from contact when omitted."
+        },
+        "closeup": {
+          "$ref": "#/$defs/id",
+          "description": "Assembly (template), figure or storyboard drawn instead of this when a step focuses it or anything inside it; cross-fades at the focus transition."
+        },
+        "use": {
+          "$ref": "#/$defs/id",
+          "description": "Template assembly instanced as this part's sub-assembly, scaled to size when size is set."
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/part"
+          },
+          "minItems": 1,
+          "maxItems": 200,
+          "description": "Child parts: makes this part a sub-assembly that moves as one unit unless a selector picks its children."
+        },
+        "programs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/program"
+          },
+          "maxItems": 8,
+          "description": "Programs of this sub-assembly; selectors are relative to it."
+        },
+        "source": {
+          "$ref": "#/$defs/source",
+          "description": "Document provenance of the part (dimensions, figure)."
+        }
+      }
+    },
+    "assembly": {
+      "title": "SpecAssembly",
+      "description": "A component-driven unit drawn assembled in isometric view, with explode and build programs.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "parts"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id",
+          "description": "Unique id (shares the namespace with nodes, racks and the rest)."
+        },
+        "label": {
+          "$ref": "#/$defs/text",
+          "description": "Name of the unit."
+        },
+        "badge": {
+          "$ref": "#/$defs/text",
+          "description": "Short badge text."
+        },
+        "units": {
+          "enum": ["mm", "cm", "in", "tile", "stud"],
+          "description": "Units of at, size, pitch and distances: mm, cm, in, tile (one world grid tile) or stud (x and y in 8 mm studs, z in 3.2 mm plates; a brick is 3 plates).",
+          "default": "mm"
+        },
+        "fit": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 40,
+          "description": "Scale so the assembled unit's largest horizontal extent is this many grid tiles; ignored for units tile and inside a rack slot.",
+          "default": 6
+        },
+        "front": {
+          "enum": ["+y", "+x", "-y", "-x"],
+          "description": "Side of the unit that is its front (the drawer direction). +y faces the viewer's lower left, +x the lower right.",
+          "default": "+y"
+        },
+        "rotate": {
+          "enum": [0, 90, 180, 270],
+          "description": "Quarter-turn rotation of the whole unit about the vertical axis.",
+          "default": 0
+        },
+        "pos": {
+          "$ref": "#/$defs/gridPos",
+          "description": "Optional manual grid position that overrides automatic layout."
+        },
+        "group": {
+          "$ref": "#/$defs/id",
+          "description": "Id of the group that contains the unit."
+        },
+        "state": {
+          "$ref": "#/$defs/state",
+          "description": "Initial state of every part that does not set its own.",
+          "default": "healthy"
+        },
+        "labels": {
+          "enum": ["exploded", "always", "never"],
+          "description": "exploded: part labels appear (with leader lines) when stages show them; always: also print each leaf's label upright on its top face at rest (plans, board layouts); never: no part labels.",
+          "default": "exploded"
+        },
+        "pose": {
+          "enum": ["assembled", "exploded", "empty"],
+          "description": "Base pose, shown in the static output, the poster frame and at the start of the loop: assembled, exploded (default program, all stages) or empty (only parts no build step adds).",
+          "default": "assembled"
+        },
+        "program": {
+          "$ref": "#/$defs/id",
+          "description": "Default program for actions that do not name one; default the first explode program, else the first build program."
+        },
+        "closeup": {
+          "$ref": "#/$defs/id",
+          "description": "Assembly (template), figure or storyboard drawn instead of this when a step focuses it or anything inside it; cross-fades at the focus transition."
+        },
+        "template": {
+          "type": "boolean",
+          "description": "Not drawn by itself; instanced by parts[].use, racks[].slots[].assembly or closeup.",
+          "default": false
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/part"
+          },
+          "minItems": 1,
+          "maxItems": 500,
+          "description": "Top-level parts (at most 2000 leaf parts per spec after count and use are expanded)."
+        },
+        "programs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/program"
+          },
+          "maxItems": 16,
+          "description": "Explode and build programs; when there is none the skill or pcosmo suggest one."
+        },
+        "source": {
+          "$ref": "#/$defs/source",
+          "description": "Document the unit was modelled from."
+        }
+      }
+    },
+    "assemblyAction": {
+      "title": "SpecAssemblyAction",
+      "description": "A pose change of an assembly, sub-assembly, rack or storyboard in a step.",
+      "oneOf": [
+        {
+          "title": "SpecExplodeAction",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["explode"],
+          "properties": {
+            "explode": {
+              "$ref": "#/$defs/partPath",
+              "description": "Assembly, sub-assembly path, rack id, rackId/slotId or figure to explode."
+            },
+            "program": {
+              "$ref": "#/$defs/id",
+              "description": "Explode program; default the target's default program."
+            },
+            "to": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 32,
+              "description": "Stage to reach (partial explode); default the last stage."
+            },
+            "start": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 600,
+              "description": "Seconds after the step's motion window opens, at speed 1; default right after the previous action."
+            }
+          }
+        },
+        {
+          "title": "SpecImplodeAction",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["implode"],
+          "properties": {
+            "implode": {
+              "$ref": "#/$defs/partPath",
+              "description": "Assembly, sub-assembly path, rack id, rackId/slotId or figure to implode."
+            },
+            "program": {
+              "$ref": "#/$defs/id",
+              "description": "Explode program to reverse; default the one that exploded it."
+            },
+            "to": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 32,
+              "description": "Stage to return to; default 0 (assembled)."
+            },
+            "start": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 600,
+              "description": "Seconds after the step's motion window opens, at speed 1."
+            }
+          }
+        },
+        {
+          "title": "SpecBuildAction",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["build"],
+          "properties": {
+            "build": {
+              "$ref": "#/$defs/partPath",
+              "description": "Assembly or storyboard to build."
+            },
+            "program": {
+              "$ref": "#/$defs/id",
+              "description": "Build program; default the target's first build program."
+            },
+            "to": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 500,
+              "description": "Build step (or storyboard frame) to reach; default the last."
+            },
+            "advance": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "description": "Build this many more steps instead of naming to; default 1 when neither is set."
+            },
+            "start": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 600,
+              "description": "Seconds after the step's motion window opens, at speed 1."
+            }
+          }
+        },
+        {
+          "title": "SpecUnbuildAction",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["unbuild"],
+          "properties": {
+            "unbuild": {
+              "$ref": "#/$defs/partPath",
+              "description": "Assembly or storyboard to take apart in reverse build order."
+            },
+            "program": {
+              "$ref": "#/$defs/id",
+              "description": "Build program to reverse."
+            },
+            "to": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 500,
+              "description": "Build step to return to; default 0 (empty)."
+            },
+            "start": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 600,
+              "description": "Seconds after the step's motion window opens, at speed 1."
+            }
+          }
+        }
+      ]
+    },
+    "storyboardItem": {
+      "title": "SpecStoryboardItem",
+      "description": "A part thumbnail in a storyboard callout.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image"],
+      "properties": {
+        "image": {
+          "$ref": "#/$defs/id",
+          "description": "Id of the thumbnail image."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 99,
+          "description": "How many of this part the step uses, shown as <count>x.",
+          "default": 1
+        },
+        "label": {
+          "$ref": "#/$defs/text",
+          "description": "Optional part name."
+        }
+      }
+    },
+    "storyboardFrame": {
+      "title": "SpecStoryboardFrame",
+      "description": "One document step: the model render after the step, the parts callout and an optional sub-build.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model"],
+      "properties": {
+        "number": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9999,
+          "description": "Step number printed in the document."
+        },
+        "caption": {
+          "$ref": "#/$defs/text",
+          "description": "Caption for the step."
+        },
+        "model": {
+          "$ref": "#/$defs/id",
+          "description": "Image of the model after this step."
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/storyboardItem"
+          },
+          "maxItems": 40,
+          "description": "Parts callout of the step."
+        },
+        "attach": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[x, y] in percent of the model image where the step's parts land; default the centre."
+        },
+        "sub": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/storyboardItem"
+          },
+          "minItems": 1,
+          "maxItems": 20,
+          "description": "Sub-build mini-step images in order (count unused); the last one docks at attach before the model image changes."
+        }
+      }
+    },
+    "storyboard": {
+      "title": "SpecStoryboard",
+      "description": "A flat, faithful build sequence made from a document's own step renders and part thumbnails (tier A of document ingestion).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "frames"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id",
+          "description": "Unique id."
+        },
+        "label": {
+          "$ref": "#/$defs/text",
+          "description": "Name of the model."
+        },
+        "pos": {
+          "$ref": "#/$defs/gridPos",
+          "description": "Optional manual grid position."
+        },
+        "width": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 40,
+          "description": "Width of the storyboard panel in grid tiles.",
+          "default": 8
+        },
+        "transition": {
+          "enum": ["fade", "wipe", "cut"],
+          "description": "How the model image changes between steps.",
+          "default": "fade"
+        },
+        "frames": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/storyboardFrame"
+          },
+          "minItems": 1,
+          "maxItems": 500,
+          "description": "Document steps in order."
+        },
+        "source": {
+          "$ref": "#/$defs/source",
+          "description": "The document; required in practice for credits."
+        }
+      }
+    },
+    "figurePart": {
+      "title": "SpecFigurePart",
+      "description": "A part sprite cut out of a figure, with its seated and exploded positions in the figure's pixel frame.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "image", "seat"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id",
+          "description": "Unique within the figure."
+        },
+        "label": {
+          "$ref": "#/$defs/text",
+          "description": "Name shown when the part is exploded."
+        },
+        "detail": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          },
+          "maxItems": 6,
+          "description": "Detail lines shown under the label when a stage enables details."
+        },
+        "type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "maxLength": 64,
+          "description": "Free part type for type: selectors."
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "maxItems": 16,
+          "uniqueItems": true,
+          "description": "Tags for tag: selectors."
+        },
+        "image": {
+          "$ref": "#/$defs/id",
+          "description": "The part's cut-out sprite (transparent outside its silhouette)."
+        },
+        "seat": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": -100000,
+            "maximum": 100000
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[x, y] of the sprite's top-left corner in the base image's pixels when seated (from pcosmo assets locate)."
+        },
+        "exploded": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": -100000,
+            "maximum": 100000
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[x, y] of the sprite's top-left corner when exploded; default straight up by the sprite height plus 20%."
+        },
+        "z": {
+          "type": "integer",
+          "minimum": -1000,
+          "maximum": 1000,
+          "description": "Draw-order override; default by the seat's bottom edge (lower on screen draws later)."
+        },
+        "arrow": {
+          "type": "boolean",
+          "description": "Draw a fading motion arrow between seat and exploded position.",
+          "default": true
+        },
+        "source": {
+          "$ref": "#/$defs/source",
+          "description": "Where the sprite was cut from."
+        }
+      }
+    },
+    "figureStage": {
+      "title": "SpecFigureStage",
+      "description": "A stage of a figure: which sprites move and when (motion is between the drawn seat and exploded positions).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parts"],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/text",
+          "description": "Stage name."
+        },
+        "parts": {
+          "$ref": "#/$defs/selectors",
+          "description": "Figure parts this stage moves."
+        },
+        "order": {
+          "enum": ["spec", "top-down", "bottom-up"],
+          "description": "Stagger order.",
+          "default": "spec"
+        },
+        "stagger": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Seconds between consecutive parts, at speed 1.",
+          "default": 0.08
+        },
+        "delay": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 60,
+          "description": "Seconds before the stage starts, at speed 1.",
+          "default": 0
+        },
+        "duration": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 60,
+          "description": "Seconds each part travels, at speed 1.",
+          "default": 0.8
+        },
+        "easing": {
+          "$ref": "#/$defs/easing",
+          "description": "Motion easing.",
+          "default": "ease-in-out"
+        },
+        "labels": {
+          "enum": ["show", "hide"],
+          "description": "Show labels with leader lines once parts arrive.",
+          "default": "show"
+        }
+      }
+    },
+    "figure": {
+      "title": "SpecFigure",
+      "description": "Figure mode: a document figure (exploded and/or assembled drawing) animated in its own drawn plane by moving cut-out sprites; no 3D inference.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "base", "parts"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id",
+          "description": "Unique id."
+        },
+        "label": {
+          "$ref": "#/$defs/text",
+          "description": "Name of the figure."
+        },
+        "pos": {
+          "$ref": "#/$defs/gridPos",
+          "description": "Optional manual grid position."
+        },
+        "width": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 40,
+          "description": "Width of the figure panel in grid tiles.",
+          "default": 8
+        },
+        "base": {
+          "$ref": "#/$defs/id",
+          "description": "Image of the figure with every moving part erased (pcosmo assets cutout --erase-from) and arrows removed."
+        },
+        "pose": {
+          "enum": ["assembled", "exploded"],
+          "description": "Base pose for the static output and the start of the loop.",
+          "default": "assembled"
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/figurePart"
+          },
+          "minItems": 1,
+          "maxItems": 200,
+          "description": "Moving sprites."
+        },
+        "stages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/figureStage"
+          },
+          "maxItems": 32,
+          "description": "Stages; default one stage moving every part in spec order."
+        },
+        "source": {
+          "$ref": "#/$defs/source",
+          "description": "The document and page of the figure."
+        }
+      }
+    },
     "text": {
       "title": "SpecText",
       "type": "string",
@@ -796,7 +2044,7 @@
       ]
     }
   },
-  "x-revision": "1.1.2",
+  "x-revision": "1.2.0",
   "anyOf": [
     {
       "required": ["nodes"],
@@ -814,6 +2062,24 @@
       "required": ["equipment"],
       "properties": {
         "equipment": true
+      }
+    },
+    {
+      "required": ["assemblies"],
+      "properties": {
+        "assemblies": true
+      }
+    },
+    {
+      "required": ["storyboards"],
+      "properties": {
+        "storyboards": true
+      }
+    },
+    {
+      "required": ["figures"],
+      "properties": {
+        "figures": true
       }
     }
   ]

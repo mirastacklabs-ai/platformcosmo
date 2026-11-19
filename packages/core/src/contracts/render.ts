@@ -49,6 +49,7 @@
  *   hide the `flows` layer (SMIL cannot be paused by CSS).
  */
 import type { PlatformCosmoSpec } from "../schema/types.gen.js";
+import type { AssemblyRenderModel, ImageAssetResolver, PartShapeRegistry } from "./assembly.js";
 import type { DcPack } from "./dc.js";
 import type { Diagnostic, ValidationReport } from "./diagnostics.js";
 import type { FaceName, Projection, Rect, Vec2 } from "./geometry.js";
@@ -144,6 +145,10 @@ export interface RenderOptions {
     /** Needed for mp4. */
     readonly encoder?: VideoEncoder;
   };
+  /** Prepared spec images (schema 1.2.0); the CLI loads and prepares them. Missing → errors. */
+  readonly images?: ImageAssetResolver;
+  /** Part shape packs (`dc:`, `hw:`, `auto:`, `brick:`), wired by the CLI like icons (D4). */
+  readonly parts?: PartShapeRegistry;
 }
 
 export interface RenderOutput {
@@ -198,7 +203,13 @@ export type ParseSpecFn = (
  */
 export type ValidateFn = (
   spec: unknown,
-  context?: { readonly icons?: IconResolver; readonly dc?: DcPack },
+  context?: {
+    readonly icons?: IconResolver;
+    readonly dc?: DcPack;
+    /** Schema 1.2.0: unknown image ids / shape refs become errors with did-you-mean. */
+    readonly images?: ImageAssetResolver;
+    readonly parts?: PartShapeRegistry;
+  },
 ) => ValidationReport<PlatformCosmoSpec>;
 
 /**
@@ -294,6 +305,8 @@ export interface RenderModel {
   readonly metricRects: Readonly<Record<string, Rect>>;
   readonly font: FontMode;
   readonly fontAssets: readonly FontAsset[];
+  /** Schema 1.2.0 assembly layer (depth epochs, copies, tracks); absent without assemblies. */
+  readonly assembly?: AssemblyRenderModel;
 }
 
 /** What animation adds on top of the static model (Track B). */
@@ -309,6 +322,13 @@ export interface AnimationLayer {
   readonly viewBox?: Rect;
   /** Loop length in seconds at the chosen speed (0 = nothing animates). */
   readonly duration: number;
+  /**
+   * Attribute overrides by element id, applied by emit (assemblies, schema 1.2.0): only
+   * `transform` (`translate(x y)`), `visibility` (`hidden`) and `opacity` (0..1) are allowed,
+   * values re-checked by the emitter. Used in `frame`/`step` modes, where resvg needs
+   * attributes rather than CSS transforms.
+   */
+  readonly attrs?: Readonly<Record<string, Readonly<Record<string, string | number>>>>;
 }
 
 export interface AnimateOptions {
@@ -401,5 +421,10 @@ export type ExportFn = (
  */
 export type BuildSceneFn = (
   spec: PlatformCosmoSpec,
-  context: { readonly icons?: IconResolver; readonly dc?: DcPack },
+  context: {
+    readonly icons?: IconResolver;
+    readonly dc?: DcPack;
+    readonly images?: ImageAssetResolver;
+    readonly parts?: PartShapeRegistry;
+  },
 ) => SceneGraph;
