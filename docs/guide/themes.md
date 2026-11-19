@@ -61,4 +61,4 @@ Teal is the primary family, neutral ink and greys fill the rest; no category use
 | `ai`            | `#2f5f5a` | `#2f7d74` | dark slate teal     |
 | `dc`            | `#a4aaa6` | `#8a928e` | cool grey           |
 
-State colours: `degraded` is a signal-orange outline with an orange tint, `down` red, `highlighted` an ink (light) or white (dark) outline. `heavy` flows are signal orange (`#fa5f14` on light, where `#ff671f` is just under 3:1 on white); `power` flows are amber.
+State colours: `degraded` is a signal-orange outline with an orange tint, `down` red, `highlighted` an ink (light) or white (dark) outline. `heavy` flows are signal orange (`#fa5f14` on light, where `#ff671f` is just under 3:1 on white); `power` flows are amber and power cables are a lighter (light theme) or darker (dark theme) amber so the particles stay visible on them. Degraded nodes and heavy particles both use signal orange; they stay apart by shape (an outlined, tinted solid versus small moving dots).

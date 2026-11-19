@@ -32,7 +32,7 @@ import {
 } from "../geometry/index.js";
 import {
   fontAssets,
-  labelFontSize,
+  labelFontSizeFor,
   measureText,
   missingGlyphs,
   type TextAnchor,
@@ -220,11 +220,10 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   const diagnostics: Diagnostic[] = [];
   // Text scales with the drawing (D51 follow-up): wide scenes are shown small, so label sizes
   // grow with the projected scene width (about width / 100, at most 2.2x the theme size).
-  const sceneWidth = unionRects([
-    ...scene.objects.map((o) => projectBoxBounds(projection, o.box)),
-    ...scene.groups.map((g) => projectBoxBounds(projection, g.box)),
-  ]).width;
-  const labelSize = labelFontSize(sceneWidth, theme.font.label);
+  const labelSize = labelFontSizeFor(
+    [...scene.objects.map((o) => o.box), ...scene.groups.map((g) => g.box)],
+    theme.font.label,
+  );
   const fs = labelSize / theme.font.label;
   // An omitted `font.mono` means technical text is measured and embedded with the display face.
   const hasMono = theme.font.mono !== undefined;

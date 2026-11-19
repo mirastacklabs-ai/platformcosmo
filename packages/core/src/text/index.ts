@@ -1,5 +1,5 @@
-import type { FontAsset } from "../contracts/index.js";
-import { fmt } from "../geometry/index.js";
+import type { Box3, FontAsset } from "../contracts/index.js";
+import { createProjection, fmt, projectBoxBounds, unionRects } from "../geometry/index.js";
 import {
   JETBRAINS_BOLD_B64,
   JETBRAINS_REGULAR_B64,
@@ -125,6 +125,17 @@ export function fallbackText(text: string): string {
  */
 export function labelFontSize(widthPx: number, base: number): number {
   return Math.min(base * 2.2, Math.max(base, Math.round(widthPx / 100)));
+}
+
+/**
+ * `labelFontSize` for a set of world boxes (objects and groups), measured as the width of their
+ * projected union with the default projection. The renderer and the router's label keep-outs
+ * both call this, so they always agree. No boxes: `base`.
+ */
+export function labelFontSizeFor(boxes: readonly Box3[], base: number): number {
+  if (boxes.length === 0) return base;
+  const projection = createProjection();
+  return labelFontSize(unionRects(boxes.map((b) => projectBoxBounds(projection, b))).width, base);
 }
 
 /** Advance width of `text` in SVG units for font-size `size`. */

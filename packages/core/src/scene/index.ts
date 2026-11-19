@@ -15,11 +15,6 @@ import type {
   SceneStep,
   Vec3,
 } from "../contracts/index.js";
-import {
-  createProjection,
-  projectBoxBounds,
-  unionRects as unionScreenRects,
-} from "../geometry/index.js";
 import { layoutSpec } from "../layout/index.js";
 import {
   KeepoutIndex,
@@ -32,7 +27,7 @@ import {
   stubZones,
 } from "../routing/obstacles.js";
 import { RouteLanes, routeEdge, type Rect } from "../routing/router.js";
-import { labelFontSize } from "../text/index.js";
+import { labelFontSizeFor } from "../text/index.js";
 import { particleCount, PARTICLE_LIMIT } from "../schema/semantic.js";
 import type { PlatformCosmoSpec, SpecFlow, SpecNode } from "../schema/types.gen.js";
 import { NODE_TYPES, PRIMITIVE_HEIGHT } from "./categories.js";
@@ -258,18 +253,11 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
   // endpoints) and the label drawn under the object (kept for endpoints too). Floor furniture
   // (cable trays, perforated tiles, floor grid) and rack front shells are never obstacles.
   const keepouts = new KeepoutIndex();
-  // Label sizes grow with the scene width (see `labelFontSize`); the keep-outs follow.
-  const projection = createProjection();
+  // Label sizes grow with the scene width (see `labelFontSizeFor`); the keep-outs follow.
+  const labelBase = context.labelSize ?? 12;
   const fs =
-    allObjects.length === 0
-      ? 1
-      : labelFontSize(
-          unionScreenRects([
-            ...allObjects.map((o) => projectBoxBounds(projection, o.box)),
-            ...allGroups.map((g) => projectBoxBounds(projection, g.box)),
-          ]).width,
-          12,
-        ) / 12;
+    labelFontSizeFor([...allObjects.map((o) => o.box), ...allGroups.map((g) => g.box)], labelBase) /
+    labelBase;
   const solidObjects: SceneObject[] = [];
   for (const o of allObjects) {
     if (o.id.includes("/") || (o.source === "dc" && isRoutingFurniture(o))) continue;

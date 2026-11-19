@@ -200,7 +200,7 @@ const light: Seed = {
   icon: { color: "#1c1c1c", plate: "#ffffff" },
   dc: {
     led: { ok: "#4ade80", warn: "#fbbf24", fail: "#ffa3a3" },
-    cable: { power: "#e8590c", network: "#00695f", fiber: "#4fb3a8", management: "#8a8a86" },
+    cable: { power: "#e9a23b", network: "#00695f", fiber: "#4fb3a8", management: "#8a8a86" },
     coldAisle: "#9fdcd4",
     hotAisle: "#ffb48a",
     containment: "#8f8f8f",
@@ -281,7 +281,7 @@ const dark: Seed = {
   icon: { color: "#e6e6e6", plate: "#222222" },
   dc: {
     led: { ok: "#4ade80", warn: "#fbbf24", fail: "#f87171" },
-    cable: { power: "#ff671f", network: "#2bd4bf", fiber: "#7fe8da", management: "#8f8f8f" },
+    cable: { power: "#a8761a", network: "#2bd4bf", fiber: "#7fe8da", management: "#8f8f8f" },
     coldAisle: "#2bb3a3",
     hotAisle: "#ff8a4a",
     containment: "#6b6b6b",
