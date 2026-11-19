@@ -76,15 +76,15 @@ export interface VideoEncoder {
   ): Promise<Uint8Array>;
 }
 
+/** Particle motion mechanism: SMIL `<animateMotion>` (default) or CSS `offset-path` (D32). */
+export type MotionMode = "smil" | "css";
+
 /**
  * Options. Invalid values produce `error` diagnostics (`options/*`) and no outputs:
  * `idPrefix` must match `^[a-z][a-z0-9-]{0,31}$`; `name` must match `^[A-Za-z0-9._-]{1,64}$`;
  * `speed` must be in (0, 10]; `png.scale` in (0, 8]; `video.fps` in [1, 60];
- * `video.durationSec` in (0, 120].
+ * `video.durationSec` in (0, 120]; `motion` must be `smil` or `css`.
  */
-/** Particle motion mechanism: SMIL `<animateMotion>` (default) or CSS `offset-path` (D32). */
-export type MotionMode = "smil" | "css";
-
 export interface RenderOptions {
   /** Default `["animated"]`. */
   readonly outputs?: readonly OutputKind[];
