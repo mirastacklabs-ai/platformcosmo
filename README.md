@@ -4,6 +4,7 @@ A Claude Code plugin and CLI that turns a prompt into an animated 2.5D isometric
 diagram for cloud, platform engineering, AI and data-center architectures. Claude writes
 a JSON spec; a deterministic engine does all layout and drawing. The SVG animates with
 no JavaScript and works in `<img>`, inline and `<object>`.
+Default look: MiraStack Labs brand — Oswald + JetBrains Mono.
 
 **Status: pre-release (v1 feature-complete, not yet published to npm).**
 

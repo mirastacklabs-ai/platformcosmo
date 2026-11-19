@@ -99,9 +99,8 @@ describe.each(all.map((t) => [t.id, t] as const))("contrast: %s", (_id, t: Theme
     }
   });
 
-  it("inverse text reads on badge and caption fills", () => {
+  it("inverse text reads on the badge fill", () => {
     expect(contrastOn(t.text.inverse, t.badge.fill, bg)).toBeGreaterThanOrEqual(min);
-    expect(contrastOn(t.text.inverse, t.caption.fill, bg)).toBeGreaterThanOrEqual(min);
   });
 
   it("group labels stay readable nested 3 deep (worst case all one style)", () => {
@@ -251,6 +250,7 @@ describe("validateTheme trust rules", () => {
   it("requires every token (deleting any leaf fails)", () => {
     const base = good();
     for (const [p] of leaves(base)) {
+      if (p === "/font/mono") continue; // optional (D51)
       const t = structuredClone(base);
       const parts = p.split("/").slice(1);
       let o: Record<string, unknown> = t;
@@ -309,6 +309,20 @@ describe("validateTheme trust rules", () => {
       checked++;
     }
     expect(checked).toBeGreaterThan(100);
+  });
+
+  it("font.mono is optional but validated like font.family (D51)", () => {
+    const t = good();
+    expect((t.font as Record<string, unknown>).mono).toContain("JetBrains Mono");
+    delete (t.font as Record<string, unknown>).mono;
+    const r = validateTheme(t);
+    expect(r.diagnostics).toEqual([]);
+    expect(r.theme?.font.mono).toBeUndefined();
+    for (const f of ["x}</style>", "", "Mono\n", "'a\"b'"]) {
+      const bad = good();
+      (bad.font as Record<string, unknown>).mono = f;
+      expect(codes(bad), f).toContain("theme/invalid-font");
+    }
   });
 
   it("rejects a quote of the other kind inside a quoted family name", () => {

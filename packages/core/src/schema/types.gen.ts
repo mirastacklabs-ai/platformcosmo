@@ -47,7 +47,7 @@ canvas?: {
  */
 theme?: ("light" | "dark" | "blueprint" | "mono")
 /**
- * Whether to draw a background grid behind the diagram.
+ * Whether to draw the iso ground grid behind the diagram (on by default; set false for a plain background).
  */
 grid?: boolean
 /**

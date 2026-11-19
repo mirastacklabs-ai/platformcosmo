@@ -26,7 +26,7 @@ A spec is a JSON file (`*.cosmo.json`; YAML `*.cosmo.yaml` is accepted and conve
 | Section     | Fields                                                                                                          |
 | ----------- | --------------------------------------------------------------------------------------------------------------- |
 | `meta`      | `version` (`"1"`), `title`, `description` (the SVG title and description)                                       |
-| `canvas`    | `theme` (`light`, `dark`, `blueprint`, `mono`), `grid`, `padding`, `aspect`                                     |
+| `canvas`    | `theme` (`light`, `dark`, `blueprint`, `mono`), `grid` (default on), `padding`, `aspect`                        |
 | `nodes[]`   | `id`, `type`, `icon`, `label`, `badge`, `size`, `pos`, `group`, `state`                                         |
 | `groups[]`  | `id`, `label`, `style` (`zone`, `vpc`, `cluster`, `platform`), `parent`                                         |
 | `edges[]`   | `id`, `from`, `to`, `label`, `style`, `bidirectional`                                                           |

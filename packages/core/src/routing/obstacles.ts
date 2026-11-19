@@ -26,8 +26,8 @@ const r2 = (v: number): number => Math.round(v * 100) / 100;
  * TODO: take the clamp (150) and the per-glyph advance from A1's text/label constants once they
  * are exported, so the keep-out tracks the emitted label exactly.
  */
-export function labelWidth(label: string): number {
-  return Math.min(150, [...label].length * 6.6) + 8;
+export function labelWidth(label: string, fs = 1): number {
+  return (Math.min(150, [...label].length * 6.6) + 8) * fs;
 }
 
 /** DC facility objects that lie on the floor and are never routing obstacles (matched by `type`). */
@@ -194,13 +194,13 @@ const sxOf = (x: number, y: number): number => (x - y) * HALF_TILE;
 const syOf = (x: number, y: number, z: number): number => (x + y) * QUARTER_TILE - z * HALF_TILE;
 
 /** Ground cells covered by the label drawn under the object. */
-export function labelRects(label: string, box: Box3): Rect[] {
+export function labelRects(label: string, box: Box3, fs = 1): Rect[] {
   const cx = box.origin.x + box.size.x / 2;
   const cy = box.origin.y + box.size.y / 2;
-  const w = labelWidth(label);
+  const w = labelWidth(label, fs);
   const bottom = syOf(box.origin.x + box.size.x, box.origin.y + box.size.y, box.origin.z);
   const sx = sxOf(cx, cy);
-  return screenRectCells(sx - w / 2, sx + w / 2, bottom + 1, bottom + 24);
+  return screenRectCells(sx - w / 2, sx + w / 2, bottom + 1, bottom + 24 * fs);
 }
 
 /** A1 draws the icon plate floating above the top face when the front face is too short. */
@@ -229,7 +229,7 @@ export function plateRects(box: Box3, iconSize: number): Rect[] {
 }
 
 /** Ground cells hidden behind the badge pill drawn above the object (or its floating plate). */
-export function badgeRects(badge: string, box: Box3, iconSize?: number): Rect[] {
+export function badgeRects(badge: string, box: Box3, iconSize?: number, fs = 1): Rect[] {
   const cx = box.origin.x + box.size.x / 2;
   const cy = box.origin.y + box.size.y / 2;
   const sx = sxOf(cx, cy);
@@ -237,22 +237,22 @@ export function badgeRects(badge: string, box: Box3, iconSize?: number): Rect[] 
   let aboveTop = syOf(box.origin.x, box.origin.y, top); // back corner of the top face
   const f = iconSize === undefined ? undefined : floatingPlate(box, iconSize);
   if (f) aboveTop = Math.min(aboveTop, f.topY - f.s - 8);
-  const w = Math.min(60, [...badge].length * 7.2) + 10;
-  const bh = 16; // theme badge font 10 + 6
+  const w = (Math.min(96, [...badge].length * 7.2) + 10) * fs;
+  const bh = 16 * fs; // theme badge font 10 + 6
   return screenRectCells(sx - w / 2, sx + w / 2, aboveTop - bh - 2, aboveTop - 2);
 }
 
 /** Ground cells under the group label pill drawn left of the slab's left corner. */
-export function groupPillRects(label: string, box: Box3): Rect[] {
+export function groupPillRects(label: string, box: Box3, fs = 1): Rect[] {
   const corner = {
     sx: sxOf(box.origin.x, box.origin.y + box.size.y),
     sy: syOf(box.origin.x, box.origin.y + box.size.y, box.origin.z + box.size.z),
   };
-  const w = Math.min(160, [...label].length * 7.4) + 12;
-  const ph = 20; // label font 12 + 8
+  const w = (Math.min(160, [...label].length * 7.4) + 12) * fs;
+  const ph = 20 * fs; // label font 12 + 8
   return screenRectCells(
-    corner.sx - 10 - w,
-    corner.sx - 10,
+    corner.sx - 10 * fs - w,
+    corner.sx - 10 * fs,
     corner.sy - ph / 2,
     corner.sy + ph / 2,
   );

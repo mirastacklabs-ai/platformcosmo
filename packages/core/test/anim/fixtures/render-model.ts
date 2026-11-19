@@ -37,7 +37,8 @@ export const lightTheme: ThemeTokens = {
   grid: { stroke: "#e2e8f0", opacity: 0.6 },
   text: { primary: "#0f172a", secondary: "#475569", inverse: "#ffffff" },
   font: {
-    family: "Inter, sans-serif",
+    family: 'Oswald, "Arial Narrow", Arial, sans-serif',
+    mono: '"JetBrains Mono", ui-monospace, monospace',
     label: 12,
     badge: 9,
     caption: 14,

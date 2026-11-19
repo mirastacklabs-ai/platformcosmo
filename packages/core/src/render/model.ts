@@ -30,7 +30,14 @@ import {
   round2,
   unionRects,
 } from "../geometry/index.js";
-import { fontAssets, measureText, missingGlyphs, type TextAnchor } from "../text/index.js";
+import {
+  fontAssets,
+  labelFontSizeFor,
+  measureText,
+  missingGlyphs,
+  type TextAnchor,
+  type TextFamily,
+} from "../text/index.js";
 
 /** Everything `buildModel` needs; kept so `withVariant` can rebuild under another id prefix. */
 export interface ModelInputs {
@@ -116,8 +123,15 @@ function arrowHead(
 }
 
 /** Shorten `text` with an ellipsis so it fits `maxWidth` at `size`. */
-function fit(text: string, size: number, bold: boolean, maxWidth: number): string {
-  const w = (s: string) => measureText(s, size, bold ? "bold" : "regular");
+function fit(
+  text: string,
+  size: number,
+  bold: boolean | "medium",
+  maxWidth: number,
+  family: TextFamily = "display",
+): string {
+  const weight = bold === true ? "bold" : bold === "medium" ? "medium" : "regular";
+  const w = (s: string) => measureText(s, size, weight, family);
   if (w(text) <= maxWidth) return text;
   const chars = Array.from(text);
   while (chars.length > 1 && w(`${chars.join("")}…`) > maxWidth) chars.pop();
@@ -204,8 +218,21 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   const ids = createIds(prefix);
   const P = prefix;
   const diagnostics: Diagnostic[] = [];
-  const labelSize = theme.font.label;
-  const allText: string[] = [];
+  // Text scales with the drawing (D51 follow-up): wide scenes are shown small, so label sizes
+  // grow with the projected scene width (about width / 100, at most 2.2x the theme size).
+  const labelSize = labelFontSizeFor(
+    [...scene.objects.map((o) => o.box), ...scene.groups.map((g) => g.box)],
+    theme.font.label,
+  );
+  const fs = labelSize / theme.font.label;
+  // An omitted `font.mono` means technical text is measured and embedded with the display face.
+  const hasMono = theme.font.mono !== undefined;
+  const MONO: TextFamily = hasMono ? "mono" : "display";
+  const metricH = round2(METRIC_H * fs);
+  const captionH = round2(CAPTION_H * fs);
+  const legendH = round2(LEGEND_H * fs);
+  const displayText: string[] = [];
+  const monoText: string[] = [];
 
   const textEl = (o: {
     id?: string;
@@ -215,10 +242,15 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     anchor?: TextAnchor;
     cls: string;
     bold?: boolean;
+    /** Technical text (D51): JetBrains Mono role. */
+    mono?: boolean;
+    /** Oswald Medium (node labels). */
+    medium?: boolean;
     hidden?: boolean;
     content: string;
   }) => {
-    allText.push(o.content);
+    const mono = o.mono === true && hasMono;
+    (mono ? monoText : displayText).push(o.content);
     return h(
       "text",
       {
@@ -227,7 +259,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
         y: o.y,
         "font-size": o.size,
         ...(o.anchor && o.anchor !== "start" ? { "text-anchor": o.anchor } : {}),
-        class: `${P}-${o.cls}${o.bold ? ` ${P}-tb` : ""}`,
+        class: `${P}-${o.cls}${o.bold ? ` ${P}-tb` : ""}${mono ? ` ${P}-tm` : ""}${o.medium ? ` ${P}-tw` : ""}`,
         ...(o.hidden ? { visibility: "hidden" } : {}),
       },
       o.content,
@@ -460,7 +492,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     // Devices inside a rack (`rack/slot`) stay unlabeled: their labels pile up over the rack.
     const insideRack = o.source === "dc" && o.id.includes("/");
     if (o.label && !insideRack) {
-      const text = fit(o.label, labelSize, false, 150);
+      const text = fit(o.label, labelSize, "medium", 150 * fs);
       const y = bbox.y + bbox.height + labelSize + 3;
       labelNodes.push(
         textEl({
@@ -469,19 +501,20 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
           size: labelSize,
           anchor: "middle",
           cls: o.source === "dc" ? "t-dc" : "t-primary",
+          medium: true,
           content: text,
         }),
       );
-      const w = measureText(text, labelSize);
+      const w = measureText(text, labelSize, "medium");
       const r = { x: center.x - w / 2, y: y - labelSize, width: w, height: labelSize + 4 };
       extents.push(r);
       placed.push(r);
     }
     if (o.badge) {
-      const bs = theme.font.badge;
-      const text = fit(o.badge, bs, true, 60);
-      const w = measureText(text, bs, "bold") + 10;
-      const bh = bs + 6;
+      const bs = theme.font.badge * fs;
+      const text = fit(o.badge, bs, true, 96 * fs, MONO);
+      const w = measureText(text, bs, "bold", MONO) + 10 * fs;
+      const bh = bs + 6 * fs;
       const by = aboveTop - bh - 2;
       labelNodes.push(
         h(
@@ -493,15 +526,16 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
             y: by,
             width: w,
             height: bh,
-            rx: bh / 2,
+            rx: 3,
           }),
           textEl({
             x: center.x,
-            y: by + bh - 5,
+            y: by + bh - 5 * fs,
             size: bs,
             anchor: "middle",
             cls: "t-badge",
             bold: true,
+            mono: true,
             content: text,
           }),
         ),
@@ -534,10 +568,15 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
         y: g.box.origin.y + g.box.size.y,
         z: g.box.origin.z + g.box.size.z,
       });
-      const text = fit(g.label, labelSize, true, 160);
+      const text = fit(g.label, labelSize, true, 160 * fs);
       const w = measureText(text, labelSize, "bold");
-      const ph = labelSize + 8;
-      const pill = { x: corner.x - 10 - w - 12, y: corner.y - ph / 2, width: w + 12, height: ph };
+      const ph = labelSize + 8 * fs;
+      const pill = {
+        x: corner.x - 10 * fs - w - 12 * fs,
+        y: corner.y - ph / 2,
+        width: w + 12 * fs,
+        height: ph,
+      };
       labelNodes.unshift(
         h(
           "g",
@@ -548,10 +587,10 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
             y: pill.y,
             width: pill.width,
             height: pill.height,
-            rx: ph / 2,
+            rx: 4,
           }),
           textEl({
-            x: pill.x + pill.width - 6,
+            x: pill.x + pill.width - 6 * fs,
             y: corner.y + labelSize / 2 - 1,
             size: labelSize,
             anchor: "end",
@@ -578,8 +617,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     extents.push(boundsOfPoints(pts));
     if (e.label) {
       const anchor = e.labelAnchor ? projection.project(e.labelAnchor) : midpoint(pts);
-      const text = fit(e.label, labelSize - 1, false, 90);
-      const w = measureText(text, labelSize - 1) + 8;
+      const text = fit(e.label, labelSize - 1, false, 120 * fs, MONO);
+      const w = measureText(text, labelSize - 1, "regular", MONO) + 8 * fs;
       const lh = labelSize + 4;
       const { dy } = nudgeLabel(
         { x: anchor.x - w / 2, y: anchor.y - lh / 2, width: w, height: lh },
@@ -616,6 +655,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
             size: labelSize - 1,
             anchor: "middle",
             cls: "t-edge",
+            mono: true,
             content: text,
           }),
         ),
@@ -680,15 +720,20 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
         prev = v;
       }
     }
-    const lab = fit(m.label, 10, false, 140);
-    const vw = Math.max(...texts.map((t) => measureText(t.text, 15, "bold")));
-    return { id: m.id, label: lab, texts, width: Math.max(measureText(lab, 10), vw) + 20 };
+    const lab = fit(m.label, 10 * fs, false, 140 * fs, MONO);
+    const vw = Math.max(...texts.map((t) => measureText(t.text, 15 * fs, "bold", MONO)));
+    return {
+      id: m.id,
+      label: lab,
+      texts,
+      width: Math.max(measureText(lab, 10 * fs, "regular", MONO), vw) + 20 * fs,
+    };
   });
   const tilesW = tiles.reduce((s, t) => s + t.width + 8, 8);
 
-  const topExtra = tiles.length > 0 ? METRIC_H + 14 : 0;
+  const topExtra = tiles.length > 0 ? metricH + 14 : 0;
   const bottomExtra =
-    (captionSteps.length > 0 ? CAPTION_H + 12 : 0) + (legend.length > 0 ? LEGEND_H + 8 : 0);
+    (captionSteps.length > 0 ? captionH + 12 : 0) + (legend.length > 0 ? legendH + 8 : 0);
   vb = { x: vb.x, y: vb.y - topExtra, width: vb.width, height: vb.height + topExtra + bottomExtra };
   if (tilesW > vb.width) vb = { ...vb, x: vb.x - (tilesW - vb.width) / 2, width: tilesW };
   const ratio = aspectRatio(scene.canvas.aspect);
@@ -710,7 +755,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       x: round2(tx),
       y: round2(vb.y + 10),
       width: round2(t.width),
-      height: METRIC_H,
+      height: metricH,
     };
     metricRects[t.id] = r;
     layers.overlay.push(
@@ -723,17 +768,25 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
           y: r.y,
           width: r.width,
           height: r.height,
-          rx: 5,
+          rx: 4,
         }),
-        textEl({ x: r.x + 10, y: r.y + 13, size: 10, cls: "t-metric-label", content: t.label }),
+        textEl({
+          x: r.x + 10 * fs,
+          y: r.y + 13 * fs,
+          size: 10 * fs,
+          cls: "t-metric-label",
+          mono: true,
+          content: t.label,
+        }),
         ...t.texts.map((tx2) =>
           textEl({
             id: ids.metricValue(t.id, tx2.n),
-            x: r.x + 10,
-            y: r.y + METRIC_H - 8,
-            size: 15,
+            x: r.x + 10 * fs,
+            y: r.y + metricH - 8 * fs,
+            size: 15 * fs,
             cls: "t-metric-value",
             bold: true,
+            mono: true,
             hidden: tx2.n !== 0,
             content: tx2.text,
           }),
@@ -748,17 +801,17 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   if (captionSteps.length > 0) {
     const maxW = vb.width - 24;
     const texts = captionSteps.map((s) =>
-      fit(s.caption as string, theme.font.caption, false, maxW - 32),
+      fit(s.caption as string, theme.font.caption * fs, false, maxW - 32 * fs),
     );
     const w = Math.min(
       maxW,
-      Math.max(...texts.map((t) => measureText(t, theme.font.caption))) + 32,
+      Math.max(...texts.map((t) => measureText(t, theme.font.caption * fs))) + 32 * fs,
     );
     captionRect = {
       x: round2(vb.x + (vb.width - w) / 2),
-      y: round2(bottom - CAPTION_H),
+      y: round2(bottom - captionH),
       width: round2(w),
-      height: CAPTION_H,
+      height: captionH,
     };
     const cx = captionRect.x + captionRect.width / 2;
     layers.overlay.push(
@@ -771,14 +824,14 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
           y: captionRect.y,
           width: captionRect.width,
           height: captionRect.height,
-          rx: 6,
+          rx: 4,
         }),
         ...captionSteps.map((s, i) =>
           textEl({
             id: ids.captionStep(s.index),
             x: cx,
-            y: captionRect!.y + CAPTION_H / 2 + theme.font.caption / 2 - 2,
-            size: theme.font.caption,
+            y: captionRect!.y + captionH / 2 + (theme.font.caption * fs) / 2 - 2 * fs,
+            size: theme.font.caption * fs,
             anchor: "middle",
             cls: "t-caption",
             hidden: s.index !== 1,
@@ -787,34 +840,34 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
         ),
       ),
     );
-    bottom -= CAPTION_H + 12;
+    bottom -= captionH + 12;
   }
   if (legend.length > 0) {
     const items: SvgNode[] = [];
     let lx = vb.x + 12;
-    const ly = bottom - LEGEND_H / 2;
+    const ly = bottom - legendH / 2;
     for (const entry of legend) {
-      const text = fit(entry.label, labelSize, false, 120);
+      const text = fit(entry.label, labelSize, false, 120 * fs);
       const c = legendColor(entry.color);
       items.push(
         h("rect", {
           x: lx,
-          y: ly - 5,
-          width: 10,
-          height: 10,
+          y: ly - 5 * fs,
+          width: 10 * fs,
+          height: 10 * fs,
           rx: 2,
           ...(c.attr ? { fill: c.attr } : {}),
           ...(c.style ? { style: c.style } : {}),
         }),
         textEl({
-          x: lx + 15,
+          x: lx + 15 * fs,
           y: ly + labelSize / 2 - 1,
           size: labelSize,
           cls: "t-secondary",
           content: text,
         }),
       );
-      lx += 15 + measureText(text, labelSize) + 16;
+      lx += 15 * fs + measureText(text, labelSize) + 16 * fs;
     }
     layers.overlay.push(h("g", { id: ids.legend(), class: `${P}-legend` }, ...items));
   }
@@ -866,7 +919,12 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       height: round2(r.height + 2 * MARGIN_FOCUS + labelSize + 6),
     };
   }
-  const missing = missingGlyphs(allText.join(""));
+  const missing = [
+    ...new Set([
+      ...missingGlyphs(displayText.join(""), "display"),
+      ...missingGlyphs(monoText.join(""), MONO),
+    ]),
+  ].sort((a, b) => a - b);
   if (missing.length > 0) {
     diagnostics.push({
       severity: "warning",

@@ -445,5 +445,7 @@ export type BuildSceneFn = (
     readonly dc?: DcPack;
     readonly images?: ImageAssetResolver;
     readonly parts?: PartShapeRegistry;
+    /** Theme label font size (default 12): sizes the router's label keep-outs like the renderer. */
+    readonly labelSize?: number;
   },
 ) => SceneGraph;

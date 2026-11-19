@@ -27,6 +27,7 @@ import {
   stubZones,
 } from "../routing/obstacles.js";
 import { RouteLanes, routeEdge, type Rect } from "../routing/router.js";
+import { labelFontSizeFor } from "../text/index.js";
 import { particleCount, PARTICLE_LIMIT } from "../schema/semantic.js";
 import type { PlatformCosmoSpec, SpecFlow, SpecNode } from "../schema/types.gen.js";
 import { NODE_TYPES, PRIMITIVE_HEIGHT } from "./categories.js";
@@ -252,17 +253,23 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
   // endpoints) and the label drawn under the object (kept for endpoints too). Floor furniture
   // (cable trays, perforated tiles, floor grid) and rack front shells are never obstacles.
   const keepouts = new KeepoutIndex();
+  // Label sizes grow with the scene width (see `labelFontSizeFor`); the keep-outs follow.
+  const labelBase = context.labelSize ?? 12;
+  const fs =
+    labelFontSizeFor([...allObjects.map((o) => o.box), ...allGroups.map((g) => g.box)], labelBase) /
+    labelBase;
   const solidObjects: SceneObject[] = [];
   for (const o of allObjects) {
     if (o.id.includes("/") || (o.source === "dc" && isRoutingFurniture(o))) continue;
     solidObjects.push(o);
     keepouts.add(o.id, "shadow", shadowRects(o.box));
-    if (o.label) keepouts.add(o.id, "label", labelRects(o.label, o.box));
+    if (o.label) keepouts.add(o.id, "label", labelRects(o.label, o.box, fs));
     if (o.icon) keepouts.add(o.id, "label", plateRects(o.box, o.icon.size));
-    if (o.badge) keepouts.add(o.id, "label", badgeRects(o.badge, o.box, o.icon?.size));
+    if (o.badge) keepouts.add(o.id, "label", badgeRects(o.badge, o.box, o.icon?.size, fs));
   }
   for (const g of allGroups) {
-    if (g.label && g.kind === "group") keepouts.add(g.id, "label", groupPillRects(g.label, g.box));
+    if (g.label && g.kind === "group")
+      keepouts.add(g.id, "label", groupPillRects(g.label, g.box, fs));
   }
   const lanes = new RouteLanes();
   const route = (
@@ -648,7 +655,7 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
     },
     canvas: {
       theme: spec.canvas?.theme ?? "light",
-      grid: spec.canvas?.grid ?? false,
+      grid: spec.canvas?.grid ?? true,
       padding: spec.canvas?.padding ?? 32,
       aspect: (spec.canvas?.aspect ?? "auto") as SceneGraph["canvas"]["aspect"],
     },
