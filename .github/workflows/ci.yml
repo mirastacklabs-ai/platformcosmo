@@ -106,12 +106,12 @@ jobs:
         run: brew install ffmpeg
       - name: Export with the workspace CLI
         run: |
-          PCOSMO_PACKS_DIR="$(mktemp -d)" node packages/cli/dist/bin.js build examples/load-balancing.cosmo.json --gif --mp4 --png --static -o out/cli
+          PCOSMO_PACKS_DIR="$(mktemp -d)" node packages/cli/dist/bin.js build examples/load-balancing.cosmo.json --gif --mp4 --png --static --fps 24 --duration 5 -o out/cli
       - name: Check CLI exports
         run: bash scripts/check-export.sh out/cli
       - name: Export with the bundled plugin CLI
         run: |
-          PCOSMO_PACKS_DIR="$(mktemp -d)" plugin/bin/pcosmo build examples/load-balancing.cosmo.json --gif --png -o out/plugin
+          PCOSMO_PACKS_DIR="$(mktemp -d)" plugin/bin/pcosmo build examples/load-balancing.cosmo.json --gif --png --fps 24 --duration 5 -o out/plugin
       - name: Check plugin exports
         run: bash scripts/check-export.sh out/plugin --gif-only
       - name: Upload outputs on failure
