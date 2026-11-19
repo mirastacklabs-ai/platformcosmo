@@ -2,6 +2,7 @@
 // Run in a container: scripts/pc exec node tests/from-image/make-inputs.mjs
 // Renders SVG -> PNG with the repo's resvg-wasm and Inter. No network, no randomness beyond a seeded PRNG.
 import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { Buffer } from "node:buffer";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -234,7 +235,9 @@ const files = {
   "whiteboard-rag": whiteboard(),
 };
 const dir = join(here, "inputs");
-await mkdir(dir, { recursive: true });
+const check = process.argv.includes("--check");
+if (!check) await mkdir(dir, { recursive: true });
+let stale = 0;
 for (const [name, svg] of Object.entries(files)) {
   const r = new Resvg(svg, {
     font: {
@@ -248,6 +251,16 @@ for (const [name, svg] of Object.entries(files)) {
   const png = img.asPng();
   img.free();
   r.free();
-  await writeFile(join(dir, `${name}.png`), png);
-  console.log(`wrote inputs/${name}.png (${png.length} bytes)`);
+  const target = join(dir, `${name}.png`);
+  if (check) {
+    // --check: render in memory and compare bytes with the committed PNG; writes nothing.
+    const onDisk = await readFile(target).catch(() => null);
+    const same = onDisk !== null && Buffer.compare(onDisk, Buffer.from(png)) === 0;
+    console.log(`${same ? "ok   " : "STALE"} inputs/${name}.png`);
+    if (!same) stale++;
+  } else {
+    await writeFile(target, png);
+    console.log(`wrote inputs/${name}.png (${png.length} bytes)`);
+  }
 }
+if (stale) process.exitCode = 1;
