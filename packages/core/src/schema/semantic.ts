@@ -2,6 +2,7 @@ import type { DcPack, Diagnostic, IconResolver } from "../contracts/index.js";
 import { DEFAULT_RACK_U, SLOT_HEIGHT_U, footprintOf } from "../scene/sizes.js";
 import type { PlatformCosmoSpec, SpecFlow } from "./types.gen.js";
 import { closest, didYouMean, q } from "./suggest.js";
+import { unsupportedDiagnostics } from "./unsupported.js";
 
 /** Σ over every flow of ceil(rate × 2); shared formula with Track B (no path lengths needed). */
 export const PARTICLE_LIMIT = 2000;
@@ -40,6 +41,9 @@ export function semanticDiagnostics(
       ...(params === undefined ? {} : { params }),
     });
   };
+
+  // Schema 1.2.0 fields that this build cannot render yet (merge guard, unsupported.ts).
+  out.push(...unsupportedDiagnostics(spec));
 
   const nodes = spec.nodes ?? [];
   const groups = spec.groups ?? [];

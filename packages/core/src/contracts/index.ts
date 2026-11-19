@@ -10,3 +10,4 @@ export type * from "./theme.js";
 export type * from "./icons.js";
 export type * from "./dc.js";
 export type * from "./render.js";
+export type * from "./assembly.js";

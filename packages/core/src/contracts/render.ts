@@ -32,7 +32,13 @@
  * - Selectors: B builds every id selector with `ids.sel(id)` (CSS-escapes `.` in slot ids).
  * - `<g id=camera()>` wrapping every layer in `Layer` order; B zooms by animating its `transform`.
  * - Object groups are flat siblings in the `objects` layer, never nested (a rack and its slot
- *   devices are separate groups ordered by depth).
+ *   devices are separate groups ordered by depth). Exception (schema 1.2.0 assemblies): each
+ *   part copy is an object-like group inside its own wrapper chain
+ *   `[partHost > clip-path] > partMotion > partVisible > partFade` (contracts/assembly.ts
+ *   `PartTrack`): a face-exit or insert clip is static in the clipping SOLID's frame, so it sits
+ *   outside the leaf's motion, on `partHost` carrying the solid's track (omitted when the solid
+ *   is static), and `partMotion` then moves the leaf relative to the solid. The wrapper chains
+ *   are the flat, depth-ordered siblings; copies k ≥ 1 suffix every id with `__c<k>`.
  * - Each object: `<g id=object(id) class="<stateClass(initial state)>">` holding its faces
  *   (`face(id, f[, part])`) and an always-present `<path id=overlay(id)>` over its silhouette,
  *   so any object can change state by CSS alone (classes are never mutated; B overrides with
@@ -49,6 +55,7 @@
  *   hide the `flows` layer (SMIL cannot be paused by CSS).
  */
 import type { PlatformCosmoSpec } from "../schema/types.gen.js";
+import type { AssemblyRenderModel, ImageAssetResolver, PartShapeRegistry } from "./assembly.js";
 import type { DcPack } from "./dc.js";
 import type { Diagnostic, ValidationReport } from "./diagnostics.js";
 import type { FaceName, Projection, Rect, Vec2 } from "./geometry.js";
@@ -155,6 +162,10 @@ export interface RenderOptions {
     /** Needed for mp4. */
     readonly encoder?: VideoEncoder;
   };
+  /** Prepared spec images (schema 1.2.0); the CLI loads and prepares them. Missing → errors. */
+  readonly images?: ImageAssetResolver;
+  /** Part shape packs (`dc:`, `hw:`, `auto:`, `brick:`), wired by the CLI like icons (D4). */
+  readonly parts?: PartShapeRegistry;
 }
 
 export interface RenderOutput {
@@ -209,7 +220,13 @@ export type ParseSpecFn = (
  */
 export type ValidateFn = (
   spec: unknown,
-  context?: { readonly icons?: IconResolver; readonly dc?: DcPack },
+  context?: {
+    readonly icons?: IconResolver;
+    readonly dc?: DcPack;
+    /** Schema 1.2.0: unknown image ids / shape refs become errors with did-you-mean. */
+    readonly images?: ImageAssetResolver;
+    readonly parts?: PartShapeRegistry;
+  },
 ) => ValidationReport<PlatformCosmoSpec>;
 
 /**
@@ -305,6 +322,8 @@ export interface RenderModel {
   readonly metricRects: Readonly<Record<string, Rect>>;
   readonly font: FontMode;
   readonly fontAssets: readonly FontAsset[];
+  /** Schema 1.2.0 assembly layer (depth epochs, copies, tracks); absent without assemblies. */
+  readonly assembly?: AssemblyRenderModel;
 }
 
 /** What animation adds on top of the static model (Track B). */
@@ -320,6 +339,13 @@ export interface AnimationLayer {
   readonly viewBox?: Rect;
   /** Loop length in seconds at the chosen speed (0 = nothing animates). */
   readonly duration: number;
+  /**
+   * Attribute overrides by element id, applied by emit (assemblies, schema 1.2.0): only
+   * `transform` (`translate(x y)`), `visibility` (`hidden`) and `opacity` (0..1) are allowed,
+   * values re-checked by the emitter. Used in `frame`/`step` modes, where resvg needs
+   * attributes rather than CSS transforms.
+   */
+  readonly attrs?: Readonly<Record<string, Readonly<Record<string, string | number>>>>;
 }
 
 export interface AnimateOptions {
@@ -417,6 +443,8 @@ export type BuildSceneFn = (
   context: {
     readonly icons?: IconResolver;
     readonly dc?: DcPack;
+    readonly images?: ImageAssetResolver;
+    readonly parts?: PartShapeRegistry;
     /** Theme label font size (default 12): sizes the router's label keep-outs like the renderer. */
     readonly labelSize?: number;
   },

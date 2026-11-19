@@ -16,6 +16,7 @@
  * diagnostics by (path, code).
  */
 import type { SpecFlowKind, SpecNodeType, SpecState } from "../schema/types.gen.js";
+import type { SceneAssemblies } from "./assembly.js";
 import type { Diagnostic } from "./diagnostics.js";
 import type { Box3, PrimitiveKind, Vec3 } from "./geometry.js";
 
@@ -201,4 +202,11 @@ export interface SceneGraph {
   /** World bounds of everything drawn. */
   readonly bounds: Box3;
   readonly diagnostics: readonly Diagnostic[];
+  /**
+   * Schema 1.2.0 content (assemblies, storyboards, figures, per-step poses); absent when the
+   * spec has none, so pre-1.2 scenes are unchanged. Assembly parts are NOT `objects`; their
+   * world boxes are in `focusTargets` (rest pose) and `bounds` covers every reachable pose.
+   * `SceneStep.states` may key assembly part paths. See contracts/assembly.ts.
+   */
+  readonly assemblies?: SceneAssemblies;
 }

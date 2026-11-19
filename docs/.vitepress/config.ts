@@ -1,11 +1,11 @@
 import { defineConfig } from "vitepress";
 
-// PLAN.md is the internal implementation plan and is never published.
+// PLAN.md (implementation plan) and design/ (internal design specs) are never published.
 export default defineConfig({
   title: "PlatformCosmo",
   description:
     "Prompt to animated isometric architecture diagrams, as a Claude Code plugin and CLI.",
-  srcExclude: ["PLAN.md", "**/PLAN.md"],
+  srcExclude: ["PLAN.md", "**/PLAN.md", "design/**"],
   cleanUrls: true,
   cacheDir: "node_modules/.vitepress/cache",
   lastUpdated: false,
