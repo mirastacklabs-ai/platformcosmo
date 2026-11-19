@@ -25,6 +25,12 @@ needed; it only needs Node.js 22.12 or newer on your PATH.
 2. Runs `pcosmo validate` and fixes every error using the suggestions.
 3. Runs `pcosmo build` and reports the output paths.
 
+## From an image
+
+`/platformcosmo:diagram` also takes an attached image or an image path. Claude transcribes it into an inventory
+(components, groups, connections, order), maps it to a spec, and reports what it read plus its assumptions. See
+[Getting started](./getting-started#from-an-image).
+
 ## The `pcosmo` command
 
 While the plugin is enabled, `pcosmo` is on the PATH of Claude's Bash tool. It is the same CLI as the npm package,

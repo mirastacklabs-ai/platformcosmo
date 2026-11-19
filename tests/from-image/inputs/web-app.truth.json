@@ -1,0 +1,24 @@
+{
+  "image": "web-app.png",
+  "nodes": [
+    { "label": "Users" },
+    { "label": "CDN" },
+    { "label": "Load Balancer" },
+    { "label": "App Server 1" },
+    { "label": "App Server 2" },
+    { "label": "PostgreSQL" },
+    { "label": "Redis Cache" }
+  ],
+  "groups": [],
+  "edges": [
+    { "from": "Users", "to": "CDN" },
+    { "from": "CDN", "to": "Load Balancer" },
+    { "from": "Load Balancer", "to": "App Server 1" },
+    { "from": "Load Balancer", "to": "App Server 2" },
+    { "from": "App Server 1", "to": "PostgreSQL" },
+    { "from": "App Server 2", "to": "PostgreSQL" },
+    { "from": "App Server 1", "to": "Redis Cache" },
+    { "from": "App Server 2", "to": "Redis Cache" }
+  ],
+  "steps": 0
+}
