@@ -393,14 +393,29 @@ body {
 .VPNavBarHamburger:not(.active) .bottom {
   transform: none !important;
 }
+/* Same geometry as the site's menu icon: 24-unit `M3 7h18M3 12h18M3 17h18`, stroke 1.6, drawn at 20 px. */
 .VPNavBarHamburger .container {
+  position: relative;
   width: 20px;
+  height: 20px;
 }
 .VPNavBarHamburger .container .top,
 .VPNavBarHamburger .container .middle,
 .VPNavBarHamburger .container .bottom {
+  position: absolute;
+  left: 2.5px !important;
+  width: 15px !important;
+  height: 1.33px;
   background-color: var(--pc-ink);
-  height: 1.6px;
+}
+.VPNavBarHamburger:not(.active) .container .top {
+  top: 5.17px;
+}
+.VPNavBarHamburger:not(.active) .container .middle {
+  top: 9.33px;
+}
+.VPNavBarHamburger:not(.active) .container .bottom {
+  top: 13.5px;
 }
 .VPNavScreenMenuLink,
 .VPNavScreenMenuGroupLink {
