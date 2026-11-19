@@ -48,12 +48,12 @@ jobs:
       # Default fps/duration (one full loop, 336 frames at 24 fps): streamed export, D33.
       - name: Export with the workspace CLI
         run: |
-          PCOSMO_PACKS_DIR="$(mktemp -d)" node packages/cli/dist/bin.js build examples/load-balancing.cosmo.json --gif --mp4 --png --static-o out/cli
+          PCOSMO_PACKS_DIR="$(mktemp -d)" node packages/cli/dist/bin.js build examples/load-balancing.cosmo.json --gif --mp4 --png --static -o out/cli
       - name: Check CLI exports
         run: bash scripts/check-export.sh out/cli --frames 336 --fps 24
       - name: Export with the bundled plugin CLI
         run: |
-          PCOSMO_PACKS_DIR="$(mktemp -d)" plugin/bin/pcosmo build examples/load-balancing.cosmo.json --gif --png-o out/plugin
+          PCOSMO_PACKS_DIR="$(mktemp -d)" plugin/bin/pcosmo build examples/load-balancing.cosmo.json --gif --png -o out/plugin
       - name: Check plugin exports
         run: bash scripts/check-export.sh out/plugin --gif-only --frames 336 --fps 24
       - name: Upload outputs on failure
