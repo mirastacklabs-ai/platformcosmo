@@ -1,6 +1,8 @@
 # Assemblies and programmable explode/implode (schema 1.2.0)
 
-Status: design, for review. Schema and contract types land with this document; no engine code.
+Status: design, for review. Schema and contract types land with this document, together with
+the merge guard: `validate` rejects every 1.2.0 field with `assembly/unsupported` until the
+phase that renders it lands ([tracks](./assemblies-tracks.md) §0). No engine code otherwise.
 Companion documents: [document ingestion](./document-ingestion.md) (PDFs, booklets, figures,
 `pcosmo assets`) and [tracks](./assemblies-tracks.md) (implementation split, PR sizes, tests).
 Section numbers (§) are referenced from `packages/core/src/contracts/assembly.ts`.
@@ -67,9 +69,9 @@ New root fields: `assemblies[]` (≤ 50), `images[]` (≤ 256), `storyboards[]` 
 | `steps[].assembly`                                                   | new: up to 20 actions per step                                                 |
 | `steps[].focus`                                                      | now `SpecPartPath` (any id path), was `SpecEndpoint` (one `/`)                 |
 | `steps[].set` keys                                                   | now `SpecPartPath`, so part states can change (`"engine/head": "highlighted"`) |
-| `racks[].programs`                                                   | new: explode programs for a rack as an assembly                                |
+| `racks[].programs`                                                   | new: explode programs only (no build programs) for a rack as an assembly       |
 | `racks[].slots[].assembly`                                           | new: template assembly as the device's internals                               |
-| `racks[].slots[].closeup`, `parts[].closeup`, `assemblies[].closeup` | new: close-up level                                                            |
+| `racks[].slots[].closeup`, `parts[].closeup`, `assemblies[].closeup` | new: close-up level, addressed through the reserved path segment `closeup`     |
 
 `edges`, `flows` and `cables` endpoints are unchanged: they may name an assembly, storyboard or
 figure id (attached at its rest bounds), never a part path (§20). `pcosmo migrate` is
@@ -105,23 +107,24 @@ than a sentence follow.
 
 ## 5. Parts
 
-| Field                      | Default                   | Semantics                                                                                                                   |
-| -------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `shape`                    | `box`                     | Primitive (`box`, `plate`, `cylinder`, `ring`, `shaft`, `prism`, `wedge`, `tray`, `card`, `sprite`) or pack shape `pack:id` |
-| `at` / `size`              | `[0,0,0]` / shape default | Box in the parent frame; sub-assemblies default to the bounds of their parts                                                |
-| `axis`                     | `z`                       | Cylinder, ring, shaft                                                                                                       |
-| `rotate`                   | `0`                       | Quarter turn about z                                                                                                        |
-| `tone` / `color`           | `base`                    | Theme part tone, or a spec color (hex, palette or flow name)                                                                |
-| `image`                    | none                      | Billboard (upright, never skewed, scaled to the silhouette) or decal on `top`, `left` (+y), `right` (+x)                    |
-| `count` / `pitch`          | `1`                       | Repeat: copies `<id>-1 … <id>-n`, offset by `pitch` (a sub-assembly repeats with its children)                              |
-| `role`                     | inferred                  | `body`, `cover`, `fastener`, `internal`, `cable`, `shell` (§17)                                                             |
-| `mates`                    | inferred                  | Sibling it sits on or in; `away` leaves the contact face                                                                    |
-| `type`, `tags`             | none                      | For `type:` / `tag:` selectors, callouts and heuristics                                                                     |
-| `label`, `detail`, `badge` | none                      | Shown per stage settings once exploded (§6.6)                                                                               |
-| `state`                    | parent's                  | Healthy/degraded/down/highlighted, same CSS as objects                                                                      |
-| `use`                      | none                      | Instance a template as this part's sub-assembly (scaled to `size` when set)                                                 |
-| `closeup`                  | none                      | Close-up level (§8.4)                                                                                                       |
-| `source`                   | none                      | Document provenance (§11.6)                                                                                                 |
+| Field                      | Default                   | Semantics                                                                                                                |
+| -------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `shape`                    | `box`                     | Primitive (`box`, `plate`, `cylinder`, `ring`, `shaft`, `stud`, `prism`, `wedge`, `tray`, `card`, `sprite`) or `pack:id` |
+| `at` / `size`              | `[0,0,0]` / shape default | Box in the parent frame; sub-assemblies default to the bounds of their parts                                             |
+| `axis`                     | `z`                       | Cylinder, ring, shaft                                                                                                    |
+| `rotate`                   | `0`                       | Quarter turn about z                                                                                                     |
+| `tone` / `color`           | `base`                    | Theme part tone, or a spec color (hex, palette or flow name)                                                             |
+| `image`                    | none                      | Billboard (upright, never skewed, scaled to the silhouette) or decal on `top`, `left` (+y), `right` (+x)                 |
+| `count` / `pitch`          | `1`                       | Repeat: copies `<id>-1 … <id>-n`, offset by `pitch` (a sub-assembly repeats with its children)                           |
+| `role`                     | inferred                  | `body`, `cover`, `fastener`, `internal`, `cable`, `shell` (§17)                                                          |
+| `mates`                    | inferred                  | Sibling it sits on or in; `away` leaves the contact face                                                                 |
+| `inserts`                  | inferred                  | Solid sibling it passes into (valve through a head): clipped at the entry face, never a collision (§9.5)                 |
+| `type`, `tags`             | none                      | For `type:` / `tag:` selectors, callouts and heuristics                                                                  |
+| `label`, `detail`, `badge` | none                      | Shown per stage settings once exploded (§6.6)                                                                            |
+| `state`                    | parent's                  | Healthy/degraded/down/highlighted, same CSS as objects                                                                   |
+| `use`                      | none                      | Instance a template as this part's sub-assembly (scaled to `size` when set)                                              |
+| `closeup`                  | none                      | Close-up level (§8.4)                                                                                                    |
+| `source`                   | none                      | Document provenance (§11.6)                                                                                              |
 
 **Primitives** (`PartPrimitiveKind`): `box`, `plate` (thin box), `prism` (vertical hexagonal),
 `wedge` (45°-class slope, a right-triangle prism, high side at `−x` before `rotate`), `card`
@@ -162,19 +165,23 @@ assumption note.
 ### 6.1 Selectors
 
 ```
-selector = [ kind ":" ] pattern          ; kind: id (default) | tag | type | role
-pattern  = segment *( "/" segment )      ; id patterns only; tag/type/role: one segment
-segment  = 1*( a-z / 0-9 / "-" / "*" / "?" ) / "**"
+selector = *( scope "/" ) term            ; at most 7 scope segments
+scope    = "**" / glob                    ; glob: 1*( a-z / 0-9 / "-" / "*" / "?" )
+term     = "**" / glob / kind ":" glob    ; kind: tag | type | role
 ```
 
-`*` matches within one segment, `?` one character, `**` any number of segments. Id patterns are
-relative to the program owner (assembly or sub-assembly; for racks, slot ids and `frame/…`).
-`parts` is a union; `except` subtracts. A selector that matches a sub-assembly selects it as a
-unit; `head/**` selects its descendants instead. Matching is over the expanded tree (after
-`count` and `use`), in depth-first spec order. Empty match: warning `assembly/selector-empty`
-with did-you-mean over candidate paths (the existing bounded edit distance). A node may be
-moved by at most one stage per program (`assembly/moved-twice`); a descendant of a node moved
-earlier may move again (moves compose by addition).
+Selectors are evaluated against the **program owner** (the assembly or sub-assembly that owns
+the program; for racks, the rack). A term with no scope matches the owner's **direct children
+only**: `cyl-*`, `type:dimm`, `role:cover`. Scopes reach deeper: `head/valve-*` (children of
+`head`), `**/type:dimm` (any depth), `frame/role:cover` (rack doors). `*` matches within one
+segment, `?` one character, `**` any number of segments (as a term: every descendant). `parts`
+is a union; `except` subtracts. A selected sub-assembly moves as one unit with its subtree.
+Matching runs over the expanded tree (after `count` and `use`), in depth-first spec order.
+Empty match: warning `assembly/selector-empty` with did-you-mean over candidate paths (the
+existing bounded edit distance; deeper matches are suggested as `**/…`). A node may be moved by
+at most one stage per program (`assembly/moved-twice`); a descendant of a node moved earlier
+may move again (moves compose by addition, §9.3). `overrides` keys are paths relative to the
+program owner.
 
 ### 6.2 Direction presets
 
@@ -197,22 +204,33 @@ Overrides (`stage.overrides[path].direction`) replace the stage direction for on
 ### 6.3 Distance and automatic stacking
 
 `distance` is a number (owner units), `"auto"` (default) or `"<k>x"` (k × auto). Auto
-distances are computed **per program**, before timing, so every stage's final positions nest:
+distances are computed **per program**, before timing, so every stage's final positions nest.
 
 1. Group the program's moves by world direction `u`. For each axis-aligned `u`, sort movers by
    `(max_u, min_u, path)` ascending (inner first).
-2. `clear(p) = max(extent_u(p) + gap, max over static parts e overlapping p in the plane ⊥ u and
-along u: e.max_u − p.min_u + gap)`; for `drawer`, also `owner.max_u − p.min_u + gap` (the
-   part leaves the unit completely).
-3. `D(p) = max(k·clear(p), max over earlier movers q overlapping p ⊥ u: q.max_u + D(q) + gap −
-p.min_u)`. For `lift`, every earlier mover counts as overlapping (one layer per part, parts
-   with equal rest `min_z` share a layer).
+2. `clear(p)` = the larger of `extent_u(p) + gap` and, over static parts `e` overlapping `p` in
+   the plane ⊥ `u` and along `u`, `e.max_u − p.min_u + gap`; for `drawer`, also
+   `owner.max_u − p.min_u + gap` (the part leaves the unit completely).
+3. `D(p)` = the larger of `k·clear(p)` and, over earlier movers `q` overlapping `p` ⊥ `u`,
+   `q.max_u + D(q) + gap − p.min_u`. For `lift`, every earlier mover counts as overlapping (one
+   layer per part; parts with equal rest `min_z` share a layer).
 4. Non-axis directions: `D(p) = k·(extent along u + gap)`, no stacking. Numbers: `D(p) = n`.
 
 `gap` is `programs[].gap`, default 10% of the owner's largest extent. Result: for any two
 footprint-overlapping movers along `u`, the outer one ends at least `gap` beyond the inner one,
-and every mover clears its seat. A final pose with interpenetrating leaves is a warning
-`assembly/collision` (painter's order is undefined for interpenetrating boxes).
+and every mover clears its seat.
+
+- **Collisions.** A final pose with interpenetrating leaves (not explained by `inserts` or
+  enclosure) is a warning `assembly/collision`. Leaves whose boxes interpenetrate at any
+  sampled time of a transition (the bisection samples of §9.3) are a warning
+  `assembly/transit-collision` naming both paths and the time: moves are straight lines and
+  the engine does not plan paths around obstacles.
+- **Below ground.** Every pose must keep leaves at `z ≥ 0` (the ground and group slabs are
+  drawn in a layer below objects, so a part under them would be painted on top). For spec
+  assemblies the frame is lifted so the reach bounds start at `z = 0` (the oil pan's drop is
+  absorbed by raising the whole unit, rest pose included). DC racks stand on the floor and are
+  not lifted: a rack or slot move with negative world `z` beyond the floor is an error
+  `assembly/below-ground`.
 
 ### 6.4 Order, stagger, overrides
 
@@ -283,6 +301,8 @@ An action moves a program from its current level `a` to a target `b`:
   reverse. A build target below the current level is an error (`assembly/build-backwards`;
   use `unbuild`).
 - A step's actions play in array order, each after the previous one, unless `start` places it.
+- An action that does not change the level (implode at level 0, explode to the current stage)
+  is kept with zero length and reported as `assembly/no-op-action` (info).
 - Levels are cumulative across steps. The **timeline start** level of a program is the base
   pose's level, except for build programs whose first action starts at level `k − advance`:
   the timeline starts there (usually 0).
@@ -302,7 +322,8 @@ tr_i + 0.2)>`. Step durations are never changed by the engine.
 ### 7.4 Rest frame, loop start and loop closure (D27 extended)
 
 - **Rest frame** (static, poster, default PNG, `png.time = 0`, interactive before Play):
-  every assembly in its base pose, full view, step-1 states.
+  every assembly in its base pose (default `assembled`; `pose: "exploded"` gives an exploded
+  poster), full view, step-1 states.
 - **Loop start**: when a build program's timeline start level differs from the base pose,
   the parts not present at that level fade out during `[0, max(lead_1, 0.4)]`.
 - **Loop closure**: during the last step's closing transition `tr_n` (with the camera's ease
@@ -352,9 +373,10 @@ rack, `DcPack.buildAssembly` returns a `SceneAssembly` (source `dc`):
   (`assembly/reserved-id`).
 - `front` = the rack's front side in world (mirrored rows: `−y`), so `drawer` slides devices
   out of the front.
-- Built-in program `drawers` (when `racks[].programs` has none): stage 1 doors (`role:cover`,
-  `drawer`), stage 2 every slot (`drawer`, `top-down`, stagger 0.1 s). Custom `programs` select
-  slot ids, `type:<slot type>` and `frame/…`.
+- Built-in program `drawers` (when `racks[].programs` has none): stage 1 doors (`frame/role:cover`,
+  `drawer`), stage 2 every slot (`drawer`, `top-down`, stagger 0.1 s). Custom `programs` are
+  explode programs only (the schema refuses build programs on racks) and select slot ids,
+  `type:<slot type>` and `frame/…`; `to` is checked against their stage count.
 - Cables (and their flows) touching a displaced slot are hidden while it is displaced
   (opacity track on the cable segments), and reappear when it is back.
 
@@ -377,20 +399,28 @@ The access move is listed in `ResolvedAction.implied`, reported as `assembly/imp
 ### 8.4 Close-ups (levels of detail)
 
 Camera zoom is capped at 3× (timeline `MAX_ZOOM`), so hall → heat sink cannot be one zoom.
-`closeup` names an assembly (template), figure or storyboard drawn **instead of** the part when
-a step focuses the part or a path inside it. Each close-up is a **level**: a sibling group of
-the main camera (`ids.level(id)`) with its own camera and its own overview transform. The
-transition into a level runs during the focus transition: the parent camera zooms toward the
-part (≤ 3×) while the level cross-fades in, starting with its rest bounds mapped onto the part's
-zoomed screen rect and easing to its own overview; leaving reverses it. Inside a level, focus,
-actions and states address the close-up's parts through the full path
-(`hall/r1/srv/board/hs-1` style paths: `r1/srv` has the close-up, `board/hs-1` are its parts).
-An action on a path whose node has a close-up uses the close-up's programs when the program is
-not found on the coarse node (`build: "r2/srv", program: "assemble"` builds the server
-close-up). A figure or storyboard used as a close-up by several parts is one board; actions name
-it by its id and play in whichever level shows it. The pose of a close-up persists while it is
-not shown. Levels nest (≤ 4 deep, ≤ 8 per spec). Per-step outputs and frames render the level in
-effect.
+`closeup` names an assembly (template), figure or storyboard drawn **instead of** the node when
+a step focuses the node's close-up. Each close-up is an **instance** with its own pose and its
+own path, addressed **explicitly** through the reserved segment `closeup`:
+
+| Path                                 | Addresses                                           |
+| ------------------------------------ | --------------------------------------------------- |
+| `r2/srv`                             | the coarse slot device (DC 2U box)                  |
+| `r2/srv/closeup`                     | the close-up instance (the `srv-2u` template)       |
+| `r2/srv/closeup/board/cpu-1`         | a part inside the close-up                          |
+| `r2/srv/closeup/board/cpu-1/closeup` | the heat-sink figure instance shown for that socket |
+
+`focus` on a `…/closeup` path (or a path inside it) shows that level; actions name the instance
+by its path (`build: "r2/srv/closeup"`), never implicitly through the coarse node. A child id
+`closeup` under a node that has a close-up is an error (`assembly/reserved-id`). Two parts
+using the same figure as close-up get two independent instances. A close-up's pose persists
+while it is not shown.
+
+Each level is a sibling group of the main camera (`ids.level(id)`) with its own camera and
+overview transform. Entering runs during the focus transition: the parent camera zooms toward
+the node (≤ 3×) while the level cross-fades in, starting with its rest bounds mapped onto the
+node's zoomed screen rect and easing to its own overview; leaving reverses it. Levels nest
+(≤ 4 deep, ≤ 8 instances per spec). Per-step outputs and frames render the level in effect.
 Element and byte budgets count every level.
 
 ### 8.5 Size reconciliation
@@ -420,29 +450,42 @@ Kahn sort with id tiebreak; plus the forced edges of §9.5. Hidden items take no
 
 ### 9.3 Transitions: certified epochs
 
-Every move is a straight segment with a monotonic easing, so over any time interval a moving
-item stays inside the hull of its boxes at the interval ends (the **swept box**).
+A leaf's displacement at time `t` is the sum of the moves of itself and its ancestors
+(`d(t) = Σ_m o_m(t)`). Each move `m` runs along a fixed vector with a monotonic easing, so over
+any interval `[t0, t1]` its offset stays on the segment between `o_m(t0)` and `o_m(t1)`, whose
+AABB is the interval `I_m = [min, max]` per axis. Moves that overlap in time (a drawer and its
+lid, `with: previous`, overlapping stagger, nested actions) compose **concurrently**, so the
+leaf's path is not a straight segment; the **swept box** is therefore the rest box plus the
+Minkowski sum of the per-move intervals: `sweep = box ⊕ Σ_m I_m` (per axis: add the interval
+ends). This is sound for any number of concurrent composed moves (the Minkowski sum of
+segments contains every point of the composed path) and equals the hull of the endpoints when
+only one move is active.
 
-1. Split the loop at every move start and end (phases). Within a phase each mover follows one
-   segment.
+1. Split the loop at every move start and end of every node (phases).
 2. For each pair of items whose swept screen rects overlap in the phase, try to **certify** a
    relation for the whole phase with the swept boxes, using only the separating test (`a`
    behind `b` if `max_a(axis) ≤ min_b(axis)` on some axis). Proof: if
    `sweep(a).max_x ≤ sweep(b).min_x` then for all t in the phase
-   `a(t).max_x ≤ sweep(a).max_x ≤ sweep(b).min_x ≤ b(t).min_x`, so `a` is behind `b` throughout.
-   Containment is never inferred from swept boxes.
+   `a(t).max_x ≤ sweep(a).max_x ≤ sweep(b).min_x ≤ b(t).min_x`. Containment is never inferred
+   from swept boxes.
 3. Pairs that cannot be certified split the phase at its midpoint (bisection, ≤ 6 levels,
    intervals ≥ 1/120 s). At the limit the static rule at the sub-interval midpoint decides and
    the epoch is marked `approximate` (`assembly/depth-approx`, info, naming the pair).
 4. Each sub-interval gets a total order by the static algorithm with the certified relations as
-   edges; adjacent sub-intervals with equal orders merge. The result is the epoch list
-   (`DepthEpoch`, cyclic over the loop), ≤ 64 per transition (beyond: merged, approximate).
+   edges; adjacent sub-intervals with equal orders merge into an epoch (`DepthEpoch`, cyclic
+   over the loop, ≤ 64 per transition; beyond: merged, approximate).
+
+**Cycles.** Edges have three strengths: forced (enclosure, `inserts`, face-exit rules of §9.5),
+certified (step 2) and heuristic (centre depth). A cycle is broken deterministically: never a
+forced edge; first drop heuristic edges, then certified ones, each time the edge whose endpoints
+have the smallest centre-depth difference (ties by the item keys); the existing Kahn release
+rule (lowest depth key, then id) then emits the order. Every broken certified edge is reported
+as `assembly/depth-cycle` (info) and marks the epoch `approximate`.
 
 ### 9.4 One DOM for all epochs: duplicate copies
 
-SVG has one paint order, so order changes are realized with **copies**: an item may appear in
-the DOM more than once (`ids.partMotion(item, copy)`), every copy carries the item's motion
-track, and an opacity track makes exactly one copy visible per epoch. Construction:
+SVG has one paint order, so order changes are realized with **copies**: an item may appear
+in the DOM more than once, and exactly one copy is visible per epoch. Construction:
 
 1. `D` = order of epoch 1, copy 0 of every item.
 2. For each next epoch `k`: take each item's position in `D` (the copy used in `k−1`); compute
@@ -453,30 +496,63 @@ track, and an opacity track makes exactly one copy visible per epoch. Constructi
 3. Copy `c` of item `x` is visible exactly in the epochs whose embedding uses it. Insertions
    never reorder existing entries, so earlier epochs (and the wrap back to epoch 1) stay valid.
 
-Both copies sit at the same place when they swap, so the swap is invisible except for the
-occlusion change it is meant to cause. Copies ≤ 0.5 × items (beyond: epochs merged,
-`budget/depth-copies` warning). Frame, static and per-step outputs use the same DOM with
-static visibility for their time, so every output agrees with the animation.
+**Emission.** Copy 0 uses the part's normal ids (`ids.object(path)`, faces, overlay). A copy
+k ≥ 1 is a full duplicate subtree in which every id is suffixed `__c<k>` (spec ids never contain
+`_`, so the suffix cannot collide); `ids.copyIds(id)` lists an element's ids across copies, and
+B emits each per-id state or track rule for all of them. Each copy is a chain of wrappers, one
+animated property per element, so CSS animations never fight and opacities multiply:
 
-### 9.5 Enclosure and face-exit clipping
+```
+<g id=partMotion(item, k)>      transform track (shared @keyframes for equal tracks)
+  <g id=partVisible(item, k)>   visibility track: copy swaps, enclosure, build appearance
+    <g id=partFade(item, k)>    opacity track: stage fades, build fade-in/out, level cross-fade
+      <g clip-path=…>           static face-exit or insert clip (only when clipped)
+        <g id=object(path)…>    object-like part group: state class, faces, overlay
+```
 
-- **Enclosed** leaf: `depthBox` strictly inside a `solid` leaf's `depthBox` at a pose → hidden
-  in that pose (a closed solid box is opaque; drawing its contents on top would show through).
-  Contents of non-solid shells (`tray`, `ring`) are not enclosed (they sort between the halves).
-- **Crossing** a solid encloser `e` (relative motion along an axis `u` while partially inside):
-  - `u ∈ {−x, −y, −z}` (leaving through a hidden face): forced edge `p` before `e`, no clip.
-    Every ray from the part's inside portion toward the viewer hits `e`, so `e` covers exactly
-    that portion.
-  - `u ∈ {+x, +y, +z}` (leaving through a visible face `F`): forced edge `p` after `e`, with a
-    static clip = the screen projection of the prism `footprint_⊥u(p) + s·u, s ≥ 0`, starting at
-    `F`'s plane. Proof for `u = +z` (the others are symmetric): a visible side-face point of
-    `p` lies on the front boundary of `p`'s footprint for its screen column, so a point below
-    `F` projects strictly below the prism's lower boundary (outside the clip) and a point above
-    `F` projects inside. The footprint is invariant under motion along `u`, so the clip is
-    static (`clipPathUnits="userSpaceOnUse"` on a non-moving wrapper). Exact for convex prisms
-    along `u` (boxes, cylinders, shafts).
-  - Requires `e` static during the crossing and `u` axis-aligned; otherwise the part stays
-    hidden until clear (`assembly/clip-fallback`, info).
+Wrappers without a track are omitted. Both copies sit at the same place when they swap, so the
+swap is invisible except for the occlusion change it is meant to cause. Copies ≤ 0.5 × items
+(beyond: epochs merged, `budget/depth-copies` warning). Frame, static and per-step outputs use
+the same DOM with static visibility for their time, so every output agrees with the animation.
+Phase 1b ships without copies (epochs that would need one are merged and marked approximate);
+copies land in Phase 3 ([tracks](./assemblies-tracks.md)).
+
+### 9.5 Enclosure, insertion and face-exit clipping
+
+Containment is **closed** with a tolerance `ε = 1e-6` world units: `a ⊆ b` when every face
+of `a` lies inside or on `b` (flush faces count, so camshafts flush with a cover's ends are
+inside it).
+
+- **Enclosed** leaf: its `depthBox` lies inside a `solid` leaf's `depthBox`, or inside the
+  **union of touching solids** (solids whose boxes share a face, merged into connected blocks;
+  a valve inside a head casting plus the valve cover above it is enclosed by their union) →
+  hidden in that pose. A closed solid is opaque; drawing its contents on top would show
+  through. Contents of non-solid shells (`tray`, `ring`) are not enclosed (they sort between
+  the halves, §9.6).
+- **Inserted** leaf (`inserts`, or inferred when the leaf crosses exactly one face plane of
+  exactly one solid block and its footprint ⊥ that face lies inside the face): a seated
+  relation, not a collision. The inside portion is clipped at the **entry face**: entry face
+  visible (`+x`, `+y`, `+z`): forced edge leaf after the solid, with the static footprint-prism
+  clip below; hidden (`−x`, `−y`, `−z`): forced edge leaf before the solid, no clip. Inserted
+  leaves keep the relation while both move together (a head and its valves) and while the leaf
+  moves along the face normal.
+- **Crossing** a solid block `e` (relative motion along an axis `u` while partially inside) is
+  the same rule with the exit face: `u ∈ {−x, −y, −z}`: forced edge before `e`, no clip (every
+  ray from the inside portion toward the viewer hits `e`, so `e` covers exactly that portion);
+  `u ∈ {+x, +y, +z}`: forced edge after `e`, with a static clip = the screen projection of the
+  prism `footprint_⊥u(p) + s·u, s ≥ 0`, starting at the face plane. Proof for `u = +z` (the
+  others are symmetric): a visible side-face point of `p` lies on the front boundary of `p`'s
+  footprint for its screen column, so a point below the face projects strictly below the
+  prism's lower boundary (outside the clip) and a point above projects inside. The footprint is
+  invariant under motion along `u`, so the clip is static (`clipPathUnits="userSpaceOnUse"` on
+  the non-moving clip wrapper of §9.4). Exact for convex prisms along `u` (boxes, cylinders,
+  shafts).
+- Requires the block static during the crossing (or moving together with the leaf, for
+  inserts) and `u` axis-aligned; otherwise the leaf stays hidden until clear
+  (`assembly/clip-fallback`, info).
+- Regression fixture: the engine example (§19.3) exercises all three: valves inserted in the
+  casting and enclosed by casting ∪ cover at rest, camshafts flush in the cover, pistons
+  crossing the block deck.
 
 ### 9.6 Split items
 
@@ -505,8 +581,10 @@ lower brick's studs, which is what a real stacked brick looks like.
   stays below every outer part already lifted (`p(t).max_z ≤ p(final).max_z < q.min_z`) and
   above every inner part at rest; parts with disjoint footprints keep their x or y separation;
   pistons leave the block through its top face (clip, §9.5), the crankshaft through its bottom
-  (before the block); manifolds move along `±y` and keep their y separation. One epoch per
-  stage, no copies.
+  (before the block); manifolds move along `±y` and keep their y separation. The valves are
+  inserted in the casting (they move with the head and stay clipped at its top face) and,
+  at rest, enclosed by casting ∪ valve cover; the camshafts are flush with the cover's ends,
+  which closed containment treats as inside. One epoch per stage, no copies.
 - **Build drop** (`above`): the seat footprint has only placed parts below it (else
   `build-path-blocked`), so the falling part stays z-separated from them; other parts keep x/y
   separation. One epoch per build step.
@@ -518,37 +596,46 @@ Pairs are pruned by a sweep over screen x (only overlapping swept rects are comp
 
 ## 10. Bounds and viewBox
 
-Reach bounds = union over every move of the hull of the moved boxes at its start and end
-(straight segments with monotonic easings never leave that hull; overshoot easings are not
-offered), plus labels and leaders at their end poses, callout flights (hull of slot and hover
-point), boards and every quarter-turn view. The viewBox covers the reach bounds of everything
-plus padding, so no exploded state is clipped; the rest frame therefore shows the assembled
-unit with the room its explosion needs (D27 overview). A reach area over 4× the rest area
-gives `assembly/bounds-growth` (info), suggesting smaller distances or `fade`.
+Reach bounds = union over every phase of the swept boxes of §9.3 (rest box ⊕ the Minkowski
+sum of the active moves' offset intervals; straight segments with monotonic easings never leave
+their interval, and overshoot easings are not offered), plus labels and leaders at their end
+poses, callout flights (hull of slot and hover point), boards and every quarter-turn view. The
+viewBox covers the reach bounds of everything plus padding, so no exploded state and no
+concurrent composed motion is clipped; the rest frame therefore shows the assembled unit with the
+room its explosion needs (D27 overview). A reach area over 4× the rest area gives
+`assembly/bounds-growth` (info), suggesting smaller distances or `fade`.
 
 ## 11. Images
 
 ### 11.1 Sources
 
 `images[].src` is a path relative to the spec's directory (schema forbids absolute paths, `..`
-segments, backslashes, `:` and therefore URLs) or an inline `data:image/(png|jpeg|webp|svg+xml);base64,…`
-URI (≤ about 256 KiB). Core does no I/O: the CLI resolves files (realpath inside
-realpath(spec dir), no symlink components, regular files only, size checked by `stat` before
-reading and while reading) and passes bytes as `ImageAssetInput`; C's `PrepareImageFn` returns
-`ImageAsset`s, collected into `RenderOptions.images`.
+segments, backslashes, `:` and therefore URLs) or an inline
+`data:image/(png|jpeg|svg+xml);base64,…` URI (≤ about 256 KiB). Core does no I/O: the CLI
+resolves files and passes bytes as `ImageAssetInput`; C's `PrepareImageFn` returns
+`ImageAsset`s, collected into `RenderOptions.images`. CLI reads (D-1): resolve the directory
+with realpath, walk the relative path one component at a time with `lstat` (no symlink
+components), then `open` the file **once** with `O_RDONLY | O_NOFOLLOW`, `fstat` that same file
+descriptor (regular file, size ≤ cap) and read from it up to cap + 1 bytes, so there is no
+check-then-use race between the checks and the read.
 
 ### 11.2 Validation (Track C, pure)
 
 - Format by **magic bytes**, never by extension (a mismatch is an error): PNG
-  (`89 50 4E 47 0D 0A 1A 0A`, IHDR first, chunk CRCs verified, APNG rejected), JPEG (`FF D8 FF`,
-  SOF0/1/2 dimensions; CMYK flagged as a warning, browsers render it, resvg may not), WebP
-  (`RIFF…WEBP`, VP8/VP8L/VP8X, animation rejected), SVG (text, `<svg` root, through the icon
-  sanitizer with `maxBytes` 256 KiB).
+  (`89 50 4E 47 0D 0A 1A 0A`, IHDR first, chunk CRCs verified, APNG rejected), JPEG
+  (`FF D8 FF`, SOF0/1/2 dimensions; CMYK flagged as a warning, browsers render it, resvg may
+  not), SVG (text, `<svg` root, through the icon sanitizer with `maxBytes` 256 KiB). **WebP is
+  rejected** (`image/format`, hint: convert it to PNG or JPEG), as are GIF, AVIF, HEIC, TIFF.
 - Dimensions from the header only (no decoding in core), so a decompression bomb cannot be
   triggered; caps apply to the declared size.
 - **Metadata removed without re-encoding**: PNG keeps IHDR, PLTE, tRNS, IDAT, IEND; JPEG drops
-  APP1–APP15 (EXIF, XMP, IPTC, ICC) except APP14 Adobe, and COM; WebP keeps image chunks only.
-  ICC profiles are ignored (sRGB assumed, noted in `image/icc-ignored` info).
+  APP1–APP15 (EXIF, XMP, IPTC, ICC) except APP14 Adobe, and COM. ICC profiles are ignored
+  (sRGB assumed, `image/icc-ignored` info).
+- **EXIF orientation** is read before the EXIF segment is dropped and kept as
+  `ImageAsset.orientation` (1–8); width and height are reported as displayed (5–8 swap them).
+  Emit applies it as a fixed rotate/flip `transform` on the `<image>` in `<defs>`, so every use,
+  crop and decal sees the upright image. A malformed EXIF block is ignored (orientation 1) with
+  `image/exif-ignored` (info).
 - Text in images is pixels: never OCR'd, never interpreted, never placed in the SVG.
 
 ### 11.3 Emit
@@ -559,7 +646,7 @@ SVG as `<symbol id=image(hash)>` with the sanitizer's `__PCID__` rewrite (like i
 `<use href="#…">`: billboards upright in screen space (contain within the silhouette box,
 bottom-aligned), decals with an affine `matrix()` mapping the crop rect onto the face
 parallelogram, crops via a nested `<svg viewBox=crop>`. The emitter accepts a `data:` href only
-on `<image>` elements in `<defs>`, only matching `^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$`,
+on `<image>` elements in `<defs>`, only matching `^data:image/(png|jpeg);base64,[A-Za-z0-9+/]+=*$`,
 and only from asset bytes it base64-encodes itself (spec data URIs are decoded and re-encoded,
 never copied). `url(` still requires `#`. No external references.
 
@@ -571,9 +658,9 @@ document class, §13). Duplicates by hash are embedded once.
 
 ### 11.5 Raster outputs
 
-resvg-wasm renders PNG and JPEG data URIs; WebP support is checked against the pinned resvg
-version by a B test, and when absent the raster target substitutes a `image/webp-raster`
-warning and an empty placeholder rather than failing (open question 4).
+resvg-wasm renders the PNG and JPEG data URIs and SVG symbols used by every image placement, so
+PNG, GIF and MP4 frames match the browser output. WebP never reaches the renderer (rejected at
+input, §11.2).
 
 ### 11.6 Provenance and credits
 
@@ -594,13 +681,13 @@ p. <page> (<license>)", then "and N more"); the SVG `<desc>` lists all. Strings 
 
 **Motion modes (D32).** Pose motion is CSS (or attributes in frame mode) in both `smil` and
 `css` modes; `--motion` still affects particles only, so `css` output keeps zero SMIL
-elements. (D32 is PR #57; this design does not depend on its merge order.)
+elements (D32, merged in #57).
 
 **Reduced motion.** For specs with assembly actions, `prefers-reduced-motion: reduce` switches
 pose tracks to discrete keyframes (each step shows its end pose for the whole step, no tween),
 keeps captions, states and metrics on their step-end keyframes, fixes the camera at the overview
 and hides particles. Specs without assembly actions keep the 1.1 rule (everything paused at the
-rest frame), so their bytes do not change (proposed D40; open question 1).
+rest frame), so their bytes do not change (user decision; proposed D56).
 
 **Determinism.** Easing evaluation is the existing bisection (`ease()`), generalized to any
 cubic-bezier; keyframe percentages 4 decimals, coordinates 2; copies, epochs, labels and
@@ -654,9 +741,13 @@ projection change: the figure's own (near-isometric) drawing plane is used as is
 
 ## 16. TypeScript builder
 
-`@platformcosmo/core` exports `spec`, `assembly` and `explode` builders (contract
-`AssemblyBuilders`; implementation A2). They produce plain spec JSON with keys in schema
-property order (deterministic `JSON.stringify`), never a scene, and fill in no defaults.
+`@platformcosmo/core` exports `spec`, `assembly`, `explode`, `build` and `figure` builders
+(contract `AssemblyBuilders`; implementation A2). `spec()` also takes racks (with `programs`,
+slot `assembly` and `closeup`), figures and storyboards, so every 1.2.0 construct can be built.
+They produce plain spec JSON, never a scene, and fill in no defaults. Equality is defined on
+RFC 8785 (JCS) canonical JSON (the same canonicalization as the id-prefix hash), so tests
+compare `jcs(builder.toJSON())` with `jcs(expected)` and key order never matters; arrays keep
+call order.
 
 ```ts
 import { assembly, explode, render, spec, validate } from "@platformcosmo/core";
@@ -714,39 +805,45 @@ and explains it:
 New codes (namespaced like existing ones; unknown ids and refs carry did-you-mean
 suggestions):
 
-| Code                                                                                                            | Severity               | When                                                           |
-| --------------------------------------------------------------------------------------------------------------- | ---------------------- | -------------------------------------------------------------- |
-| `assembly/unknown-target`                                                                                       | error                  | action, focus or `set` path matches nothing                    |
-| `assembly/unknown-program`                                                                                      | error                  | program id not found on the target                             |
-| `assembly/selector-empty`                                                                                       | warning                | selector matches no part                                       |
-| `assembly/moved-twice`                                                                                          | error                  | a node moved by two stages of one program                      |
-| `assembly/stage-out-of-range`                                                                                   | error                  | `to` beyond the program's stages or steps                      |
-| `assembly/build-backwards`                                                                                      | error                  | `build` to a lower level                                       |
-| `assembly/build-path-blocked`                                                                                   | warning                | `above` origin blocked                                         |
-| `assembly/collision`                                                                                            | warning                | interpenetrating leaves in a final pose                        |
-| `assembly/compressed`                                                                                           | info / warning (< 0.5) | actions compressed to fit the step                             |
-| `assembly/implicit-access`                                                                                      | info                   | access move prepended (§8.3)                                   |
-| `assembly/depth-approx`                                                                                         | info                   | an epoch could not be certified                                |
-| `assembly/clip-fallback`                                                                                        | info                   | enclosed part hidden until clear                               |
-| `assembly/bounds-growth`                                                                                        | info                   | reach bounds > 4× rest                                         |
-| `assembly/size-mismatch`                                                                                        | warning                | template or close-up does not fit at true scale                |
-| `assembly/reserved-id`                                                                                          | error                  | slot id `frame` on a rack in assembly mode                     |
-| `assembly/too-deep`                                                                                             | error                  | path longer than 8 segments                                    |
-| `assembly/view-needs-assembly-only`                                                                             | error                  | `view` with nodes or DC content                                |
-| `assembly/storyboard-no-explode`                                                                                | error                  | explode on a storyboard                                        |
-| `assembly/edge-to-part`                                                                                         | error                  | edge, flow or cable endpoint is a part path                    |
-| `assembly/unknown-shape`                                                                                        | error                  | `pack:id` shape not installed                                  |
-| `assembly/shape-params`                                                                                         | error                  | unknown or invalid `params` for a shape                        |
-| `assembly/duplicate-part`                                                                                       | error                  | sibling ids collide (also after `count` expansion)             |
-| `brick/off-grid`                                                                                                | warning                | non-integer stud or plate position                             |
-| `image/not-found`, `image/unsafe-path`                                                                          | error                  | CLI path resolution (did-you-mean over files in the directory) |
-| `image/format`, `image/format-mismatch`                                                                         | error                  | magic bytes not allowlisted / differ from extension            |
-| `image/too-large`, `image/too-many`                                                                             | error                  | §11.4 caps                                                     |
-| `image/animated`                                                                                                | error                  | APNG or animated WebP                                          |
-| `image/sanitized`                                                                                               | info                   | SVG elements removed by the sanitizer                          |
-| `image/icc-ignored`, `image/cmyk`                                                                               | info / warning         | colour handling                                                |
-| `image/unknown`                                                                                                 | error                  | part references an image id not in `images`                    |
-| `budget/assembly-parts`, `budget/depth-copies`, `budget/views`, `budget/levels`, `budget/images`, `budget/time` | warning / error        | §13                                                            |
+| Code                                                                                                            | Severity               | When                                                                                       |
+| --------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------ |
+| `assembly/unsupported`                                                                                          | error                  | 1.2.0 field not rendered by this build yet (merge guard, until its phase lands)            |
+| `assembly/no-op-action`                                                                                         | info                   | action that does not change the level                                                      |
+| `assembly/transit-collision`                                                                                    | warning                | leaves interpenetrate during a transition                                                  |
+| `assembly/below-ground`                                                                                         | error                  | rack or slot move below the floor                                                          |
+| `assembly/depth-cycle`                                                                                          | info                   | a certified depth edge was dropped to break a cycle                                        |
+| `image/exif-ignored`                                                                                            | info                   | malformed EXIF block; orientation 1 assumed                                                |
+| `assembly/unknown-target`                                                                                       | error                  | action, focus or `set` path matches nothing                                                |
+| `assembly/unknown-program`                                                                                      | error                  | program id not found on the target                                                         |
+| `assembly/selector-empty`                                                                                       | warning                | selector matches no part                                                                   |
+| `assembly/moved-twice`                                                                                          | error                  | a node moved by two stages of one program                                                  |
+| `assembly/stage-out-of-range`                                                                                   | error                  | `to` beyond the program's stages or steps                                                  |
+| `assembly/build-backwards`                                                                                      | error                  | `build` to a lower level                                                                   |
+| `assembly/build-path-blocked`                                                                                   | warning                | `above` origin blocked                                                                     |
+| `assembly/collision`                                                                                            | warning                | interpenetrating leaves in a final pose                                                    |
+| `assembly/compressed`                                                                                           | info / warning (< 0.5) | actions compressed to fit the step                                                         |
+| `assembly/implicit-access`                                                                                      | info                   | access move prepended (§8.3)                                                               |
+| `assembly/depth-approx`                                                                                         | info                   | an epoch could not be certified                                                            |
+| `assembly/clip-fallback`                                                                                        | info                   | enclosed part hidden until clear                                                           |
+| `assembly/bounds-growth`                                                                                        | info                   | reach bounds > 4× rest                                                                     |
+| `assembly/size-mismatch`                                                                                        | warning                | template or close-up does not fit at true scale                                            |
+| `assembly/reserved-id`                                                                                          | error                  | slot id `frame` on a rack in assembly mode                                                 |
+| `assembly/too-deep`                                                                                             | error                  | path longer than 8 segments                                                                |
+| `assembly/view-needs-assembly-only`                                                                             | error                  | `view` with nodes or DC content                                                            |
+| `assembly/storyboard-no-explode`                                                                                | error                  | explode on a storyboard                                                                    |
+| `assembly/edge-to-part`                                                                                         | error                  | edge, flow or cable endpoint is a part path                                                |
+| `assembly/unknown-shape`                                                                                        | error                  | `pack:id` shape not installed                                                              |
+| `assembly/shape-params`                                                                                         | error                  | unknown or invalid `params` for a shape                                                    |
+| `assembly/duplicate-part`                                                                                       | error                  | sibling ids collide (also after `count` expansion)                                         |
+| `brick/off-grid`                                                                                                | warning                | non-integer stud or plate position                                                         |
+| `image/not-found`, `image/unsafe-path`                                                                          | error                  | CLI path resolution (did-you-mean over files in the directory)                             |
+| `image/format`, `image/format-mismatch`                                                                         | error                  | not PNG, JPEG or SVG by magic bytes (WebP: convert to PNG or JPEG) / differ from extension |
+| `image/too-large`, `image/too-many`                                                                             | error                  | §11.4 caps                                                                                 |
+| `image/animated`                                                                                                | error                  | APNG                                                                                       |
+| `image/sanitized`                                                                                               | info                   | SVG elements removed by the sanitizer                                                      |
+| `image/icc-ignored`, `image/cmyk`                                                                               | info / warning         | colour handling                                                                            |
+| `image/unknown`                                                                                                 | error                  | part references an image id not in `images`                                                |
+| `budget/assembly-parts`, `budget/depth-copies`, `budget/views`, `budget/levels`, `budget/images`, `budget/time` | warning / error        | §13                                                                                        |
 
 ## 19. Examples
 
@@ -776,7 +873,12 @@ All examples validate against `schema/v1.json` (checked when this design was wri
           "id": "service",
           "label": "Service view",
           "stages": [
-            { "label": "Doors", "parts": ["role:cover"], "direction": "drawer", "labels": "hide" },
+            {
+              "label": "Doors",
+              "parts": ["frame/role:cover"],
+              "direction": "drawer",
+              "labels": "hide"
+            },
             {
               "label": "Network and power",
               "parts": ["tor", "pdu"],
@@ -1083,6 +1185,7 @@ All examples validate against `schema/v1.json` (checked when this design was wri
               "at": [50, 95, 40],
               "pitch": [55, 0, 0],
               "size": [12, 12, 70],
+              "inserts": "casting",
               "label": "Valve"
             }
           ]
@@ -1605,16 +1708,22 @@ The OCP-style 2OU server and the figure-mode heat-sink example are in
   overshoot or spring easings.
 - Booleans, fillets, curved surfaces beyond cylinders/rings, curved slopes; texture mapping
   other than planar decals on box faces; reading text in images; OCR.
-- Remote images, image fetching of any kind; GIF, AVIF, HEIC, TIFF, BMP inputs; animated images.
+- Remote images, image fetching of any kind; WebP, GIF, AVIF, HEIC, TIFF, BMP inputs; animated
+  images.
 - Automatic 3D reconstruction from images (Claude places parts; the engine only renders).
 - Editing or re-encoding images inside `render` (crop is an SVG viewport; resizing and
   cut-outs are `pcosmo assets` commands).
 - Technic-style angled connections, stickers as separate geometry (use decals), minifigures.
 - Bundling third-party documents, booklets, artwork or trademarks in packs, tests or the gallery.
 
-## 21. Open questions
+## 21. Decisions taken and open questions
 
-See the PR description; the main ones: reduced-motion behaviour change for assembly specs
-(§12), whether `pose` should default to `exploded` for posters, rest-frame fade for builds,
-WebP in raster outputs, `jpeg-js` for `assets shrink`, and close-up levels in the first release
-or a follow-up.
+Decided by the user (review of #60): reduced motion jumps between per-step poses for specs with
+assembly actions only (§12); the poster is `assembled` by default, `pose: "exploded"` opts in
+(§7.4); the merge guard ships with the schema (§0 of the tracks); WebP is rejected with a PNG/JPEG
+hint (§11.2); no `jpeg-js`: JPEG is passed through, only PNG is re-encoded (ingestion §5);
+encrypted PDFs with an empty user password are supported in the PDF phase, others refused
+(ingestion §4.1); close-ups and quarter-turn views ship in Phase 2; image caps 2 MiB per image,
+8 MiB total, warning at 1 MiB (4 MiB for document outputs).
+
+Open: none blocking the schema; implementation-level questions are listed per PR in the tracks.
