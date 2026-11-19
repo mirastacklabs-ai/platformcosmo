@@ -503,14 +503,23 @@ B emits each per-id state or track rule for all of them. Each copy is a chain of
 animated property per element, so CSS animations never fight and opacities multiply:
 
 ```
-<g id=partMotion(item, k)>      transform track (shared @keyframes for equal tracks)
-  <g id=partVisible(item, k)>   visibility track: copy swaps, enclosure, build appearance
-    <g id=partFade(item, k)>    opacity track: stage fades, build fade-in/out, level cross-fade
-      <g clip-path=…>           static face-exit or insert clip (only when clipped)
-        <g id=object(path)…>    object-like part group: state class, faces, overlay
+<g id=partHost(item, k)>            clipped copies only: the clipping SOLID's transform track
+  <g clip-path=…>                   static clip, defined in the solid's frame
+    <g id=partMotion(item, k)>      transform track; relative to the solid when clipped
+      <g id=partVisible(item, k)>   visibility track: copy swaps, enclosure, build appearance
+        <g id=partFade(item, k)>    opacity track: stage fades, build fade-in/out, cross-fades
+          <g id=object(path)…>      object-like part group: state class, faces, overlay
 ```
 
-Wrappers without a track are omitted. Both copies sit at the same place when they swap, so the
+The clip must not move with the leaf: a `userSpaceOnUse` clip inside the leaf's translated
+group would travel with it, so a piston rising out of a static block would carry its clip
+upward and lose its visible section. The clip is therefore defined in the clipping solid's
+frame and placed **outside** the leaf's motion, on `partHost`, which carries the solid's track:
+omitted when the solid is static (piston leaving a static block, valves pulled out of a static
+head); equal to the solid's track when they move together (valves inserted in a head that
+lifts), in which case `partMotion` is the leaf's motion relative to the solid (zero for the
+valves). Unclipped copies have no `partHost` and no clip wrapper. Wrappers without a track are
+omitted. Both copies sit at the same place when they swap, so the
 swap is invisible except for the occlusion change it is meant to cause. Copies ≤ 0.5 × items
 (beyond: epochs merged, `budget/depth-copies` warning). Frame, static and per-step outputs use
 the same DOM with static visibility for their time, so every output agrees with the animation.
@@ -543,13 +552,15 @@ inside it).
   prism `footprint_⊥u(p) + s·u, s ≥ 0`, starting at the face plane. Proof for `u = +z` (the
   others are symmetric): a visible side-face point of `p` lies on the front boundary of `p`'s
   footprint for its screen column, so a point below the face projects strictly below the
-  prism's lower boundary (outside the clip) and a point above projects inside. The footprint is
-  invariant under motion along `u`, so the clip is static (`clipPathUnits="userSpaceOnUse"` on
-  the non-moving clip wrapper of §9.4). Exact for convex prisms along `u` (boxes, cylinders,
-  shafts).
-- Requires the block static during the crossing (or moving together with the leaf, for
-  inserts) and `u` axis-aligned; otherwise the leaf stays hidden until clear
-  (`assembly/clip-fallback`, info).
+  prism's lower boundary (outside the clip) and a point above projects inside. The leaf's
+  footprint ⊥ `u` is invariant in the solid's frame under relative motion along `u`, so the clip
+  is static **in the solid's frame**: `clipPathUnits="userSpaceOnUse"` on the clip wrapper
+  inside `partHost`, which carries the solid's track (none when the solid is static), with the
+  leaf's motion relative to the solid inside it (§9.4). Exact for convex prisms along `u`
+  (boxes, cylinders, shafts).
+- Requires the relative motion of leaf and solid during the crossing to be along an axis `u`
+  (the solid may itself move, its track rides on `partHost`); otherwise the leaf stays hidden
+  until clear (`assembly/clip-fallback`, info).
 - Regression fixture: the engine example (§19.3) exercises all three: valves inserted in the
   casting and enclosed by casting ∪ cover at rest, camshafts flush in the cover, pistons
   crossing the block deck.

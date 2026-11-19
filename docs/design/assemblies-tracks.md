@@ -31,6 +31,13 @@ a release-quality slice and lifts its part of the merge guard.
   `false` and adds the end-to-end test that renders that phase's design examples. Test:
   `packages/core/test/assembly-guard.test.ts` (field paths per group, outermost reporting, 1.1
   specs untouched, every design example passes the schema and hits only the guard).
+- **Step actions are gated by their target**, not as one group: explode/implode on a figure →
+  `phase1a`; on an assembly or part path → `phase1b`; on a rack, slot or any path through a
+  `closeup` segment → `phase2`; build/unbuild → `phase2` (`phase3` for storyboards); unknown
+  targets stay gated until `phase1a` lifts (then semantic validation reports them). Part paths
+  (two or more `/`) and `closeup` paths in `steps[].focus` and `steps[].set` are gated the same
+  way, so a 1.1 spec cannot reach them either. Lifting one phase therefore never enables another
+  phase's actions, and Phase 1b does not depend on Phase 1a's lift.
 - **Byte identity gate** (every A, B, E PR): all gallery specs and all visual goldens unchanged
   (`check:gallery`, visual regression exact match).
 - **Parallelism.** The figure chain (1a) does not depend on the assembly engine: it needs only
@@ -60,7 +67,8 @@ Phase 3   A1-2b copies ─ C-2 pdf ─ R-2 storyboards ─ A2-7 callouts/sub-bui
 ### A2-F Figures in validate and scene (M, ~900 LOC, 4 files)
 
 Owns `schema/assembly-semantic.ts` (figure part), `scene/boards.ts`. Image ids, figure parts,
-stages (selectors over figure part ids), explode/implode actions on figures and close-up paths,
+stages (selectors over figure part ids), explode/implode actions on figures (close-up paths are
+Phase 2, A2-5),
 timing (stage times, implode as time reverse, windows and compression), `SceneFlatBoard`,
 credits. **oneOf diagnostics** for actions, programs and part images pick the branch by
 discriminator (the action key `explode`/`implode`/`build`/`unbuild`; `kind`; string vs
@@ -110,20 +118,24 @@ committed with D-2a), silhouette segmentation, groups, instances and template sp
 occlusion recovery, clean base with recovery, arrow removal, positions, spec fragment, the gate
 of ingestion §6.5 and its report.
 
-**Acceptance criteria (normative).** On every synthetic trap figure the correct pipeline passes
-the gate. Each deliberately broken variant fails, with at least the listed codes (all at
-error severity):
+**Acceptance criteria (normative).** On every synthetic trap figure, including the
+arrows-touching-parts figure, the leader-line figure and the callout-text figure, the correct
+pipeline passes the gate with zero errors (declared annotations are excluded from both residual
+comparisons and the re-render has no redrawn hints, ingestion §6.5). Single-state trap figures
+pass with the missing-state checks reported as `not-run` and `confidence: "reduced"`. Each
+deliberately broken variant fails, with at least the listed codes (all at error severity):
 
-| Broken variant                            | Must fail with                                                               |
-| ----------------------------------------- | ---------------------------------------------------------------------------- |
-| rectangle mask                            | `asset/rect-mask`, `asset/foreign-pixels`, `asset/exploded-residual`         |
-| base not erased (ghost fins)              | `asset/leftover-fragment`, `asset/exploded-residual`                         |
-| enclosed interior left transparent        | `asset/mask-hole`, `asset/assembled-residual`                                |
-| twin instances assigned crosswise         | `asset/instance-swap`                                                        |
-| board under a moved part not recovered    | `asset/base-unrecovered`, `asset/exploded-residual`                          |
-| arrows left in the base                   | `asset/arrow-residual`                                                       |
-| clip lever not grouped with its heat sink | `asset/exploded-residual` (the lever stays seated in the exploded re-render) |
-| sprite carrying a neighbour's sliver      | `asset/foreign-pixels`                                                       |
+| Broken variant                                            | Must fail with                                                                        |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| rectangle mask                                            | `asset/rect-mask`, `asset/foreign-pixels`, `asset/exploded-residual`                  |
+| base not erased (ghost fins)                              | `asset/leftover-fragment`, `asset/exploded-residual`                                  |
+| enclosed interior left transparent                        | `asset/mask-hole`, `asset/assembled-residual`                                         |
+| twin instances assigned crosswise                         | `asset/instance-swap`                                                                 |
+| board under a moved part not recovered                    | `asset/base-unrecovered`, `asset/exploded-residual`                                   |
+| arrows left in the base                                   | `asset/arrow-residual`                                                                |
+| arrow declared but not erased, or erased but not declared | `asset/arrow-residual` / `asset/exploded-residual` (undeclared ink is never excluded) |
+| clip lever not grouped with its heat sink                 | `asset/exploded-residual` (the lever stays seated in the exploded re-render)          |
+| sprite carrying a neighbour's sliver                      | `asset/foreign-pixels`                                                                |
 
 Sprites never contain pixels of another part (asserted pixel-wise against the generator's
 ground-truth masks); all residual metrics are local (largest connected component), so the
@@ -211,7 +223,12 @@ its lid lifts and a child lifts with `with: previous`, asserting the swept box c
 sampled pose and that the endpoint hull would not (regression for the unsound bound); the
 engine example as a regression fixture (valves inserted and enclosed by casting ∪ cover, flush
 camshafts inside the cover, pistons crossing the deck); clip correctness against a per-pixel
-z-buffer reference rendered with resvg; randomized property test (painter's order of sampled
+z-buffer reference rendered with resvg, including the clip-frame cases: a piston rising out of a
+**static** block (clip on a static `partHost`, the visible section above the deck intact at every
+sampled time), valves pulled out of a static head, and valves inserted in a head that lifts
+(`partHost` carries the head's track, valve motion relative to it is zero); a regression case
+asserting that a clip placed inside the leaf's own motion group would fail the z-buffer
+comparison; randomized property test (painter's order of sampled
 frames matches a z-buffer within 0.5% of pixels except approximate epochs); determinism;
 performance (300 leaves × 20 transitions < 2 s).
 
