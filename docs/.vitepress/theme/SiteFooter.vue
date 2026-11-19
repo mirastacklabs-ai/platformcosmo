@@ -5,26 +5,24 @@ import MiraLogo from "./MiraLogo.vue";
 <template>
   <footer class="pc-footer">
     <div class="pc-footer-inner">
-      <div class="pc-footer-brand">
-        <a
-          href="https://www.mirastacklabs.ai"
-          target="_blank"
-          rel="noopener"
-          aria-label="MiraStack Labs"
-        >
-          <MiraLogo wordmark />
-        </a>
-        <p>
-          PlatformCosmo is built by the engineering team at
-          <a href="https://www.mirastacklabs.ai" target="_blank" rel="noopener">MiraStack Labs</a>.
-        </p>
-      </div>
+      <a
+        class="pc-footer-logo"
+        href="https://www.mirastacklabs.ai"
+        aria-label="MIRASTACK LABS, home"
+      >
+        <MiraLogo wordmark />
+      </a>
+      <p class="pc-footer-tag">
+        platformcosmo is open source under Apache-2.0, built by the engineering team at
+        <a href="https://www.mirastacklabs.ai">MIRASTACK LABS</a>.
+      </p>
       <div class="pc-footer-legal">
-        <p>Apache-2.0. Copyright 2026 MiraStack Labs.</p>
+        <p>&copy; 2026 MIRASTACK LABS PRIVATE LIMITED &middot; Hyderabad, India</p>
+        <p>This site records anonymous page views (no cookies, no IP addresses).</p>
         <p>
           AWS, Azure, Google Cloud, Kubernetes and the brands in Simple Icons are trademarks of
-          their owners; use does not imply endorsement. The MiraStack Labs name and logo are
-          trademarks of MiraStack Labs.
+          their owners; use does not imply endorsement. The MIRASTACK LABS name and logo are
+          trademarks of MIRASTACK LABS.
         </p>
       </div>
     </div>

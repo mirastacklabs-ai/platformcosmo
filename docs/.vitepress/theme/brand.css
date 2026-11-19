@@ -96,12 +96,12 @@
   --vp-code-copy-code-hover-bg: var(--pc-bg-band);
 
   --vp-home-hero-name-color: var(--pc-accent);
-  --vp-nav-height: 72px;
+  --vp-nav-height: 73px;
   --vp-layout-max-width: 1280px;
 }
 @media (max-width: 639px) {
   :root {
-    --vp-nav-height: 64px;
+    --vp-nav-height: 65px;
   }
 }
 
@@ -246,21 +246,63 @@ body {
   border-radius: 2px;
 }
 
-/* ---- Nav ---- */
+/* ---- Nav: same header row as mirastacklabs.ai (72/64 px, 24/16 px gutters, 1200 px wrap) ---- */
+:root {
+  --pc-gutter: 24px;
+}
+@media (max-width: 399px) {
+  :root {
+    --pc-gutter: 16px;
+  }
+}
 .VPNavBar {
   border-bottom: 1px solid var(--pc-line);
 }
-.VPNavBar:not(.home.top) .divider-line,
-.VPNavBar .divider-line {
-  background-color: transparent;
+.VPNavBar .wrapper,
+.VPNavBar.has-sidebar .wrapper {
+  padding: 0 var(--pc-gutter) 1px !important;
+}
+.VPNavBar .container,
+.VPNavBar.has-sidebar .container {
+  max-width: 1152px !important;
+}
+.VPNavBar .divider {
+  display: none;
+}
+/* The lockup is the title: the sidebar-width title box becomes a plain left-aligned logo area. */
+.VPNavBar.has-sidebar .title {
+  position: static !important;
+  width: auto !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border-bottom: 0 !important;
+}
+.VPNavBar .title {
+  padding: 0;
+  border: 0;
+  height: calc(var(--vp-nav-height) - 1px);
+  flex: none;
 }
 .VPNavBarTitle .title {
-  font-family: var(--pc-display);
-  font-size: 1.125rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  font-size: 1rem;
+  font-weight: 400;
+  text-decoration: none;
   color: var(--pc-ink);
+}
+.VPNavBar .content {
+  padding: 0 !important;
+  flex-grow: 1;
+}
+.VPNavBar .content-body {
+  gap: 8px;
+}
+.VPNavBar .content-body,
+.VPNavBar.has-sidebar .content-body {
+  background: transparent !important;
 }
 .VPNavBarMenuLink,
 .VPNavBarMenuGroup .button {
@@ -272,8 +314,10 @@ body {
   color: var(--pc-text);
   border-bottom: 2px solid transparent;
   height: 44px;
+  padding: 0 12px;
   align-self: center;
-  margin-top: 2px;
+  display: inline-flex;
+  align-items: center;
 }
 .VPNavBarMenuLink:hover {
   color: var(--pc-ink);
@@ -284,64 +328,92 @@ body {
 }
 .VPNavBarMenu {
   align-items: center;
+  gap: 4px;
+}
+/* Appearance/GitHub live in NavIcons.vue as the site's square icon buttons. */
+.VPNavBarAppearance,
+.VPNavBarSocialLinks,
+.VPNavBarExtra,
+.VPNavBarTranslations {
+  display: none !important;
+}
+.pc-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  background: none;
+  border: 1px solid var(--pc-line);
+  border-radius: 4px;
+  color: var(--pc-ink);
+  cursor: pointer;
+  flex: none;
+  font: inherit;
+}
+.pc-icon-btn:hover {
+  border-color: var(--pc-muted);
+}
+.pc-icon-btn svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+}
+.pc-icon-btn.pc-gh-btn svg {
+  width: 22px;
+  height: 22px;
+  fill: currentColor;
+  stroke: none;
+}
+.pc-theme-btn .i-moon {
+  display: none;
+}
+.dark .pc-theme-btn .i-sun {
+  display: none;
+}
+.dark .pc-theme-btn .i-moon {
+  display: block;
+}
+.VPNavBarMenu + .pc-gh-btn {
+  margin-left: 8px;
+}
+.VPNavBarHamburger {
+  width: 44px !important;
+  height: 44px !important;
+  border: 1px solid var(--pc-line);
+  border-radius: 4px;
+  margin-left: 0;
+  align-self: center;
+}
+.VPNavBarHamburger:not(.active) .top,
+.VPNavBarHamburger:not(.active) .middle,
+.VPNavBarHamburger:not(.active) .bottom {
+  transform: none !important;
+}
+.VPNavBarHamburger .container {
+  width: 20px;
+}
+.VPNavBarHamburger .container .top,
+.VPNavBarHamburger .container .middle,
+.VPNavBarHamburger .container .bottom {
+  background-color: var(--pc-ink);
+  height: 1.6px;
 }
 .VPNavScreenMenuLink,
 .VPNavScreenMenuGroupLink {
   font-family: var(--pc-display);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 1.25rem;
+  letter-spacing: 0.02em;
+  font-size: 1.5rem;
   font-weight: 500;
   color: var(--pc-ink);
 }
-.VPNavBarAppearance,
-.VPSocialLinks {
-  align-items: center;
-}
-.VPSwitchAppearance,
-.VPNavBarHamburger {
-  border-radius: 4px;
-}
-
-/* "by MiraStack Labs" mark next to the title */
-.pc-by {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: 14px;
-  padding-left: 14px;
-  border-left: 1px solid var(--pc-line);
-  text-decoration: none;
-  color: var(--pc-muted);
-  line-height: 1;
-  white-space: nowrap;
-}
-.pc-by-text {
-  font-family: var(--pc-display);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-}
-.pc-by:hover .pc-wordmark b {
-  color: var(--pc-accent);
-}
-.pc-by .pc-logo svg {
-  width: 18px;
-  height: 15px;
-}
-.pc-by .pc-wordmark {
-  font-size: 0.6875rem;
-}
-@media (max-width: 767px) {
-  .pc-by .pc-wordmark {
+@media (max-width: 379px) {
+  .pc-gh-btn {
     display: none;
-  }
-  .pc-by-text {
-    display: none;
-  }
-  .pc-by {
-    margin-left: 10px;
-    padding-left: 10px;
   }
 }
 
@@ -467,22 +539,24 @@ body {
   color: var(--pc-btn-text);
 }
 
-/* ---- Home hero ---- */
-.VPHero .main {
-  text-align: left;
+/* ---- Home hero: the site's eyebrow, H1 and lede ---- */
+.VPHero.VPHero {
+  padding: calc(var(--vp-nav-height) + 64px) var(--pc-gutter) 48px;
 }
 .VPHero .container {
   max-width: 1152px;
+  padding: 0;
 }
 .VPHero .main,
 .VPHero.has-image .main {
+  text-align: left;
   max-width: none;
 }
-.VPHero .name,
-.VPHero .text {
-  max-width: none;
+.VPHero .heading {
+  display: block;
 }
 .VPHero .name {
+  display: block;
   font-family: var(--pc-display);
   font-size: 0.8125rem;
   font-weight: 500;
@@ -492,25 +566,27 @@ body {
   color: var(--pc-accent);
   background: none;
   -webkit-text-fill-color: currentColor;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 .VPHero .text {
+  display: block;
   font-family: var(--pc-display);
   color: var(--pc-ink);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: -0.01em;
   line-height: 1;
-  font-size: clamp(2.5rem, 6.2vw, 4.75rem);
-  max-width: 14em;
+  font-size: clamp(2.75rem, 6.2vw, 5.5rem);
+  max-width: 864px;
 }
 .VPHero .tagline {
   font-family: var(--pc-display);
-  font-size: 1.1875rem;
+  font-size: 1.125rem;
+  font-weight: 400;
   line-height: 1.6;
   color: var(--pc-text);
-  max-width: 44rem;
-  padding-top: 24px;
+  max-width: 45rem;
+  padding-top: 32px;
 }
 .VPHero .actions {
   margin: 0;
@@ -522,18 +598,8 @@ body {
 }
 .pc-hero-diagram {
   margin: 8px auto 0;
-  max-width: 1152px;
-  padding: 0 24px;
-}
-@media (min-width: 640px) {
-  .pc-hero-diagram {
-    padding: 0 48px;
-  }
-}
-@media (min-width: 960px) {
-  .pc-hero-diagram {
-    padding: 0;
-  }
+  max-width: 1200px;
+  padding: 0 var(--pc-gutter);
 }
 .pc-hero-diagram img {
   display: block;
@@ -553,6 +619,12 @@ body {
   display: none !important;
 }
 
+.VPFeatures.VPFeatures {
+  padding: 0 var(--pc-gutter);
+}
+.VPFeatures .container {
+  max-width: 1152px;
+}
 .VPFeature {
   border: 1px solid var(--pc-line);
   border-radius: 2px;
@@ -571,70 +643,11 @@ body {
   color: var(--pc-text);
 }
 
-/* Home: Built by MiraStack Labs */
-.pc-eyebrow {
-  font-family: var(--pc-display);
-  font-weight: 500;
-  font-size: 0.8125rem;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: var(--pc-accent);
-  margin: 0 0 16px;
-  line-height: 1.5;
-}
-.pc-built-by {
-  margin: 64px 0 0;
-  padding: 64px 24px;
-  background: var(--pc-bg-band);
-  border-top: 1px solid var(--pc-line);
-}
-.pc-built-by-inner {
-  max-width: 1152px;
-  margin: 0 auto;
-}
-@media (min-width: 640px) {
-  .pc-built-by {
-    padding: 80px 48px;
-  }
-}
-@media (min-width: 960px) {
-  .pc-built-by-inner {
-    padding: 0 16px;
-  }
-}
-.pc-built-by h2 {
-  font-family: var(--pc-display);
-  font-weight: 600;
-  text-transform: uppercase;
-  color: var(--pc-ink);
-  font-size: clamp(2rem, 3.8vw, 3rem);
-  line-height: 1.05;
-  letter-spacing: -0.01em;
-  margin: 0 0 24px;
-}
-.pc-built-by-logo {
-  display: inline-block;
-  text-decoration: none;
-  margin-bottom: 20px;
-}
-.pc-built-by p {
-  max-width: 40rem;
-  font-size: 1.125rem;
-  line-height: 1.6;
-  color: var(--pc-text);
-  margin: 0 0 28px;
-}
-.pc-built-by p.pc-eyebrow {
-  font-size: 0.8125rem;
-  margin: 0 0 16px;
-  color: var(--pc-accent);
-}
-
-/* ---- Footer (every page) ---- */
+/* ---- Footer (every page): the site's pattern ---- */
 .pc-footer {
   border-top: 1px solid var(--pc-line);
   background: var(--pc-bg);
-  padding: 48px 24px 40px;
+  padding: 72px var(--pc-gutter) 40px;
   font-size: 0.9375rem;
   position: relative;
   z-index: 1;
@@ -642,52 +655,53 @@ body {
 .pc-footer-inner {
   max-width: 1152px;
   margin: 0 auto;
-  display: grid;
-  gap: 28px;
 }
-.pc-footer-brand a:first-child {
-  display: inline-block;
+.pc-footer-logo {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
   text-decoration: none;
-  margin-bottom: 14px;
 }
-.pc-footer-brand p {
-  margin: 0;
-  font-size: 1.0625rem;
-  color: var(--pc-ink);
+.pc-footer-tag {
+  color: var(--pc-muted);
+  max-width: 36rem;
+  margin: 16px 0 0;
+  line-height: 1.6;
 }
-.pc-footer a {
+.pc-footer-tag a {
   color: var(--pc-accent);
   text-underline-offset: 3px;
   text-decoration-thickness: 1px;
 }
-.pc-footer a:hover {
-  color: var(--pc-accent-hover);
-  text-decoration-thickness: 2px;
+.pc-footer-legal {
+  margin-top: 48px;
+  padding-top: 24px;
+  border-top: 1px solid var(--pc-line);
+  color: var(--pc-muted);
+  font-size: 0.8125rem;
+  line-height: 1.6;
 }
 .pc-footer-legal p {
-  margin: 0 0 6px;
-  color: var(--pc-muted);
-  line-height: 1.6;
-  max-width: 52rem;
+  max-width: 60rem;
+  margin: 0 0 0.6em;
 }
-/* Pages with a sidebar: the fixed sidebar overlays the left edge, so inset the footer like VPContent does. */
+@media (max-width: 479px) {
+  .pc-footer {
+    padding-top: 56px;
+  }
+}
+/* Sidebar pages: the fixed sidebar overlays the left edge, so inset the footer like VPContent does. */
 @media (min-width: 960px) {
   body:has(.VPContent.has-sidebar) .pc-footer {
     padding-left: calc(var(--vp-sidebar-width) + 32px);
-    padding-right: 32px;
+  }
+  body:has(.VPContent.has-sidebar) .pc-footer-inner {
+    margin: 0;
   }
 }
 @media (min-width: 1440px) {
   body:has(.VPContent.has-sidebar) .pc-footer {
-    padding-left: calc(
-      (100% - (var(--vp-layout-max-width) - 64px)) / 2 + var(--vp-sidebar-width) + 0px
-    );
-  }
-}
-@media (min-width: 640px) {
-  .pc-footer {
-    padding-left: 48px;
-    padding-right: 48px;
+    padding-left: calc((100% - var(--vp-layout-max-width)) / 2 + var(--vp-sidebar-width) + 32px);
   }
 }
 
@@ -719,4 +733,20 @@ body {
 }
 .VPDoc .container .content-container .vp-doc [class*="language-"] pre {
   color: var(--pc-text);
+}
+
+/* Header stays one solid surface above the sidebar (the title box is transparent). */
+.VPNavBar.has-sidebar {
+  background-color: var(--pc-bg);
+}
+.VPFeatures .VPFeature.VPFeature {
+  border: 1px solid var(--pc-line) !important;
+  border-radius: 2px !important;
+  background: var(--pc-surface) !important;
+}
+.pc-footer-tag {
+  max-width: 48rem;
+}
+.pc-footer-tag a {
+  white-space: nowrap;
 }

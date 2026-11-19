@@ -2,9 +2,25 @@ import { defineConfig } from "vitepress";
 
 // PLAN.md is the internal implementation plan and is never published.
 export default defineConfig({
-  title: "PlatformCosmo",
+  title: "platformcosmo",
+  // Same pattern as the sibling MIRASTACK LABS sites: "<product>: <page> | MIRASTACK LABS".
+  titleTemplate: "platformcosmo: :title | MIRASTACK LABS",
   description:
-    "Prompt to animated isometric architecture diagrams, as a Claude Code plugin and CLI.",
+    "platformcosmo turns a prompt into animated isometric architecture diagrams, as an open-source Claude Code plugin and CLI from MIRASTACK LABS.",
+  transformHead({ pageData, description }) {
+    const pageTitle = pageData.frontmatter.title ?? pageData.title;
+    const full = `platformcosmo: ${pageTitle} | MIRASTACK LABS`;
+    const desc = pageData.description || description;
+    return [
+      ["meta", { property: "og:type", content: "website" }],
+      ["meta", { property: "og:site_name", content: "MIRASTACK LABS" }],
+      ["meta", { property: "og:title", content: full }],
+      ["meta", { property: "og:description", content: desc }],
+      ["meta", { name: "twitter:card", content: "summary" }],
+      ["meta", { name: "twitter:title", content: full }],
+      ["meta", { name: "twitter:description", content: desc }],
+    ];
+  },
   srcExclude: ["PLAN.md", "**/PLAN.md"],
   cleanUrls: true,
   cacheDir: "node_modules/.vitepress/cache",
@@ -34,6 +50,9 @@ export default defineConfig({
     ],
   ],
   themeConfig: {
+    // The nav logo is the MIRASTACK LABS lockup (theme/Layout.vue), linking to the company site; no title text.
+    siteTitle: false,
+    logoLink: "https://www.mirastacklabs.ai",
     nav: [
       { text: "Guide", link: "/guide/getting-started" },
       { text: "Gallery", link: "/gallery" },
@@ -55,7 +74,6 @@ export default defineConfig({
       },
       { text: "Gallery", link: "/gallery" },
     ],
-    socialLinks: [{ icon: "github", link: "https://github.com/mirastacklabs-ai/platformcosmo" }],
     // The footer (credit, license, trademark note) is theme/SiteFooter.vue so it shows on every page.
   },
 });
