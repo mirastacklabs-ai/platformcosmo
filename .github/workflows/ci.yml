@@ -78,3 +78,11 @@ jobs:
       - run: pnpm run build
       - run: pnpm run check:gallery
       - run: pnpm run docs:build
+      - name: Docs serve the schema byte-identical at its $id path
+        run: |
+          cmp docs/.vitepress/dist/schema/v1.json schema/v1.json
+          # shellcheck disable=SC2016
+          id=$(sed -n 's/^ *"\$id": *"\(.*\)".*/\1/p' schema/v1.json | head -n 1)
+          [ "$id" = "https://platformcosmo.io/schema/v1.json" ] || { echo "unexpected \$id: $id" >&2; exit 1; }
+          path=${id#https://platformcosmo.io}
+          [ -f "docs/.vitepress/dist$path" ] || { echo "docs site does not serve $path" >&2; exit 1; }

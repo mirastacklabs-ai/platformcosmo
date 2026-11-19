@@ -1,0 +1,67 @@
+name: Export (macOS)
+
+# PLAN section 14 (v1.2): works on macOS and Linux; outputs must be deterministic across OS.
+# macOS minutes are costly, so PRs only run this when export-related paths change.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "packages/core/src/export/**"
+      - "packages/core/src/emit/**"
+      - "packages/core/src/anim/**"
+      - "packages/cli/**"
+      - "plugin/bin/**"
+      - "scripts/check-export.sh"
+      - ".github/workflows/export-macos.yml"
+      - ".github/workflows/ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: export-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+
+jobs:
+  export-macos:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - name: Install ffmpeg (CI runner only)
+        run: brew install ffmpeg
+      # TODO(D33): drop --fps/--duration once streaming export lands (the default 336 frames
+      # of 1129x748 exceed the 1 GiB frame cap).
+      - name: Export with the workspace CLI
+        run: |
+          PCOSMO_PACKS_DIR="$(mktemp -d)" node packages/cli/dist/bin.js build examples/load-balancing.cosmo.json --gif --mp4 --png --static --fps 24 --duration 5 -o out/cli
+      - name: Check CLI exports
+        run: bash scripts/check-export.sh out/cli --frames 120 --fps 24
+      # TODO(D33): drop --fps/--duration once streaming export lands.
+      - name: Export with the bundled plugin CLI
+        run: |
+          PCOSMO_PACKS_DIR="$(mktemp -d)" plugin/bin/pcosmo build examples/load-balancing.cosmo.json --gif --png --fps 24 --duration 5 -o out/plugin
+      - name: Check plugin exports
+        run: bash scripts/check-export.sh out/plugin --gif-only --frames 120 --fps 24
+      - name: Upload outputs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: export-macos-out
+          path: out
+          retention-days: 7
