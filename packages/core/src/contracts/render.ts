@@ -82,6 +82,9 @@ export interface VideoEncoder {
  * `speed` must be in (0, 10]; `png.scale` in (0, 8]; `video.fps` in [1, 60];
  * `video.durationSec` in (0, 120].
  */
+/** Particle motion mechanism: SMIL `<animateMotion>` (default) or CSS `offset-path` (D32). */
+export type MotionMode = "smil" | "css";
+
 export interface RenderOptions {
   /** Default `["animated"]`. */
   readonly outputs?: readonly OutputKind[];
@@ -98,6 +101,14 @@ export interface RenderOptions {
   readonly font?: FontMode;
   /** Animation speed multiplier, default 1. */
   readonly speed?: number;
+  /**
+   * Particle motion mechanism, default `smil` (`<animateMotion>`). `css` is the PLAN §7
+   * fallback: particles move with CSS `offset-path` + `offset-distance` keyframes and the
+   * output has no SMIL elements (for hosts or sanitizers that strip SMIL but keep `<style>`).
+   * Render-affecting (part of the default id-prefix hash). Same timing, phases, budgets and
+   * reduced-motion behaviour as `smil`; `frame` mode output is identical for both (D32).
+   */
+  readonly motion?: MotionMode;
   /**
    * Prefix for every SVG id; default `pc-` + the first 8 hex chars of SHA-256 over the
    * RFC 8785 (JCS) canonical JSON of `{ spec, options }` (render-affecting options only).
@@ -291,6 +302,8 @@ export interface AnimationLayer {
 
 export interface AnimateOptions {
   readonly speed: number;
+  /** Particle motion mechanism (see `RenderOptions.motion`); default `smil`. Ignored in `frame` mode. */
+  readonly motion?: MotionMode;
   /**
    * `loop`: one looping master timeline over all steps (animated output).
    * `step`: static states of one step with its own particle loops (per-step output).
