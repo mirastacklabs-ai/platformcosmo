@@ -38,6 +38,7 @@ Resume point for the autonomous run: read this file and `DECISIONS.md`, then con
 - npm: org and package names, `npm-publish` environment, `RELEASE_ENABLED`, trusted publishing (or `NPM_TOKEN`).
 - Icon terms: accept Azure (D29) and confirm Google Cloud (D30) terms to render those examples.
 - `CLAUDE_CODE_OAUTH_TOKEN` for a real Claude Code prompt → diagram run in a container.
+- Renew the `platformbuilds.*` domains; add the redirect README in the `platformcosmo` GitHub org (PLAN §16).
 - Trademark search, conduct contact, close stale Dependabot PRs #2–#5.
 
 ## Follow-ups (logged, not blocking)
