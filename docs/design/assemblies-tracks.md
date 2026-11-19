@@ -122,7 +122,9 @@ occlusion recovery, clean base with recovery, arrow removal, positions, spec fra
 of ingestion §6.5 and its report.
 
 **Acceptance criteria (normative).** On every synthetic trap figure, including the
-arrows-touching-parts figure, the leader-line figure and the callout-text figure, the correct
+arrows-touching-parts figure, the leader-line figure, the callout-text figure and the numbered
+callout joined by a leader to a seated part on a busy board (geodesic part ink: the board is not
+part ink of the heat sink), the correct
 pipeline passes the gate with zero errors (declared annotations are excluded from both residual
 comparisons and the re-render has no redrawn hints, ingestion §6.5). Single-state trap figures
 pass with the missing-state checks reported as `not-run` and `confidence: "reduced"`. Each
@@ -139,6 +141,7 @@ deliberately broken variant fails, with at least the listed codes (all at error 
 | arrow declared but not erased, or erased but not declared                                                                         | `asset/arrow-residual` / `asset/exploded-residual` (undeclared ink is never excluded)                                                        |
 | residual hidden by a declared annotation (a text rect over a ghost fin or a seated clip lever; a wide polyline across a fragment) | `asset/annotation-invalid` and/or `asset/exploded-residual` (bridged components, §6.5)                                                       |
 | fins the segmentation missed, declared as a `text` rect in one or both states                                                     | `asset/annotation-invalid` (the fins are part ink inside the heat sink's hull; text rects allow none)                                        |
+| outermost fin row missed by segmentation, declared as a leader                                                                    | `asset/annotation-invalid` (inside the hull built from the heat sink's whole ink in the exploded state; no text rect at its end)             |
 | a leader polyline traced along a fin's own ink                                                                                    | `asset/annotation-invalid` (part ink inside the part hull along its length, also after the allowance cut; measured band, not declared width) |
 | many small annotations each touching a part (cumulative overlap)                                                                  | `asset/annotation-invalid` (per-part cap 16 px summed over all annotations)                                                                  |
 | a 40 px ghost cut in two by an arrow band                                                                                         | `asset/exploded-residual` (the band bridges the pieces into one component)                                                                   |
