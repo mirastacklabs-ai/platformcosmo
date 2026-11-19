@@ -50,9 +50,10 @@ export default defineConfig({
     ],
   ],
   themeConfig: {
-    // The nav logo is the MIRASTACK LABS lockup (theme/Layout.vue), linking to the company site; no title text.
+    // The nav logo is the MIRASTACK LABS lockup (theme/Layout.vue) linking to this site's home, as on
+    // the MIRASTACK LABS product sites; no title text. The company site is credited in the footer.
     siteTitle: false,
-    logoLink: "https://www.mirastacklabs.ai",
+    logoLink: "/",
     nav: [
       { text: "Guide", link: "/guide/getting-started" },
       { text: "Gallery", link: "/gallery" },

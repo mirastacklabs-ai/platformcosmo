@@ -7,7 +7,7 @@ import MiraLogo from "./MiraLogo.vue";
     <div class="pc-footer-inner">
       <a
         class="pc-footer-logo"
-        href="https://www.mirastacklabs.ai"
+        href="/"
         aria-label="MIRASTACK LABS, home"
       >
         <MiraLogo wordmark />
