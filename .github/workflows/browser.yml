@@ -32,7 +32,7 @@ jobs:
       - run: scripts/pc install --frozen-lockfile
       - name: Browser check on the generated fixtures
         run: tests/browser/run.sh
-      - name: Render the launch examples and dc-hall with the CLI (animated + interactive)
+      - name: Render the launch examples and dc-hall with the CLI (animated + interactive, smil and css motion)
         if: always()
         run: |
           scripts/pc run build
@@ -40,6 +40,9 @@ jobs:
           for f in load-balancing rag-pipeline kubernetes-deployment cdn-cache gpu-inference-cluster dc-hall; do
             scripts/pc exec node packages/cli/dist/bin.js build "examples/$f.cosmo.json" \
               -o tests/browser/real --interactive
+            # CSS offset-path variant (D32): <name>.css-motion.svg, same checks
+            scripts/pc exec node packages/cli/dist/bin.js build "examples/$f.cosmo.json" \
+              -o tests/browser/real --interactive --motion css --name "$f.css-motion"
           done
       - name: Browser check on the real CLI output
         if: always()
@@ -80,6 +83,7 @@ jobs:
           mkdir -p tests/browser/real
           for f in load-balancing rag-pipeline kubernetes-deployment cdn-cache gpu-inference-cluster dc-hall; do
             node packages/cli/dist/bin.js build "examples/$f.cosmo.json" -o tests/browser/real --interactive
+            node packages/cli/dist/bin.js build "examples/$f.cosmo.json" -o tests/browser/real --interactive --motion css --name "$f.css-motion"
           done
       - run: sudo safaridriver --enable
       - name: Safari checks (Reduce Motion off, then on) on fixtures and real output

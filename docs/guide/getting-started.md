@@ -18,6 +18,19 @@ Then ask for a diagram:
 Claude writes `rag.cosmo.json`, runs `pcosmo validate`, fixes any problems and runs `pcosmo build`. See
 [the plugin guide](./plugin).
 
+## From an image
+
+Attach a screenshot, an exported diagram or a whiteboard photo, or name its path:
+
+```
+/platformcosmo:diagram draw this as a PlatformCosmo diagram: ./sketch.png
+```
+
+Claude first lists the components, groups, connections and reading order it sees, then writes the spec, validates
+it and builds the SVG. The image is redrawn in PlatformCosmo's isometric style (not a pixel copy), labels are kept
+verbatim (obvious typos fixed, long ones shortened and listed as assumptions), and steps are added only when the image shows a sequence such as numbered arrows. Claude ends with what
+it read and any assumptions, so you can correct them. Add "keep the layout" to ask for a best-effort match of the original positions. PlatformCosmo sends the image nowhere: Claude reads it as part of your conversation, like any attachment, and no tool uploads it elsewhere.
+
 ## With the CLI
 
 ```sh

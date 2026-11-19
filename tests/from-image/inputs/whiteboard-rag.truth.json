@@ -1,0 +1,22 @@
+{
+  "image": "whiteboard-rag.png",
+  "nodes": [
+    { "label": "Documents" },
+    { "label": "Chunker" },
+    { "label": "Embedding Model" },
+    { "label": "Question" },
+    { "label": "Vector DB" },
+    { "label": "LLM" },
+    { "label": "Answer" }
+  ],
+  "groups": [],
+  "edges": [
+    { "from": "Documents", "to": "Chunker" },
+    { "from": "Chunker", "to": "Embedding Model" },
+    { "from": "Question", "to": "Embedding Model" },
+    { "from": "Embedding Model", "to": "Vector DB" },
+    { "from": "Vector DB", "to": "LLM" },
+    { "from": "LLM", "to": "Answer" }
+  ],
+  "steps": 0
+}

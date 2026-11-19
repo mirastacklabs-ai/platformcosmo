@@ -1,0 +1,31 @@
+{
+  "image": "k8s-sequence.png",
+  "nodes": [
+    { "label": "Client" },
+    { "label": "Ingress" },
+    { "label": "Web Service" },
+    { "label": "Web Pod 1" },
+    { "label": "Web Pod 2" },
+    { "label": "Database" }
+  ],
+  "groups": [
+    {
+      "label": "Kubernetes Cluster",
+      "members": ["Ingress", "Web Service", "Web Pod 1", "Web Pod 2"]
+    }
+  ],
+  "edges": [
+    { "from": "Client", "to": "Ingress" },
+    { "from": "Ingress", "to": "Web Service" },
+    { "from": "Web Service", "to": "Web Pod 1" },
+    { "from": "Web Pod 1", "to": "Database" },
+    { "from": "Web Service", "to": "Web Pod 2" }
+  ],
+  "steps": 4,
+  "stepEdges": [
+    { "from": "Client", "to": "Ingress" },
+    { "from": "Ingress", "to": "Web Service" },
+    { "from": "Web Service", "to": "Web Pod 1" },
+    { "from": "Web Pod 1", "to": "Database" }
+  ]
+}

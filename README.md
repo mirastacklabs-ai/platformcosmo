@@ -32,6 +32,8 @@ You need [Claude Code](https://code.claude.com) and Node.js >= 22.12 on your `PA
    /platformcosmo:diagram A load balancer sending user traffic round-robin to three app servers backed by a database, with health checks and a failover step when one server goes down
    ```
 
+   Or attach a screenshot, exported diagram or whiteboard photo and ask Claude to draw it as a PlatformCosmo diagram.
+
    Claude writes a `<name>.cosmo.json` spec in your working directory, validates it,
    builds it, and reports the output paths: `<name>.svg` (animated, looping), plus any
    extras you ask for (`--static`, `--steps`, `--png`, `--theme dark`).

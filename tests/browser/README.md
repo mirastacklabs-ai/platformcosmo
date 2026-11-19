@@ -29,6 +29,10 @@ budget for `<img>`), not blank, reduced motion static (inline and `<object>`), d
 the rendering, no request leaves localhost. A static `<img>` is a hard FAIL unless the engine is in
 the printed allowlist in `check.mjs` and the media probe proves the cause.
 
+CI renders every example twice: the default (`<name>.svg`) and the CSS `offset-path` motion
+variant (`pcosmo build --motion css --name <name>.css-motion`, D32), so the same animates and
+reduced-motion checks run on both in every engine and embedding.
+
 ## Real Safari
 
 `safari.mjs` is a dependency-free WebDriver client (plain `fetch` to safaridriver on

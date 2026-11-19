@@ -14,6 +14,6 @@ receives security fixes.
 ## Network policy
 
 `@platformcosmo/core` and the `pcosmo` CLI make no network requests at runtime.
-The only planned exception is `pcosmo icons add`, which downloads icon packs
+The only exception is `pcosmo icons add`, which downloads icon packs
 only when the user explicitly runs it. Generated SVGs contain no external
 references, and all labels are escaped.

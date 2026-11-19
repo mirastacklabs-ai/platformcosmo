@@ -1,7 +1,7 @@
 ---
 name: export
 description: Re-export an existing PlatformCosmo spec (*.cosmo.json or *.cosmo.yaml) to other formats or themes: static SVG, per-step SVGs, PNG, interactive SVG, GIF or MP4. Use when the user already has a spec and wants a different output, size, theme or speed without redrawing it.
-argument-hint: <spec file> [--static --steps --interactive --png --gif --mp4 --theme dark --speed 2]
+argument-hint: <spec file> [--static --steps --interactive --png --gif --mp4 --theme dark --speed 2 --motion css]
 allowed-tools: Bash(pcosmo build *) Bash(pcosmo validate *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs build *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs validate *) Read
 ---
 
@@ -28,7 +28,12 @@ The animated `<name>.svg` is always written unless `--no-animated` is given. Fla
 | `--mp4`         | `<name>.mp4`               | Needs `ffmpeg` on PATH; if it is missing, say so and offer `--gif`              |
 
 Other options: `--theme light|dark|blueprint|mono|<file>`, `--font embed|outline|system`, `--speed <n>`,
-`-o <dir>` (output directory), `--name <base>`, `--no-optimize`.
+`--motion smil|css`, `-o <dir>` (output directory), `--name <base>`, `--no-optimize`.
+
+`--motion css` moves the flow particles with CSS `offset-path` instead of SMIL (`<animateMotion>`), so the SVG
+contains no SMIL elements at all. Use it when the host strips SMIL but keeps `<style>` (some sanitizers, markdown
+renderers and wikis); keep the default `smil` otherwise. Timing, particle counts and reduced-motion behaviour are
+the same; static, PNG and GIF/MP4 output do not change.
 
 ## Rules
 
