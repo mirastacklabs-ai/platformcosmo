@@ -99,9 +99,24 @@ export function unsupportedDiagnostics(
   for (const a of spec.assemblies ?? []) roots.set(a.id, "phase1b");
   for (const f of spec.figures ?? []) roots.set(f.id, "phase1a");
   for (const b of spec.storyboards ?? []) roots.set(b.id, "phase3");
+  // `closeup` is a reserved path segment only after the first segment and only in specs with
+  // 1.2.0 content; in a plain 1.1 spec it is an ordinary id (`r1/closeup` is a slot).
+  const has12 =
+    spec.assemblies !== undefined ||
+    spec.images !== undefined ||
+    spec.figures !== undefined ||
+    spec.storyboards !== undefined ||
+    (spec.steps ?? []).some((st) => st.assembly !== undefined) ||
+    (spec.racks ?? []).some(
+      (r) =>
+        r.programs !== undefined ||
+        (r.slots ?? []).some((sl) => sl.assembly !== undefined || sl.closeup !== undefined),
+    );
+  const closeupPath = (segs: readonly string[]): boolean =>
+    has12 && segs.indexOf("closeup", 1) >= 1;
   const pathGate = (path: string): boolean => {
     const segs = path.split("/");
-    if (groups.phase2 && segs.includes("closeup")) return true; // close-up levels (phase 2)
+    if (groups.phase2 && closeupPath(segs)) return true; // close-up levels (phase 2)
     const kind = roots.get(segs[0] as string);
     // Unknown roots are left to semantic validation once phase 1a is lifted.
     return kind === undefined ? groups.phase1a : groups[kind];
@@ -125,12 +140,35 @@ export function unsupportedDiagnostics(
     // Part paths (two or more `/`) and close-up paths only exist with 1.2.0 content.
     const deep = (path: string, at: string): void => {
       const segs = path.split("/");
-      if (groups.phase2 && segs.includes("closeup")) flag(at, path);
+      if (groups.phase2 && closeupPath(segs)) flag(at, path);
       else if (segs.length > 2 && pathGate(path)) flag(at, path);
     };
     if (step.focus !== undefined) deep(step.focus, `/steps/${i}/focus`);
     for (const key of Object.keys(step.set ?? {})) deep(key, `/steps/${i}/set/${ptr(key)}`);
   });
+
+  // A plain 1.1 id `closeup` stays valid, with a warning: it would shadow the reserved close-up
+  // segment once the node (or its parent) gets a close-up.
+  const reserved = (id: string | undefined, at: string): void => {
+    if (id !== "closeup") return;
+    out.push({
+      severity: "warning",
+      code: "semantic/reserved-id",
+      path: at,
+      message:
+        'The id "closeup" is reserved as a close-up path segment from schema revision 1.2.0.',
+      suggestion: "Rename it (for example close-up-1) before adding close-ups to this spec",
+    });
+  };
+  const lists = ["nodes", "groups", "racks", "equipment", "rows", "aisles", "cables"] as const;
+  for (const list of lists) {
+    (spec[list] ?? []).forEach((it: { readonly id?: string }, i: number) =>
+      reserved(it.id, `/${list}/${i}/id`),
+    );
+  }
+  (spec.racks ?? []).forEach((r, i) =>
+    (r.slots ?? []).forEach((sl, j) => reserved(sl.id, `/racks/${i}/slots/${j}/id`)),
+  );
 
   if (groups.phase2) {
     (spec.racks ?? []).forEach((rack, i) => {

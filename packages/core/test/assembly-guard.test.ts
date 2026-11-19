@@ -146,6 +146,22 @@ describe("schema 1.2.0 guard", () => {
     expect(paths({})).toEqual([]);
   });
 
+  test("a 1.1 id named closeup stays valid (warning only), also as a slot path", () => {
+    const spec = {
+      meta: { version: "1" },
+      nodes: [{ id: "closeup", type: "server" }],
+      racks: [{ id: "r1", slots: [{ id: "closeup", at: 1, type: "server-1u" }] }],
+      steps: [{ focus: "closeup" }, { focus: "r1/closeup", set: { "r1/closeup": "down" } }],
+    };
+    const r = validate(spec);
+    expect(r.valid).toBe(true);
+    expect(at(spec)).toEqual([]);
+    expect(
+      r.diagnostics.filter((d) => d.code === "semantic/reserved-id").map((d) => d.path),
+    ).toEqual(["/nodes/0/id", "/racks/0/slots/0/id"]);
+    expect(r.diagnostics.every((d) => d.severity !== "error")).toBe(true);
+  });
+
   test("1.1 specs are untouched", () => {
     const spec = {
       meta: { version: "1" },

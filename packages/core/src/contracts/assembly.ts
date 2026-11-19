@@ -577,7 +577,13 @@ export interface OpacityKey {
 export interface PartTrack {
   /** Copy key (`item` or `item__c<k>`). */
   readonly copy: string;
-  /** Clipped copies only: the clipping solid's screen track (its copy-0 motion); else empty. */
+  /**
+   * Clipped copies only: the clipping solid's TOTAL screen track (its own `host`, when it is
+   * clipped itself, plus its motion), so nested inserts compose; else empty. A copy is clipped
+   * only if its motion relative to the solid has no component ⊥ the clip axis anywhere in the
+   * loop (§9.5); otherwise the crossing epochs fall back (Phase 1b) or use a separate clipped
+   * copy swapped with an unclipped one (Phase 3).
+   */
   readonly host: readonly TrackKey[];
   /**
    * The leaf's screen translation; for clipped copies RELATIVE to `host` (leaf track minus solid
