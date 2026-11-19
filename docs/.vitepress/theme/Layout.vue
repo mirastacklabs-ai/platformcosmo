@@ -10,7 +10,11 @@ const { Layout } = DefaultTheme;
 
 <template>
   <Layout>
-    <template #nav-bar-title-before><MiraLogo wordmark /></template>
+    <template #nav-bar-title-before>
+      <span class="pc-product">PLATFORMCOSMO</span>
+      <span class="pc-by">by</span>
+      <MiraLogo wordmark class="pc-title-lockup" />
+    </template>
     <template #nav-bar-content-after><NavIcons /></template>
     <template #home-hero-after><HeroDiagram /></template>
     <template #layout-bottom><SiteFooter /></template>

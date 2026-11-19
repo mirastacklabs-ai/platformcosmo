@@ -453,6 +453,40 @@ body {
 .pc-logo .b3 {
   fill: #ced4da;
 }
+/* Header: "PLATFORMCOSMO by" + the MIRASTACK LABS lockup (unchanged), one link to this site's home.
+   The product name uses the lockup's own wordmark type so the two read as one line. */
+.pc-product {
+  font-family: var(--pc-mono);
+  font-size: 1rem;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--pc-ink);
+  white-space: nowrap;
+}
+.pc-by {
+  font-family: var(--pc-mono);
+  font-size: 1rem;
+  line-height: 1;
+  font-weight: 400;
+  color: var(--pc-muted);
+}
+.pc-title-lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+@media (max-width: 480px) {
+  /* Not enough width for the full lockup next to the buttons: keep the mark; the footer shows it in full. */
+  .pc-title-lockup .pc-wordmark {
+    display: none;
+  }
+}
+@media (max-width: 400px) {
+  .pc-gh-btn {
+    display: none;
+  }
+}
 .pc-wordmark {
   font-family: var(--pc-mono);
   font-size: 1rem;
@@ -764,4 +798,17 @@ body {
 }
 .pc-footer-tag a {
   white-space: nowrap;
+}
+
+/* One header background on every page: VitePress tints the title area with the sidebar colour on
+   pages that have a sidebar, which split the "PLATFORMCOSMO by MIRASTACK LABS" lockup across two
+   backgrounds. */
+.VPNavBar,
+.VPNavBar.has-sidebar .title,
+.VPNavBar.has-sidebar .divider-line,
+.VPNavBar.has-sidebar .content-body {
+  background-color: var(--vp-c-bg) !important;
+}
+.VPNavBar.has-sidebar .title {
+  border-bottom: 0;
 }
