@@ -414,5 +414,10 @@ export type ExportFn = (
  */
 export type BuildSceneFn = (
   spec: PlatformCosmoSpec,
-  context: { readonly icons?: IconResolver; readonly dc?: DcPack },
+  context: {
+    readonly icons?: IconResolver;
+    readonly dc?: DcPack;
+    /** Theme label font size (default 12): sizes the router's label keep-outs like the renderer. */
+    readonly labelSize?: number;
+  },
 ) => SceneGraph;

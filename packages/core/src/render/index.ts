@@ -215,6 +215,7 @@ export function createRender(deps: RenderDeps): RenderFn {
       }
 
       const scene = deps.buildScene(parsed, {
+        labelSize: theme.font.label,
         ...(options.icons ? { icons: options.icons } : {}),
         ...(options.dc ? { dc: options.dc } : {}),
       });

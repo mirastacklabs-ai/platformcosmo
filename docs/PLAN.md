@@ -105,7 +105,7 @@ platformcosmo/
 
 **Version policy:**
 - `meta.version` is the spec format's **major** version, a string (`"1"`). The schema URL is per major (`/schema/v1.json`) and never moves.
-- Within a major, changes are **additive only**: new optional fields, new enum values, looser limits. `meta.version` stays `"1"`; v1.1's DC fields (`racks[]`, `rows[]`, `aisles[]`, `cables[]`) land in `v1.json` as optional fields.
+- Within a major, changes are **additive only**: new optional fields, new enum values, looser limits. `meta.version` stays `"1"`; v1.1's DC fields (`racks[]`, `rows[]`, `aisles[]`, `cables[]`) land in `v1.json` as optional fields. A revision may also change a default when its changeset says so (the revision's patch or minor number moves); `canvas.grid` became `true` by default in 1.1.3 (D51).
 - The schema also has a semver **revision** (`1.0.0`, `1.1.0`, …) kept in the schema file as `x-revision` and exported by core as `SCHEMA_REVISION` (done in the contracts PR). The engine's revision decides which fields it accepts.
 - Specs fail closed: root `additionalProperties: false` means an older engine rejects fields it doesn't know, and the error names the field and says to upgrade `platformcosmo`.
 - Breaking changes need a new major: `meta.version: "2"`, `schema/v2.json`, and `migrate()` in core (exposed as `pcosmo migrate`) that rewrites v1 specs. Core keeps validating every supported major. A field is deprecated (validator warning) for at least one minor release before a major removes it.

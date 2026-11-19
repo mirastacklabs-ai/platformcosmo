@@ -50,7 +50,8 @@ export function fixtureTheme(id = "light", dark = false): ThemeTokens {
     grid: { stroke: "#cccccc", opacity: 0.5 },
     text: { primary: fg, secondary: "#667788", inverse: "#ffffff" },
     font: {
-      family: "Inter, ui-sans-serif, system-ui, sans-serif",
+      family: 'Oswald, "Arial Narrow", Arial, sans-serif',
+      mono: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
       label: 12,
       badge: 10,
       caption: 14,

@@ -21,7 +21,7 @@ function num(n: number): string {
 
 function checkString(path: readonly string[], v: string): string {
   const key = path.join(".");
-  if (key === "font.family") {
+  if (key === "font.family" || key === "font.mono") {
     if (!FAMILY_RE.test(v) || !balancedQuotes(v)) throw new Error(`invalid theme value at ${key}`);
     return v;
   }
@@ -47,6 +47,9 @@ export function themeVars(theme: ThemeTokens): Map<string, string> {
     } else throw new Error(`unsupported theme value at ${path.join(".")}`);
   };
   walk(theme, []);
+  // `font.mono` is optional (D51): technical text falls back to the display family.
+  if (!out.has("--pc-font-mono"))
+    out.set("--pc-font-mono", out.get("--pc-font-family") ?? "sans-serif");
   return out;
 }
 
@@ -149,6 +152,8 @@ export function ruleFor(token: string): string | undefined {
   if (token === "t-metric-value") return `fill:${v("metric-value")}`;
   if (token === "t-caption") return `fill:${v("caption-text")}`;
   if (token === "t-badge") return `fill:${v("badge-text")}`;
+  if (token === "tm") return `font-family:${v("font-mono")}`;
+  if (token === "tw") return "font-weight:500";
   if (token === "tb") return `font-weight:${v("font-weightBold")}`;
   if (token === "edge")
     return `fill:none;stroke:${v("edge-stroke")};stroke-width:${v("edge-width")};stroke-linejoin:round;stroke-linecap:round`;
@@ -166,7 +171,8 @@ export function ruleFor(token: string): string | undefined {
   if (token === "grid")
     return `fill:none;stroke:${v("grid-stroke")};stroke-opacity:${v("grid-opacity")};stroke-width:1`;
   if (token === "metric") return `fill:${v("metric-fill")};stroke:${v("metric-stroke")}`;
-  if (token === "capbox") return `fill:${v("caption-fill")};stroke:none`;
+  if (token === "capbox")
+    return `fill:${v("caption-fill")};stroke:${v("badge-fill")};stroke-width:1`;
   if (token === "badgebox") return `fill:${v("badge-fill")};stroke:none`;
   if (token === "plate") return `fill:${v("icon-plate")};stroke:none`;
   if (token === "icon") return `color:${v("icon-color")}`;
@@ -174,14 +180,21 @@ export function ruleFor(token: string): string | undefined {
 }
 
 /** Class rules for the tokens actually used, sorted for determinism. */
-export function classRules(prefix: string, usedClasses: ReadonlySet<string>): string[] {
+export function classRules(
+  prefix: string,
+  usedClasses: ReadonlySet<string>,
+  monoEmbedFamily?: string,
+): string[] {
   const lead = `${prefix}-`;
   const tokens = [...usedClasses]
     .filter((c) => c.startsWith(lead))
     .map((c) => c.slice(lead.length));
   const out: string[] = [];
   for (const t of tokens.sort()) {
-    const r = ruleFor(t);
+    const r =
+      t === "tm" && monoEmbedFamily
+        ? `font-family:"${monoEmbedFamily}",var(--pc-font-mono)`
+        : ruleFor(t);
     // Modifier tokens that must beat their base class (`edge`, `grp-<style>`) get doubled specificity.
     const sel =
       t.startsWith("cable-") || t === "grp-contained" ? `.${lead}${t}.${lead}${t}` : `.${lead}${t}`;

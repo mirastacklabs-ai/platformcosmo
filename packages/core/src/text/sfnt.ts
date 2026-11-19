@@ -1,7 +1,7 @@
 /**
  * Minimal pure-JS TrueType (glyf) reader, glyph subsetter and WOFF2 writer.
  *
- * Scope: exactly what the engine needs from its vendored Inter subsets: character mapping
+ * Scope: exactly what the engine needs from its vendored Oswald and JetBrains Mono subsets: character mapping
  * (cmap formats 4 and 12), advances, glyph outlines (simple and composite), per-diagram
  * subsetting, and a WOFF2 container with null table transforms compressed with Brotli
  * (`node:zlib`, Node-only like the rest of the CLI). No kerning or shaping.

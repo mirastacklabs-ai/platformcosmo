@@ -1,9 +1,50 @@
-Inter-Regular.latin.ttf and Inter-Bold.latin.ttf are Latin subsets of Inter 4.1
-(https://github.com/rsms/inter, SIL Open Font License 1.1, see LICENSES/Inter-OFL-1.1.txt,
-the upstream LICENSE.txt at tag v4.1, unmodified).
+Bundled fonts (D51, MiraStack Labs brand look): Latin subsets of two open-source families, both
+SIL Open Font License 1.1. Upstream outlines are unmodified apart from subsetting; the family and
+style names are unchanged. The license texts ship in the package at dist/LICENSES/ and in LICENSES/
+of the repository (the upstream OFL.txt files, unmodified).
 
-Built from the Debian fonts-inter OTF (CFF) files: outlines converted to TrueType (cu2qu),
-hinting and layout features removed, subset to U+0020-007E, U+00A0-00FF and a few
-punctuation/arrow/math code points. The font family and style names are unchanged
-("Inter", "Regular"/"Bold"). The base64 copy in src/text/font-data.ts is generated from these
-files. The license text ships in the package at dist/LICENSES/Inter-OFL-1.1.txt.
+Display text (node labels, group pills, titles, legend, captions):
+
+  Oswald-Regular.latin.ttf    Oswald Regular  (400)
+  Oswald-Medium.latin.ttf     Oswald Medium   (500, node labels)
+  Oswald-SemiBold.latin.ttf   Oswald SemiBold (600, used as "bold")
+  Source: https://github.com/googlefonts/OswaldFont, commit
+          89795261ac9eeb9aa8cd99f43982c4e4b0e53261 (main), static files fonts/ttf/*.ttf.
+  License: LICENSES/Oswald-OFL-1.1.txt (upstream OFL.txt, same commit)
+  Upstream SHA-256:
+    0d9980da817ee71ad9c34bb46950fcf15dd53e928031f39d2e11ae19178ab826  fonts/ttf/Oswald-Regular.ttf
+    d8b3ac8668c6ddbcecd299567e2130e2b933ad8b6c98b5b8ac6ff2bee9c0848a  fonts/ttf/Oswald-Medium.ttf
+    8c5e61737c100d0a1ca87a9a1608afc53246b8a77f8d73c56b03406adc2d9282  fonts/ttf/Oswald-SemiBold.ttf
+    0fd731a904b729a4e02eaf5e8ebd06783edd9abe400e8882760160230675b652  OFL.txt
+
+Technical text (badges, metric values and labels, edge labels):
+
+  JetBrainsMono-Regular.latin.ttf  JetBrains Mono Regular (400)
+  JetBrainsMono-Bold.latin.ttf     JetBrains Mono Bold    (700)
+  Source: https://github.com/JetBrains/JetBrainsMono release v2.304,
+          JetBrainsMono-2.304.zip, static files fonts/ttf/*.ttf.
+  License: LICENSES/JetBrainsMono-OFL-1.1.txt (OFL.txt from the same zip)
+  Upstream SHA-256:
+    6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf  JetBrainsMono-2.304.zip
+    a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f  fonts/ttf/JetBrainsMono-Regular.ttf
+    5590990c82e097397517f275f430af4546e1c45cff408bde4255dad142479dcb  fonts/ttf/JetBrainsMono-Bold.ttf
+    30f0c136e3c88e422d0791acd97238870f9054a9729bc34cf2ff0d4ed8cac4ad  OFL.txt
+
+Both families ship static TrueType files upstream, so no variable-font instancing was needed.
+
+Subsetting: scripts/subset-fonts.sh (fonttools 4.55.3 `pyftsubset`, installed with
+`pip --require-hashes` from scripts/fonts-requirements.txt, in the container image
+python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b (python:3.12-slim)) keeps U+0020-007E, U+00A0-00AC, U+00AE-00FF, U+2013-2014, U+2018-2019, U+201C-201D,
+U+2022, U+2026, U+20AC, U+2190-2193, U+2212, U+2248, U+2260, U+2264-2265 (Oswald has no U+2190-2193
+arrows; JetBrains Mono has all), drops hinting and layout tables (no ligatures or kerning; the
+engine measures plain advances) and keeps the name table. The base64 copy in
+src/text/font-data.ts is generated from these files with scripts/gen-font-data.sh.
+
+SHA-256 of the committed subsets (reproducible with the script):
+  3b7c981cd2de114cfc73c01d3017dd58a866d5ff04a8819de646d5cf0d958828  Oswald-Regular.latin.ttf
+  643e9d6b95f53428377259b8cc341a4ad79cdd25f9789d38de957f8f51c63998  Oswald-Medium.latin.ttf
+  72f9b580b0430aba8e12eb829e41276dd935567adb5be77dd01e4ead39e45b6d  Oswald-SemiBold.latin.ttf
+  10d9ff242874a7eb4045c553cb50f555f06b8a1c046c98d44dc6af8052392db5  JetBrainsMono-Regular.latin.ttf
+  225d3309718d8d74eb437a5d84748a61f12ddc57641fca9230969c1645956e7e  JetBrainsMono-Bold.latin.ttf
+
+Replaces Inter 4.1 (rsms/inter, OFL 1.1), which is no longer bundled.
