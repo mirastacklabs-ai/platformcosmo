@@ -45,19 +45,17 @@ jobs:
       - run: pnpm run build
       - name: Install ffmpeg (CI runner only)
         run: brew install ffmpeg
-      # TODO(D33): drop --fps/--duration once streaming export lands (the default 336 frames
-      # of 1129x748 exceed the 1 GiB frame cap).
+      # Default fps/duration (one full loop, 336 frames at 24 fps): streamed export, D33.
       - name: Export with the workspace CLI
         run: |
-          PCOSMO_PACKS_DIR="$(mktemp -d)" node packages/cli/dist/bin.js build examples/load-balancing.cosmo.json --gif --mp4 --png --static --fps 24 --duration 5 -o out/cli
+          PCOSMO_PACKS_DIR="$(mktemp -d)" node packages/cli/dist/bin.js build examples/load-balancing.cosmo.json --gif --mp4 --png --static -o out/cli
       - name: Check CLI exports
-        run: bash scripts/check-export.sh out/cli --frames 120 --fps 24
-      # TODO(D33): drop --fps/--duration once streaming export lands.
+        run: bash scripts/check-export.sh out/cli --frames 336 --fps 24
       - name: Export with the bundled plugin CLI
         run: |
-          PCOSMO_PACKS_DIR="$(mktemp -d)" plugin/bin/pcosmo build examples/load-balancing.cosmo.json --gif --png --fps 24 --duration 5 -o out/plugin
+          PCOSMO_PACKS_DIR="$(mktemp -d)" plugin/bin/pcosmo build examples/load-balancing.cosmo.json --gif --png -o out/plugin
       - name: Check plugin exports
-        run: bash scripts/check-export.sh out/plugin --gif-only --frames 120 --fps 24
+        run: bash scripts/check-export.sh out/plugin --gif-only --frames 336 --fps 24
       - name: Upload outputs on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

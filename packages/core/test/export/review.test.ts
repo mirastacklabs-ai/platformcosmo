@@ -236,8 +236,23 @@ describe("ffmpeg encoder hardening", () => {
     const p = fake();
     p.stdin.write = () => false; // backpressure that never drains
     const enc = createFfmpegEncoder({ spawn: (() => p) as never, timeoutMs: 5000 });
-    const done = enc.encode([new Uint8Array([1]), new Uint8Array([2])], o);
-    queueMicrotask(() => setTimeout(() => p.emit("close", 1), 10));
-    await expect(done).rejects.toThrow(/code 1/);
+    // Deterministic: the process only exists after open() resolved, and the writer is parked on
+    // backpressure (write() returned false) before ffmpeg is made to exit.
+    const sink = await enc.open!(o);
+    let settled = false;
+    const blocked = sink.write(new Uint8Array([1])).then(
+      () => {
+        settled = true;
+      },
+      (e: unknown) => {
+        settled = true;
+        throw e;
+      },
+    );
+    blocked.catch(() => undefined);
+    await Promise.resolve();
+    expect(settled).toBe(false); // still waiting for a drain that never comes
+    p.emit("close", 1);
+    await expect(blocked).rejects.toThrow(/code 1/);
   });
 });

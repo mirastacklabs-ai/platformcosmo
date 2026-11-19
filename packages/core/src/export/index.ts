@@ -7,6 +7,7 @@ import { r2, t4 } from "../anim/css.js";
 import type {
   AnimationLayer,
   Diagnostic,
+  VideoSink,
   ExportFn,
   OutputKind,
   RenderModel,
@@ -15,16 +16,28 @@ import type {
 import { gifEncoder } from "./gif.js";
 import { validateRenderOptions } from "./options.js";
 import { pngSize } from "./png.js";
+import { bufferingSink, MAX_OUTPUT_BYTES, OutputTooLargeError } from "./stream.js";
 
 export { gifEncoder } from "./gif.js";
 export { rasterize, setResvgWasm } from "./rasterize.js";
 export { validateRenderOptions } from "./options.js";
 
-/** frames x width x height x 4 may not exceed this (PLAN: memory cap). */
-export const MAX_RASTER_BYTES = 1024 ** 3;
+/** One raster frame (width x height x 4) may not exceed this (D33: frames are streamed). */
+export const MAX_FRAME_BYTES = 256 * 1024 ** 2;
+/** Whole-clip cap for encoders without `open` (their frames are buffered). */
+const MAX_CLIP_BYTES = 1024 ** 3;
 const MAX_VIDEO_SECONDS = 120;
 const MAX_GIF_FPS = 50;
 const SVG_MIME = "image/svg+xml";
+
+/** Aborting must never reject or leave the export hanging. */
+async function abortSink(sink: VideoSink | undefined): Promise<void> {
+  try {
+    await sink?.abort();
+  } catch {
+    /* abort never rejects by contract; ignore a misbehaving one */
+  }
+}
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");
 
@@ -154,19 +167,50 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
     lastPng = png;
     return png;
   };
-  const tooLarge = (kind: OutputKind, scale: number, frames: number): boolean => {
+  /**
+   * D33 limits: one frame (and a PNG) is at most 256 MiB of RGBA. An encoder without `open`
+   * gets the whole clip buffered, so there frames x w x h x 4 is capped at 1 GiB too.
+   */
+  const tooLarge = (kind: OutputKind, scale: number, frames: number, buffered = false): boolean => {
     const w = Math.ceil(model.viewBox.width * scale);
     const h = Math.ceil(model.viewBox.height * scale);
-    if (frames * w * h * 4 <= MAX_RASTER_BYTES) return false;
+    const params = { kind, frames, width: w, height: h };
+    if (w * h * 4 > MAX_FRAME_BYTES) {
+      diagnostics.push({
+        severity: "error",
+        code: "export/too-large",
+        path: "",
+        message: `${kind} output frames would be ${w}x${h} pixels (${Math.ceil((w * h * 4) / 1024 ** 2)} MiB each), over the 256 MiB per-frame limit.`,
+        suggestion:
+          kind === "png"
+            ? "Use a smaller --scale."
+            : "Use a smaller --scale or reduce the diagram.",
+        params,
+      });
+      return true;
+    }
+    if (buffered && frames * w * h * 4 > MAX_CLIP_BYTES) {
+      diagnostics.push({
+        severity: "error",
+        code: "export/too-large",
+        path: "",
+        message: `${kind} encoder buffers the whole clip: ${frames} frame(s) of ${w}x${h} pixels is over the 1 GiB cap.`,
+        suggestion: "Lower --fps or --duration, or use an encoder that streams.",
+        params,
+      });
+      return true;
+    }
+    return false;
+  };
+  const outputTooLarge = (kind: OutputKind, bytes: number): void => {
     diagnostics.push({
       severity: "error",
       code: "export/too-large",
       path: "",
-      message: `${kind} output would need ${frames} frame(s) of ${w}x${h} pixels, over the 1 GiB memory cap.`,
-      suggestion: "Lower png.scale, video.fps or video.durationSec, or reduce the diagram size.",
-      params: { kind, frames, width: w, height: h },
+      message: `${kind} output is ${bytes} bytes, over the 1 GiB encoded-output cap.`,
+      suggestion: "Lower --fps or --duration, or use --scale for a smaller frame size.",
+      params: { kind, bytes },
     });
-    return true;
   };
 
   if (wanted.has("png")) {
@@ -215,37 +259,33 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
         message: `GIF frame delays are whole centiseconds, so the GIF uses ${gifFps} fps instead of ${fps}.`,
       });
     }
-    const cache = new Map<number, Promise<Uint8Array[]>>();
-    const getFrames = (rate: number, count: number): Promise<Uint8Array[]> => {
-      let p = cache.get(rate);
-      if (!p) {
-        p = (async () => {
-          const list: Uint8Array[] = [];
-          for (let i = 0; i < count; i++) list.push(await renderFrame(i / rate, 1));
-          return list;
-        })();
-        cache.set(rate, p);
-      }
-      return p;
-    };
+    // Frames are streamed (D33): each is rasterized, handed to every sink wanting that rate and
+    // dropped, so at most one PNG (plus the encoder's own working frame) is alive at a time.
+    // gif and mp4 at the same rate share one rasterization pass.
+    const byRate = new Map<number, { kind: "gif" | "mp4"; count: number }[]>();
     for (const kind of videoKinds) {
       const rate = kind === "gif" ? gifFps : fps;
       const count = seconds > 0 ? Math.max(1, Math.round(seconds * rate)) : 1;
-      if (tooLarge(kind, 1, count)) continue;
-      try {
-        const list = await getFrames(rate, count);
-        const first = list[0];
-        if (!first) continue;
-        const { width, height } = pngSize(first);
-        const encoder = kind === "mp4" ? options.video?.encoder : gifEncoder;
-        const data = await encoder!.encode(list, { fps: rate, width, height, format: kind });
-        outputs.push({
-          kind,
-          path: `${name}.${kind}`,
-          mime: kind === "gif" ? "image/gif" : "video/mp4",
-          data,
-        });
-      } catch (e) {
+      const enc = kind === "mp4" ? options.video?.encoder : gifEncoder;
+      if (tooLarge(kind, 1, count, !enc?.open)) continue;
+      byRate.set(rate, [...(byRate.get(rate) ?? []), { kind, count }]);
+    }
+    for (const [rate, jobs] of byRate) {
+      const count = jobs[0]!.count;
+      const sinks = new Map<"gif" | "mp4", VideoSink>();
+      const failed = new Set<"gif" | "mp4">();
+      const fail = async (kind: "gif" | "mp4", e: unknown): Promise<void> => {
+        failed.add(kind);
+        const sink = sinks.get(kind);
+        sinks.delete(kind);
+        await abortSink(sink);
+        // By name too: a bundler may duplicate the class, which breaks `instanceof`.
+        if (
+          e instanceof OutputTooLargeError ||
+          (e instanceof Error && e.name === "OutputTooLargeError")
+        ) {
+          return outputTooLarge(kind, (e as OutputTooLargeError).bytes ?? 0);
+        }
         diagnostics.push({
           severity: "error",
           code: "export/encode-failed",
@@ -253,6 +293,55 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
           message: `${kind} encoding failed: ${e instanceof Error ? e.message : String(e)}`,
           params: { kind },
         });
+      };
+      try {
+        for (let i = 0; i < count && failed.size < jobs.length; i++) {
+          const frame = await renderFrame(i / rate, 1);
+          if (i === 0) {
+            const { width, height } = pngSize(frame);
+            for (const { kind } of jobs) {
+              const encoder = (kind === "mp4" ? options.video?.encoder : gifEncoder)!;
+              const o = { fps: rate, width, height, format: kind } as const;
+              try {
+                sinks.set(kind, encoder.open ? await encoder.open(o) : bufferingSink(encoder, o));
+              } catch (e) {
+                await fail(kind, e);
+              }
+            }
+          }
+          for (const [kind, sink] of [...sinks]) {
+            try {
+              await sink.write(frame);
+            } catch (e) {
+              await fail(kind, e);
+            }
+          }
+        }
+        for (const [kind, sink] of [...sinks]) {
+          try {
+            const data = await sink.finish();
+            sinks.delete(kind);
+            if (data.length > MAX_OUTPUT_BYTES) {
+              outputTooLarge(kind, data.length);
+              continue;
+            }
+            outputs.push({
+              kind,
+              path: `${name}.${kind}`,
+              mime: kind === "gif" ? "image/gif" : "video/mp4",
+              data,
+            });
+          } catch (e) {
+            await fail(kind, e);
+          }
+        }
+      } catch (e) {
+        // Rasterization itself failed: every sink of this pass is lost.
+        for (const { kind } of jobs) if (!failed.has(kind)) await fail(kind, e);
+      } finally {
+        for (const sink of [...sinks.values()]) await abortSink(sink);
+        lastPng = undefined;
+        lastSvg = undefined;
       }
     }
   }
