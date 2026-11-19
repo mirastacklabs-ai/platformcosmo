@@ -412,9 +412,10 @@ the part (Claude reads coordinates from the image it viewed); `polygon` is an op
 outline; `prior` an optional isometric hull (`box`, `cylinder`); `group` puts sub-parts that
 move together into one sprite (the retention clip lever belongs to its heat sink); `instanceOf`
 marks identical parts; `holes: true` declares real through-holes. `annotations` declares the
-figure's arrows and leader lines (polylines with a stroke `width`, default 3 px) and its callout
-text (rectangles) per state: they are erased from the base and excluded from the gate's residual
-comparisons (§6.5); anything not declared is treated as drawing and must reproduce.
+figure's arrows and leader lines (polylines; `width` is only a hint, the band is measured) and
+its callout text (rectangles) per state. Their **non-part ink** is erased from the base and
+excluded from the gate's residual comparisons (§6.5); ink that belongs to a part can never be
+declared away (§6.5 rules 2–4), and anything not declared is drawing and must reproduce.
 
 ### 6.2 Silhouette segmentation, never rectangles
 
@@ -445,8 +446,10 @@ never contains pixels of a different part.
 ### 6.4 Clean base
 
 The base (default the assembled drawing) has every moved part's mask (dilated by 1 px) and
-every declared annotation erased: arrow and leader polylines dilated by `width / 2 + 2` px, text
-rectangles dilated by 2 px (the **annotation mask** of each state). Erased pixels are filled from
+every declared annotation erased: the measured band of each arrow and leader polyline and each
+text rectangle, dilated by 2 px (the **annotation mask** of each state), **minus part ink** (§6.5
+rule 2): annotation erasure only ever removes ink that is not part ink, except inside each
+contact allowance. Erased pixels are filled from
 the other state's drawing at the aligned position where no part covers them there
 (`erase: recover`; the board under the heat sinks comes from the exploded drawing), else with
 the background colour and flagged. Arrows are redrawn by the renderer as fading motion hints
@@ -479,13 +482,40 @@ until the gate passes:
    excluded band are one component, and its size is the sum of the residual pixels (a 40 px ghost
    cut by an arrow band stays 40 px). In addition, the residual pixels touching each band (within
    2 px of it) are summed per band and fail the same threshold.
-2. **Annotations are validated** deterministically (`asset/annotation-invalid`, error):
-   an arrow or leader polyline must lie on ink of its declared state (≥ 80% of samples taken
-   every 2 px along it have ink within `width / 2`), and its band may overlap a part's seated or
-   exploded mask only within the band itself (no band wider than 32 px); a text rectangle must
-   contain ink, must be no larger than 2% of the figure, and may overlap any part's seated or
-   exploded mask by at most 16 px.
-3. **Exclusions are capped and shown.** `report.json` lists every annotation and the total
+2. **Part ink cannot be annotated.** On the binarized source of each state (§6.2, after the
+   closing), ink components are labelled with 8-connectivity; a component is **part ink** when it
+   touches a part's seeded regions, their enclosed regions or their bounding ink, in that state.
+   Fins, levers and every other stroke attached to a part are part ink even when segmentation
+   missed them. Each part also has a **hull**: the convex hull of its mask and its prior hull
+   (§6.2), dilated by 2 px, per state. A **contact allowance** is a `w × w` px square (`w` = the
+   measured band width, rule 3) centred where a polyline end or crossing meets a part's outline
+   (an arrow tip, a leader end, a line crossing an edge); at most 2 per polyline and 8 per part.
+   - A text rectangle may contain no part ink and may not overlap any part's hull.
+   - An arrow or leader band may contain part ink only inside its contact allowances. For this
+     test the ink is relabelled with the polyline's own allowance squares cut out, so an arrow
+     whose tip touches a part is not part ink through that tip; but whatever the cut separates
+     must still lie **outside every part hull** (except inside the allowances). A leader traced
+     along a fin therefore fails even when its allowance cuts the fin off at its root, because
+     the fin lies inside the heat sink's hull; an arrow from the background to a part's edge
+     passes.
+   - Annotation erasure in the base (§6.4) uses the same rule, so it never removes part ink.
+3. **Measured band width.** A polyline's band is not its declared `width`: at every 2 px sample
+   along it, the gate measures the ink run perpendicular to the polyline through the sample;
+   the band half-width is (median run + 2 px) / 2. The polyline must lie on ink of its declared
+   state (≥ 80% of samples have a run ≥ 1 px), the median run must be ≤ 12 px (strokes, not
+   shapes) and the declared `width`, when given, within 2× of the measured one. Outside its
+   contact allowances, the measured band may not overlap any part mask or any part ink. A
+   polyline traced along a part's own stroke (a leader along fin ink) lies on part ink inside the
+   part's hull over its length and fails rule 2.
+4. **Cumulative caps per part.** For each part and state, the pixels of its seated and exploded
+   masks and of its part ink (labelled before any cut) that lie inside the part's hull and inside
+   any annotation, counted once over the union of all annotations and excluding the contact
+   allowances, must be ≤ 16 px. Many small annotations cannot add up to a hidden part. Text
+   rectangles must also contain ink and be ≤ 2% of the figure each.
+   Residual risk, stated in the report: a stroke attached to a part at a single point and lying
+   entirely outside the part's hull can be declared as a leader; the exclusion overlay (rule 5)
+   and the skill's verification renders are the backstop.
+5. **Exclusions are capped and shown.** `report.json` lists every annotation and the total
    excluded area per state; more than 5% of the figure in either state is an error
    (`asset/annotation-invalid`). The skill shows the user the excluded regions (an overlay of the
    annotation masks on the source, written by `assets figure --show-exclusions`) whenever it
@@ -500,20 +530,20 @@ cross-correlation of the sprite's 2-pixel silhouette band against the base); a s
 is a warning `asset/seat-unverified` with the bbox, so a seat that lands on the wrong socket is
 still reported.
 
-| Check                 | Rule (defaults; `--strict` halves the thresholds)                                                                                                                                                                                                     | Code                                                            |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| assembled residual    | largest residual component of (assembled re-render vs assembled source) > 24 px                                                                                                                                                                       | `asset/assembled-residual` (error, with bbox)                   |
-| exploded residual     | largest residual component of (exploded re-render vs exploded source) > 24 px; this is where ghost fragments in the base, rectangles carrying slivers and blanked interiors show up, and where an ungrouped sub-part (a clip lever left seated) fails | `asset/exploded-residual` (error, with bbox)                    |
-| leftover fragments    | after erasing, an ink component ≥ 12 px inside the moved parts' dilated seated masks whose pixels correlate (NCC ≥ 0.6) with the moved sprite at that place                                                                                           | `asset/leftover-fragment` (error)                               |
-| foreign pixels        | any ink pixel of a sprite outside the part's own regions (its seeded regions, the regions they enclose, and their bounding ink); ≥ 1 component of ≥ 4 px fails                                                                                        | `asset/foreign-pixels` (error)                                  |
-| transparency holes    | a transparent region of a sprite fully enclosed by its opaque mask, unless `holes`                                                                                                                                                                    | `asset/mask-hole` (error)                                       |
-| rectangle masks       | a mask equal to its bbox while the bbox contains ink of another part's regions                                                                                                                                                                        | `asset/rect-mask` (error)                                       |
-| group connectivity    | a group's mask is not one connected component (unless `allowDisjoint`)                                                                                                                                                                                | `asset/group-disconnected` (error)                              |
-| instance assignment   | two instances assigned to the same `locate` peak, or a swap that lowers the residual                                                                                                                                                                  | `asset/instance-swap` (error)                                   |
-| unrecovered base      | erased pixels filled with background (no other depiction) that are **visible in either re-render**, i.e. not covered by a sprite in that state, with a component > 24 px                                                                              | `asset/base-unrecovered` (error); invisible fills are info      |
-| unrecovered occlusion | pixels of a part hidden in its source depiction and not recovered (§6.3), visible in the exploded re-render                                                                                                                                           | `asset/occluded-unrecovered` (error when > 24 px, else warning) |
-| annotation residual   | ink left in the base inside a declared annotation mask (arrow or leader polyline, callout text rectangle)                                                                                                                                             | `asset/arrow-residual` (error)                                  |
-| annotation validity   | polyline not on ink, band too wide or over a part beyond its band, text rect without ink, larger than 2% or over a part by more than 16 px, total exclusion above 5% per state                                                                        | `asset/annotation-invalid` (error)                              |
+| Check                 | Rule (defaults; `--strict` halves the thresholds)                                                                                                                                                                                                                                                                                                                            | Code                                                            |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| assembled residual    | largest residual component of (assembled re-render vs assembled source) > 24 px                                                                                                                                                                                                                                                                                              | `asset/assembled-residual` (error, with bbox)                   |
+| exploded residual     | largest residual component of (exploded re-render vs exploded source) > 24 px; this is where ghost fragments in the base, rectangles carrying slivers and blanked interiors show up, and where an ungrouped sub-part (a clip lever left seated) fails                                                                                                                        | `asset/exploded-residual` (error, with bbox)                    |
+| leftover fragments    | after erasing, an ink component ≥ 12 px inside the moved parts' dilated seated masks whose pixels correlate (NCC ≥ 0.6) with the moved sprite at that place                                                                                                                                                                                                                  | `asset/leftover-fragment` (error)                               |
+| foreign pixels        | any ink pixel of a sprite outside the part's own regions (its seeded regions, the regions they enclose, and their bounding ink); ≥ 1 component of ≥ 4 px fails                                                                                                                                                                                                               | `asset/foreign-pixels` (error)                                  |
+| transparency holes    | a transparent region of a sprite fully enclosed by its opaque mask, unless `holes`                                                                                                                                                                                                                                                                                           | `asset/mask-hole` (error)                                       |
+| rectangle masks       | a mask equal to its bbox while the bbox contains ink of another part's regions                                                                                                                                                                                                                                                                                               | `asset/rect-mask` (error)                                       |
+| group connectivity    | a group's mask is not one connected component (unless `allowDisjoint`)                                                                                                                                                                                                                                                                                                       | `asset/group-disconnected` (error)                              |
+| instance assignment   | two instances assigned to the same `locate` peak, or a swap that lowers the residual                                                                                                                                                                                                                                                                                         | `asset/instance-swap` (error)                                   |
+| unrecovered base      | erased pixels filled with background (no other depiction) that are **visible in either re-render**, i.e. not covered by a sprite in that state, with a component > 24 px                                                                                                                                                                                                     | `asset/base-unrecovered` (error); invisible fills are info      |
+| unrecovered occlusion | pixels of a part hidden in its source depiction and not recovered (§6.3), visible in the exploded re-render                                                                                                                                                                                                                                                                  | `asset/occluded-unrecovered` (error when > 24 px, else warning) |
+| annotation residual   | ink left in the base inside a declared annotation mask (arrow or leader polyline, callout text rectangle)                                                                                                                                                                                                                                                                    | `asset/arrow-residual` (error)                                  |
+| annotation validity   | rules 2–5 above: part ink inside an annotation beyond its contact allowances (for text rects: any part ink or any part hull), ink separated by an allowance cut lying inside a part hull, polyline not on ink or measured run > 12 px, more than 16 px of a part inside annotations (cumulative per part), text rect without ink or > 2%, total exclusion above 5% per state | `asset/annotation-invalid` (error)                              |
 
 The report (`report.json`) lists every check with its numbers and the bbox of each failing
 component, so Claude can fix seeds, polygons or groups and rerun. The skill's verification loop
