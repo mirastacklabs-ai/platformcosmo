@@ -32,7 +32,10 @@
  * - Selectors: B builds every id selector with `ids.sel(id)` (CSS-escapes `.` in slot ids).
  * - `<g id=camera()>` wrapping every layer in `Layer` order; B zooms by animating its `transform`.
  * - Object groups are flat siblings in the `objects` layer, never nested (a rack and its slot
- *   devices are separate groups ordered by depth).
+ *   devices are separate groups ordered by depth). Exception (schema 1.2.0 assemblies): each
+ *   part copy is an object-like group inside its own wrapper chain `partMotion > partVisible >
+ *   partFade > [static clip]` (contracts/assembly.ts `PartTrack`); the wrapper chains are the
+ *   flat, depth-ordered siblings, and copies k ≥ 1 suffix every id with `__c<k>`.
  * - Each object: `<g id=object(id) class="<stateClass(initial state)>">` holding its faces
  *   (`face(id, f[, part])`) and an always-present `<path id=overlay(id)>` over its silhouette,
  *   so any object can change state by CSS alone (classes are never mutated; B overrides with

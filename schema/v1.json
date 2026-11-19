@@ -614,10 +614,10 @@
         "programs": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/program"
+            "$ref": "#/$defs/explodeProgram"
           },
           "maxItems": 8,
-          "description": "Explode programs for the rack as an assembly; selectors address slot ids, slot types (type:server-2u) and the rack's own parts. Without one the rack has the built-in drawers program (schema 1.2.0)."
+          "description": "Explode programs for the rack as an assembly (explode only; no build programs). Selectors are relative to the rack: slot ids, type:<slot type>, frame/<part> and frame/role:cover. Without one the rack has the built-in drawers program (doors, then every slot). Schema 1.2.0."
         }
       }
     },
@@ -661,7 +661,7 @@
         },
         "closeup": {
           "$ref": "#/$defs/id",
-          "description": "Assembly (template), figure or storyboard drawn instead of this when a step focuses it or anything inside it; cross-fades at the focus transition."
+          "description": "Assembly (template), figure or storyboard shown as a close-up level when a step focuses this node's close-up. Address the close-up instance explicitly with the reserved path segment closeup (r2/srv/closeup, r2/srv/closeup/board/cpu-1); the coarse node keeps its own path."
         }
       }
     },
@@ -817,7 +817,7 @@
     },
     "partPath": {
       "title": "SpecPartPath",
-      "description": "An id, or up to 8 ids joined by / that address a rack slot (rackId/slotId) or an assembly part (assemblyId/partId/...).",
+      "description": "An id, or up to 8 ids joined by / that address a rack slot (rackId/slotId), an assembly part (assemblyId/partId/...) or a close-up instance through the reserved segment closeup (rackId/slotId/closeup/partId).",
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]*(/[a-z][a-z0-9-]*){0,7}$",
       "maxLength": 520
@@ -907,10 +907,10 @@
     },
     "selector": {
       "title": "SpecPartSelector",
-      "description": "Selects parts of the program's assembly: a part path relative to the assembly (head/cam-intake), a glob (cyl-*, head/**, dimm-?), or tag:<tag>, type:<type>, role:<role>, id:<glob>. * matches within one path segment, ** any number of segments, ? one character. A selected sub-assembly moves as one unit.",
+      "description": "Selects nodes of the program owner (the assembly or sub-assembly that owns the program). A bare term matches the owner's direct children only: an id glob (cyl-*, dimm-?), or tag:<tag>, type:<type>, role:<role>. Prefix path segments to scope deeper: head/valve-* (children of head), **/type:dimm (any depth), frame/role:cover. * matches within one segment, ** any number of segments, ? one character. A selected sub-assembly moves as one unit.",
       "type": "string",
-      "pattern": "^((id|tag|type|role):)?[a-z0-9*?][a-z0-9*?/-]*$",
-      "maxLength": 140
+      "pattern": "^((\\*\\*|[a-z0-9*?][a-z0-9*?-]*)/){0,7}((tag|type|role):[a-z0-9*?][a-z0-9*?-]*|\\*\\*|[a-z0-9*?][a-z0-9*?-]*)$",
+      "maxLength": 200
     },
     "selectors": {
       "title": "SpecPartSelectors",
@@ -961,7 +961,7 @@
     },
     "image": {
       "title": "SpecImage",
-      "description": "An image asset. src is a file path relative to the spec's directory (no .., no absolute paths, no URLs) or an inline data:image/(png|jpeg|webp|svg+xml);base64 URI. Formats are checked by magic bytes; metadata is dropped; SVG goes through the icon sanitizer.",
+      "description": "An image asset. src is a file path relative to the spec's directory (no .., no absolute paths, no URLs) or an inline data:image/(png|jpeg|svg+xml);base64 URI. PNG, JPEG and SVG only (WebP is rejected: convert it to PNG or JPEG). Formats are checked by magic bytes; metadata is dropped (a JPEG's EXIF orientation is applied as a transform first); SVG goes through the icon sanitizer.",
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "src"],
@@ -973,8 +973,8 @@
         "src": {
           "type": "string",
           "maxLength": 350000,
-          "pattern": "^(data:image/(png|jpeg|webp|svg\\+xml);base64,[A-Za-z0-9+/]+={0,2}|(?![/\\\\])(?!.*(^|/)\\.\\.(/|$))[A-Za-z0-9._ /-]+\\.(png|jpg|jpeg|webp|svg|PNG|JPG|JPEG|WEBP|SVG))$",
-          "description": "Relative file path (png, jpg, jpeg, webp, svg) or an inline base64 data URI of up to about 256 KiB."
+          "pattern": "^(data:image/(png|jpeg|svg\\+xml);base64,[A-Za-z0-9+/]+={0,2}|(?![/\\\\])(?!.*(^|/)\\.\\.(/|$))[A-Za-z0-9._ /-]+\\.(png|jpg|jpeg|svg|PNG|JPG|JPEG|SVG))$",
+          "description": "Relative file path (png, jpg, jpeg, svg) or an inline base64 data URI of up to about 256 KiB."
         },
         "crop": {
           "$ref": "#/$defs/pixelRect",
@@ -1155,7 +1155,7 @@
             "$ref": "#/$defs/partOverride"
           },
           "maxProperties": 200,
-          "description": "Per-part direction, distance, delay or order, keyed by part path relative to the assembly."
+          "description": "Per-part direction, distance, delay or order, keyed by part path relative to the program owner."
         }
       }
     },
@@ -1240,68 +1240,10 @@
       "description": "An explode program (ordered stages) or a build program (ordered build steps).",
       "oneOf": [
         {
-          "title": "SpecExplodeProgram",
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["id", "stages"],
-          "properties": {
-            "id": {
-              "$ref": "#/$defs/id",
-              "description": "Program id, unique within its assembly or sub-assembly."
-            },
-            "kind": {
-              "const": "explode",
-              "description": "Explode program (the default kind)."
-            },
-            "label": {
-              "$ref": "#/$defs/text",
-              "description": "Program name."
-            },
-            "gap": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 100000,
-              "description": "Clearance between parts after an auto-distance move, in the assembly's units; default 10% of the assembly's largest extent."
-            },
-            "stages": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/stage"
-              },
-              "minItems": 1,
-              "maxItems": 32,
-              "description": "Stages in order; explode to stage k plays stages 1..k, implode plays them backwards."
-            }
-          }
+          "$ref": "#/$defs/explodeProgram"
         },
         {
-          "title": "SpecBuildProgram",
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["id", "kind", "steps"],
-          "properties": {
-            "id": {
-              "$ref": "#/$defs/id",
-              "description": "Program id, unique within its assembly or sub-assembly."
-            },
-            "kind": {
-              "const": "build",
-              "description": "Build program."
-            },
-            "label": {
-              "$ref": "#/$defs/text",
-              "description": "Program name."
-            },
-            "steps": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/buildStep"
-              },
-              "minItems": 1,
-              "maxItems": 500,
-              "description": "Build steps in order; parts not added by any step are the base and are present from the start."
-            }
-          }
+          "$ref": "#/$defs/buildProgram"
         }
       ]
     },
@@ -1353,9 +1295,9 @@
         },
         "shape": {
           "type": "string",
-          "pattern": "^(box|plate|cylinder|ring|shaft|prism|wedge|tray|card|sprite|[a-z0-9-]+:[a-z0-9-]+)$",
+          "pattern": "^(box|plate|cylinder|ring|shaft|stud|prism|wedge|tray|card|sprite|[a-z0-9-]+:[a-z0-9-]+)$",
           "maxLength": 129,
-          "description": "Primitive (box, plate, cylinder, ring, shaft, prism, wedge, tray, card, sprite) or a pack shape such as dc:server-2u, hw:dimm, auto:piston, brick:brick. Ignored for sub-assemblies.",
+          "description": "Primitive (box, plate, cylinder, ring, shaft, stud, prism, wedge, tray, card, sprite) or a pack shape such as dc:server-2u, hw:dimm, auto:piston, brick:brick. Ignored for sub-assemblies.",
           "default": "box"
         },
         "at": {
@@ -1435,9 +1377,13 @@
           "$ref": "#/$defs/partPath",
           "description": "Sibling part (path relative to the parent) this part sits on or in; the away direction leaves its contact face. Inferred from contact when omitted."
         },
+        "inserts": {
+          "$ref": "#/$defs/partPath",
+          "description": "Solid sibling (path relative to the parent) this part is inserted into, such as a valve through a head or a bolt in a block: the part's inside portion is clipped at that solid's entry face instead of counting as a collision. Detected automatically when unambiguous."
+        },
         "closeup": {
           "$ref": "#/$defs/id",
-          "description": "Assembly (template), figure or storyboard drawn instead of this when a step focuses it or anything inside it; cross-fades at the focus transition."
+          "description": "Assembly (template), figure or storyboard shown as a close-up level when a step focuses this node's close-up. Address the close-up instance explicitly with the reserved path segment closeup (r2/srv/closeup, r2/srv/closeup/board/cpu-1); the coarse node keeps its own path."
         },
         "use": {
           "$ref": "#/$defs/id",
@@ -1536,7 +1482,7 @@
         },
         "closeup": {
           "$ref": "#/$defs/id",
-          "description": "Assembly (template), figure or storyboard drawn instead of this when a step focuses it or anything inside it; cross-fades at the focus transition."
+          "description": "Assembly (template), figure or storyboard shown as a close-up level when a step focuses this node's close-up. Address the close-up instance explicitly with the reserved path segment closeup (r2/srv/closeup, r2/srv/closeup/board/cpu-1); the coarse node keeps its own path."
         },
         "template": {
           "type": "boolean",
@@ -1977,7 +1923,7 @@
         },
         "pose": {
           "enum": ["assembled", "exploded"],
-          "description": "Base pose for the static output and the start of the loop.",
+          "description": "Base pose shown in the static output and at the start of the loop. A figure drawn exploded usually sets exploded, so its first action implodes it.",
           "default": "assembled"
         },
         "parts": {
@@ -2042,6 +1988,70 @@
           "type": "number"
         }
       ]
+    },
+    "explodeProgram": {
+      "title": "SpecExplodeProgram",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "stages"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id",
+          "description": "Program id, unique within its assembly or sub-assembly."
+        },
+        "kind": {
+          "const": "explode",
+          "description": "Explode program (the default kind)."
+        },
+        "label": {
+          "$ref": "#/$defs/text",
+          "description": "Program name."
+        },
+        "gap": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100000,
+          "description": "Clearance between parts after an auto-distance move, in the assembly's units; default 10% of the assembly's largest extent."
+        },
+        "stages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stage"
+          },
+          "minItems": 1,
+          "maxItems": 32,
+          "description": "Stages in order; explode to stage k plays stages 1..k, implode plays them backwards."
+        }
+      }
+    },
+    "buildProgram": {
+      "title": "SpecBuildProgram",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "steps"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id",
+          "description": "Program id, unique within its assembly or sub-assembly."
+        },
+        "kind": {
+          "const": "build",
+          "description": "Build program."
+        },
+        "label": {
+          "$ref": "#/$defs/text",
+          "description": "Program name."
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/buildStep"
+          },
+          "minItems": 1,
+          "maxItems": 500,
+          "description": "Build steps in order; parts not added by any step are the base and are present from the start."
+        }
+      }
     }
   },
   "x-revision": "1.2.0",

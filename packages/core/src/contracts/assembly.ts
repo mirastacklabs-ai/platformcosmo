@@ -20,15 +20,22 @@
 import type {
   PlatformCosmoSpec,
   SpecAssembly,
+  SpecBuildProgram,
+  SpecBuildStep,
   SpecColor,
   SpecEasing,
   SpecExplodeProgram,
+  SpecFigure,
+  SpecFigurePart,
+  SpecFigureStage,
   SpecImage,
   SpecPart,
   SpecProgram,
+  SpecRack,
   SpecStage,
   SpecState,
   SpecStep,
+  SpecStoryboard,
 } from "../schema/types.gen.js";
 import type { Diagnostic } from "./diagnostics.js";
 import type { Box3, FaceName, Rect, Vec2, Vec3 } from "./geometry.js";
@@ -196,7 +203,8 @@ export interface PartShapeRegistry {
 // Image assets (§11). Core never reads files: the CLI loads bytes, core validates them.
 // ---------------------------------------------------------------------------------------------
 
-export type ImageFormat = "png" | "jpeg" | "webp" | "svg";
+/** WebP, GIF, AVIF and others are rejected (`image/format`, hint: convert to PNG or JPEG). */
+export type ImageFormat = "png" | "jpeg" | "svg";
 
 /** Raw input for one spec image, loaded by the CLI (path guard) or decoded from a data URI. */
 export interface ImageAssetInput {
@@ -210,17 +218,24 @@ export interface ImageAssetInput {
 /**
  * A validated image. Raster: format from magic bytes (never the extension), dimensions from the
  * header, metadata removed without re-encoding (PNG keeps IHDR, PLTE, tRNS, IDAT, IEND only;
- * JPEG drops APP1..APP15 except APP14 Adobe, and COM; WebP keeps VP8/VP8L/VP8X/ALPH/ANIM
- * frames only, then rejects animation). SVG: `svg` holds the sanitizer output (icon allowlist),
+ * JPEG drops APP1..APP15 except APP14 Adobe, and COM, after reading the EXIF orientation into
+ * `orientation`). APNG is rejected. SVG: `svg` holds the sanitizer output (icon allowlist),
  * embedded as a `<symbol>`. Text inside images is pixels, never read or interpreted.
  */
 export interface ImageAsset {
   readonly key: string;
   readonly format: ImageFormat;
-  /** `image/png` | `image/jpeg` | `image/webp` | `image/svg+xml`. */
+  /** `image/png` | `image/jpeg` | `image/svg+xml`. */
   readonly mime: string;
+  /** Display size AFTER applying `orientation` (5–8 swap the stored width and height). */
   readonly width: number;
   readonly height: number;
+  /**
+   * EXIF orientation 1–8 of a JPEG (1 for everything else). Emit applies it as a fixed
+   * rotate/flip transform on the `<image>` in `<defs>`, so every use shows the image upright
+   * although the EXIF block itself was removed.
+   */
+  readonly orientation: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
   /** `sha256-<base64>` of `data` (or of `svg.body`); emit embeds each hash once (dedupe). */
   readonly hash: string;
   /** Cleaned raster bytes; empty for SVG. */
@@ -302,6 +317,13 @@ export interface SceneAssemblyNode {
   readonly geometry?: PartGeometry;
   /** Sibling path this part mates with (spec `mates` or inferred contact), if any. */
   readonly mates?: string;
+  /**
+   * Solid sibling this leaf is inserted into (spec `inserts`, or inferred when the leaf crosses
+   * exactly one face plane of exactly one solid with its footprint inside that face): drawn after
+   * (visible entry face) or before (hidden entry face) that solid, clipped at the entry face
+   * (assemblies §9.5). Never a collision.
+   */
+  readonly inserts?: string;
   /** Spec `closeup`: id of an assembly, figure or storyboard shown when focused (§8.4). */
   readonly closeup?: string;
   readonly source?: AssetSource;
@@ -315,7 +337,9 @@ export interface PartMove {
   readonly path: string;
   /**
    * World displacement at the END of this move, relative to the node's pose at the start of
-   * the move (moves of ancestors and earlier stages compose by addition).
+   * the move. A leaf's displacement is the SUM of the moves of itself and its ancestors; moves
+   * that overlap in time compose concurrently, so a leaf's path is then not one straight
+   * segment and swept bounds use the Minkowski sum of each move's offset interval (§9.3).
    */
   readonly offset: Vec3;
   /** Seconds from the program segment's start (before compression), speed 1. */
@@ -490,7 +514,8 @@ export interface SceneAssemblies {
 
 /**
  * A drawable unit of the assembly layer: a leaf, or the `back`/`front` half of a split leaf.
- * `item` = `path` or `path#back` / `path#front`.
+ * Keys are id-safe (spec ids never contain `_`): `item` = `path`, `path__back` or
+ * `path__front`; a copy key is `item` (copy 0) or `item__c<k>` (k ≥ 1).
  */
 export interface AssemblyDrawItem {
   readonly item: string;
@@ -505,7 +530,7 @@ export interface AssemblyDrawItem {
 export interface DepthEpoch {
   readonly t0: number;
   readonly t1: number;
-  /** `item~copy` keys, back to front; only items that are visible somewhere in the epoch. */
+  /** Copy keys (`item`, `item__c<k>`), back to front; only copies visible in the epoch. */
   readonly order: readonly string[];
   /** True when a pair could not be certified within the bisection limit (approximate). */
   readonly approximate: boolean;
@@ -521,29 +546,43 @@ export interface TrackKey {
   readonly easing: SpecEasing | "step";
 }
 
-/** Visibility key: copy swaps, enclosure hiding, build appearance, fades, labels. */
+/** Visibility key (copy swaps, enclosure hiding, build appearance): always a step change. */
+export interface VisibilityKey {
+  readonly t: number;
+  readonly visible: boolean;
+}
+
+/** Opacity key (stage fades, build fade-in/out, label fades, level cross-fades). */
 export interface OpacityKey {
   readonly t: number;
-  /** 0 hidden, 1 visible; values in between only for fades (`unselected`, `others`). */
+  /** 0..1, rounded to 2 decimals. */
   readonly opacity: number;
   readonly easing: SpecEasing | "step";
 }
 
+/**
+ * Tracks of one copy. Each property animates on its OWN nested wrapper, so CSS animations never
+ * fight over one property and opacities multiply (§9.4):
+ * `<g id=partMotion>` (transform) > `<g id=partVisible>` (visibility) > `<g id=partFade>`
+ * (opacity) > [`<g clip-path>` static, when clipped] > the object-like part group (state class,
+ * whose opacity comes from the state CSS). A wrapper without a track is omitted.
+ * Sorted by t; first key at t = 0, last at the loop end. Identical tracks share keyframes.
+ */
 export interface PartTrack {
-  /** `ids.partMotion(path, copy)` target. */
-  readonly target: string;
-  /** Sorted by t; first key at t = 0, last at the loop end. Identical tracks share keyframes. */
+  /** Copy key (`item` or `item__c<k>`). */
+  readonly copy: string;
   readonly motion: readonly TrackKey[];
+  readonly visibility: readonly VisibilityKey[];
   readonly opacity: readonly OpacityKey[];
 }
 
 /** Pose of every motion group at one time (frame mode, per-step outputs, static). */
 export interface AssemblyFrameState {
-  /** Motion group id → SVG `transform` attribute value (`translate(x y)`), only when non-zero. */
+  /** `partMotion` id → SVG `transform` attribute value (`translate(x y)`), only when non-zero. */
   readonly transforms: Readonly<Record<string, string>>;
-  /** Element ids hidden at this time (copies not in use, enclosed or not-yet-built parts). */
+  /** `partVisible` ids hidden at this time (unused copies, enclosed or not-yet-built parts). */
   readonly hidden: readonly string[];
-  /** Element ids with opacity < 1 (fades), value rounded to 2 decimals. */
+  /** `partFade` ids with opacity < 1, rounded to 2 decimals. */
   readonly opacity: Readonly<Record<string, number>>;
 }
 
@@ -554,7 +593,7 @@ export interface AssemblyRenderModel {
   readonly items: readonly AssemblyDrawItem[];
   /** Cover [0, loop length]; consecutive epochs differ in order. */
   readonly epochs: readonly DepthEpoch[];
-  /** Sorted by target. */
+  /** Sorted by copy key. */
   readonly tracks: readonly PartTrack[];
   /** Loop length at speed 1 (= sum of step durations), or 0 without steps. */
   readonly loop: number;
@@ -574,13 +613,21 @@ export interface AssemblyRenderModel {
 }
 
 /**
- * Ids for assembly content. Parts reuse `IdScheme.object/face/overlay` with the part path
- * (`/` encoded as `.`, as for slots), so state CSS works unchanged. A1's `createIds` returns
- * `IdScheme & AssemblyIdScheme` once implemented.
+ * Ids for assembly content. Copy 0 of a part reuses `IdScheme.object/face/overlay` with the
+ * part path (`/` encoded as `.`, as for slots), so state CSS works unchanged. A copy k ≥ 1 is a
+ * full duplicate subtree in which EVERY id gets the suffix `__c<k>` (object, faces, overlay,
+ * wrappers); B emits each per-id state or track rule for every copy id (`copyIds`). A1's
+ * `createIds` returns `IdScheme & AssemblyIdScheme` once implemented.
  */
 export interface AssemblyIdScheme {
-  /** Motion group (`<g>` carrying the translate track) of an item copy; copy 0 has no suffix. */
+  /** Transform wrapper of an item copy (copy 0 has no suffix). */
   partMotion(item: string, copy?: number): string;
+  /** Visibility wrapper of an item copy. */
+  partVisible(item: string, copy?: number): string;
+  /** Opacity wrapper of an item copy. */
+  partFade(item: string, copy?: number): string;
+  /** Every id of the given element id across all copies of its item (copy 0 first). */
+  copyIds(id: string): readonly string[];
   /** Label group (label text, details, leader line) of a part; moves with copy 0. */
   partLabel(path: string): string;
   /** Static clip path for face-exit clipping. */
@@ -612,23 +659,42 @@ export interface PartsBuilder {
   part(id: string, fields?: Omit<SpecPart, "id">): this;
   /** Sub-assembly; `build` adds its children and programs (selectors relative to it). */
   sub(id: string, fields: Omit<SpecPart, "id" | "parts">, build: (b: PartsBuilder) => void): this;
-  program(program: SpecProgram | ProgramBuilder): this;
+  program(program: SpecProgram | ProgramBuilder | BuildProgramBuilder): this;
 }
 
 export interface AssemblyBuilder extends PartsBuilder {
-  /** Plain spec JSON, keys in schema property order (deterministic serialization). */
+  /** Plain spec JSON (compare with JCS; see `SpecBuilder`). */
   toJSON(): SpecAssembly;
 }
 
 /** `explode("service").stage({ parts: ["role:cover"], direction: "up" })`. */
 export interface ProgramBuilder {
   stage(stage: SpecStage): this;
-  toJSON(): SpecProgram;
+  toJSON(): SpecExplodeProgram;
 }
 
-/** Whole-spec builder; `toJSON()` output still goes through `validate`. */
+/** `build("assemble").step({ add: ["board"] })`. */
+export interface BuildProgramBuilder {
+  step(step: SpecBuildStep): this;
+  toJSON(): SpecBuildProgram;
+}
+
+/** Figure-mode builder: `figure("hs", { base: "hs-base" }).part({...}).stage({...})`. */
+export interface FigureBuilder {
+  part(part: SpecFigurePart): this;
+  stage(stage: SpecFigureStage): this;
+  toJSON(): SpecFigure;
+}
+
+/**
+ * Whole-spec builder; `toJSON()` output still goes through `validate`. Output equality is
+ * defined on RFC 8785 (JCS) canonical JSON, so key order is irrelevant; arrays keep call order.
+ */
 export interface SpecBuilder {
   assembly(a: SpecAssembly | AssemblyBuilder): this;
+  rack(rack: SpecRack): this;
+  figure(f: SpecFigure | FigureBuilder): this;
+  storyboard(s: SpecStoryboard): this;
   image(image: SpecImage): this;
   step(step: SpecStep): this;
   toJSON(): PlatformCosmoSpec;
@@ -643,4 +709,6 @@ export interface AssemblyBuilders {
   spec(meta: Omit<PlatformCosmoSpec["meta"], "version">): SpecBuilder;
   assembly(id: string, fields?: Omit<SpecAssembly, "id" | "parts" | "programs">): AssemblyBuilder;
   explode(id: string, fields?: Omit<SpecExplodeProgram, "id" | "stages" | "kind">): ProgramBuilder;
+  build(id: string, fields?: Omit<SpecBuildProgram, "id" | "steps" | "kind">): BuildProgramBuilder;
+  figure(id: string, fields: Omit<SpecFigure, "id" | "parts" | "stages">): FigureBuilder;
 }

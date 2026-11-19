@@ -180,7 +180,7 @@ export type SpecFlowKind = ("normal" | "heavy" | "health" | "failed" | "airflow"
 export type SpecColor = string
 export type SpecMetricValue = (string | number)
 /**
- * An id, or up to 8 ids joined by / that address a rack slot (rackId/slotId) or an assembly part (assemblyId/partId/...).
+ * An id, or up to 8 ids joined by / that address a rack slot (rackId/slotId), an assembly part (assemblyId/partId/...) or a close-up instance through the reserved segment closeup (rackId/slotId/closeup/partId).
  */
 export type SpecPartPath = string
 /**
@@ -189,10 +189,6 @@ export type SpecPartPath = string
 export type SpecAssemblyAction = (SpecExplodeAction | SpecImplodeAction | SpecBuildAction | SpecUnbuildAction)
 export type SpecDcSlotType = ("server-1u" | "server-2u" | "server-4u" | "blade-chassis" | "gpu-node" | "switch-tor" | "switch-leaf" | "switch-spine" | "patch-panel" | "storage-shelf" | "storage-flash" | "storage-jbod" | "pdu-1u" | "ups-2u" | "blank")
 /**
- * An explode program (ordered stages) or a build program (ordered build steps).
- */
-export type SpecProgram = (SpecExplodeProgram | SpecBuildProgram)
-/**
  * Union of selectors.
  * 
  * @minItems 1
@@ -200,7 +196,7 @@ export type SpecProgram = (SpecExplodeProgram | SpecBuildProgram)
  */
 export type SpecPartSelectors = [SpecPartSelector, ...(SpecPartSelector)[]]
 /**
- * Selects parts of the program's assembly: a part path relative to the assembly (head/cam-intake), a glob (cyl-*, head/**, dimm-?), or tag:<tag>, type:<type>, role:<role>, id:<glob>. * matches within one path segment, ** any number of segments, ? one character. A selected sub-assembly moves as one unit.
+ * Selects nodes of the program owner (the assembly or sub-assembly that owns the program). A bare term matches the owner's direct children only: an id glob (cyl-*, dimm-?), or tag:<tag>, type:<type>, role:<role>. Prefix path segments to scope deeper: head/valve-* (children of head), ** /type:dimm (any depth), frame/role:cover. * matches within one segment, ** any number of segments, ? one character. A selected sub-assembly moves as one unit.
  */
 export type SpecPartSelector = string
 /**
@@ -252,6 +248,10 @@ fit?: ("contain" | "cover" | "stretch")
  * @maxItems 4
  */
 export type SpecPixelRect = [number, number, number, number]
+/**
+ * An explode program (ordered stages) or a build program (ordered build steps).
+ */
+export type SpecProgram = (SpecExplodeProgram | SpecBuildProgram)
 
 export interface SpecNode {
 id: SpecId
@@ -439,11 +439,11 @@ rearDoorHeatExchanger?: boolean
  */
 slots?: SpecRackSlot[]
 /**
- * Explode programs for the rack as an assembly; selectors address slot ids, slot types (type:server-2u) and the rack's own parts. Without one the rack has the built-in drawers program (schema 1.2.0).
+ * Explode programs for the rack as an assembly (explode only; no build programs). Selectors are relative to the rack: slot ids, type:<slot type>, frame/<part> and frame/role:cover. Without one the rack has the built-in drawers program (doors, then every slot). Schema 1.2.0.
  * 
  * @maxItems 8
  */
-programs?: []|[SpecProgram]|[SpecProgram, SpecProgram]|[SpecProgram, SpecProgram, SpecProgram]|[SpecProgram, SpecProgram, SpecProgram, SpecProgram]|[SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram]|[SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram]|[SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram]|[SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram]
+programs?: []|[SpecExplodeProgram]|[SpecExplodeProgram, SpecExplodeProgram]|[SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram]|[SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram]|[SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram]|[SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram]|[SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram]|[SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram, SpecExplodeProgram]
 }
 export interface SpecRackSlot {
 id?: SpecId
@@ -527,7 +527,7 @@ details?: boolean
  */
 fade?: ("none" | "unselected" | "others")
 /**
- * Per-part direction, distance, delay or order, keyed by part path relative to the assembly.
+ * Per-part direction, distance, delay or order, keyed by part path relative to the program owner.
  */
 overrides?: {
 [k: string]: SpecPartOverride
@@ -547,56 +547,6 @@ delay?: number
  * Rank in the stage's stagger order (lower moves first); ties keep the stage order.
  */
 order?: number
-}
-export interface SpecBuildProgram {
-id: SpecId
-/**
- * Build program.
- */
-kind: "build"
-label?: SpecText
-/**
- * Build steps in order; parts not added by any step are the base and are present from the start.
- * 
- * @minItems 1
- * @maxItems 500
- */
-steps: [SpecBuildStep, ...(SpecBuildStep)[]]
-}
-/**
- * One build step: parts appear at an origin and travel to their seats.
- */
-export interface SpecBuildStep {
-/**
- * Step number printed in the document (booklet step), shown in the caption and the parts callout.
- */
-number?: number
-caption?: SpecText
-add: SpecPartSelectors
-/**
- * Where added parts come from: above their seat, the parts callout (fly from the callout box, then drop), outside the model bounds along their nearest free side, an axis, or an explicit vector.
- */
-from?: (("above" | "callout" | "outside" | "+x" | "-x" | "+y" | "-y") | SpecVec3)
-distance?: SpecDistance
-subBuild?: SpecPartPath
-program?: SpecId
-/**
- * Rotate the view about the vertical axis (degrees, quarter turns only) from this step on, like a booklet's rotate-model hint. Assembly-only specs.
- */
-view?: (0 | 90 | 180 | 270)
-/**
- * Show the parts callout (count x part thumbnail) for this step.
- */
-callout?: boolean
-/**
- * Seconds each part travels, at speed 1.
- */
-duration?: number
-/**
- * Seconds between consecutive parts, at speed 1.
- */
-stagger?: number
-easing?: SpecEasing
 }
 export interface SpecEquipment {
 id: SpecId
@@ -746,7 +696,7 @@ tags?: []|[SpecId]|[SpecId, SpecId]|[SpecId, SpecId, SpecId]|[SpecId, SpecId, Sp
  */
 role?: ("body" | "cover" | "fastener" | "internal" | "cable" | "shell")
 /**
- * Primitive (box, plate, cylinder, ring, shaft, prism, wedge, tray, card, sprite) or a pack shape such as dc:server-2u, hw:dimm, auto:piston, brick:brick. Ignored for sub-assemblies.
+ * Primitive (box, plate, cylinder, ring, shaft, stud, prism, wedge, tray, card, sprite) or a pack shape such as dc:server-2u, hw:dimm, auto:piston, brick:brick. Ignored for sub-assemblies.
  */
 shape?: string
 at?: SpecVec3
@@ -778,6 +728,7 @@ state?: SpecState
 count?: number
 pitch?: SpecVec3
 mates?: SpecPartPath
+inserts?: SpecPartPath
 closeup?: SpecId
 use?: SpecId
 /**
@@ -794,6 +745,56 @@ parts?: [SpecPart, ...(SpecPart)[]]
  */
 programs?: []|[SpecProgram]|[SpecProgram, SpecProgram]|[SpecProgram, SpecProgram, SpecProgram]|[SpecProgram, SpecProgram, SpecProgram, SpecProgram]|[SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram]|[SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram]|[SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram]|[SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram, SpecProgram]
 source?: SpecSource
+}
+export interface SpecBuildProgram {
+id: SpecId
+/**
+ * Build program.
+ */
+kind: "build"
+label?: SpecText
+/**
+ * Build steps in order; parts not added by any step are the base and are present from the start.
+ * 
+ * @minItems 1
+ * @maxItems 500
+ */
+steps: [SpecBuildStep, ...(SpecBuildStep)[]]
+}
+/**
+ * One build step: parts appear at an origin and travel to their seats.
+ */
+export interface SpecBuildStep {
+/**
+ * Step number printed in the document (booklet step), shown in the caption and the parts callout.
+ */
+number?: number
+caption?: SpecText
+add: SpecPartSelectors
+/**
+ * Where added parts come from: above their seat, the parts callout (fly from the callout box, then drop), outside the model bounds along their nearest free side, an axis, or an explicit vector.
+ */
+from?: (("above" | "callout" | "outside" | "+x" | "-x" | "+y" | "-y") | SpecVec3)
+distance?: SpecDistance
+subBuild?: SpecPartPath
+program?: SpecId
+/**
+ * Rotate the view about the vertical axis (degrees, quarter turns only) from this step on, like a booklet's rotate-model hint. Assembly-only specs.
+ */
+view?: (0 | 90 | 180 | 270)
+/**
+ * Show the parts callout (count x part thumbnail) for this step.
+ */
+callout?: boolean
+/**
+ * Seconds each part travels, at speed 1.
+ */
+duration?: number
+/**
+ * Seconds between consecutive parts, at speed 1.
+ */
+stagger?: number
+easing?: SpecEasing
 }
 /**
  * Provenance of an image or a part taken from a document. Shown in the credits line when attribution or license is set; never fetched, never a link.
@@ -813,12 +814,12 @@ attribution?: SpecText
 url?: string
 }
 /**
- * An image asset. src is a file path relative to the spec's directory (no .., no absolute paths, no URLs) or an inline data:image/(png|jpeg|webp|svg+xml);base64 URI. Formats are checked by magic bytes; metadata is dropped; SVG goes through the icon sanitizer.
+ * An image asset. src is a file path relative to the spec's directory (no .., no absolute paths, no URLs) or an inline data:image/(png|jpeg|svg+xml);base64 URI. PNG, JPEG and SVG only (WebP is rejected: convert it to PNG or JPEG). Formats are checked by magic bytes; metadata is dropped (a JPEG's EXIF orientation is applied as a transform first); SVG goes through the icon sanitizer.
  */
 export interface SpecImage {
 id: SpecId
 /**
- * Relative file path (png, jpg, jpeg, webp, svg) or an inline base64 data URI of up to about 256 KiB.
+ * Relative file path (png, jpg, jpeg, svg) or an inline base64 data URI of up to about 256 KiB.
  */
 src: string
 crop?: SpecPixelRect
@@ -904,7 +905,7 @@ pos?: SpecGridPos
 width?: number
 base: SpecId
 /**
- * Base pose for the static output and the start of the loop.
+ * Base pose shown in the static output and at the start of the loop. A figure drawn exploded usually sets exploded, so its first action implodes it.
  */
 pose?: ("assembled" | "exploded")
 /**
