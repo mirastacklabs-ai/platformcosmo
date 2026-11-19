@@ -26,18 +26,18 @@ describe("motion css", () => {
 
   test("each flow has an offset-path rule, shared 0->100% keyframes and negative delays", () => {
     const l = run({ mode: "loop", motion: "css" });
-    expect(l.css).toContain('#pc-test-fl-f_1>circle{offset-path:path("');
+    expect(l.css).toContain('#pc-test-fl-f_1>.pc-test_pt{offset-path:path("');
     expect(l.css).toContain(model.edgePaths["e1"]!.d);
     expect(l.css).toContain("offset-rotate:0deg");
     expect(l.css).toMatch(
       /@keyframes pc-test_kf1\{0%\{offset-distance:0%\}100%\{offset-distance:100%\}\}/,
     );
     expect(l.css).toContain("linear infinite}");
-    expect(l.css).toContain("#pc-test-fl-f_1>circle:nth-child(2){animation-delay:-0.6667s}");
-    expect(l.css).toContain("#pc-test-fl-f_1>circle:nth-child(3){animation-delay:-1.3333s}");
+    expect(l.css).toContain("#pc-test-fl-f_1>.pc-test_pt:nth-child(2){animation-delay:-0.6667s}");
+    expect(l.css).toContain("#pc-test-fl-f_1>.pc-test_pt:nth-child(3){animation-delay:-1.3333s}");
     expect(l.css).not.toContain("nth-child(1)");
     // the reverse flow runs the keyframes backwards
-    expect(l.css).toMatch(/#pc-test-fl-s2_f_2>circle\{[^}]*2s linear infinite reverse\}/);
+    expect(l.css).toMatch(/#pc-test-fl-s2_f_2>.pc-test_pt\{[^}]*2s linear infinite reverse\}/);
     expect(l.duration).toBe(8);
   });
 
@@ -64,7 +64,7 @@ describe("motion css", () => {
     expect(i.script).toContain("getAnimations");
     // Play/Pause drive CSS animations; the timeline clock ignores particle (circle) animations
     expect(i.script).toContain("a.pause()");
-    expect(i.script).toContain('tagName==="circle"');
+    expect(i.script).toContain('classList.contains("pc-test_pt")');
     expect(i.script).toContain("S=[0,3,6],G=[0.75,3,6]");
   });
 

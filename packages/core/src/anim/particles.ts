@@ -52,6 +52,14 @@ function cssColor(flow: SceneFlow): string {
   return `var(--pc-flows-${NAME.test(flow.kind) ? flow.kind : "normal"})`;
 }
 
+/** Class of every CSS-motion particle circle (B-owned, derived from the id prefix). */
+export function particleClass(prefix: string): string {
+  return `${prefix}_pt`;
+}
+
+/** Path data the CSS `path("…")` string may carry: commands, numbers and separators only. */
+const SAFE_D = /^[MLHVCSQTAZmlhvcsqtaz0-9.,\s+eE-]*$/;
+
 /** Wrapper id for all particles (contains `_`, which spec ids cannot). */
 export function particlesId(prefix: string): string {
   return `${prefix}_particles`;
@@ -103,24 +111,25 @@ export function cssFlow(
   kf: Keyframes,
 ): { node: SvgElement; css: string } | undefined {
   const path = model.edgePaths[flow.edge];
-  if (!path || path.points.length < 2) return undefined;
+  if (!path || path.points.length < 2 || !SAFE_D.test(path.d)) return undefined;
   const n = particleCount(flow);
   const period = traversalSeconds(speed);
-  const cls = colors.classFor(flow);
+  const cls = `${colors.classFor(flow)} ${particleClass(model.ids.prefix)}`;
+  const pt = `.${particleClass(model.ids.prefix)}`;
   const name = kf.add([
     [0, "offset-distance:0%"],
     [1, "offset-distance:100%"],
   ]);
   const sel = model.ids.sel(model.ids.flow(flow.id));
   const rules = [
-    `${sel}>circle{offset-path:path("${path.d}");offset-rotate:0deg;offset-distance:0%;animation:${name} ${t4(period)}s linear infinite${flow.reverse ? " reverse" : ""}}`,
+    `${sel}>${pt}{offset-path:path("${path.d}");offset-rotate:0deg;offset-distance:0%;animation:${name} ${t4(period)}s linear infinite${flow.reverse ? " reverse" : ""}}`,
   ];
   const circles: SvgElement[] = [];
   for (let k = 0; k < n; k++) {
     circles.push(el("circle", { r: R, class: cls }));
     const offset = (k * period) / n;
     if (offset !== 0)
-      rules.push(`${sel}>circle:nth-child(${k + 1}){animation-delay:-${t4(offset)}s}`);
+      rules.push(`${sel}>${pt}:nth-child(${k + 1}){animation-delay:-${t4(offset)}s}`);
   }
   return { node: el("g", { id: model.ids.flow(flow.id) }, circles), css: rules.join("\n") };
 }

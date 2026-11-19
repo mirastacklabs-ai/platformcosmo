@@ -19,6 +19,7 @@ import {
   ParticleColors,
   cssFlow,
   frozenFlow,
+  particleClass,
   particlesId,
   smilFlow,
   traversalSeconds,
@@ -151,6 +152,12 @@ function flowsOfStep(model: RenderModel, k: number): readonly SceneFlow[] {
   return [...(tl[k]?.flows.filter((f) => !isDcFlow(f)) ?? []), ...flows.filter(isDcFlow)];
 }
 
+/** CSS motion needs `offset-path`; without it the particles would sit at the origin, so hide them. */
+function supportsGuard(model: RenderModel): string {
+  const g = particlesId(model.ids.prefix);
+  return `@supports not (offset-path:path("M0 0")){\n${model.ids.sel(g)},${model.ids.sel(`${g}_dc`)}{display:none}\n}`;
+}
+
 function wrap(model: RenderModel, flowGroups: SvgElement[]): AnimationLayer["layers"] {
   return flowGroups.length === 0
     ? {}
@@ -223,7 +230,14 @@ function stepLayer(
       ? `@media (prefers-reduced-motion:reduce){\n${model.ids.sel(particlesId(model.ids.prefix))}{display:none}\n}`
       : "";
   return {
-    css: join(colors.css(), kf.css(), ...flowCss, staticStepCss(model, k), reduced),
+    css: join(
+      colors.css(),
+      kf.css(),
+      ...flowCss,
+      css && groups.length > 0 ? supportsGuard(model) : "",
+      staticStepCss(model, k),
+      reduced,
+    ),
     defs: [],
     layers: wrap(model, groups),
     ...(zoom ? { viewBox: zoom.viewBox } : {}),
@@ -392,6 +406,7 @@ function loopLayer(
       win.starts,
       targets,
       total > 0 ? total : traversalSeconds(speed),
+      particleClass(ids.prefix),
     );
   }
 
@@ -404,6 +419,7 @@ function loopLayer(
       controlCssText,
       kf.css(),
       particleRules.join("\n"),
+      css && flowGroups.length > 0 ? supportsGuard(model) : "",
       rules.join("\n"),
       reducedCss,
     ),
