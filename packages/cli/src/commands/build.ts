@@ -239,14 +239,20 @@ export function abortableEncoder(enc: VideoEncoder, signal?: AbortSignal): Video
   const open = enc.open;
   if (!signal || !open) return enc;
   const live = new Set<VideoSink>();
-  signal.addEventListener(
-    "abort",
-    () => {
-      for (const s of live) void Promise.resolve(s.abort()).catch(() => undefined);
-      live.clear();
-    },
-    { once: true },
-  );
+  // One listener while any sink is live; none otherwise, so `watch` rebuilds on the shared
+  // signal never accumulate listeners.
+  const onAbort = (): void => {
+    for (const s of live) void Promise.resolve(s.abort()).catch(() => undefined);
+    live.clear();
+  };
+  const track = (s: VideoSink): void => {
+    if (live.size === 0) signal.addEventListener("abort", onAbort, { once: true });
+    live.add(s);
+  };
+  const untrack = (s: VideoSink): void => {
+    live.delete(s);
+    if (live.size === 0) signal.removeEventListener("abort", onAbort);
+  };
   const interrupted = (): Error => new Error("interrupted");
   return {
     encode: (frames, o) => enc.encode(frames, o),
@@ -257,7 +263,7 @@ export function abortableEncoder(enc: VideoEncoder, signal?: AbortSignal): Video
         await sink.abort();
         throw interrupted();
       }
-      live.add(sink);
+      track(sink);
       return {
         write: async (frame) => {
           if (signal.aborted) throw interrupted();
@@ -268,11 +274,11 @@ export function abortableEncoder(enc: VideoEncoder, signal?: AbortSignal): Video
           try {
             return await sink.finish();
           } finally {
-            live.delete(sink);
+            untrack(sink);
           }
         },
         abort: async () => {
-          live.delete(sink);
+          untrack(sink);
           await sink.abort();
         },
       };

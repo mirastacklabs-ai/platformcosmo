@@ -73,6 +73,9 @@ export function createFfmpegEncoder(options: FfmpegEncoderOptions = {}): VideoEn
   const spawn = options.spawn ?? nodeSpawn;
   const crf = options.crf ?? 18;
   if (!Number.isFinite(crf) || crf < 0 || crf > 51) throw new Error("ffmpeg crf must be in 0..51");
+  if (options.padColor !== undefined && !/^([a-z]+|#[0-9a-fA-F]{6})$/.test(options.padColor)) {
+    throw new Error("ffmpeg padColor must be a colour name (a-z) or #rrggbb");
+  }
   const timeoutMs = options.timeoutMs ?? 600_000;
   const maxOutput = options.maxOutputBytes ?? MAX_OUTPUT_BYTES;
   const open: NonNullable<VideoEncoder["open"]> = async (o) => {
@@ -132,11 +135,24 @@ export function createFfmpegEncoder(options: FfmpegEncoderOptions = {}): VideoEn
 export async function ffmpegAvailable(
   ffmpegPath = "ffmpeg",
   spawn: typeof nodeSpawn = nodeSpawn,
+  probeTimeoutMs = 5000,
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const p = spawn(ffmpegPath, ["-version"], { stdio: "ignore" });
-    p.on("error", () => resolve(false));
-    p.on("close", (code) => resolve(code === 0));
+    // A wedged binary must not hang `pcosmo build --mp4`: give up after the probe timeout.
+    const timer = setTimeout(() => {
+      p.kill("SIGKILL");
+      resolve(false);
+    }, probeTimeoutMs);
+    timer.unref();
+    p.on("error", () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+    p.on("close", (code) => {
+      clearTimeout(timer);
+      resolve(code === 0);
+    });
   });
 }
 
@@ -209,6 +225,7 @@ function startFfmpeg(
       gone,
       new Promise<void>((r) => {
         grace = setTimeout(r, 2000);
+        grace.unref();
       }),
     ]);
     clearTimeout(grace);

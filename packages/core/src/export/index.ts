@@ -279,7 +279,13 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
         const sink = sinks.get(kind);
         sinks.delete(kind);
         await abortSink(sink);
-        if (e instanceof OutputTooLargeError) return outputTooLarge(kind, e.bytes);
+        // By name too: a bundler may duplicate the class, which breaks `instanceof`.
+        if (
+          e instanceof OutputTooLargeError ||
+          (e instanceof Error && e.name === "OutputTooLargeError")
+        ) {
+          return outputTooLarge(kind, (e as OutputTooLargeError).bytes ?? 0);
+        }
         diagnostics.push({
           severity: "error",
           code: "export/encode-failed",

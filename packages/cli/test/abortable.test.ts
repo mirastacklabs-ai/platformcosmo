@@ -47,6 +47,31 @@ describe("abortableEncoder (SIGINT/SIGTERM)", () => {
     expect(abortableEncoder(plain, new AbortController().signal)).toBe(plain);
   });
 
+  test("20 rebuilds on one shared signal leave at most one listener (watch)", async () => {
+    const { enc } = fake();
+    const ac = new AbortController();
+    let listeners = 0;
+    let peak = 0;
+    const add = ac.signal.addEventListener.bind(ac.signal);
+    const remove = ac.signal.removeEventListener.bind(ac.signal);
+    ac.signal.addEventListener = ((...a: Parameters<typeof add>) => {
+      listeners++;
+      peak = Math.max(peak, listeners);
+      add(...a);
+    }) as typeof add;
+    ac.signal.removeEventListener = ((...a: Parameters<typeof remove>) => {
+      listeners--;
+      remove(...a);
+    }) as typeof remove;
+    for (let i = 0; i < 20; i++) {
+      const sink = await abortableEncoder(enc, ac.signal).open!(o);
+      await sink.write(new Uint8Array(1));
+      await (i % 2 ? sink.finish() : sink.abort());
+    }
+    expect(peak).toBeLessThanOrEqual(1);
+    expect(listeners).toBe(0);
+  });
+
   test("finished sinks are not aborted later", async () => {
     const { enc, state } = fake();
     const ac = new AbortController();

@@ -9,7 +9,7 @@ import type {
   VideoEncoder,
   VideoSink,
 } from "../../src/contracts/index.js";
-import { createFfmpegEncoder } from "../../src/export/ffmpeg.js";
+import { createFfmpegEncoder, ffmpegAvailable } from "../../src/export/ffmpeg.js";
 import { createGifEncoder, gifEncoder } from "../../src/export/gif.js";
 import { exportOutputs, rasterize } from "../../src/export/index.js";
 import { OutputTooLargeError } from "../../src/export/stream.js";
@@ -269,6 +269,46 @@ describe("ffmpeg abort, hang and output cap", () => {
     await expect(sink.write(new Uint8Array(4))).rejects.toThrow(/timed out/);
     await sink.abort();
     expect(existsSync(f.dir())).toBe(false);
+  });
+
+  test("padColor is validated", () => {
+    for (const bad of ["white;rm", "#fff", "red:x=1", "", "Red1"]) {
+      expect(() => createFfmpegEncoder({ padColor: bad })).toThrow(/padColor/);
+    }
+    expect(() => createFfmpegEncoder({ padColor: "white" })).not.toThrow();
+    expect(() => createFfmpegEncoder({ padColor: "#A0b1C2" })).not.toThrow();
+  });
+
+  test("ffmpegAvailable gives up on a probe that never exits", async () => {
+    const kill = vi.fn();
+    const hung = Object.assign(new EventEmitter(), { kill });
+    const ok = await ffmpegAvailable("ffmpeg", (() => hung) as never, 30);
+    expect(ok).toBe(false);
+    expect(kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  test("an OutputTooLargeError from a duplicated class is still export/too-large", async () => {
+    class Dup extends Error {
+      override name = "OutputTooLargeError";
+      bytes = 5;
+    }
+    const encoder: VideoEncoder = {
+      encode: async () => new Uint8Array(),
+      open: (): VideoSink => ({
+        write: async () => undefined,
+        finish: async () => {
+          throw new Dup("x");
+        },
+        abort: () => undefined,
+      }),
+    };
+    const r = await exportOutputs(
+      buildFixture(),
+      ["mp4"],
+      depsWith(() => undefined),
+      { video: { fps: 1, durationSec: 1, encoder } },
+    );
+    expect(r.diagnostics[0]).toMatchObject({ code: "export/too-large" });
   });
 
   test("mp4 larger than the output cap is an OutputTooLargeError", async () => {
