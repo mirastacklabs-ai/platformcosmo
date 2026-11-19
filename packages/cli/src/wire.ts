@@ -14,7 +14,7 @@ import * as iconsLucide from "@platformcosmo/icons-lucide";
 import * as iconsSimple from "@platformcosmo/icons-simple";
 import * as themesModule from "@platformcosmo/themes";
 import type { Deps } from "./deps.js";
-import { createFfmpegEncoder } from "./ffmpeg.js";
+import { createFfmpegEncoder, ffmpegAvailable } from "@platformcosmo/core/node";
 import { createIconHttpClient } from "./http.js";
 
 const named = <T>(mod: unknown, key: string): T | undefined =>
@@ -43,7 +43,8 @@ export function defaultDeps(): Deps {
     env: process.env,
     cwd: process.cwd(),
     homedir: homedir(),
-    createMp4Encoder: () => createFfmpegEncoder(),
+    createMp4Encoder: async () =>
+      (await ffmpegAvailable()) ? createFfmpegEncoder({ padColor: "white" }) : undefined,
     watch: (dir, onChange) => {
       const w = watch(dir, (_event, name) => onChange(name));
       return { close: () => w.close() };

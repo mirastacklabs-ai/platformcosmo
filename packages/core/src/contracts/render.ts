@@ -74,6 +74,28 @@ export interface VideoEncoder {
       readonly format: "gif" | "mp4";
     },
   ): Promise<Uint8Array>;
+  /**
+   * Optional streaming entry (D33): when present, export feeds PNG frames one at a time to the
+   * returned sink instead of calling `encode` with the whole clip. Built-in gif and the ffmpeg
+   * encoder implement it.
+   */
+  open?(options: VideoSinkOptions): Promise<VideoSink> | VideoSink;
+}
+
+export interface VideoSinkOptions {
+  readonly fps: number;
+  readonly width: number;
+  readonly height: number;
+  readonly format: "gif" | "mp4";
+}
+
+/** Receives PNG frames in order (D33). `write` resolves once the frame was consumed (backpressure). */
+export interface VideoSink {
+  write(frame: Uint8Array): Promise<void>;
+  /** Ends the stream and returns the finished file. */
+  finish(): Promise<Uint8Array>;
+  /** Drops everything and stops child processes; safe to call at any point; never rejects. */
+  abort(): void | Promise<void>;
 }
 
 /** Particle motion mechanism: SMIL `<animateMotion>` (default) or CSS `offset-path` (D32). */
@@ -352,7 +374,11 @@ export type RasterizeFn = (
 
 /**
  * Builds every non-`animated` output (B). `render()` (A) calls it with its own stages.
- * Memory cap: frames × width × height × 4 ≤ 1 GiB, otherwise an `export/too-large` error.
+ * GIF/MP4 frames are rendered and encoded one at a time into `VideoEncoder.open` sinks, so
+ * memory is bounded by one frame plus the encoded output, not the whole clip (D33). Limits,
+ * else an `export/too-large` error: one frame (and a PNG) width × height × 4 ≤ 256 MiB; frames
+ * ≤ fps × 120 s; encoded output ≤ 1 GiB; for an encoder without `open` (frames buffered for
+ * `encode`) the whole clip frames × width × height × 4 ≤ 1 GiB.
  */
 export type ExportFn = (
   model: RenderModel,

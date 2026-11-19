@@ -6,6 +6,8 @@ import type {
   MotionMode,
   OutputKind,
   RenderOptions,
+  VideoEncoder,
+  VideoSink,
 } from "@platformcosmo/core";
 import { type Parsed, flag, num, parse, str } from "../args.js";
 import { loadSpec, makeResolver, resolveTheme, specBaseName } from "../common.js";
@@ -200,7 +202,7 @@ export async function buildOnce(ctx: Ctx, s: BuildSettings): Promise<number> {
     options.video = {
       ...(s.fps === undefined ? {} : { fps: s.fps }),
       ...(s.duration === undefined ? {} : { durationSec: s.duration }),
-      ...(encoder ? { encoder } : {}),
+      ...(encoder ? { encoder: abortableEncoder(encoder, ctx.deps.signal) } : {}),
     };
   }
 
@@ -238,6 +240,61 @@ export async function buildOnce(ctx: Ctx, s: BuildSettings): Promise<number> {
     });
   }
   return finish(EXIT.ok);
+}
+
+/**
+ * Ties streaming sinks to the process signal (Ctrl-C / SIGTERM): an interrupt aborts every open
+ * sink at once (ffmpeg is killed, temp directories removed) and later writes fail fast.
+ */
+export function abortableEncoder(enc: VideoEncoder, signal?: AbortSignal): VideoEncoder {
+  const open = enc.open;
+  if (!signal || !open) return enc;
+  const live = new Set<VideoSink>();
+  // One listener while any sink is live; none otherwise, so `watch` rebuilds on the shared
+  // signal never accumulate listeners.
+  const onAbort = (): void => {
+    for (const s of live) void Promise.resolve(s.abort()).catch(() => undefined);
+    live.clear();
+  };
+  const track = (s: VideoSink): void => {
+    if (live.size === 0) signal.addEventListener("abort", onAbort, { once: true });
+    live.add(s);
+  };
+  const untrack = (s: VideoSink): void => {
+    live.delete(s);
+    if (live.size === 0) signal.removeEventListener("abort", onAbort);
+  };
+  const interrupted = (): Error => new Error("interrupted");
+  return {
+    encode: (frames, o) => enc.encode(frames, o),
+    open: async (o) => {
+      if (signal.aborted) throw interrupted();
+      const sink = await open.call(enc, o);
+      if (signal.aborted) {
+        await sink.abort();
+        throw interrupted();
+      }
+      track(sink);
+      return {
+        write: async (frame) => {
+          if (signal.aborted) throw interrupted();
+          await sink.write(frame);
+        },
+        finish: async () => {
+          if (signal.aborted) throw interrupted();
+          try {
+            return await sink.finish();
+          } finally {
+            untrack(sink);
+          }
+        },
+        abort: async () => {
+          untrack(sink);
+          await sink.abort();
+        },
+      };
+    },
+  };
 }
 
 export async function buildCommand(ctx: Ctx, args: string[]): Promise<number> {

@@ -5,7 +5,7 @@ import { createAnimator } from "../../src/anim/index.js";
 import type { RenderModel, RenderOptions } from "../../src/contracts/index.js";
 import { buildFfmpegArgs, createFfmpegEncoder } from "../../src/export/ffmpeg.js";
 import { gifEncoder } from "../../src/export/gif.js";
-import { exportOutputs, MAX_RASTER_BYTES, rasterize } from "../../src/export/index.js";
+import { exportOutputs, MAX_FRAME_BYTES, rasterize } from "../../src/export/index.js";
 import { decodePng, pngSize } from "../../src/export/png.js";
 import { buildFixture, emit, withVariant } from "../anim/fixtures/render-model.js";
 
@@ -168,17 +168,17 @@ describe("gif and mp4", () => {
     expect(r.outputs[0]).toMatchObject({ kind: "mp4", path: "diagram.mp4", mime: "video/mp4" });
   });
 
-  test("video memory cap", async () => {
+  test("video per-frame limit (D33)", async () => {
     const r = await run(
       ["gif"],
       { video: { fps: 60, durationSec: 120 } },
       {
         ...buildFixture(),
-        viewBox: { x: 0, y: 0, width: 4000, height: 3000 },
+        viewBox: { x: 0, y: 0, width: 12000, height: 6000 },
       },
     );
     expect(r.diagnostics.map((d) => d.code)).toContain("export/too-large");
-    expect(MAX_RASTER_BYTES).toBe(1024 ** 3);
+    expect(MAX_FRAME_BYTES).toBe(256 * 1024 ** 2);
   });
 
   test("gifEncoder refuses other formats and wrong-sized frames", async () => {
