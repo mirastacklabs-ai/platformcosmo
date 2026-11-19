@@ -19,7 +19,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    # Docs-only PRs skip the engine jobs (skipped jobs satisfy required checks; a workflow-level
+    # paths filter would not). Push, dispatch and every non-PR event always run everything.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      engine: ${{ steps.diff.outputs.engine }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          engine=true
+          if [ "$EVENT" = "pull_request" ]; then
+            files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+            engine=false
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              case "$f" in
+                docs/*|*.md|LICENSE*|NOTICE|scripts/deploy-docs.sh|.github/ISSUE_TEMPLATE/*) ;;
+                *) echo "engine file: $f"; engine=true ;;
+              esac
+            done <<< "$files"
+          fi
+          echo "engine=$engine" >> "$GITHUB_OUTPUT"
+          echo "engine=$engine"
+
   visual:
+    needs: changes
+    if: needs.changes.outputs.engine == 'true'
     name: visual (${{ matrix.image }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
