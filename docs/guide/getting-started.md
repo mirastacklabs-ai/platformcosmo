@@ -63,3 +63,5 @@ VS Code and other JSON-schema-aware editors. The CLI never fetches that URL; val
 - [Spec format](./spec) and the [CLI reference](./cli)
 - [Icons](./icons), including AWS, Azure and GCP packs
 - [Gallery](/gallery)
+
+CI docs-only probe.
