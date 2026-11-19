@@ -14,6 +14,8 @@ import { fixtureTheme } from "./fixtures/theme.js";
 const SEED = Number(process.env["FUZZ_SEED"] ?? 20240607) >>> 0;
 const RUNS = Math.max(1, Number(process.env["FUZZ_RUNS"] ?? 300) | 0);
 const RENDER_RUNS = Math.max(1, Math.min(RUNS, 12));
+// Explicit per-describe timeouts that scale with RUNS (a deep local run must not trip the 5 s default).
+const TIMEOUT = { timeout: 30_000 + RUNS * 100 };
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -233,7 +235,7 @@ function garble(r: Rand, text: string): string {
   return t;
 }
 
-describe("fuzz: random JSON values", () => {
+describe("fuzz: random JSON values", TIMEOUT, () => {
   test("validate never throws and always explains itself", () => {
     const r = mulberry32(SEED);
     for (let i = 0; i < RUNS; i++) {
@@ -289,6 +291,35 @@ describe("fuzz: random JSON values", () => {
       expect(res.valid).toBe(false); // lengths are capped by the schema
     }
     assertClean();
+  });
+
+  test("1 MB unknown keys and enum-ish values stay cheap (suggestion search is bounded)", () => {
+    const big = "q".repeat(1_000_000);
+    const mk = (): Obj => ({
+      meta: { version: "1" },
+      nodes: [
+        { id: "a", type: "server" },
+        { id: "b", type: "server" },
+      ],
+      edges: [{ from: "a", to: "b" }],
+    });
+    const cases: [string, (s: Obj) => void][] = [
+      ["root key", (s) => (s[big] = 1)],
+      ["nodes[0].type", (s) => ((s["nodes"] as Obj[])[0]!["type"] = big)],
+      ["edges[0].style", (s) => ((s["edges"] as Obj[])[0]!["style"] = big)],
+      ["nodes[0] key", (s) => ((s["nodes"] as Obj[])[0]![big] = 1)],
+    ];
+    validate(mk()); // warm up
+    for (const [label, apply] of cases) {
+      const s = mk();
+      apply(s);
+      const t0 = performance.now();
+      const res = checkResult(validate(s), label);
+      const ms = performance.now() - t0;
+      expect(res.valid, label).toBe(false);
+      // unbounded edit-distance tables took many seconds and hundreds of MB; generous ceiling
+      expect(ms, `${label} took ${ms.toFixed(0)} ms`).toBeLessThan(3000);
+    }
   });
 
   test("parseSpec on random text never throws (json and yaml)", () => {
@@ -493,7 +524,7 @@ function mutate(r: Rand, spec: Json): Json {
   return spec;
 }
 
-describe("fuzz: mutated example specs", () => {
+describe("fuzz: mutated example specs", TIMEOUT, () => {
   test("examples and templates are the seed corpus", () => {
     expect(examples.length).toBeGreaterThanOrEqual(15);
   });
@@ -501,6 +532,7 @@ describe("fuzz: mutated example specs", () => {
   test("validate survives mutations, every error has a pointer and message", () => {
     const r = mulberry32(SEED + 2);
     let invalid = 0;
+    let deep = 0; // runs that got past the JSON Schema layer into semantic/layout checks
     for (let i = 0; i < RUNS * 2; i++) {
       const ex = pick(r, examples);
       let spec = JSON.parse(ex.json) as Json;
@@ -510,10 +542,32 @@ describe("fuzz: mutated example specs", () => {
       expect(parsed.spec, ex.name).toBeDefined();
       const res = checkResult(validate(parsed.spec), `${ex.name} case ${i}`);
       if (!res.valid) invalid++;
+      if (res.diagnostics.some((d) => /^(semantic|layout)\//.test(d.code))) deep++;
       checkResult(validate(spec), `${ex.name} raw case ${i}`);
     }
     expect(invalid).toBeGreaterThan(RUNS / 4); // the mutators actually break things
+    expect(deep, "mutants reaching semantic/layout diagnostics").toBeGreaterThanOrEqual(RUNS * 0.2);
     assertClean();
+  });
+
+  test("duplicate-id and dangling-ref mutations produce their specific codes", () => {
+    const codes = new Set<string>();
+    for (const ex of examples) {
+      const dup = JSON.parse(ex.json) as Obj;
+      const nodes = dup["nodes"];
+      if (Array.isArray(nodes) && nodes.length >= 2) {
+        (nodes[1] as Obj)["id"] = (nodes[0] as Obj)["id"]!;
+        for (const d of validate(dup).diagnostics) codes.add(d.code);
+      }
+      const dangling = JSON.parse(ex.json) as Obj;
+      const edges = dangling["edges"];
+      if (Array.isArray(edges) && edges.length > 0) {
+        (edges[0] as Obj)["from"] = "ghost-node";
+        for (const d of validate(dangling).diagnostics) codes.add(d.code);
+      }
+    }
+    expect(codes.has("semantic/duplicate-id")).toBe(true);
+    expect(codes.has("semantic/unknown-node")).toBe(true);
   });
 
   test("prototype pollution keys at the root are rejected and never pollute", () => {
@@ -582,7 +636,7 @@ const sig = (ds: Diagnostic[]) =>
     .sort()
     .join("\n");
 
-describe("fuzz: validity-preserving mutations", () => {
+describe("fuzz: validity-preserving mutations", TIMEOUT, () => {
   test("every example validates; key order and an added optional field keep it valid", () => {
     const r = mulberry32(SEED + 4);
     for (const ex of examples) {
@@ -616,7 +670,7 @@ describe("fuzz: validity-preserving mutations", () => {
 
 // ---------------------------------------------------------------- render of anything valid
 
-describe("fuzz: valid specs render", () => {
+describe("fuzz: valid specs render", TIMEOUT, () => {
   const opts = { themes: registry, font: "system" as const };
 
   test("mutated specs that validate render without throwing", async () => {
@@ -625,7 +679,7 @@ describe("fuzz: valid specs render", () => {
     for (let i = 0; i < RUNS * 4 && rendered < RENDER_RUNS; i++) {
       const ex = pick(r, examples);
       let spec = JSON.parse(ex.json) as Json;
-      for (let m = int(r, 3); m > 0; m--) spec = mutate(r, spec);
+      for (let m = 1 + int(r, 3); m > 0; m--) spec = mutate(r, spec);
       const parsed = parseSpec(JSON.stringify(spec), "json").spec;
       if (JSON.stringify(parsed).length > 60_000) continue; // cost bound: skip huge specs
       if (!(validate(parsed) as { valid: boolean }).valid) continue;
@@ -637,15 +691,24 @@ describe("fuzz: valid specs render", () => {
         expect(typeof d.path).toBe("string");
       }
       const errs = out.diagnostics.filter((d) => d.severity === "error");
+      for (const e of errs) {
+        if (e.code === "semantic/dc-pack-required") continue; // the DC pack is not wired in core tests
+        expect(e.code, `${ex.name}: ${e.message}`).not.toMatch(/^semantic\//);
+      }
       if (errs.length === 0) expect(out.outputs.length, ex.name).toBeGreaterThan(0);
     }
     expect(rendered).toBeGreaterThan(0);
     assertClean();
-  }, 120_000);
+  });
 
   test("a sample of examples renders deterministically", async () => {
     const r = mulberry32(SEED + 7);
-    const sample = [...examples].sort(() => r() - 0.5).slice(0, 6);
+    const sample = [...examples];
+    for (let i = sample.length - 1; i > 0; i--) {
+      const j = int(r, i + 1);
+      [sample[i], sample[j]] = [sample[j]!, sample[i]!];
+    }
+    sample.length = 6;
     for (const ex of sample) {
       const a = await render(JSON.parse(ex.json) as unknown, opts);
       const b = await render(JSON.parse(ex.json) as unknown, opts);

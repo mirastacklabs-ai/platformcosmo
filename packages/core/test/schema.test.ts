@@ -89,6 +89,24 @@ describe("suggest", () => {
     expect(closestMatches("servr", ["server", "queue", "vm"])[0]).toBe("server");
     expect(closestMatches("zzzz", ["server"])).toEqual([]);
   });
+
+  test("transposition and rolling rows agree with the textbook values", () => {
+    expect(editDistance("", "abc")).toBe(3);
+    expect(editDistance("abcd", "acbd")).toBe(1);
+    expect(editDistance("flaw", "lawn")).toBe(2);
+    expect(editDistance("a".repeat(40), "a".repeat(39) + "b")).toBe(1);
+  });
+
+  test("huge inputs are bounded (no |a| x |b| tables)", () => {
+    const big = "x".repeat(1_000_000);
+    const cands = ["server", "queue", "database", "x".repeat(70)];
+    expect(closestMatches(big, cands)).toEqual([cands[3]]); // prefix compared, still a plausible match
+    expect(closestMatches(big, ["server", "queue"])).toEqual([]);
+    expect(closestMatches("srvr", [big, "server"])).toEqual(["server"]);
+    const t0 = performance.now();
+    for (let i = 0; i < 200; i++) closestMatches(big, cands);
+    expect(performance.now() - t0).toBeLessThan(5000); // generous: 200 x 1 MB would take minutes unbounded
+  });
 });
 
 describe("validate: schema layer", () => {

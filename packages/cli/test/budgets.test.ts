@@ -32,12 +32,24 @@ let packs = "";
 beforeAll(async () => {
   work = await mkdtemp(join(tmpdir(), "pcosmo-budget-out-"));
   packs = await mkdtemp(join(tmpdir(), "pcosmo-budget-packs-"));
-});
+  // Warm-up: the first build pays module init and font/WASM setup, which is not what we budget.
+  const t0 = performance.now();
+  await buildOnce("load-balancing");
+  void t0;
+}, 60_000);
 afterAll(async () => {
   await Promise.all([work, packs].map((d) => rm(d, { recursive: true, force: true })));
 });
 
-async function build(name: string) {
+const builds = new Map<string, ReturnType<typeof buildOnce>>();
+/** Each example is built once per file; every test shares the result. */
+const build = (name: string) => {
+  let b = builds.get(name);
+  if (!b) builds.set(name, (b = buildOnce(name)));
+  return b;
+};
+
+async function buildOnce(name: string) {
   const out = join(work, name);
   const t0 = performance.now();
   const r = await run(
@@ -75,7 +87,7 @@ describe("size budgets (PLAN section 6)", () => {
     expect(svg.byteLength, `dc-hall is ${(svg.byteLength / KB).toFixed(1)} KB`).toBeLessThan(
       DC_MAX,
     );
-    expect((svg.toString("utf8").match(/<[a-zA-Z]/g) ?? []).length).toBeLessThan(ELEMENT_LIMIT * 4);
+    expect((svg.toString("utf8").match(/<[a-zA-Z]/g) ?? []).length).toBeLessThan(ELEMENT_LIMIT);
     expect(ms, `dc-hall took ${ms.toFixed(0)} ms`).toBeLessThan(TIME_CEILING_MS * 4);
   });
 
