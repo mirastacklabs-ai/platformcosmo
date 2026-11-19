@@ -60,8 +60,13 @@ export interface ThemeTokens {
     readonly inverse: CssColor;
   };
   readonly font: {
-    /** CSS font-family list; the embedded font's family name comes first. */
+    /** CSS font-family list for display text (node labels, group pills, titles, legend, captions); the embedded font's family name comes first. */
     readonly family: string;
+    /**
+     * CSS font-family list for technical text: badges, metric values, edge labels and part details
+     * (D51). Omitted: `family` is used for everything. Embedded like `family`.
+     */
+    readonly mono?: string;
     readonly label: number;
     readonly badge: number;
     readonly caption: number;
