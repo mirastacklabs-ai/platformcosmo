@@ -159,11 +159,12 @@ in the ground layer, cables depth-sorted with objects, DC particles after object
 
 ## 8. Icon system
 
-**Manifest:** `icons.json` with id, aliases, category, provider, license, source URL and SVG path for each icon.
+**Manifest:** `icons.json` with id, aliases, category, provider, source URL and SVG path for each icon, and the license per pack (per icon where a set mixes licenses).
 
 **Rules:**
 - Semantic node type → default glyph; the `icon` field overrides it with a provider or brand icon
-- Icons sit flat on the front face, never skewed onto the top face
+- Icons sit flat on the front face, never skewed onto the top face; when a front face is too
+  short even for a 0.75-size icon, the icon floats upright above the top face (DECISIONS D28)
 - The build inlines only the icons a diagram uses
 
 | Pack | Content | Distribution |
@@ -212,7 +213,7 @@ in the ground layer, cables depth-sorted with objects, DC particles after object
 | `--steps` | `name.steps/step-NN.svg` |
 | `--interactive` | `name.interactive.svg` |
 | `--png` | `name.png` |
-| `--gif` / `--mp4` (v1.2) | Optional; needs Puppeteer + ffmpeg |
+| `--gif` / `--mp4` (v1.2) | Optional; frames rendered with resvg, MP4 needs ffmpeg on PATH (DECISIONS D8) |
 
 **Other options:**
 - `--theme light|dark|blueprint|mono|<file>`
@@ -308,7 +309,7 @@ in the ground layer, cables depth-sorted with objects, DC particles after object
 |---|---|
 | Overlaps from LLM-placed nodes | Auto-layout by default; validator rejects collisions |
 | Depth-sort artifacts | Box overlap comparison plus edge splitting; regression gallery |
-| Icon licensing | Bundle only permissive sets; provider packs fetched by users; license recorded per icon |
+| Icon licensing | Bundle only permissive sets; provider packs fetched by users; license recorded per pack in `icons.json` (per icon where a set mixes licenses, e.g. Simple Icons) |
 | SVG bloat | Tree-shaking, font subsetting, SVGO, CI size budgets |
 | Browser differences in SMIL/CSS | Browser test matrix; `offset-path` fallback |
 | Scope creep | DC pack → v1.1; video → v1.2 |
