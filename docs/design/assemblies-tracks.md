@@ -34,7 +34,10 @@ a release-quality slice and lifts its part of the merge guard.
 - **Step actions are gated by their target**, not as one group: explode/implode on a figure →
   `phase1a`; on an assembly or part path → `phase1b`; on a rack, slot or any path through a
   `closeup` segment → `phase2`; build/unbuild → `phase2` (`phase3` for storyboards); unknown
-  targets stay gated until `phase1a` lifts (then semantic validation reports them). Part paths
+  targets stay gated until `phase1a` lifts (then semantic validation reports them). Once
+  `phase1a` is lifted, A2-F's semantic check reports `assembly/unknown-target` for every action
+  whose target is not a figure while the guard still gates that target's phase (the guard error
+  stays too), so a Phase 1a build never resolves a non-figure target. Part paths
   (two or more `/`) and `closeup` paths in `steps[].focus` and `steps[].set` are gated the same
   way, so a 1.1 spec cannot reach them either. Lifting one phase therefore never enables another
   phase's actions, and Phase 1b does not depend on Phase 1a's lift.
@@ -125,17 +128,19 @@ comparisons and the re-render has no redrawn hints, ingestion §6.5). Single-sta
 pass with the missing-state checks reported as `not-run` and `confidence: "reduced"`. Each
 deliberately broken variant fails, with at least the listed codes (all at error severity):
 
-| Broken variant                                            | Must fail with                                                                        |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| rectangle mask                                            | `asset/rect-mask`, `asset/foreign-pixels`, `asset/exploded-residual`                  |
-| base not erased (ghost fins)                              | `asset/leftover-fragment`, `asset/exploded-residual`                                  |
-| enclosed interior left transparent                        | `asset/mask-hole`, `asset/assembled-residual`                                         |
-| twin instances assigned crosswise                         | `asset/instance-swap`                                                                 |
-| board under a moved part not recovered                    | `asset/base-unrecovered`, `asset/exploded-residual`                                   |
-| arrows left in the base                                   | `asset/arrow-residual`                                                                |
-| arrow declared but not erased, or erased but not declared | `asset/arrow-residual` / `asset/exploded-residual` (undeclared ink is never excluded) |
-| clip lever not grouped with its heat sink                 | `asset/exploded-residual` (the lever stays seated in the exploded re-render)          |
-| sprite carrying a neighbour's sliver                      | `asset/foreign-pixels`                                                                |
+| Broken variant                                                                                                                    | Must fail with                                                                         |
+| --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| rectangle mask                                                                                                                    | `asset/rect-mask`, `asset/foreign-pixels`, `asset/exploded-residual`                   |
+| base not erased (ghost fins)                                                                                                      | `asset/leftover-fragment`, `asset/exploded-residual`                                   |
+| enclosed interior left transparent                                                                                                | `asset/mask-hole`, `asset/assembled-residual`                                          |
+| twin instances assigned crosswise                                                                                                 | `asset/instance-swap`                                                                  |
+| board under a moved part not recovered                                                                                            | `asset/base-unrecovered`, `asset/exploded-residual`                                    |
+| arrows left in the base                                                                                                           | `asset/arrow-residual`                                                                 |
+| arrow declared but not erased, or erased but not declared                                                                         | `asset/arrow-residual` / `asset/exploded-residual` (undeclared ink is never excluded)  |
+| residual hidden by a declared annotation (a text rect over a ghost fin or a seated clip lever; a wide polyline across a fragment) | `asset/annotation-invalid` and/or `asset/exploded-residual` (bridged components, §6.5) |
+| a 40 px ghost cut in two by an arrow band                                                                                         | `asset/exploded-residual` (the band bridges the pieces into one component)             |
+| clip lever not grouped with its heat sink                                                                                         | `asset/exploded-residual` (the lever stays seated in the exploded re-render)           |
+| sprite carrying a neighbour's sliver                                                                                              | `asset/foreign-pixels`                                                                 |
 
 Sprites never contain pixels of another part (asserted pixel-wise against the generator's
 ground-truth masks); all residual metrics are local (largest connected component), so the
@@ -163,7 +168,9 @@ gate on every synthetic trap figure and reports failures it cannot fix.
 ### A2-1 Assembly validation (M, ~1300 LOC, 4 files)
 
 Owns `schema/assembly-semantic.ts`, `schema/suggest.ts` (reuse). Namespace (assemblies join the
-global id namespace; sibling uniqueness after `count`; reserved ids `frame` and `closeup`; path
+global id namespace; sibling uniqueness after `count`; reserved ids `frame` (racks in
+assembly mode) and `closeup` (only after the first segment, only with 1.2.0 content; a 1.1 id
+`closeup` keeps the `semantic/reserved-id` warning of the guard); path
 depth ≤ 8; `assembly/edge-to-part`); references with did-you-mean (actions, focus and `set`
 paths over the expanded tree, programs, selectors with deeper `**/…` suggestions, `overrides`
 relative to the owner, `mates`, `inserts`, `use`, `closeup`, image ids, shape refs, template
@@ -228,7 +235,9 @@ z-buffer reference rendered with resvg, including the clip-frame cases: a piston
 sampled time), valves pulled out of a static head, and valves inserted in a head that lifts
 (`partHost` carries the head's track, valve motion relative to it is zero); a regression case
 asserting that a clip placed inside the leaf's own motion group would fail the z-buffer
-comparison; randomized property test (painter's order of sampled
+comparison; the clip-validity rule (a piston that slides sideways after clearing the deck is not
+clipped and falls back to hidden-until-clear during the crossing; nested inserts, a valve in a
+head inserted in a block, get the head's total track); randomized property test (painter's order of sampled
 frames matches a z-buffer within 0.5% of pixels except approximate epochs); determinism;
 performance (300 leaves × 20 transitions < 2 s).
 

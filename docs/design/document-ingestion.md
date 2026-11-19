@@ -471,6 +471,26 @@ cross parts, or whose leaders and callout text sit on the drawing, produces no r
 Only declared annotations are excluded; undeclared ink must reproduce. Whether the base still
 contains annotation ink is checked separately (`arrow-residual`).
 
+Exclusions must not be able to hide a real defect, because Claude writes the manifest and reruns
+until the gate passes:
+
+1. **Excluded pixels bridge connectivity.** Residual components are labelled with excluded
+   pixels counted as connective but not as residual: two residual pieces joined through an
+   excluded band are one component, and its size is the sum of the residual pixels (a 40 px ghost
+   cut by an arrow band stays 40 px). In addition, the residual pixels touching each band (within
+   2 px of it) are summed per band and fail the same threshold.
+2. **Annotations are validated** deterministically (`asset/annotation-invalid`, error):
+   an arrow or leader polyline must lie on ink of its declared state (≥ 80% of samples taken
+   every 2 px along it have ink within `width / 2`), and its band may overlap a part's seated or
+   exploded mask only within the band itself (no band wider than 32 px); a text rectangle must
+   contain ink, must be no larger than 2% of the figure, and may overlap any part's seated or
+   exploded mask by at most 16 px.
+3. **Exclusions are capped and shown.** `report.json` lists every annotation and the total
+   excluded area per state; more than 5% of the figure in either state is an error
+   (`asset/annotation-invalid`). The skill shows the user the excluded regions (an overlay of the
+   annotation masks on the source, written by `assets figure --show-exclusions`) whenever it
+   reports a passing gate.
+
 **Single-state figures.** When only one state is drawn (an exploded view with arrows, or an
 assembled view), the residual check of the missing state is reported as `not-run`, the report
 carries `confidence: "reduced"` and lists the checks not run, and the skill tells the user that
@@ -493,6 +513,7 @@ still reported.
 | unrecovered base      | erased pixels filled with background (no other depiction) that are **visible in either re-render**, i.e. not covered by a sprite in that state, with a component > 24 px                                                                              | `asset/base-unrecovered` (error); invisible fills are info      |
 | unrecovered occlusion | pixels of a part hidden in its source depiction and not recovered (§6.3), visible in the exploded re-render                                                                                                                                           | `asset/occluded-unrecovered` (error when > 24 px, else warning) |
 | annotation residual   | ink left in the base inside a declared annotation mask (arrow or leader polyline, callout text rectangle)                                                                                                                                             | `asset/arrow-residual` (error)                                  |
+| annotation validity   | polyline not on ink, band too wide or over a part beyond its band, text rect without ink, larger than 2% or over a part by more than 16 px, total exclusion above 5% per state                                                                        | `asset/annotation-invalid` (error)                              |
 
 The report (`report.json`) lists every check with its numbers and the bbox of each failing
 component, so Claude can fix seeds, polygons or groups and rerun. The skill's verification loop
