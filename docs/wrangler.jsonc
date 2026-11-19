@@ -1,0 +1,15 @@
+// platformcosmo.io: the built VitePress site served as a static-assets Cloudflare Worker.
+// Deployed manually from a maintainer's machine with `scripts/deploy-docs.sh` (DECISIONS D69).
+{
+  "name": "platformcosmo",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./.vitepress/dist",
+    "not_found_handling": "404-page",
+    "html_handling": "auto-trailing-slash",
+  },
+  "routes": [
+    { "pattern": "platformcosmo.io", "custom_domain": true },
+    { "pattern": "www.platformcosmo.io", "custom_domain": true },
+  ],
+}
