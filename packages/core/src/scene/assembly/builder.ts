@@ -16,6 +16,7 @@ import type {
   PartsBuilder,
   ProgramBuilder,
   SpecBuilder,
+  SpecRest,
 } from "../../contracts/assembly.js";
 import type {
   PlatformCosmoSpec,
@@ -41,9 +42,12 @@ type Json = unknown;
 function clone<T>(value: T): T {
   if (Array.isArray(value)) return value.map(clone) as unknown as T;
   if (value !== null && typeof value === "object") {
-    const out: Record<string, Json> = {};
-    for (const [k, v] of Object.entries(value as Record<string, Json>)) out[k] = clone(v);
-    return out as T;
+    // fromEntries defines own properties, so a `__proto__` key stays data (never a prototype).
+    return Object.fromEntries(
+      Object.entries(value as Record<string, Json>)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, clone(v)]),
+    ) as T;
   }
   return value;
 }
@@ -65,10 +69,15 @@ class PartsImpl implements PartsBuilder {
     return this;
   }
 
-  sub(id: string, fields: Omit<SpecPart, "id" | "parts">, build: (b: PartsBuilder) => void): this {
+  sub(
+    id: string,
+    fields: Omit<SpecPart, "id" | "parts" | "programs">,
+    build: (b: PartsBuilder) => void,
+  ): this {
     const child = new PartsImpl();
     build(child);
-    this.parts.push({ ...clone(fields), id, ...child.collect() } as SpecPart);
+    // A sub-assembly always has `parts` (empty is invalid; the schema reports it).
+    this.parts.push({ ...clone(fields), id, parts: [], ...child.collect() } as SpecPart);
     return this;
   }
 
@@ -172,7 +181,10 @@ class SpecImpl implements SpecBuilder {
   private readonly storyboards: SpecStoryboard[] = [];
   private readonly images: SpecImage[] = [];
   private readonly steps: SpecStep[] = [];
-  constructor(private readonly meta: Omit<PlatformCosmoSpec["meta"], "version">) {}
+  constructor(
+    private readonly meta: Omit<PlatformCosmoSpec["meta"], "version">,
+    private readonly rest: SpecRest,
+  ) {}
 
   assembly(a: SpecAssembly | AssemblyBuilder): this {
     this.assemblies.push(resolve(a));
@@ -200,7 +212,10 @@ class SpecImpl implements SpecBuilder {
   }
 
   toJSON(): PlatformCosmoSpec {
-    const out: Record<string, Json> = { meta: { ...clone(this.meta), version: "1" } };
+    const out: Record<string, Json> = {
+      ...clone(this.rest),
+      meta: { ...clone(this.meta), version: "1" },
+    };
     const add = (key: string, list: Json[]) => {
       if (list.length) out[key] = clone(list);
     };
@@ -214,7 +229,7 @@ class SpecImpl implements SpecBuilder {
   }
 }
 
-export const spec: AssemblyBuilders["spec"] = (meta) => new SpecImpl(meta);
+export const spec: AssemblyBuilders["spec"] = (meta, rest = {}) => new SpecImpl(meta, rest);
 export const assembly: AssemblyBuilders["assembly"] = (id, fields = {}) =>
   new AssemblyImpl(id, fields);
 export const explode: AssemblyBuilders["explode"] = (id, fields = {}) =>

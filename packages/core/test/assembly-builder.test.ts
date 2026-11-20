@@ -8,108 +8,123 @@ import type {
   SpecPart,
   SpecProgram,
 } from "../src/index.js";
-import { assembly, build, explode, figure, spec, validate, validateSpec } from "../src/index.js";
+import {
+  assembly,
+  build,
+  canonicalJson as jcs,
+  explode,
+  figure,
+  spec,
+  validate,
+  validateSpec,
+} from "../src/index.js";
 
 // A2-4: TypeScript builder (docs/design/assemblies.md §16). Equality is on RFC 8785 canonical
-// JSON, so key order never matters and arrays keep call order.
+// JSON (the engine's own `canonicalJson`), so key order never matters and arrays keep call order.
 
-/** RFC 8785 (JCS): sorted keys (UTF-16 code units), ES number and string serialization. */
-const jcs = (v: unknown): string => {
-  if (v === null || typeof v !== "object") return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map(jcs).join(",")}]`;
-  const o = v as Record<string, unknown>;
-  return `{${Object.keys(o)
-    .filter((k) => o[k] !== undefined)
-    .sort()
-    .map((k) => `${JSON.stringify(k)}:${jcs(o[k])}`)
-    .join(",")}}`;
-};
-
+type Example = { name: string; title: string; e: PlatformCosmoSpec };
 const FENCE = "```";
-const designExamples = (file: string): Record<string, unknown>[] => {
+const designExamples = (file: string): PlatformCosmoSpec[] => {
   const md = readFileSync(new URL(`../../../docs/design/${file}`, import.meta.url), "utf8");
   return [...md.matchAll(new RegExp(`${FENCE}json\\n([\\s\\S]*?)${FENCE}`, "g"))]
     .map((m) => JSON.parse(m[1] as string) as Record<string, unknown>)
-    .filter((s) => typeof s.meta === "object");
+    .filter((s) => typeof s.meta === "object") as unknown as PlatformCosmoSpec[];
 };
-// Top-level keys the builder has a method for (`SpecBuilder`). An example that also uses other
-// keys (the hall's `aisles`/`rows`) has no builder form and is excluded from the comparison.
-const BUILDABLE = new Set([
-  "$schema",
-  "meta",
-  "images",
-  "figures",
-  "storyboards",
-  "assemblies",
-  "racks",
-  "steps",
-]);
-const ALL = [
-  ...designExamples("assemblies.md").map((e, i) => ({ name: `assemblies #${i + 1}`, e })),
-  ...designExamples("document-ingestion.md").map((e, i) => ({
-    name: `document-ingestion #${i + 1}`,
-    e,
-  })),
-];
-const EXAMPLES = ALL.filter((x) => Object.keys(x.e).every((k) => BUILDABLE.has(k)));
+const EXAMPLES: Example[] = [
+  ...designExamples("assemblies.md").map((e) => ({ file: "assemblies", e })),
+  ...designExamples("document-ingestion.md").map((e) => ({ file: "document-ingestion", e })),
+].map(({ file, e }) => ({
+  name: `${file}: ${e.meta.title ?? "(untitled)"}`,
+  title: e.meta.title ?? "",
+  e,
+}));
+const byTitle = (title: string): PlatformCosmoSpec => {
+  const hit = EXAMPLES.find((x) => x.title === title);
+  if (!hit) throw new Error(`design example not found: ${title}`);
+  return hit.e;
+};
+const ENGINE_TITLE = "Inline-4 engine teardown";
 
-type Obj = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-const without = (o: Obj, ...keys: string[]): Obj =>
-  Object.fromEntries(Object.entries(o).filter(([k]) => !keys.includes(k)));
+/** `$schema` is an editor hint; the builder never emits it. */
+const plain = (e: PlatformCosmoSpec): PlatformCosmoSpec => {
+  const { $schema: _ignored, ...rest } = e; // eslint-disable-line @typescript-eslint/no-unused-vars
+  return rest as PlatformCosmoSpec;
+};
 
-/** Rebuild a plain spec by driving the builders from its parsed JSON (the call-for-call form). */
-const rebuildProgram = (
-  p: Obj,
-): SpecProgram | ReturnType<typeof build> | ReturnType<typeof explode> => {
+/**
+ * Rebuild a plain spec by driving the typed builders from its parsed JSON. Everything is
+ * destructured against the generated types, so this compiles only if the typed API can express
+ * every example (no casts to `never`).
+ */
+const rebuildProgram = (p: SpecProgram) => {
   if (p.kind === "build") {
-    const b = build(p.id, without(p, "id", "kind", "steps") as never);
-    for (const s of p.steps) b.step(s);
+    const { id, kind: _kind, steps, ...fields } = p; // eslint-disable-line @typescript-eslint/no-unused-vars
+    const b = build(id, fields);
+    for (const s of steps) b.step(s);
     return b;
   }
-  if (p.kind !== undefined) return p as SpecProgram; // explicit kind: pass the plain object
-  const x = explode(p.id, without(p, "id", "stages") as never);
-  for (const s of p.stages) x.stage(s);
+  const { id, stages, ...fields } = p;
+  const x = explode(id, fields);
+  for (const s of stages) x.stage(s);
   return x;
 };
-const fillParts = (b: PartsBuilder, parts: Obj[] | undefined, programs?: Obj[]): void => {
+const fillParts = (
+  b: PartsBuilder,
+  parts: readonly SpecPart[] | undefined,
+  programs?: readonly SpecProgram[],
+): void => {
   for (const p of parts ?? []) {
-    if (p.parts) {
-      b.sub(p.id, without(p, "id", "parts", "programs") as never, (c) =>
-        fillParts(c, p.parts, p.programs),
-      );
-    } else b.part(p.id, without(p, "id") as never);
+    const { id, parts: kids, programs: progs, ...fields } = p;
+    if (kids) b.sub(id, fields, (c) => fillParts(c, kids, progs));
+    else b.part(id, { ...fields, ...(progs ? { programs: progs } : {}) });
   }
   for (const pr of programs ?? []) b.program(rebuildProgram(pr));
 };
-const rebuild = (e: Obj): PlatformCosmoSpec => {
-  const s = spec(without(e.meta, "version") as never);
-  for (const i of e.images ?? []) s.image(i);
-  for (const f of e.figures ?? []) {
-    const fb = figure(f.id, without(f, "id", "parts", "stages") as never);
-    for (const p of f.parts) fb.part(p);
-    for (const st of f.stages ?? []) fb.stage(st);
+const rebuild = (e: PlatformCosmoSpec): PlatformCosmoSpec => {
+  const {
+    $schema: _s, // eslint-disable-line @typescript-eslint/no-unused-vars
+    meta,
+    images,
+    figures,
+    storyboards,
+    assemblies,
+    racks,
+    steps,
+    ...rest
+  } = e;
+  const s = spec(meta, rest);
+  for (const i of images ?? []) s.image(i);
+  for (const f of figures ?? []) {
+    const { id, parts, stages, ...fields } = f;
+    const fb = figure(id, fields);
+    for (const p of parts) fb.part(p);
+    for (const st of stages ?? []) fb.stage(st);
     s.figure(fb);
   }
-  for (const sb of e.storyboards ?? []) s.storyboard(sb);
-  for (const a of e.assemblies ?? []) {
-    const ab = assembly(a.id, without(a, "id", "parts", "programs") as never);
-    fillParts(ab, a.parts, a.programs);
+  for (const sb of storyboards ?? []) s.storyboard(sb);
+  for (const a of assemblies ?? []) {
+    const { id, parts, programs, ...fields } = a;
+    const ab = assembly(id, fields);
+    fillParts(ab, parts, programs);
     s.assembly(ab);
   }
-  for (const r of e.racks ?? []) s.rack(r);
-  for (const st of e.steps ?? []) s.step(st);
+  for (const r of racks ?? []) s.rack(r);
+  for (const st of steps ?? []) s.step(st);
   return s.toJSON();
 };
 
 describe("design examples", () => {
-  test("the doc yields the expected examples", () => {
-    expect(ALL.length).toBeGreaterThanOrEqual(6);
-    expect(EXAMPLES.length).toBeGreaterThanOrEqual(ALL.length - 1);
+  test("every design example is built (none excluded)", () => {
+    const total =
+      designExamples("assemblies.md").length + designExamples("document-ingestion.md").length;
+    expect(EXAMPLES.length).toBe(total);
+    expect(total).toBeGreaterThanOrEqual(6);
+    // the hall example (aisles, rows) goes through the `rest` argument of spec()
+    expect(EXAMPLES.some((x) => "rows" in x.e && "aisles" in x.e)).toBe(true);
   });
 
   test.each(EXAMPLES)("$name: builder output equals the example (JCS)", ({ e }) => {
-    // `$schema` is an editor hint; the builder never emits it.
-    expect(jcs(rebuild(e))).toBe(jcs(without(e, "$schema")));
+    expect(jcs(rebuild(e))).toBe(jcs(plain(e)));
   });
 
   test.each(EXAMPLES)("$name: builder output validates (only the guard objects)", ({ e }) => {
@@ -118,26 +133,21 @@ describe("design examples", () => {
     const errors = validate(out).diagnostics.filter((d) => d.severity === "error");
     for (const d of errors) expect(d.code).toBe("assembly/unsupported");
     // identical to what the plain example gets
-    expect(validate(out).diagnostics).toEqual(validate(without(e, "$schema")).diagnostics);
+    expect(validate(out).diagnostics).toEqual(validate(plain(e)).diagnostics);
   });
 
   test("the comparison detects differences", () => {
-    const e = EXAMPLES.find((x) => x.name === "assemblies #3")?.e as Obj; // 19.3 engine
-    const out = rebuild(e) as unknown as Obj;
-    out.assemblies[0].parts[0].size = [1, 2, 3];
-    expect(jcs(out)).not.toBe(jcs(without(e, "$schema")));
-    const out2 = rebuild(e) as unknown as Obj;
-    out2.assemblies[0].parts.reverse();
-    expect(jcs(out2)).not.toBe(jcs(without(e, "$schema")));
+    const e = byTitle(ENGINE_TITLE);
+    const out = rebuild(e) as unknown as { assemblies: { parts: { size?: unknown }[] }[] };
+    out.assemblies[0]!.parts[0]!.size = [1, 2, 3];
+    expect(jcs(out)).not.toBe(jcs(plain(e)));
+    const out2 = rebuild(e) as unknown as { assemblies: { parts: unknown[] }[] };
+    out2.assemblies[0]!.parts.reverse();
+    expect(jcs(out2)).not.toBe(jcs(plain(e)));
   });
 });
 
 describe("builder forms", () => {
-  const engineExample = () =>
-    EXAMPLES.map((x) => x.e).find(
-      (x) => (x.assemblies as Obj[] | undefined)?.[0]?.id === "engine" && x.steps,
-    ) as Obj;
-
   test("19.3 written as builder calls equals the example", () => {
     const engine = assembly("engine", { label: "Inline-4 engine", units: "mm" })
       .part("oil-pan", {
@@ -289,7 +299,7 @@ describe("builder forms", () => {
       })
       .step({ caption: "Back together", assembly: [{ implode: "engine" }], duration: 5 })
       .toJSON();
-    expect(jcs(doc)).toBe(jcs(without(engineExample(), "$schema")));
+    expect(jcs(doc)).toBe(jcs(plain(byTitle(ENGINE_TITLE))));
   });
 
   test("§16 example: nested sub, program, spec and validate", () => {
@@ -387,10 +397,83 @@ describe("builder forms", () => {
     expect(s.programs?.[0]).toEqual({ id: "x", stages: [{ parts: ["p"] }] });
   });
 
-  test("never throws on bad input; validate reports it", () => {
+  test("never throws on bad input; validate reports the specific diagnostic", () => {
+    const codes = (doc: unknown) =>
+      validate(doc)
+        .diagnostics.filter((d) => d.code !== "assembly/unsupported")
+        .map((d) => [d.code, d.path]);
+    const one: Omit<SpecPart, "id"> = { size: [1, 1, 1] };
     expect(() => assembly("a").part("x").part("x").toJSON()).not.toThrow();
-    const doc = spec({}).assembly(assembly("a")).toJSON();
-    expect(validate(doc).diagnostics.length).toBeGreaterThan(0);
+    // empty parts / stages / steps are emitted as [] and reported by the schema
+    expect(codes(spec({}).assembly(assembly("a")).toJSON())).toEqual([
+      ["schema/min-items", "/assemblies/0/parts"],
+    ]);
+    const sub = assembly("a").sub("s", {}, () => undefined);
+    expect(codes(spec({}).assembly(sub).toJSON())).toEqual([
+      ["schema/min-items", "/assemblies/0/parts/0/parts"],
+    ]);
+    const noStages = assembly("a").part("x", one).program(explode("e"));
+    expect(codes(spec({}).assembly(noStages).toJSON())).toEqual([
+      ["schema/min-items", "/assemblies/0/programs/0/stages"],
+    ]);
+    const noSteps = assembly("a").part("x", one).program(build("b"));
+    expect(codes(spec({}).assembly(noSteps).toJSON())).toEqual([
+      ["schema/min-items", "/assemblies/0/programs/0/steps"],
+    ]);
+    expect(
+      codes(
+        spec({})
+          .figure(figure("f", { base: "i" }))
+          .toJSON(),
+      ),
+    ).toEqual([["schema/min-items", "/figures/0/parts"]]);
+    const dup = assembly("a").part("x", one).part("x", one);
+    expect(codes(spec({}).assembly(dup).toJSON())).toEqual([
+      ["assembly/duplicate-part", "/assemblies/0/parts/1/id"],
+    ]);
+  });
+
+  test("sub() always emits parts, even when the callback adds none", () => {
+    const json = assembly("a")
+      .sub("s", { label: "S" }, () => undefined)
+      .toJSON();
+    expect(json.parts[0]).toEqual({ id: "s", label: "S", parts: [] });
+  });
+
+  test("a proto key is kept as data, not a prototype", () => {
+    const key = "__proto__";
+    const fields = JSON.parse(`{"label":"L","${key}":{"polluted":true}}`);
+    const part = assembly("a").part("x", fields).toJSON().parts[0] as object;
+    expect(Object.keys(part)).toContain(key);
+    expect(Object.getPrototypeOf(part)).toBe(Object.prototype);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(jcs(part)).toContain(`"${key}":{"polluted":true}`);
+  });
+
+  test("undefined-valued keys are skipped", () => {
+    const out = assembly("a", { label: undefined })
+      .part("x", { label: undefined, size: [1, 1, 1] })
+      .toJSON();
+    expect("label" in out).toBe(false);
+    expect("label" in (out.parts[0] as object)).toBe(false);
+  });
+
+  test("spec(meta, rest) passes other top-level fields", () => {
+    const out = spec({ title: "t" }, { canvas: { theme: "dark" }, rows: [] }).toJSON();
+    expect(out).toEqual({
+      meta: { version: "1", title: "t" },
+      canvas: { theme: "dark" },
+      rows: [],
+    });
+  });
+
+  test("program() snapshots a builder when called", () => {
+    const e = explode("e").stage({ parts: ["x"] });
+    const a = assembly("a")
+      .part("x", { size: [1, 1, 1] })
+      .program(e);
+    e.stage({ parts: ["late"] });
+    expect((a.toJSON().programs?.[0] as { stages: unknown[] }).stages).toHaveLength(1);
   });
 });
 
@@ -446,6 +529,8 @@ describe("type-level misuse", () => {
       noop(assembly("a").part("x", { id: "y" }));
       // @ts-expect-error a sub-assembly takes children through the callback
       noop(assembly("a").sub("s", { parts: [] }, () => undefined));
+      // @ts-expect-error a sub-assembly takes programs through the callback
+      noop(assembly("a").sub("s", { programs: [] }, () => undefined));
       // @ts-expect-error sub needs its build callback
       noop(assembly("a").sub("s", {}));
       // @ts-expect-error build steps are not explode stages
