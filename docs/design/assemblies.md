@@ -488,11 +488,13 @@ only one move is active.
    over the loop, ≤ 64 per transition; beyond: merged, approximate).
 
 **Cycles.** Edges have three strengths: forced (enclosure, `inserts`, face-exit rules of §9.5),
-certified (step 2) and heuristic (centre depth). A cycle is broken deterministically: never a
-forced edge; first drop heuristic edges, then certified ones, each time the edge whose endpoints
-have the smallest centre-depth difference (ties by the item keys); the existing Kahn release
-rule (lowest depth key, then id) then emits the order. Every broken certified edge is reported
-as `assembly/depth-cycle` (info) and marks the epoch `approximate`.
+certified (step 2) and heuristic (centre depth). A cycle is broken deterministically: first drop
+heuristic edges, then certified ones, each time the edge whose endpoints have the smallest
+centre-depth difference (ties by the item keys); a forced edge is dropped only when a cycle has
+nothing else left (no single interval can form one, but forced edges of different intervals can
+close a cycle in the one DOM order of Phase 1b), by the same rule. The existing Kahn release
+rule (lowest depth key, then id) then emits the order. Every broken certified or forced edge is
+reported as `assembly/depth-cycle` (info) and marks the epoch `approximate`.
 
 ### 9.4 One DOM for all epochs: duplicate copies
 
@@ -546,6 +548,13 @@ Containment is **closed** with a tolerance `ε = 1e-6` world units: `a ⊆ b` wh
 of `a` lies inside or on `b` (flush faces count, so camshafts flush with a cover's ends are
 inside it).
 
+Every rule of this section reasons about the faces of a solid's `depthBox`, so only solids that
+**fill** their box take part: one `box`, `plate` or `card` primitive whose box is the
+`depthBox`. A cylinder, shaft, wedge, prism or multi-primitive solid leaves empty box corners
+where a crossing leaf can be visible in front of it, so it never encloses, hides, clips or
+orders by the hidden-face rule; it is ordered by separation or bisection only (approximate where
+those cannot decide).
+
 - **Enclosed** leaf: its `depthBox` lies inside a `solid` leaf's `depthBox`, or inside the
   **union of touching solids** (solids whose boxes share a face, merged into connected blocks;
   a valve inside a head casting plus the valve cover above it is enclosed by their union) →
@@ -554,7 +563,16 @@ inside it).
   the halves, §9.6).
 - **Inserted** leaf (`inserts`, or inferred when the leaf crosses exactly one face plane of
   exactly one solid block and its footprint ⊥ that face lies inside the face): a seated
-  relation, not a collision. The inside portion is clipped at the **entry face**: entry face
+  relation, not a collision. A **block** is a set of touching solids that do not move relative
+  to each other (in the loop, for a static clip); its face planes are its exterior faces. A leaf
+  that crosses exactly one exterior face plane of a block (a seam pin across two halves, a pin
+  through two stacked members, a head bolt through cover and casting) is clipped at the
+  **block's** exit face: the part of the leaf below that plane lies inside the union of the
+  members and the part beyond it meets no member; the clip solid is the member that carries the
+  face, and the leaf is drawn after every member it interpenetrates (forced). When no single
+  block face qualifies (a leaf crossing faces of two different blocks, or several faces of one),
+  the leaf is hidden while it crosses (`assembly/clip-fallback`), never left to the static
+  heuristic. The inside portion is clipped at the **entry face**: entry face
   visible (`+x`, `+y`, `+z`): forced edge leaf after the solid, with the static footprint-prism
   clip below; hidden (`−x`, `−y`, `−z`): forced edge leaf before the solid, no clip. Inserted
   leaves keep the relation while both move together (a head and its valves) and while the leaf
@@ -571,7 +589,13 @@ inside it).
   is static **in the solid's frame**: `clipPathUnits="userSpaceOnUse"` on the clip wrapper
   inside `partHost`, which carries the solid's track (none when the solid is static), with the
   leaf's motion relative to the solid inside it (§9.4). Exact for convex prisms along `u`
-  (boxes, cylinders, shafts).
+  (boxes, cylinders, shafts). The proof covers side-face points and needs the leaf's own `+u`
+  face at or beyond the face plane (`p.max_u ≥ e.max_u`): a `+u` face still below the plane
+  projects inside the prism and would show through. While `p.max_u ≤ e.max_u` the leaf lies
+  inside `e` (its footprint is inside the face and it never passes the hidden `−u` face), so
+  the enclosure rule takes precedence: it is hidden, and the clip applies only while it crosses.
+  The instants where `p.max_u(t) = e.max_u(t)` are epoch boundaries, like presence changes, so
+  both sides certify.
 - **Validity of a static clip.** The clip is one fixed region for the whole loop, so a copy may
   be clipped only if its motion relative to the solid has **no component ⊥ `u` at any time in
   the loop** (only motion along `u`, the axis that leaves through the clipped face). Then its
@@ -585,6 +609,10 @@ inside it).
 - Regression fixture: the engine example (§19.3) exercises all three: valves inserted in the
   casting and enclosed by casting ∪ cover at rest, camshafts flush in the cover, pistons
   crossing the block deck.
+- **Note for A1-3 (Phase 1b):** a drawer that moves inside the loop (the built-in `drawers`
+  program, §19.4) is approximate until copies (A1-2b): an open device at rest is behind the
+  device above it, and its internals lifted on the pulled drawer are in front of it, which no
+  single DOM order satisfies (reported as `assembly/depth-approx` with `copy: true`).
 
 ### 9.6 Split items
 
@@ -843,7 +871,7 @@ suggestions):
 | `assembly/no-op-action`                                                                                         | info                                              | action that does not change the level                                                      |
 | `assembly/transit-collision`                                                                                    | warning                                           | leaves interpenetrate during a transition                                                  |
 | `assembly/below-ground`                                                                                         | error                                             | rack or slot move below the floor                                                          |
-| `assembly/depth-cycle`                                                                                          | info                                              | a certified depth edge was dropped to break a cycle                                        |
+| `assembly/depth-cycle`                                                                                          | info                                              | a certified (or, in an all-forced cycle, forced) depth edge was dropped to break a cycle   |
 | `image/exif-ignored`                                                                                            | info                                              | malformed EXIF block; orientation 1 assumed                                                |
 | `assembly/unknown-target`                                                                                       | error                                             | action, focus, `set`, `overrides`, `mates`, `inserts`, `use`, `closeup` matches nothing    |
 | `assembly/unknown-program`                                                                                      | error                                             | program id not found on the target (action, `program`, `subBuild`) or of the wrong kind    |
@@ -862,6 +890,7 @@ suggestions):
 | `assembly/implicit-access`                                                                                      | info                                              | access move prepended (§8.3)                                                               |
 | `assembly/depth-approx`                                                                                         | info                                              | an epoch could not be certified                                                            |
 | `assembly/clip-fallback`                                                                                        | info                                              | enclosed part hidden until clear                                                           |
+| `assembly/depth-input`                                                                                          | error                                             | internal: invalid depth-order input (non-finite box, move or loop); that input is ignored  |
 | `assembly/bounds-growth`                                                                                        | info                                              | reach bounds > 4× rest                                                                     |
 | `assembly/size-mismatch`                                                                                        | warning                                           | template or close-up does not fit at true scale                                            |
 | `assembly/reserved-id`                                                                                          | error                                             | slot id `frame` on a rack in assembly mode; any part id `closeup` (reserved segment)       |
