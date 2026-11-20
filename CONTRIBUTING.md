@@ -48,9 +48,10 @@ Each workflow with a required check starts with a `changes` job that diffs the P
 If every changed file is documentation (`docs/**`, any `*.md` including `.changeset/*.md`, `LICENSE*`,
 `NOTICE`, `scripts/deploy-docs.sh`, `.github/ISSUE_TEMPLATE/**`), the engine, plugin, hook, visual and
 browser jobs are skipped (a skipped job satisfies a required check) and `plugin-bundle` runs only the
-docs build and the schema identity check. Any other changed file, any push and any manual run executes
-everything, so `main` is always fully tested. We use job-level `if:` and not workflow-level `paths:`
-filters, which would leave required checks pending forever.
+docs build and the schema identity check. Markdown under `plugin/`, `packages/`, `schema/`, `examples/`,
+`tests/` or `docs/design/` is tested input and always takes the full path. Any other changed file, any
+push and any manual run executes everything, so `main` is always fully tested. We use job-level `if:` and
+not workflow-level `paths:` filters, which would leave required checks pending forever.
 
 ## Docs site
 

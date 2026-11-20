@@ -49,6 +49,7 @@ jobs:
             while IFS= read -r f; do
               [ -n "$f" ] || continue
               case "$f" in
+                plugin/*|packages/*|schema/*|examples/*|tests/*|docs/design/*) echo "engine file: $f"; engine=true ;;
                 docs/*|*.md|LICENSE*|NOTICE|scripts/deploy-docs.sh|.github/ISSUE_TEMPLATE/*) ;;
                 *) echo "engine file: $f"; engine=true ;;
               esac
