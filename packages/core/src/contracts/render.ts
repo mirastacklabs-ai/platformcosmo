@@ -55,7 +55,12 @@
  *   hide the `flows` layer (SMIL cannot be paused by CSS).
  */
 import type { PlatformCosmoSpec } from "../schema/types.gen.js";
-import type { AssemblyRenderModel, ImageAssetResolver, PartShapeRegistry } from "./assembly.js";
+import type {
+  AssemblyRenderModel,
+  ImageAsset,
+  ImageAssetResolver,
+  PartShapeRegistry,
+} from "./assembly.js";
 import type { DcPack } from "./dc.js";
 import type { Diagnostic, ValidationReport } from "./diagnostics.js";
 import type { FaceName, Projection, Rect, Vec2 } from "./geometry.js";
@@ -303,6 +308,71 @@ export interface FontAsset {
   readonly sfnt: Uint8Array;
 }
 
+/** Easing of the segment that STARTS at a key: a cubic-bezier, or `step` = hold to the next key. */
+export type BoardKeyEasing = readonly [number, number, number, number] | "step";
+
+/** Screen translation of one flat-board sprite relative to its seated position. */
+export interface BoardPoseKey {
+  /** Loop seconds at the speed the tracks were built for. */
+  readonly t: number;
+  readonly x: number;
+  readonly y: number;
+  readonly easing: BoardKeyEasing;
+}
+
+/** Opacity (0..1) of a label or arrow group. */
+export interface BoardFadeKey {
+  readonly t: number;
+  readonly v: number;
+  readonly easing: BoardKeyEasing;
+}
+
+export interface BoardPoseTrack {
+  /** Element id of the sprite's motion group. */
+  readonly id: string;
+  /** Sorted by t, strictly increasing; first key at 0, last at the loop end. */
+  readonly keys: readonly BoardPoseKey[];
+}
+
+export interface BoardFadeTrack {
+  readonly id: string;
+  readonly keys: readonly BoardFadeKey[];
+}
+
+/**
+ * Motion of flat boards on the master loop, for one `--speed`. Times are in loop seconds (the
+ * sum of the step durations, at speed 1 scale), but the camera transitions that bound the
+ * motion windows are computed on the OUTPUT clock (`min(0.8, 0.25 d / speed)` seconds, as the
+ * animator's camera does) and converted, so a closing return starts exactly when the camera's
+ * ease-out starts.
+ */
+export interface BoardsTracks {
+  /** Loop length in loop seconds (0 without steps). */
+  readonly loop: number;
+  /** Sprites that move at some time of the loop, sorted by id. */
+  readonly poses: readonly BoardPoseTrack[];
+  /** Labels and arrows whose opacity changes, sorted by id. */
+  readonly fades: readonly BoardFadeTrack[];
+  /** Per step: start time. */
+  readonly stepStarts: readonly number[];
+  /** Per step: where its closing hold ends (`T + d − tr`), where per-step outputs read the pose. */
+  readonly stepEnds: readonly number[];
+  /** Per step: when its actions have settled (§7.5); undefined for steps without actions. */
+  readonly settled: readonly (number | undefined)[];
+}
+
+/** What the figure renderer adds to `RenderModel` (`RenderModel.boards`). */
+export interface BoardsRenderModel {
+  /** Tracks for an output speed (the animator's `--speed`). */
+  tracks(speed: number): BoardsTracks;
+  /** The credits line group (pinned like the legend), when any source carries a credit. */
+  readonly creditsId?: string;
+  /** Every embedded asset by hash, first-use order (the emitter encodes the bytes itself). */
+  readonly assets: ReadonlyMap<string, ImageAsset>;
+  /** Text appended to the SVG `<desc>`: every credit entry (§11.6). Empty without credits. */
+  readonly desc: string;
+}
+
 /** Output of projection + routing + depth sort (Track A); input to animation, emit and export. */
 export interface RenderModel {
   readonly scene: SceneGraph;
@@ -324,6 +394,8 @@ export interface RenderModel {
   readonly fontAssets: readonly FontAsset[];
   /** Schema 1.2.0 assembly layer (depth epochs, copies, tracks); absent without assemblies. */
   readonly assembly?: AssemblyRenderModel;
+  /** Schema 1.2.0 flat boards (figure panels, R-1): tracks and asset data; absent without them. */
+  readonly boards?: BoardsRenderModel;
 }
 
 /** What animation adds on top of the static model (Track B). */
