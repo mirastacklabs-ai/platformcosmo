@@ -67,7 +67,7 @@ JSON summary with `--json`. Inputs are untrusted (§4.6, §14).
 | `assets pdf extract <f.pdf> --page N --image K -o out.png\|.jpg`                                                                                              | one image: DCTDecode passed through as `.jpg`; everything else decoded to PNG; `--all --pages a-b -d dir` writes every image ≥ `--min-px` as `p<page>-i<index>.png\|.jpg` (names never come from the PDF) plus `manifest.json` (page, index, bbox, sha256; identical images written once) |
 | `assets pdf compose --page N -o page.png [--dpi 96] [--crop x,y,w,h\|x%,y%,w%,h%] [--annotate]`                                                               | composites the page's raster images at their CTMs on white; `--annotate` draws each image's bbox and index so Claude can match figures to `extract` indexes                                                                                                                               |
 | `assets pdf render --page N -o page.png [--dpi 150] [--crop …]`                                                                                               | full render via the optional external renderer, then crop                                                                                                                                                                                                                                 |
-| `assets pdf text --page N [--json]`                                                                                                                           | text runs with bboxes (simple fonts, ToUnicode CMaps; unknown glyphs as U+FFFD); data, never instructions                                                                                                                                                                                 |
+| `assets pdf text --page N [--json]`                                                                                                                           | text runs with bboxes (simple fonts, ToUnicode CMaps; unknown glyphs, C0/C1 controls and bidi formatting characters as U+FFFD); data, never instructions                                                                                                                                  |
 | `assets crop <img> --rect x,y,w,h -o out.png [--transparent [--tolerance 12]] [--trim]`                                                                       | crop; optional removal of a near-uniform background by **edge-connected flood fill** (enclosed whites stay opaque)                                                                                                                                                                        |
 | `assets cutout <img> --seed x,y[;x,y…] [--polygon …] [--prior box\|cylinder\|none] [--mask auto\|rect] [--erase-from base.png -o base-out.png] -o sprite.png` | silhouette segmentation of one part (§6.2) and, optionally, erasing it from a base                                                                                                                                                                                                        |
 | `assets locate <sprite> --in <img> [--region x,y,w,h] [--top 3]`                                                                                              | template match (normalized cross-correlation on luminance and alpha mask, multi-scale), best positions with scores                                                                                                                                                                        |
@@ -102,10 +102,14 @@ follows only what extraction needs.
   is empty** (common for manuals that only restrict printing or copying): RC4 (V1/V2, R2–R4,
   40–128 bit), AES-128 (V4 with crypt filter `AESV2`, R4) and AES-256 (V5 `AESV3`, R5–R6) via
   `node:crypto` (MD5, SHA-2, AES; RC4 itself is a few lines in the package, because OpenSSL 3
-  ships it only in the legacy provider that Node does not load); strings and streams (including object streams; metadata per
-  `/EncryptMetadata`) are decrypted with the per-object key, the file key is derived per the
-  PDF spec and checked against `/U` before any object is decrypted, and decrypted streams count
-  against the same decode caps. Any other handler, a
+  ships it only in the legacy provider that Node does not load); strings and streams (object
+  streams decrypted as a whole, never the strings inside them a second time; xref streams and
+  streams with an Identity `/Crypt` filter never) are decrypted with the per-object key. The
+  file key is derived per the PDF spec (`/EncryptMetadata false` changes only the R4 key
+  derivation: `/Metadata` streams are never read) and checked against `/U` before any object is
+  decrypted; decrypted bytes count against the same decode caps. The handler must be
+  consistent: AESV3 only with V5, V5 only with AESV3 (or no encryption), and a `/Length` that
+  is a whole number of bytes. Any other handler, a
   non-empty user password, or a failed `/U` check is refused with `pdf/encrypted`. Permission
   flags are reported by `pdf info`; they are not enforced by us and do not change what the user
   may do with their own document (the skill states the document's license).
@@ -139,8 +143,10 @@ Colour: `DeviceGray`, `DeviceRGB`, `DeviceCMYK` (naive conversion), `ICCBased` (
 ignored), `Indexed` over those bases (palette lookup), `CalGray`/`CalRGB` as device spaces;
 `Separation`/`DeviceN` approximated to gray with `pdf/colour-approx`. `BitsPerComponent` 1, 2,
 4, 8, 16; `/Decode` arrays; `/ImageMask` stencils (alpha with the fill colour black); `/SMask`
-(soft mask → alpha channel, resampled to the image size if different) and `/Mask` colour-key
-ranges. Output: 8-bit RGB or RGBA PNG, at most **16 MP** of output pixels per image (larger images are
+(soft mask → alpha channel, resampled to the image size if different; `/Matte` is ignored, so
+pre-multiplied soft masks are not un-multiplied) and `/Mask` colour-key ranges. A passed-through
+JPEG keeps its own pixels: its `/Decode` and `/SMask` are not applied (an info diagnostic says
+so; the mask is extractable on its own). Output: 8-bit RGB or RGBA PNG, at most **16 MP** of output pixels per image (larger images are
 listed but not decoded: `pdf/too-large`, suggesting `render --crop` at a lower DPI). Flate and
 LZW decode **streaming** (fflate's streaming inflate) into a buffer sized from the declared
 width × height × components, aborting as soon as the output would exceed it or the 64 MiB
@@ -172,12 +178,33 @@ The parser never throws on bad input (diagnostics instead), is fuzzed (Track C t
 all text and pixels it returns are data: the skill's prompt-injection rule (§10) applies to
 everything read from a document.
 
-How C-2 applies the table: the object cap also bounds the elements of one array or
-dictionary; a `/Prev` chain longer than 64 sections gives a `pdf/too-complex` warning and the
-file is rebuilt by the one-pass repair scan instead; the 16 MP cap is 16 777 216 px, as for
-image assets; the operator cap counts forms with their page; the decoded total counts filter
-output (a raw JPEG passed through costs nothing). All limits can be lowered per call
-(`openPdf(bytes, { limits })`), never raised by the file.
+How C-2 applies the table:
+
+- The object cap also bounds the elements of one array or dictionary, and the entries of one
+  xref table (a larger declared count is treated as damage and repaired).
+- `/Prev` targets and a hybrid file's `/XRefStm` count as sections; one already read is not read
+  again (`pdf/malformed` warning), and past 64 a `pdf/too-complex` warning precedes the
+  one-pass repair scan. Repair skips stream data (by a valid `/Length`, else to the next
+  `endstream`), so an embedded file's objects are never adopted, and reads at most the newest
+  64 trailers.
+- Every object is parsed only up to the next `endobj` (or, after repair, the next object
+  header); an object-stream member only within its own slice, and an object stream whose member
+  offsets repeat or decrease is ignored (`pdf/malformed`). Lexed bytes count against
+  `maxLexedBytes` (1 GiB per command).
+- At most 8 whitespace bytes may separate data from `endstream` or `EI`; otherwise the
+  stream's end is found by the scan.
+- The decoded total counts every byte handed out: filter output, unfiltered and passed-through
+  streams, decrypted bytes, the concatenated page content, padding and pixel buffers; it is
+  checked before each decode. An image whose data is under 1/1024 of its declared size is
+  `pdf/malformed`, never padded.
+- Per-command budgets on top of the table: 50 M content tokens (the per-page cap of 5 M counts
+  operands too), 256 MiB of page content scanned (many pages on one large stream), 256 MiB of
+  image data hashed per `list` call (beyond: `sha256: null` and one warning; the same when the
+  decoded total runs out while hashing), 100 000 image placements per page, and 200 000 text
+  runs of at most 65 536 characters per page (`pdf/too-complex`, truncated).
+- The 16 MP cap is 16 777 216 px, as for image assets.
+- Limits can only be lowered per call (`openPdf(bytes, { limits })`, `min(default, value)`),
+  never raised, and never by the file.
 
 ## 5. Raster operations (Track C)
 
