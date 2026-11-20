@@ -7,6 +7,7 @@
  * The contract has no slot for figure sprites and moves (`SceneFlatBoard` carries ids only), so
  * `resolveFigure` is exported for R-1: it is cheap and gives the same answer as the scene.
  */
+import { toSource } from "./assembly/source.js";
 import { globMatch } from "../schema/glob.js";
 import type {
   AssemblyStepPlan,
@@ -25,7 +26,6 @@ import type {
   SpecAssemblyAction,
   SpecEasing,
   SpecFigure,
-  SpecSource,
   SpecStep,
 } from "../schema/types.gen.js";
 
@@ -786,15 +786,6 @@ function planPass(
 // ---------------------------------------------------------------------------------------------
 // Boards, images and credits
 // ---------------------------------------------------------------------------------------------
-
-const SOURCE_KEYS = ["document", "page", "figure", "license", "attribution", "url"] as const;
-
-function toSource(s: SpecSource | undefined): AssetSource | undefined {
-  if (s === undefined) return undefined;
-  const out: Record<string, unknown> = {};
-  for (const k of SOURCE_KEYS) if (s[k] !== undefined) out[k] = s[k];
-  return Object.keys(out).length > 0 ? (out as AssetSource) : undefined;
-}
 
 export interface BoardOptions {
   /** Where figures without `pos` start: placed in a row along +x, one tile apart. */
