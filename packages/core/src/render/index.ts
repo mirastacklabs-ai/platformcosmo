@@ -25,6 +25,7 @@ import { validateRenderOptions } from "../export/options.js";
 import { optimize } from "../optimize/index.js";
 import { buildScene } from "../scene/index.js";
 import { validate } from "../schema/index.js";
+import { checkFigureImages } from "./boards/index.js";
 import { buildModel, buildModelWithDiagnostics, inputsOf } from "./model.js";
 
 export { buildModel } from "./model.js";
@@ -85,10 +86,16 @@ export function defaultIdPrefix(
     readonly optimize: boolean;
     /** Only hashed when not the default `smil`, so existing prefixes stay unchanged (D32). */
     readonly motion?: string;
+    /** Schema 1.2.0: `[image id, asset hash]` of the declared images, so other bytes give other ids. */
+    readonly assets?: readonly (readonly [string, string])[];
   },
 ): string {
-  const { motion, ...rest } = options;
-  const hashed = motion !== undefined && motion !== "smil" ? { ...rest, motion } : rest;
+  const { motion, assets, ...rest } = options;
+  const hashed = {
+    ...rest,
+    ...(motion !== undefined && motion !== "smil" ? { motion } : {}),
+    ...(assets !== undefined && assets.length > 0 ? { assets } : {}),
+  };
   const digest = createHash("sha256")
     .update(canonicalJson({ spec, options: hashed }))
     .digest("hex");
@@ -214,10 +221,17 @@ export function createRender(deps: RenderDeps): RenderFn {
         }
       }
 
+      // Figures (schema 1.2.0): every image they use must be provided, and the embedded total
+      // must fit the caps, before anything is placed or encoded.
+      const imageDiagnostics = checkFigureImages(parsed, options.images);
+      diagnostics.push(...imageDiagnostics);
+      if (imageDiagnostics.some((d) => d.severity === "error")) return fail(diagnostics);
+
       const scene = deps.buildScene(parsed, {
         labelSize: theme.font.label,
         ...(options.icons ? { icons: options.icons } : {}),
         ...(options.dc ? { dc: options.dc } : {}),
+        ...(options.images ? { images: options.images } : {}),
       });
       diagnostics.push(...scene.diagnostics);
       if (diagnostics.some((d) => d.severity === "error")) return fail(diagnostics, scene);
@@ -235,6 +249,14 @@ export function createRender(deps: RenderDeps): RenderFn {
           speed,
           optimize: doOptimize,
           ...(motion === "css" ? { motion } : {}),
+          // Schema 1.2.0 only (1.1 specs declare no images): other image bytes, other ids.
+          ...(parsed.images !== undefined
+            ? {
+                assets: parsed.images.map(
+                  (i) => [i.id, options.images?.get(i.id)?.hash ?? ""] as const,
+                ),
+              }
+            : {}),
         });
 
       const built = buildModelWithDiagnostics({
@@ -244,6 +266,9 @@ export function createRender(deps: RenderDeps): RenderFn {
         font,
         prefix,
         ...(options.icons ? { icons: options.icons } : {}),
+        ...(parsed.figures !== undefined
+          ? { spec: parsed, ...(options.images ? { images: options.images } : {}) }
+          : {}),
       });
       diagnostics.push(...built.diagnostics);
       const model = built.model;

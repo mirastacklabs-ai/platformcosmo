@@ -142,7 +142,12 @@ existing `PrimitiveKind` union is untouched so its exhaustive maps stay source-c
 `camshaft`, `piston`, `rod`, `valve`, `oil-pan`, `intake`, `exhaust`, `timing-belt`) and
 `brick:` (stud grid, §5.1). A shape's `build` returns `PartGeometry` (primitives in its local
 frame, `bounds`, `depthBox`, `solid`, optional `split`). Shapes are generic and vendor-neutral
-(no trade dress, no trademarks).
+(no trade dress, no trademarks, no vendor names); standards-body interface and form-factor names
+(M.2, E1.S, OCP 3.0, PCIe, NVMe, CRPS) may be used descriptively in ids, labels and docs.
+`hw:` shapes have one canonical orientation (x width, y depth, z height, mm), devices with a
+front put it at +y, and `depthBox` is the solid core (fingers, ears, handles, sockets and
+connectors are drawn but excluded, like brick studs). Use the part's `rotate` to turn a shape;
+`hw:e1s` also takes `params.orientation` (`flat` | `upright`).
 
 ### 5.1 Stud-grid bricks (`@platformcosmo/parts-brick`, Track E)
 
@@ -315,6 +320,7 @@ Step `i` spans `[T_i, T_i + d_i]`. Its **motion window** opens at `m_i = T_i + l
 transitions sit at the end of the previous step, D27) and closes at
 `c_i = T_i + d_i − tr_i − 0.2` where `tr_i = min(0.8, 0.25·d_i)` is the closing camera
 transition (0 when the next view is the same) and 0.2 s is a hold so the settled pose is seen.
+For the last step `tr_n` also applies when the end pose of any program differs from its base pose and no camera transition follows (the loop closure of §7.4 needs that window). All times use the output clock: `tr` and `lead` are `min(0.8, 0.25·d/speed)` seconds of output, i.e. that many times `speed` loop seconds.
 If the step's actions need `L_i > c_i − m_i`, all of them are compressed uniformly by
 `scale = (c_i − m_i)/L_i` (`ResolvedAction.scale`), with `assembly/compressed` (info; warning
 below 0.5) whose suggestion gives the duration that fits: `"duration": D`, the smallest whole
@@ -332,7 +338,7 @@ number of seconds with `D − lead(D) − tr(D) − 0.2 ≥ L_i`, where `lead(D)
   back to the overview) every program returns to its base level: explode levels by a fast
   implode (all moves reversed together, no stagger, compressed into `tr_n`); build levels by
   fades (parts present at rest but not at the end fade in, others out). Ending with an
-  explicit implode step avoids the fast return; the skill does that.
+  explicit implode step avoids the fast return; the skill does that. When the last step is not zoomed the window `tr_n = min(0.8, 0.25·d_n)` is still reserved at its end for the fast return, so the loop restart never snaps.
 - **Focus on assemblies**: `focus` on an assembly, sub-assembly or part frames its box at the
   END pose of the step (`AssemblyRenderModel.focusRect(step, id)`), so an exploded unit fits
   the zoom; B uses it instead of `RenderModel.focusRects` when present.
@@ -1064,7 +1070,8 @@ All examples validate against `schema/v1.json` (checked when this design was wri
           "count": 8,
           "at": [175, 410, 7],
           "pitch": [11, 0, 0],
-          "size": [7, 133, 31],
+          "rotate": 90,
+          "size": [133, 7, 31],
           "label": "DIMM"
         },
         {
@@ -1074,7 +1081,8 @@ All examples validate against `schema/v1.json` (checked when this design was wri
           "count": 4,
           "at": [370, 410, 7],
           "pitch": [11, 0, 0],
-          "size": [7, 133, 31],
+          "rotate": 90,
+          "size": [133, 7, 31],
           "label": "DIMM"
         },
         {
@@ -1082,9 +1090,10 @@ All examples validate against `schema/v1.json` (checked when this design was wri
           "type": "nvme",
           "shape": "hw:e1s",
           "count": 8,
-          "at": [20, 700, 7],
+          "at": [20, 632, 7],
           "pitch": [14, 0, 0],
-          "size": [10, 45, 60],
+          "params": { "orientation": "upright" },
+          "size": [10, 118, 34],
           "label": "E1.S NVMe"
         }
       ],
@@ -1355,7 +1364,7 @@ pistons, head, camshafts, valve cover, so the cover (moved first) ends highest.
           "id": "board",
           "shape": "hw:board",
           "at": [10, 260, 0],
-          "size": [418, 400, 3],
+          "size": [418, 400, 12],
           "label": "Motherboard"
         },
         {
@@ -1375,7 +1384,8 @@ pistons, head, camshafts, valve cover, so the cover (moved first) ends highest.
           "count": 8,
           "at": [175, 410, 3],
           "pitch": [11, 0, 0],
-          "size": [7, 133, 31],
+          "rotate": 90,
+          "size": [133, 7, 31],
           "label": "DIMM"
         },
         {

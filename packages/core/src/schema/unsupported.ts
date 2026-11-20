@@ -14,8 +14,8 @@ export type GuardGroup = "phase1a" | "phase1b" | "phase2" | "phase3";
 
 /** Field groups not rendered yet, by the phase that lifts them (tracks §0). */
 export const UNRENDERED: Readonly<Record<GuardGroup, boolean>> = {
-  /** Phase 1a, figure mode: `images`, `figures`, explode/implode actions on figures. */
-  phase1a: true,
+  /** Phase 1a, figure mode: `images`, `figures`, explode/implode actions on figures. Lifted by R-1. */
+  phase1a: false,
   /** Phase 1b, plans and basic explode: `assemblies`, actions on assemblies, part paths. */
   phase1b: true,
   /**
