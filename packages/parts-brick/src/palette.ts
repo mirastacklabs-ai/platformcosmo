@@ -2,6 +2,10 @@
  * Generic brick colours (assemblies section 5.1). Plain colour words only: no brand palettes, no
  * catalogue colour names. The spec's own `color` (palette name or hex) always wins; this palette
  * adds names for the `paint` param so a shape can be coloured without a spec `color`.
+ *
+ * These are the pack's own fixed hex values, not the theme's `palette:` colours: a spec `color`
+ * of `red` resolves through the theme (and follows light/dark), while `paint: "red"` always
+ * draws the hex below. Names overlap on purpose; the two never mix on one part.
  */
 export const palette = {
   white: "#f2f2ee",

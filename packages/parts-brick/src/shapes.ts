@@ -1,4 +1,4 @@
-import { studGrid, type Box3, type PartShapeDef } from "@platformcosmo/core";
+import { studGrid, STUD_DIAMETER, type Box3, type PartShapeDef } from "@platformcosmo/core";
 import { defineShape, MAX_STEPS, MAX_STUDS, type ParamSpec, type Solid } from "./define.js";
 import { palette, paletteNames } from "./palette.js";
 
@@ -37,16 +37,27 @@ function topStuds(
         ...s.style,
       }),
     );
-  } catch {
-    // A host the grid cannot sit on gets no studs; building never throws.
+  } catch (e) {
+    // A host the grid cannot sit on gets no studs; anything but a RangeError is a bug.
+    if (!(e instanceof RangeError)) throw e;
   }
 }
 
-/** Stud cells whose centre lies inside the footprint ellipse (round parts). */
-function inEllipse(c: number, r: number, cols: number, rows: number): boolean {
-  const dx = (c + 0.5 - cols / 2) / (cols / 2);
-  const dy = (r + 0.5 - rows / 2) / (rows / 2);
-  return dx * dx + dy * dy <= 1 + EPS;
+/**
+ * Stud cells whose whole disc lies inside the footprint ellipse (round parts): the stud centre
+ * must be inside the ellipse shrunk by the stud radius, with 0.01 slack so a 2 x 2 keeps its four.
+ */
+function discInside(host: Box3): (c: number, r: number, cols: number, rows: number) => boolean {
+  const a = host.size.x / 2;
+  const b = host.size.y / 2;
+  const rad = STUD_DIAMETER / 2;
+  return (c, r, cols, rows) => {
+    const dx = c + 0.5 - cols / 2;
+    const dy = r + 0.5 - rows / 2;
+    const ea = a - rad + 0.01;
+    const eb = b - rad + 0.01;
+    return ea > 0 && eb > 0 && (dx * dx) / (ea * ea) + (dy * dy) / (eb * eb) <= 1;
+  };
 }
 
 const brick = defineShape(
@@ -105,7 +116,7 @@ const round = defineShape(
     draw(s, p, axis) {
       const body = s.add("body", "cylinder", [0, 0, 0], [s.size.x, s.size.y, s.size.z], { axis });
       // Studs stand on the top face of an upright round only.
-      if (p["studs"] && axis === "z") topStuds(s, body, inEllipse);
+      if (p["studs"] && axis === "z") topStuds(s, body, discInside(body));
     },
   },
   (n) => palette[n as keyof typeof palette],
@@ -116,7 +127,8 @@ const round = defineShape(
  * sorts as a convex solid. The high side is at -x (turn it with the part's `rotate`). The first
  * stud of the run is a full-height block that carries the studs; the rest of the run is a wedge
  * (a width-1 slope is a wedge only and has no studs). `inverted` flips the slope under the part:
- * a flat studded top over a stepped underside, at most `MAX_STEPS` steps.
+ * a flat studded top over a stepped underside, at most `MAX_STEPS` steps; this is an approximation, since a wedge cannot be flipped. A slope under 2 studs wide has no room for steps, so inverted
+ * is ignored there and it is the regular wedge (no studs).
  */
 const slope = defineShape(
   {
@@ -127,7 +139,7 @@ const slope = defineShape(
     params: { studs: bool(true), inverted: bool(false), paint },
     draw(s, p) {
       const { x: w, y: d, z: h } = s.size;
-      if (p["inverted"]) {
+      if (p["inverted"] && w >= 2 - EPS) {
         const n = Math.min(Math.max(1, Math.ceil(w - EPS)), MAX_STEPS);
         const step = w / n;
         for (let i = 0; i < n; i++) {

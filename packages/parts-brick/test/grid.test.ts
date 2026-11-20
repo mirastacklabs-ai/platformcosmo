@@ -53,8 +53,23 @@ describe("brick/off-grid", () => {
     expect(part({ at: [1.001, 0, 0] })).toHaveLength(1);
   });
 
-  test("only stud units are checked, only brick: shapes", () => {
-    expect(part({ units: "mm", at: [0.5, 0, 0] })).toEqual([]);
+  test("other units are converted to studs first (8 mm studs, 3.2 mm plates)", () => {
+    expect(part({ units: "mm", at: [8, 16, 6.4], size: [16, 32, 9.6] })).toEqual([]);
+    const [d] = part({ units: "mm", at: [4, 0, 0] });
+    expect(d?.code).toBe("brick/off-grid");
+    expect(d?.suggestion).toBe("Use [8, 0, 0]"); // 0.5 studs rounds up
+    expect(d?.params).toMatchObject({ axes: ["x"] });
+    expect(part({ units: "mm", at: [0, 0, 3.2] })).toEqual([]); // one plate high
+    expect(part({ units: "mm", at: [0, 0, 8] })).toHaveLength(1); // 2.5 plates
+    expect(part({ units: "cm", at: [0.8, 0, 0] })).toEqual([]);
+    expect(part({ units: "cm", at: [1, 0, 0] })).toHaveLength(1);
+    expect(part({ units: "in", at: [0, 0, 0], size: [8 / 25.4, 8 / 25.4, 3.2 / 25.4] })).toEqual(
+      [],
+    );
+  });
+
+  test("unknown or missing units, and other shapes, are skipped", () => {
+    expect(part({ units: "furlong", at: [0.5, 0, 0] })).toEqual([]);
     expect(part({ units: undefined, at: [0.5, 0, 0] })).toEqual([]);
     expect(part({ shape: "hw:dimm", at: [0.5, 0, 0] })).toEqual([]);
     expect(part({ shape: "box", at: [0.5, 0, 0] })).toEqual([]);
@@ -89,6 +104,32 @@ describe("stud count cap", () => {
       1,
     );
     expect(part({ size: [40, 40, 1], shape: "brick:unknown" })).toEqual([]);
+  });
+
+  test("slope counts one stud column, or none when 1 wide; inverted counts the footprint", () => {
+    const slope = (size: number[], params?: object) =>
+      part({ shape: "brick:slope", size, ...(params ? { params } : {}) });
+    expect(slope([2, 256, 3])).toEqual([]); // 256 studs in one column
+    expect(slope([2, 257, 3])).toHaveLength(1);
+    expect(slope([1, 1000, 3])).toEqual([]); // wedge only: no studs
+    expect(slope([20, 20, 3])).toEqual([]); // 20 studs
+    expect(slope([20, 20, 3], { inverted: true })).toHaveLength(1); // 400
+    expect(slope([1, 1000, 3], { inverted: true })).toEqual([]); // too narrow to invert
+  });
+
+  test("a round on a side axis carries no studs", () => {
+    const round = (axis?: string) =>
+      part({ shape: "brick:round", size: [20, 20, 3], ...(axis ? { axis } : {}) });
+    expect(round()).toHaveLength(1);
+    expect(round("z")).toHaveLength(1);
+    expect(round("x")).toEqual([]);
+    expect(round("y")).toEqual([]);
+  });
+
+  test("the stud count uses the clamped size, in stud units", () => {
+    expect(part({ units: "mm", shape: "brick:plate", size: [128, 128, 3.2] })).toEqual([]); // 16 x 16
+    expect(part({ units: "mm", shape: "brick:plate", size: [136, 128, 3.2] })).toHaveLength(1);
+    expect(part({ shape: "brick:plate", size: [1e30, 1e30, 1] })).toHaveLength(1);
   });
 
   test("a huge size is checked without allocation", () => {

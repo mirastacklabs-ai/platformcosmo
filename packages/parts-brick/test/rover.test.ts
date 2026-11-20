@@ -103,6 +103,7 @@ describe("section 19.5 generic brick rover", () => {
           ...(l.pitch ? { pitch: l.pitch } : {}),
           ...(l.count ? { count: l.count } : {}),
           size: l.size,
+          ...(l.axis ? { axis: l.axis } : {}),
           params: l.params,
         }),
       ).toEqual([]);

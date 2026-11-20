@@ -91,6 +91,10 @@ export function readParamSpecs(
   for (const key of Object.keys(src)) {
     const spec = specs.get(key);
     if (spec === undefined) {
+      if (diagnostics.length >= MAX_PARAM_DIAGNOSTICS) {
+        omitted++;
+        continue;
+      }
       const hint = didYouMean(key, names);
       const seg = key.slice(0, 64).replace(/~/g, "~0").replace(/\//g, "~1");
       report({
@@ -105,6 +109,10 @@ export function readParamSpecs(
     }
     const v = src[key];
     if (!valid(spec, v)) {
+      if (diagnostics.length >= MAX_PARAM_DIAGNOSTICS) {
+        omitted++;
+        continue;
+      }
       const hint =
         spec.kind === "enum" && typeof v === "string" ? didYouMean(v, spec.values) : undefined;
       report({
@@ -142,7 +150,7 @@ function normalize(specs: ReadonlyMap<string, ParamSpec>, input: unknown): Brick
   return out;
 }
 
-function sanitizeSize(size: Vec3 | undefined, def: Vec3): Vec3 {
+export function sanitizeSize(size: Vec3 | undefined, def: Vec3): Vec3 {
   const f = (v: unknown, d: number): number =>
     typeof v === "number" && Number.isFinite(v) && v > 0
       ? round2(Math.min(Math.max(v, MIN_DIM), MAX_EXTENT))
@@ -255,11 +263,60 @@ function union(prims: readonly PartPrimitive[]): Box3 {
   };
 }
 
+/** Millimetres per unit on x, y and z. `stud`: 8 mm studs, 3.2 mm plates (assemblies section 4). */
+const UNIT_MM: Readonly<Record<string, readonly [number, number, number]>> = {
+  stud: [8, 8, 3.2],
+  mm: [1, 1, 1],
+  cm: [10, 10, 10],
+  in: [25.4, 25.4, 25.4],
+  tile: [600, 600, 600],
+};
+const STUD_MM = UNIT_MM["stud"] as readonly [number, number, number];
+
+/** Factors from `units` to stud units per axis, or undefined for unknown units. */
+export function toStudFactors(units: unknown): readonly [number, number, number] | undefined {
+  const mm =
+    typeof units === "string" && Object.hasOwn(UNIT_MM, units) ? UNIT_MM[units] : undefined;
+  return mm === undefined
+    ? undefined
+    : [mm[0] / STUD_MM[0], mm[1] / STUD_MM[1], mm[2] / STUD_MM[2]];
+}
+
+/** Scale a part authored in stud units to `f` (units per stud unit), rounding corners. */
+function rescale(
+  prims: readonly PartPrimitive[],
+  f: readonly [number, number, number],
+): PartPrimitive[] {
+  return prims.map((p) => {
+    const o = p.box.origin;
+    const e = p.box.size;
+    const lo = { x: round2(o.x * f[0]), y: round2(o.y * f[1]), z: round2(o.z * f[2]) };
+    const hi = {
+      x: round2((o.x + e.x) * f[0]),
+      y: round2((o.y + e.y) * f[1]),
+      z: round2((o.z + e.z) * f[2]),
+    };
+    return {
+      ...p,
+      box: {
+        origin: lo,
+        size: {
+          x: Math.max(MIN_DIM, round2(hi.x - lo.x)),
+          y: Math.max(MIN_DIM, round2(hi.y - lo.y)),
+          z: Math.max(MIN_DIM, round2(hi.z - lo.z)),
+        },
+      },
+    };
+  });
+}
+
 const projection = createProjection();
 
 /** Back-to-front order; `bounds` is everything drawn, `depthBox` the body without studs. */
-export function finish(solid: Solid): PartGeometry {
-  const prims = solid.all();
+export function finish(solid: Solid, scale?: readonly [number, number, number]): PartGeometry {
+  const all = solid.all();
+  const prims = scale === undefined ? all : rescale(all, scale);
+  const stud = new Set(all.filter((p) => p.kind === "stud").map((p) => p.id));
   const byId = new Map(prims.map((p) => [p.id, p]));
   const order = depthOrder(
     prims.map((p) => ({ id: p.id, box: p.box })),
@@ -268,7 +325,7 @@ export function finish(solid: Solid): PartGeometry {
   return {
     primitives: order.map((id) => byId.get(id) as PartPrimitive),
     bounds: union(prims),
-    depthBox: union(solid.body),
+    depthBox: union(prims.filter((p) => !stud.has(p.id))),
     solid: true,
   };
 }
@@ -310,7 +367,19 @@ export function defineShape(init: ShapeInit, paint: (name: string) => string): P
     },
     build(params, ctx) {
       const p = normalize(specs, params);
-      const size = sanitizeSize(ctx?.size, def);
+      // `ctx.size` is in the assembly's units; the shape is authored in stud units and the
+      // result is scaled back, so the body fills the spec size in the assembly's units.
+      const toStud = toStudFactors(ctx?.units) ?? [1, 1, 1];
+      const raw = ctx?.size;
+      const inStud =
+        raw === undefined
+          ? undefined
+          : {
+              x: typeof raw.x === "number" ? raw.x * toStud[0] : NaN,
+              y: typeof raw.y === "number" ? raw.y * toStud[1] : NaN,
+              z: typeof raw.z === "number" ? raw.z * toStud[2] : NaN,
+            };
+      const size = sanitizeSize(inStud, def);
       const named = p["paint"];
       // The spec color wins; the `paint` param only applies when the spec gives none.
       const color =
@@ -319,7 +388,8 @@ export function defineShape(init: ShapeInit, paint: (name: string) => string): P
       const axis = ctx?.axis === "x" || ctx?.axis === "y" ? ctx.axis : "z";
       const solid = new Solid(size, ctx?.tone ?? "base", color);
       init.draw(solid, p, axis);
-      return finish(solid);
+      const same = toStud[0] === 1 && toStud[1] === 1 && toStud[2] === 1;
+      return finish(solid, same ? undefined : [1 / toStud[0], 1 / toStud[1], 1 / toStud[2]]);
     },
   };
 }

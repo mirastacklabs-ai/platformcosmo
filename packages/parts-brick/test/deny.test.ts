@@ -8,24 +8,25 @@ import { brickPack, brickShapes, palette, paletteNames, paramSpecsOf } from "../
  * is no standards-body name for a stud-grid brick, so nothing at all from this list may appear
  * in ids, labels, types, params, palette names or the package's own text.
  */
+// Very short names are left out when stripping punctuation would turn code such as `lo.z` into them.
 const DENY = [
   "lego",
   "duplo",
-  "mega ?bloks?",
+  "megabloks",
   "bloks",
   "cobi",
-  "kre-?o",
-  "k'?nex",
+  "kreo",
+  "knex",
   "playmobil",
   "tente",
   "sluban",
   "lepin",
   "nexo",
-  "minifig(ure)?s?",
+  "minifig",
   "technic",
   "bionicle",
   "ninjago",
-  "brick ?link",
+  "bricklink",
   "ldraw",
   "rebrickable",
   "hasbro",
@@ -33,12 +34,45 @@ const DENY = [
   "bluebrixx",
   "qman",
   "wange",
-  "loz",
   "banbao",
   "oxford",
-  "clone ?brands?",
+  "clonebrand",
 ];
-const RE = new RegExp(`(^|[^a-z])(${DENY.join("|")})([^a-z]|$)`, "i");
+
+/** Ordinary words that contain a deny-list name as a substring. */
+const ALLOW = [
+  "technical",
+  "technically",
+  "technician",
+  "attention",
+  "attentive",
+  "legend",
+  "legendary",
+];
+
+/**
+ * Lowercase, strip every non-letter, then look for a deny-list name as a substring, so joined
+ * ("MegaBloks"), hyphenated, camelCase and plural ("minifigs") spellings all match. Each
+ * whitespace-separated word is checked alone and joined with its neighbour (when the name starts the word) ("mega bloks"),
+ * after the allow-listed words are removed.
+ */
+function brandIn(text: string): string | undefined {
+  const words = text.split(/\s+/).map((w) => {
+    let letters = w.toLowerCase().replace(/[^a-z]/g, "");
+    for (const ok of ALLOW) letters = letters.split(ok).join("");
+    return letters;
+  });
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i] as string;
+    const pair = w + (words[i + 1] ?? "");
+    for (const d of DENY) {
+      if (w.includes(d) || (pair.startsWith(d) && (words[i + 1] ?? "") !== "")) {
+        return d;
+      }
+    }
+  }
+  return undefined;
+}
 
 function strings(): string[] {
   const out: string[] = [brickPack.id, brickPack.name, brickPack.license];
@@ -58,20 +92,43 @@ test("the matcher itself catches brands (the test can fail)", () => {
   for (const bad of [
     "lego-brick",
     "Lego",
+    "LEGOs",
+    "legoBrick",
     "technic-pin",
     "mega bloks",
+    "MegaBloks",
+    "mega_bloks",
     "minifig",
+    "minifigs",
+    "MiniFigures",
     "BrickLink red",
+    "brick_link",
+    "Duplos",
+    "k'nex",
+    "K-NEX",
   ]) {
-    expect(RE.test(bad), bad).toBe(true);
+    expect(brandIn(bad), bad).toBeDefined();
   }
-  for (const ok of ["brick", "plate", "tile", "slope", "round", "dark-gray", "tan", "legend"]) {
-    expect(RE.test(ok), ok).toBe(false);
+  for (const ok of [
+    "brick",
+    "plate",
+    "tile",
+    "slope",
+    "round",
+    "dark-gray",
+    "tan",
+    "legend",
+    "technical",
+    "attention",
+    "extent",
+    "content of the plate",
+  ]) {
+    expect(brandIn(ok), ok).toBeUndefined();
   }
 });
 
 test("no brand names or marks in ids, labels, types, params or palette", () => {
-  for (const s of strings()) expect(s, s).not.toMatch(RE);
+  for (const s of strings()) expect(brandIn(s), s).toBeUndefined();
 });
 
 test("palette is plain colour words with valid hex values", () => {
@@ -83,11 +140,16 @@ test("palette is plain colour words with valid hex values", () => {
   expect(new Set(Object.values(palette)).size).toBe(paletteNames.length);
 });
 
-test("no brand names in the package sources or manifest", () => {
+test("no brand names in the package sources, manifest, snapshot or changeset", () => {
   const root = new URL("../", import.meta.url);
-  const files = [...readdirSync(new URL("src/", root)).map((f) => `src/${f}`), "package.json"];
+  const files = [
+    ...readdirSync(new URL("src/", root)).map((f) => `src/${f}`),
+    "package.json",
+    "test/__snapshots__/contact-sheet.svg",
+    "../../.changeset/parts-brick-e3.md",
+  ];
   for (const f of files) {
     const text = readFileSync(fileURLToPath(new URL(f, root)), "utf8");
-    expect(text, f).not.toMatch(RE);
+    expect(brandIn(text), f).toBeUndefined();
   }
 });

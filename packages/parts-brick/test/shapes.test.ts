@@ -365,10 +365,90 @@ describe("studs", () => {
     ).toBeLessThanOrEqual(16);
   });
 
+  test("an inverted slope under 2 studs wide is the regular wedge", () => {
+    const g = build("slope", { inverted: true }, sz(1, 3, 3));
+    expect(g.primitives.map((p) => p.id)).toEqual(["slope"]);
+    expect(g.primitives[0]?.kind).toBe("wedge");
+  });
+
   test("stud count cap: 16 x 16 gets studs, 17 x 16 gets none", () => {
     expect(studsOf(build("plate", {}, sz(16, 16, 1)))).toHaveLength(MAX_STUDS);
     expect(studsOf(build("plate", {}, sz(17, 16, 1)))).toHaveLength(0);
     expect(MAX_STUDS).toBe(256);
+  });
+});
+
+describe("round studs stay inside the footprint", () => {
+  /** Eight points on each stud's rim, checked against the footprint ellipse. */
+  function rimInside(g: PartGeometry, size: Vec3): void {
+    for (const s of studsOf(g)) {
+      const cx = s.box.origin.x + s.box.size.x / 2;
+      const cy = s.box.origin.y + s.box.size.y / 2;
+      for (let a = 0; a < 8; a++) {
+        const px = cx + (s.box.size.x / 2) * Math.cos((a * Math.PI) / 4) - size.x / 2;
+        const py = cy + (s.box.size.y / 2) * Math.sin((a * Math.PI) / 4) - size.y / 2;
+        const r = (px / (size.x / 2)) ** 2 + (py / (size.y / 2)) ** 2;
+        expect(r, `${s.id} rim point ${a}`).toBeLessThanOrEqual(1.03);
+      }
+    }
+  }
+
+  test.each([2, 3, 4, 6, 9])("%i x %i: every stud disc is inside the ellipse", (n) => {
+    const size = sz(n, n, 3);
+    const g = build("round", {}, size);
+    expect(studsOf(g).length).toBeGreaterThan(0);
+    rimInside(g, size);
+  });
+
+  test("counts: 2 x 2 keeps its 4, 3 x 3 drops the corners, 6 x 6 is a rounded square", () => {
+    expect(studsOf(build("round", {}, sz(2, 2, 3)))).toHaveLength(4);
+    expect(studsOf(build("round", {}, sz(3, 3, 3)))).toHaveLength(5);
+    const six = studsOf(build("round", {}, sz(6, 6, 3)));
+    expect(six.length).toBeLessThan(36);
+    expect(six.length).toBeGreaterThan(20);
+  });
+
+  test("an elongated round fits its studs to the ellipse", () => {
+    const size = sz(6, 2, 3);
+    rimInside(build("round", {}, size), size);
+  });
+});
+
+describe("assembly units", () => {
+  test("a brick in a mm assembly is converted to studs and back", () => {
+    const g = build("brick", {}, sz(16, 32, 9.6), { units: "mm" });
+    expect(g.depthBox).toEqual({ origin: sz(0, 0, 0), size: sz(16, 32, 9.6) });
+    const studs = studsOf(g);
+    expect(studs).toHaveLength(8); // 2 x 4 studs
+    for (const st of studs) {
+      near(st.box.size.x, 4.8, 0.02); // 4.8 mm studs
+      near(st.box.size.z, 1.7, 0.02);
+      near(st.box.origin.z, 9.6, 1e-9);
+    }
+    near(g.bounds.size.z, 9.6 + 1.7, 0.02);
+    expectNoIntersections(g, "mm brick");
+  });
+
+  test("cm and in convert by length; stud units are untouched", () => {
+    expect(studsOf(build("plate", {}, sz(1.6, 3.2, 0.32), { units: "cm" }))).toHaveLength(8);
+    const inch = 8 / 25.4;
+    expect(
+      studsOf(build("plate", {}, sz(2 * inch, 4 * inch, 3.2 / 25.4), { units: "in" })),
+    ).toHaveLength(8);
+    expect(build("brick", {}, sz(2, 4, 3), { units: "stud" })).toEqual(
+      build("brick", {}, sz(2, 4, 3)),
+    );
+  });
+
+  test("mm geometry passes the same invariants and stays deterministic", () => {
+    for (const id of ["brick", "plate", "tile", "round", "slope"]) {
+      const a = build(id, {}, sz(24, 40, 9.6), { units: "mm" });
+      check(`${id} mm`, a);
+      expectNoIntersections(a, `${id} mm`);
+      expect(JSON.stringify(a)).toBe(
+        JSON.stringify(build(id, {}, sz(24, 40, 9.6), { units: "mm" })),
+      );
+    }
   });
 });
 
@@ -482,6 +562,15 @@ describe("readParams", () => {
     const r = slope.readParams(many);
     expect(r.diagnostics.length).toBeLessThanOrEqual(21);
     expect(r.diagnostics.at(-1)?.message).toContain("more param problems omitted");
+  });
+
+  test("did-you-mean is only computed for diagnostics that are reported", () => {
+    const many = Object.fromEntries(
+      Array.from({ length: 5000 }, (_, i) => [`${"k".repeat(60)}${i}`, i]),
+    );
+    const t0 = performance.now();
+    expect(slope.readParams(many).diagnostics.length).toBe(21);
+    expect(performance.now() - t0).toBeLessThan(500);
   });
 
   test("every palette name is accepted", () => {
