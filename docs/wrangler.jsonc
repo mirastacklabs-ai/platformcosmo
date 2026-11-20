@@ -1,0 +1,21 @@
+// platformcosmo.io: the built VitePress site served by a Cloudflare Worker with static assets.
+// Deployed manually from a maintainer's machine with `scripts/deploy-docs.sh` (DECISIONS D69).
+// The worker (worker/index.js) serves every request from the assets binding and records
+// cookie-less page views in Workers Analytics Engine (dataset `platformcosmo`).
+{
+  "name": "platformcosmo",
+  "main": "./worker/index.js",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./.vitepress/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "html_handling": "auto-trailing-slash",
+    "run_worker_first": true,
+  },
+  "analytics_engine_datasets": [{ "binding": "analytics_engine", "dataset": "platformcosmo" }],
+  "routes": [
+    { "pattern": "platformcosmo.io", "custom_domain": true },
+    { "pattern": "www.platformcosmo.io", "custom_domain": true },
+  ],
+}

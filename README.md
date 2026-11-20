@@ -1,10 +1,14 @@
-# PlatformCosmo
+<a href="https://www.mirastacklabs.ai"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/public/brand/mirastack-labs-lockup-dark.svg"><img src="docs/public/brand/mirastack-labs-lockup-light.svg" alt="MIRASTACK LABS" height="26"></picture></a>
+
+platformcosmo &middot; built by the engineering team at [MIRASTACK LABS](https://www.mirastacklabs.ai).
+
+# platformcosmo
 
 A Claude Code plugin and CLI that turns a prompt into an animated 2.5D isometric SVG
 diagram for cloud, platform engineering, AI and data-center architectures. Claude writes
 a JSON spec; a deterministic engine does all layout and drawing. The SVG animates with
 no JavaScript and works in `<img>`, inline and `<object>`.
-Default look: MiraStack Labs brand — Oswald + JetBrains Mono.
+Default look: MIRASTACK LABS brand — Oswald + JetBrains Mono.
 
 **Status: pre-release (v1 feature-complete, not yet published to npm).**
 
@@ -81,7 +85,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/PLAN.md](docs/PLAN.md) and
 
 ## License
 
-Apache-2.0, Copyright 2026 MiraStack Labs. See [LICENSE](LICENSE), [NOTICE](NOTICE),
+Apache-2.0, Copyright 2026 MIRASTACK LABS PRIVATE LIMITED. See [LICENSE](LICENSE), [NOTICE](NOTICE),
 [LICENSES/](LICENSES) and [plugin/THIRD_PARTY_NOTICES.md](plugin/THIRD_PARTY_NOTICES.md).
 
 ## Trademarks

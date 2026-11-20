@@ -13,6 +13,7 @@
  * Rack slot size: spec `size` wins; otherwise the component's `heightU`.
  */
 import type { PlatformCosmoSpec, SpecState } from "../schema/types.gen.js";
+import type { PartShapePack, SceneAssembly, SceneAssemblyNode } from "./assembly.js";
 import type { Diagnostic } from "./diagnostics.js";
 import type { Box3, Vec3 } from "./geometry.js";
 import type { SceneEdge, SceneFlow, SceneGroup, SceneObject, ScenePart } from "./scene.js";
@@ -91,4 +92,21 @@ export interface DcPack {
   readonly registry: DcComponentRegistry;
   /** Lays out the hall (rows, aisles, racks, equipment, cables) on the 600 mm grid from the world origin. */
   buildScene(spec: PlatformCosmoSpec): DcSceneFragment;
+  /**
+   * Schema 1.2.0 (optional until Track E lands it): the rack as an assembly, called only for
+   * racks a step action targets. Leaves are the rack's individual parts (posts, panels, doors,
+   * PDUs, top: no `_front` shell object and no forced id ranks) and one sub-assembly per slot
+   * (`rackId/slotId`, with lid and internals when `slots[].assembly` is set); built-in program
+   * `drawers`. The caller removes the rack's `fragment` objects (`rackId`, `rackId_front`,
+   * `rackId/slot`) from the object list and draws the assembly instead (assemblies.md §8).
+   */
+  buildAssembly?(
+    spec: PlatformCosmoSpec,
+    rackId: string,
+    fragment: DcSceneFragment,
+    /** Resolved template trees (local units) for `slots[].assembly`, by template id (A2). */
+    templates: Readonly<Record<string, SceneAssemblyNode>>,
+  ): { readonly assembly?: SceneAssembly; readonly diagnostics: readonly Diagnostic[] };
+  /** `dc:` part shapes (rack devices usable inside any assembly). */
+  readonly shapes?: PartShapePack;
 }

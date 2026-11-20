@@ -1,6 +1,6 @@
 # Themes and fonts
 
-The default look is the MiraStack Labs brand: Oswald for display text, JetBrains Mono for
+The default look is the MIRASTACK LABS brand: Oswald for display text, JetBrains Mono for
 technical text, a white or near-black base, neutral ink/grey solids with teal accents, and an
 iso ground grid in the brand line colour. Orange (`#ff671f`, the brand signal colour) is reserved for
 emphasis: the `highlighted` state and power flows and cables.

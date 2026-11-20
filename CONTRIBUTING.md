@@ -42,21 +42,11 @@ git commit -s -m "feat(core): add layout skeleton"
 User-facing changes to a package need a changeset: `scripts/pc changeset`, then commit
 the generated file in `.changeset/`.
 
-## Docs site (GitHub Pages)
+## Docs site
 
-`.github/workflows/docs-pages.yml` builds the VitePress site on every relevant push to `main`
-but deploys only when the repository variable `PAGES_ENABLED` is `true`. Human steps, once:
-
-1. Settings > Pages > Source: **GitHub Actions**.
-2. Settings > Secrets and variables > Actions > Variables: add `PAGES_ENABLED` = `true`.
-3. DNS for `platformcosmo.io`: apex `A` records `185.199.108.153`, `185.199.109.153`,
-   `185.199.110.153`, `185.199.111.153` (and matching `AAAA` records `2606:50c0:8000::153`,
-   `2606:50c0:8001::153`, `2606:50c0:8002::153`, `2606:50c0:8003::153`), and a `CNAME`
-   for `www` pointing at the organization's Pages host. Then enable "Enforce HTTPS" in Pages settings.
-
-4. Settings > Environments > `github-pages` > Deployment branches: restrict to `main`.
-5. Verify `platformcosmo.io` under the organization's Settings > Pages > Verified domains, so
-   nobody else can claim the domain if the Pages site is later removed (subdomain takeover).
-
-The workflow writes the `CNAME` file into the build output. The schema is served at its
-`$id`, `https://platformcosmo.io/schema/v1.json`; CI checks it is byte-identical to `schema/v1.json`.
+`.github/workflows/docs-pages.yml` ("Docs build") only builds the VitePress site on pushes to `main`
+that touch the docs inputs, so a broken docs build is caught in CI. The site at
+`https://platformcosmo.io` is deployed manually to Cloudflare with `scripts/deploy-docs.sh`, using the
+maintainer's wrangler login (see `docs/wrangler.jsonc`). GitHub Pages stays enabled only as a
+domain-claim guard: do not deploy from it. The schema is served at its `$id`,
+`https://platformcosmo.io/schema/v1.json`; CI checks it is byte-identical to `schema/v1.json`.
