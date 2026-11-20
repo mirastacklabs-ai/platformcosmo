@@ -2,12 +2,13 @@ import type { DcPack, Diagnostic, IconResolver } from "../contracts/index.js";
 import { DEFAULT_RACK_U, SLOT_HEIGHT_U, footprintOf } from "../scene/sizes.js";
 import type { PlatformCosmoSpec, SpecFlow } from "./types.gen.js";
 import { closest, didYouMean, q } from "./suggest.js";
+import { figureDiagnostics } from "./assembly-semantic.js";
 import { unsupportedDiagnostics } from "./unsupported.js";
 
 /** Σ over every flow of ceil(rate × 2); shared formula with Track B (no path lengths needed). */
 export const PARTICLE_LIMIT = 2000;
 
-type Kind = "node" | "group" | "rack" | "equipment" | "row" | "aisle" | "cable";
+type Kind = "node" | "group" | "rack" | "equipment" | "row" | "aisle" | "cable" | "figure";
 
 export interface SemanticContext {
   readonly icons?: IconResolver;
@@ -63,7 +64,9 @@ export function semanticDiagnostics(
         "semantic/duplicate-id",
         path,
         `Duplicate id ${q(id)} (already used by a ${prev.kind} at ${prev.path})`,
-        "Ids are shared by nodes, groups, racks, equipment, rows, aisles and cables; rename one",
+        `Ids are shared by nodes, groups, racks, equipment, rows, aisles${
+          spec.figures === undefined ? " and cables" : ", cables and figures"
+        }; rename one`,
         { id, first: prev.path },
       );
     } else ids.set(id, { kind, path });
@@ -77,6 +80,7 @@ export function semanticDiagnostics(
   cables.forEach((c, i) => {
     if (c.id !== undefined) declare(c.id, "cable", `/cables/${i}/id`);
   });
+  (spec.figures ?? []).forEach((f, i) => declare(f.id, "figure", `/figures/${i}/id`));
 
   // Edge ids and cable ids share the namespace flows refer to.
   const edgeIds = new Map<string, string>();
@@ -342,6 +346,9 @@ export function semanticDiagnostics(
     });
   };
   checkFlows(spec.flows ?? [], "/flows");
+  // Images, figures and figure actions (A2-F); these run alongside the guard. Focus ids that
+  // zoom are the ones the check below accepts, as in the scene.
+  out.push(...figureDiagnostics(spec, undefined, (id) => isObject(id) || isAreaRef(id)));
   (spec.steps ?? []).forEach((s, si) => {
     const base = `/steps/${si}`;
     for (const key of Object.keys(s.set ?? {})) {

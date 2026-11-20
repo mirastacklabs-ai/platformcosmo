@@ -292,7 +292,8 @@ their own program first). All times are seconds at speed 1; B divides by `--spee
 
 An action moves a program from its current level `a` to a target `b`:
 
-- `explode` (`to`, default all stages): stages `a+1 … b`, shifted so stage `a+1` starts at 0.
+- `explode` (`to`, default all stages): stages `a+1 … b`, shifted so stage `a+1` starts at 0 (so its own `delay` has no effect; use the
+  action's `start` to wait).
 - `implode` (`to`, default 0): the **exact time reverse** of the explode segment `b+1 … a`:
   a move `[st, en]` becomes `[L − en, L − st]` with the mirrored easing
   (`cubic-bezier(x1,y1,x2,y2)` → `(1−x2, 1−y2, 1−x1, 1−y1)`). Depth epochs (§9) of an implode
@@ -316,8 +317,9 @@ transitions sit at the end of the previous step, D27) and closes at
 transition (0 when the next view is the same) and 0.2 s is a hold so the settled pose is seen.
 If the step's actions need `L_i > c_i − m_i`, all of them are compressed uniformly by
 `scale = (c_i − m_i)/L_i` (`ResolvedAction.scale`), with `assembly/compressed` (info; warning
-below 0.5) whose suggestion gives the duration that fits: `"duration": <ceil(L_i + lead_i +
-tr_i + 0.2)>`. Step durations are never changed by the engine.
+below 0.5) whose suggestion gives the duration that fits: `"duration": D`, the smallest whole
+number of seconds with `D − lead(D) − tr(D) − 0.2 ≥ L_i`, where `lead(D)` and `tr(D)` are
+`min(0.8, 0.25·D)` under the same conditions as above (0 when they do not apply). Step durations are never changed by the engine.
 
 ### 7.4 Rest frame, loop start and loop closure (D27 extended)
 
@@ -842,6 +844,10 @@ suggestions):
 | `assembly/moved-twice`                                                                                          | error                                   | a node moved by two stages of one program                                                   |
 | `assembly/stage-out-of-range`                                                                                   | error                                   | `to` beyond the program's stages or steps                                                   |
 | `assembly/build-backwards`                                                                                      | error                                   | `build` to a lower level                                                                    |
+| `assembly/explode-backwards`                                                                                    | error                                   | `explode` of a figure to a lower stage (use `implode`)                                      |
+| `assembly/implode-forwards`                                                                                     | error                                   | `implode` of a figure to a higher stage (use `explode`)                                     |
+| `assembly/figure-no-build`                                                                                      | error                                   | build or unbuild on a figure (figures explode and implode)                                  |
+| `assembly/part-not-staged`                                                                                      | info                                    | a figure part that no stage moves (it stays seated)                                         |
 | `assembly/build-path-blocked`                                                                                   | warning                                 | `above` origin blocked                                                                      |
 | `assembly/collision`                                                                                            | warning                                 | interpenetrating leaves in a final pose                                                     |
 | `assembly/compressed`                                                                                           | info / warning (< 0.5)                  | actions compressed to fit the step                                                          |
