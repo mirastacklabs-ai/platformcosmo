@@ -19,6 +19,7 @@ import type { BoardIdScheme } from "../../emit/ids.js";
 import { h } from "../../emit/xml.js";
 import { fmt } from "../../geometry/index.js";
 import {
+  closesLoop,
   figureSegment,
   panelSize,
   resolveFigure,
@@ -36,10 +37,23 @@ import {
   type LabelBox,
   type SpriteBox,
 } from "./layout.js";
-import { arrowKeys, labelKeys, partSegments, poseKeys, stepTimes, type Seg } from "./timeline.js";
-import type { BoardsModel, FadeKey, FadeTrack, PoseTrack } from "./types.js";
+import {
+  arrowKeys,
+  labelKeys,
+  partSegments,
+  poseKeys,
+  stepTimes,
+  type Seg,
+  type StepTime,
+} from "./timeline.js";
+import type { BoardsModel, BoardsTracks, FadeKey, FadeTrack, PoseTrack } from "./types.js";
 
-export { attachBoards, boardsOf } from "./types.js";
+interface Timing {
+  readonly times: StepTime[];
+  readonly total: number;
+}
+
+export { boardsOf } from "./types.js";
 export type { BoardsModel, FadeKey, FadeTrack, PoseKey, PoseTrack } from "./types.js";
 export { checkFigureImages, creditsDesc, creditsLine } from "./images.js";
 
@@ -95,15 +109,26 @@ export function buildBoards(ctx: BoardsContext): BoardsBuild | undefined {
   const boards = scene.assemblies?.boards.filter((b) => b.kind === "figure") ?? [];
   if (spec === undefined || images === undefined || boards.length === 0) return undefined;
 
-  const { times, total } = stepTimes(scene);
   const plan = scene.assemblies?.plan ?? [];
+  // The loop closes (§7.4) when some figure ends away from its base pose.
+  const closeLast = closesLoop(
+    (spec.figures ?? []).map((f, i) => resolveFigure(f, i).figure),
+    plan,
+  );
+  const timingFor = (speed: number): Timing => {
+    const { times, total } = stepTimes(scene, speed, closeLast);
+    return { times, total };
+  };
+  // Rest values (the DOM shows the rest frame) do not depend on the speed.
+  const rest1 = timingFor(1);
+  const total = rest1.total;
+  /** Track builders: re-run per output speed, since camera transitions are on the output clock. */
+  const trackDefs: ((tm: Timing) => { pose?: PoseTrack; fade?: FadeTrack })[] = [];
   const objects: SvgNode[] = [];
   const labels: SvgNode[] = [];
   const defs: SvgNode[] = [];
   const extents: Rect[] = [];
   const focus: Record<string, Rect> = {};
-  const poses: PoseTrack[] = [];
-  const fades: FadeTrack[] = [];
   const assets = new Map<string, ImageAsset>();
   const f2 = (n: number): number => Number(fmt(n));
   const lineH = ctx.labelSize * 1.25;
@@ -157,10 +182,20 @@ export function buildBoards(ctx: BoardsContext): BoardsBuild | undefined {
 
     // ---- sprites and their tracks ------------------------------------------------------
     const segsOf = new Map<string, { segs: Seg[]; base: number }>();
+    const segsAt = (part: string, tm: Timing): Seg[] =>
+      partSegments(
+        figure.id,
+        segment,
+        part,
+        plan,
+        tm.times,
+        tm.total,
+        (segsOf.get(part) as { base: number }).base,
+      ).segs;
     for (const sp of layout.sprites) {
       const base = sp.moves && (sp.stage as number) <= figure.baseLevel ? 1 : 0;
       const { segs } = sp.moves
-        ? partSegments(figure.id, segment, sp.part.id, plan, times, total, base)
+        ? partSegments(figure.id, segment, sp.part.id, plan, rest1.times, total, base)
         : { segs: [] as Seg[] };
       segsOf.set(sp.part.id, { segs, base });
       const asset = images.get(sp.part.image) as ImageAsset;
@@ -187,7 +222,12 @@ export function buildBoards(ctx: BoardsContext): BoardsBuild | undefined {
       if (sp.moves) {
         reach.push(spriteRect(sp, "seat"), spriteRect(sp, "exploded"));
         if (segs.length > 0) {
-          poses.push({ id, keys: poseKeys(segs, base, sp.offset, total) });
+          trackDefs.push((tm) => ({
+            pose: {
+              id,
+              keys: poseKeys(segsAt(sp.part.id, tm), base, sp.offset, tm.total),
+            },
+          }));
         }
       } else reach.push(spriteRect(sp, "seat"));
     }
@@ -208,7 +248,12 @@ export function buildBoards(ctx: BoardsContext): BoardsBuild | undefined {
         );
         if (a !== undefined) {
           arrowNodes.push(a.node);
-          if (a.track !== undefined) fades.push(a.track);
+          if (a.track !== undefined) {
+            const id = a.track.id;
+            trackDefs.push((tm) => ({
+              fade: { id, keys: arrowKeys(segsAt(sp.part.id, tm), forward, tm.total) },
+            }));
+          }
         }
       }
     }
@@ -217,7 +262,21 @@ export function buildBoards(ctx: BoardsContext): BoardsBuild | undefined {
     const lab = placeLabels(ctx, figure, layout.sprites, panel, segsOf, total, lineH);
     for (const l of lab.items) {
       labelNodes.push(l.node);
-      if (l.track !== undefined) fades.push(l.track);
+      if (l.track !== undefined) {
+        const id = l.track.id;
+        const { part, pose } = l;
+        trackDefs.push((tm) => ({
+          fade: {
+            id,
+            keys: labelKeys(
+              segsAt(part, tm),
+              (segsOf.get(part) as { base: number }).base,
+              pose,
+              tm.total,
+            ),
+          },
+        }));
+      }
       reach.push(l.rect);
     }
 
@@ -272,19 +331,34 @@ export function buildBoards(ctx: BoardsContext): BoardsBuild | undefined {
 
   const credits = scene.assemblies?.credits ?? [];
   const line = creditsLine(credits);
+  const byId = (a: { id: string }, b: { id: string }): number => (a.id < b.id ? -1 : 1);
+  const cache = new Map<number, BoardsTracks>();
   const model: BoardsModel = {
-    loop: total,
-    poses: poses.sort((a, b) => (a.id < b.id ? -1 : 1)),
-    fades: fades.sort((a, b) => (a.id < b.id ? -1 : 1)),
-    stepStarts: times.map((t) => t.start),
-    stepEnds: times.map((t) => t.end),
-    settled: times.map((t, i) => {
-      const acts = plan[i]?.actions ?? [];
-      if (acts.length === 0) return undefined;
-      return (
-        Math.round((t.open + Math.max(...acts.map((a) => a.start + a.length))) * 10000) / 10000
-      );
-    }),
+    tracks(speed) {
+      const key = speed > 0 && Number.isFinite(speed) ? speed : 1;
+      let t = cache.get(key);
+      if (t === undefined) {
+        const tm = timingFor(key);
+        const built = trackDefs.map((d) => d(tm));
+        t = {
+          loop: tm.total,
+          poses: built.flatMap((b) => (b.pose ? [b.pose] : [])).sort(byId),
+          fades: built.flatMap((b) => (b.fade ? [b.fade] : [])).sort(byId),
+          stepStarts: tm.times.map((x) => x.start),
+          stepEnds: tm.times.map((x) => x.end),
+          settled: tm.times.map((x, i) => {
+            const acts = plan[i]?.actions ?? [];
+            if (acts.length === 0) return undefined;
+            return (
+              Math.round((x.open + Math.max(...acts.map((a) => a.start + a.length))) * 10000) /
+              10000
+            );
+          }),
+        };
+        cache.set(key, t);
+      }
+      return t;
+    },
     ...(line === "" ? {} : { creditsId: ids.credits() }),
     assets,
     desc: creditsDesc(credits),
@@ -349,6 +423,8 @@ const changes = (keys: readonly FadeKey[]): boolean =>
 // ---------------------------------------------------------------------------------------------
 
 interface PlacedLabel {
+  readonly part: string;
+  readonly pose: 0 | 1;
   readonly node: SvgElement;
   readonly track: FadeTrack | undefined;
   readonly rect: Rect;
@@ -461,6 +537,8 @@ function placeLabels(
         ),
       );
       items.push({
+        part: sp.part.id,
+        pose,
         node,
         track: changes(keys) ? { id, keys } : undefined,
         rect: {

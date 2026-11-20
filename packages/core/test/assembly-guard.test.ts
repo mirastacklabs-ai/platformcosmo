@@ -233,6 +233,52 @@ describe("schema 1.2.0 guard", () => {
     },
   );
 
+  describe("what phase1a does not unlock (Q08)", () => {
+    const base = {
+      meta: { version: "1" },
+      images: [
+        { id: "b", src: "b.png" },
+        { id: "s", src: "s.png" },
+      ],
+      figures: [{ id: "fig", base: "b", parts: [{ id: "a", image: "s", seat: [0, 0] }] }],
+      nodes: [{ id: "n", type: "server" }],
+    };
+    const errors = (steps: unknown[]) =>
+      validate({ ...base, steps }).diagnostics.filter((d) => d.severity === "error");
+
+    test("explode on a node is an unknown target, not a pose change", () => {
+      const e = errors([{ assembly: [{ explode: "n" }] }]);
+      expect(e.map((d) => [d.code, d.path])).toEqual([
+        ["assembly/unknown-target", "/steps/0/assembly/0/explode"],
+      ]);
+      expect(e[0]?.message).toBe('Cannot explode "n": it is a node, not a figure');
+    });
+
+    test("explode on an unknown root is an unknown target with a did-you-mean", () => {
+      const e = errors([{ assembly: [{ explode: "fgi" }] }]);
+      expect(e.map((d) => d.code)).toEqual(["assembly/unknown-target"]);
+      expect(e[0]?.suggestion).toBe('Did you mean "fig"?');
+    });
+
+    test("a figure part path is not a target, and focus or set of fig/a/b is rejected", () => {
+      const act = errors([{ assembly: [{ explode: "fig/a" }] }]);
+      expect(act.map((d) => d.code)).toEqual(["assembly/unknown-target"]);
+      // focus and set of a part path: the guard (phase1b) AND semantic validation reject them
+      for (const step of [
+        { focus: "fig/a/b" },
+        { set: { "fig/a/b": "down" } },
+        { focus: "fig/a" },
+      ]) {
+        const e = errors([step]);
+        expect(
+          e.some((d) => d.code.startsWith("semantic/")),
+          JSON.stringify(step),
+        ).toBe(true);
+      }
+      expect(errors([{ focus: "fig" }])).toEqual([]);
+    });
+  });
+
   test("the heat-sink figure example is the one example that renders", () => {
     const rendering = designExamples("document-ingestion.md").filter(phase1aOnly);
     expect(rendering.map((s) => (s.meta as { title: string }).title)).toEqual([

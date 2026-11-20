@@ -7,7 +7,7 @@
  */
 import type { IdScheme } from "../contracts/index.js";
 import { bezierProgress } from "../render/boards/timeline.js";
-import type { BoardsModel, FadeKey, KeyEasing, PoseKey } from "../render/boards/types.js";
+import type { BoardsTracks, FadeKey, KeyEasing, PoseKey } from "../render/boards/types.js";
 import { Keyframes, r2, t4 } from "./css.js";
 
 type Attrs = Record<string, Record<string, string | number>>;
@@ -52,7 +52,7 @@ const timing = (e: KeyEasing): string =>
 const translate = (x: number, y: number): string => `translate(${r2(x)} ${r2(y)})`;
 
 /** Attribute overrides for every track at loop time `t` (speed 1, the loop's own clock). */
-export function boardsAt(bm: BoardsModel, t: number): Attrs {
+export function boardsAt(bm: BoardsTracks, t: number): Attrs {
   const out: Attrs = {};
   for (const p of bm.poses) {
     const { x, y } = poseAt(p.keys, t);
@@ -64,7 +64,7 @@ export function boardsAt(bm: BoardsModel, t: number): Attrs {
 }
 
 /** The pose of a frame at `seconds` of the output clock (speed applied); time 0 is the rest frame. */
-export function boardsFrame(bm: BoardsModel, seconds: number, speed: number): Attrs | undefined {
+export function boardsFrame(bm: BoardsTracks, seconds: number, speed: number): Attrs | undefined {
   if (bm.poses.length === 0 && bm.fades.length === 0) return undefined;
   const loop = bm.loop;
   if (!(loop > 0)) return boardsAt(bm, 0);
@@ -73,7 +73,7 @@ export function boardsFrame(bm: BoardsModel, seconds: number, speed: number): At
 }
 
 /** End pose of step `step` (1-based): read where its closing hold ends, before the closing return. */
-export function boardsStepEnd(bm: BoardsModel, step: number): Attrs | undefined {
+export function boardsStepEnd(bm: BoardsTracks, step: number): Attrs | undefined {
   if (bm.poses.length === 0 && bm.fades.length === 0) return undefined;
   const end = bm.stepEnds[step - 1];
   return boardsAt(bm, end ?? 0);
@@ -92,7 +92,7 @@ export interface BoardRules {
  * through `kf`.
  */
 export function boardsLoop(
-  bm: BoardsModel,
+  bm: BoardsTracks,
   ids: IdScheme,
   kf: Keyframes,
   total: number,
@@ -144,5 +144,5 @@ export function boardsLoop(
 }
 
 /** Whether the model has any motion at all (a track with more than one value). */
-export const hasBoardMotion = (bm: BoardsModel | undefined): bm is BoardsModel =>
+export const hasBoardMotion = (bm: BoardsTracks | undefined): bm is BoardsTracks =>
   bm !== undefined && bm.loop > 0 && (bm.poses.length > 0 || bm.fades.length > 0);

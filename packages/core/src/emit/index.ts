@@ -92,12 +92,67 @@ export function orientationMatrix(orientation: number, w: number, h: number): st
   }
 }
 
+/** Tags the emitter never embeds from an image (the sanitizer already removes them). */
+const BAD_TAG_NAME = /^(?:a|set|animate\w*|script|foreignObject|iframe|object|embed)\b/i;
+
+/** Element name of a tag text (`<  /name ...`), found by index so no pattern can backtrack. */
+function tagName(tag: string): string {
+  let k = 1;
+  while (k < tag.length && /\s/.test(tag[k] as string)) k++;
+  if (tag[k] === "/") k++;
+  while (k < tag.length && /\s/.test(tag[k] as string)) k++;
+  return tag.slice(k, k + 32);
+}
+/** Attribute context only (a tag's text): handlers, external references, animation targets. */
+const BAD_ATTRS = [
+  /\son[a-z]+\s*=/i,
+  /(?:href|src)\s*=\s*["'](?!#)/i,
+  /\s(?:to|from|by|values)\s*=\s*["'][^"'#]/i,
+];
+const BAD_ANYWHERE = /javascript:|url\(\s*["']?(?!#)|@import/i;
+
+/**
+ * Defence in depth for a sanitized SVG body, with the reason it is refused, else undefined.
+ * Linear: one pass over the tags (quotes respected, text between tags is not attribute context),
+ * each pattern applied to one tag only, and no nested quantifiers.
+ */
+export function unsafeSvgBody(body: string): string | undefined {
+  if (BAD_ANYWHERE.test(body)) return "script, external or import reference";
+  let i = 0;
+  while (i < body.length) {
+    const lt = body.indexOf("<", i);
+    if (lt < 0) break;
+    if (body.startsWith("<!--", lt)) {
+      const end = body.indexOf("-->", lt + 4);
+      if (end < 0) return "unterminated comment";
+      i = end + 3;
+      continue;
+    }
+    let j = lt + 1;
+    let quote = "";
+    for (; j < body.length; j++) {
+      const c = body[j] as string;
+      if (quote !== "") {
+        if (c === quote) quote = "";
+      } else if (c === '"' || c === "'") quote = c;
+      else if (c === ">") break;
+    }
+    if (j >= body.length) return "unterminated tag";
+    const tag = body.slice(lt, j + 1);
+    if (BAD_TAG_NAME.test(tagName(tag))) return "active or animation element";
+    if (BAD_ATTRS.some((re) => re.test(tag))) return "event handler or external attribute";
+    i = j + 1;
+  }
+  return undefined;
+}
+
 /** `<image>` (raster) or `<symbol>` (SVG) of an asset, in `<defs>`, under the id of its hash. */
 function imageDefOf(asset: ImageAsset, id: string): SvgNode {
   if (asset.format === "svg") {
     const svg = asset.svg;
-    if (!svg || UNSAFE_ICON.test(svg.body))
-      throw new Error("image: SVG body is not sanitizer output");
+    const bad = svg === undefined ? "no SVG body" : unsafeSvgBody(svg.body);
+    if (!svg || bad !== undefined)
+      throw new Error(`image: SVG body is not sanitizer output (${bad})`);
     const body = svg.body.replaceAll("__PCID__-", `${id}_`).replaceAll("__PCID__", id);
     return h("symbol", { id, viewBox: svg.viewBox }, raw(body));
   }

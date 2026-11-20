@@ -492,11 +492,15 @@ export function fitDuration(need: number, lead: boolean, tr: boolean): number {
 export function stepWindows(
   durations: readonly number[],
   views: readonly (string | undefined)[],
+  /** The last step's end pose differs from the base pose: it reserves a closing window even
+   * when no camera transition follows (§7.3, §7.4). */
+  closeLast = false,
 ): StepWindow[] {
   return durations.map((d, i) => {
     const lead = i === 0 && views[0] !== undefined ? transitionOf(d) : 0;
     const next = i + 1 < durations.length ? views[i + 1] : undefined;
-    const tr = views[i] !== next ? transitionOf(d) : 0;
+    const last = i === durations.length - 1;
+    const tr = views[i] !== next || (last && closeLast) ? transitionOf(d) : 0;
     return { lead, tr, window: Math.max(MIN_WINDOW, r4(d - lead - tr - HOLD)) };
   });
 }
@@ -531,6 +535,40 @@ export function planFigureSteps(
   views: readonly (string | undefined)[],
   opts: PlanOptions = {},
 ): { plan: AssemblyStepPlan[]; diagnostics: Diagnostic[] } {
+  // Levels do not depend on the windows, so a first pass tells whether the loop must close
+  // (the last step ends away from the base pose, §7.4); if so the last step reserves its
+  // closing window and the plan is made again with it (compression and suggestions agree).
+  const first = planPass(spec, figures, views, opts, false);
+  return closesLoop(figures.values(), first.plan)
+    ? planPass(spec, figures, views, opts, true)
+    : first;
+}
+
+/**
+ * Whether the loop ends away from its base pose: some figure's level after the last step
+ * differs from its base level. Then the last step has a closing window `tr_n` even when the
+ * camera does not move (§7.3, §7.4).
+ */
+export function closesLoop(
+  figures: Iterable<ResolvedFigure>,
+  plan: readonly AssemblyStepPlan[],
+): boolean {
+  const last = plan[plan.length - 1];
+  if (last === undefined) return false;
+  for (const f of figures) {
+    const end = last.poses[f.id]?.[0]?.level;
+    if (end !== undefined && end !== f.baseLevel) return true;
+  }
+  return false;
+}
+
+function planPass(
+  spec: PlatformCosmoSpec,
+  figures: ReadonlyMap<string, ResolvedFigure>,
+  views: readonly (string | undefined)[],
+  opts: PlanOptions,
+  closeLast: boolean,
+): { plan: AssemblyStepPlan[]; diagnostics: Diagnostic[] } {
   const steps: readonly SpecStep[] = spec.steps ?? [];
   const diagnostics: Diagnostic[] = [];
   const level = new Map<string, number>();
@@ -538,6 +576,7 @@ export function planFigureSteps(
   const windows = stepWindows(
     steps.map((s) => s.duration ?? 3),
     views,
+    closeLast,
   );
   // Every declared non-figure root: its gating phase ("none": never an action target) and name.
   const phaseOf = new Map<string, RootPhase | "none">();

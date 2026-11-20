@@ -43,15 +43,29 @@ export interface StepTime {
 }
 
 /** Step windows on the master loop; views are the scene's own (`SceneStep.focus`). */
-export function stepTimes(scene: SceneGraph): { times: StepTime[]; total: number } {
+export function stepTimes(
+  scene: SceneGraph,
+  speed: number,
+  closeLast: boolean,
+): { times: StepTime[]; total: number } {
   const tl = scene.timeline;
   const wins = stepWindows(
     tl.map((s) => s.duration),
     tl.map((s) => s.focus),
+    closeLast,
   );
+  // The camera's transition is `min(0.8, 0.25 d / speed)` seconds on the OUTPUT clock; in loop
+  // seconds that is `min(0.8 speed, 0.25 d)`, so a board's windows meet the camera's.
+  const loopSeconds = (on: number, d: number): number =>
+    on > 0 ? r4(Math.min(0.8 * speed, 0.25 * d)) : 0;
   let t = 0;
   const times = tl.map((s, i) => {
-    const window = wins[i] as StepWindow;
+    const w = wins[i] as StepWindow;
+    const window: StepWindow = {
+      lead: loopSeconds(w.lead, s.duration),
+      tr: loopSeconds(w.tr, s.duration),
+      window: w.window,
+    };
     const start = r4(t);
     t += s.duration;
     return {

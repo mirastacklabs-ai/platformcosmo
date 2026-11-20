@@ -12,14 +12,38 @@ import type {
   ImageLimits,
   SvgElement,
 } from "../../contracts/index.js";
-import { IMAGE_DEF_TAG } from "../../emit/index.js";
+import { IMAGE_DEF_TAG, unsafeSvgBody } from "../../emit/index.js";
 import { h } from "../../emit/xml.js";
 import { fmt } from "../../geometry/index.js";
 import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
 
-/** Bytes an asset adds to the document before base64 (SVG: its sanitized body). */
+/** Bytes of an asset's SVG body in UTF-8 (the text is embedded as is). */
+const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
+
+/**
+ * Bytes an asset adds to the document: raster as base64 text (`4 * ceil(n / 3)`), SVG as its
+ * sanitized body in UTF-8. This, not the raw size, is what the §11.4 total counts.
+ */
 export const assetBytes = (a: ImageAsset): number =>
-  a.format === "svg" ? (a.svg?.body.length ?? 0) : a.data.byteLength;
+  a.format === "svg" ? utf8Bytes(a.svg?.body ?? "") : 4 * Math.ceil(a.data.byteLength / 3);
+
+/** The per-file caps again, from the asset's own sizes (callers can build `ImageAsset`s by hand). */
+function overCap(a: ImageAsset, limits: ImageLimits): string | undefined {
+  if (a.format === "svg") {
+    const n = utf8Bytes(a.svg?.body ?? "");
+    return n > limits.maxSvgBytes ? `${n} bytes (SVG limit ${limits.maxSvgBytes})` : undefined;
+  }
+  if (a.data.byteLength > limits.maxBytes) {
+    return `${a.data.byteLength} bytes (limit ${limits.maxBytes})`;
+  }
+  if (a.width > limits.maxDimension || a.height > limits.maxDimension) {
+    return `${a.width} x ${a.height} px (limit ${limits.maxDimension} per side)`;
+  }
+  if (a.width * a.height > limits.maxPixels) {
+    return `${a.width * a.height} pixels (limit ${limits.maxPixels})`;
+  }
+  return undefined;
+}
 
 /**
  * Image ids the figures of a spec use, in first-use order (base, then parts), with the index of
@@ -70,6 +94,32 @@ export function checkFigureImages(
         message: `Image "${id}" was not provided to the renderer`,
         suggestion:
           "Load it with the CLI (the path is relative to the spec's directory) or pass it in RenderOptions.images",
+        params: { id },
+      });
+      continue;
+    }
+    const big = overCap(a, limits);
+    if (big !== undefined) {
+      out.push({
+        severity: "error",
+        code: "image/too-large",
+        path: `/images/${index}/src`,
+        message: `Image "${id}" is too large: ${big}`,
+        suggestion: "Shrink or crop the image (pcosmo assets shrink)",
+        params: { id },
+      });
+      continue;
+    }
+    // User SVG: the emitter refuses unsafe bodies, so say so here, before anything renders.
+    const unsafe = a.format === "svg" ? unsafeSvgBody(a.svg?.body ?? "") : undefined;
+    if (unsafe !== undefined) {
+      out.push({
+        severity: "error",
+        code: "image/format",
+        path: `/images/${index}/src`,
+        message: `Image "${id}" is an SVG the renderer will not embed (${unsafe})`,
+        suggestion:
+          "Export it without scripts, links, animation or external references, or convert it to PNG",
         params: { id },
       });
       continue;

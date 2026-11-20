@@ -86,10 +86,16 @@ export function defaultIdPrefix(
     readonly optimize: boolean;
     /** Only hashed when not the default `smil`, so existing prefixes stay unchanged (D32). */
     readonly motion?: string;
+    /** Schema 1.2.0: `[image id, asset hash]` of the declared images, so other bytes give other ids. */
+    readonly assets?: readonly (readonly [string, string])[];
   },
 ): string {
-  const { motion, ...rest } = options;
-  const hashed = motion !== undefined && motion !== "smil" ? { ...rest, motion } : rest;
+  const { motion, assets, ...rest } = options;
+  const hashed = {
+    ...rest,
+    ...(motion !== undefined && motion !== "smil" ? { motion } : {}),
+    ...(assets !== undefined && assets.length > 0 ? { assets } : {}),
+  };
   const digest = createHash("sha256")
     .update(canonicalJson({ spec, options: hashed }))
     .digest("hex");
@@ -243,6 +249,14 @@ export function createRender(deps: RenderDeps): RenderFn {
           speed,
           optimize: doOptimize,
           ...(motion === "css" ? { motion } : {}),
+          // Schema 1.2.0 only (1.1 specs declare no images): other image bytes, other ids.
+          ...(parsed.images !== undefined
+            ? {
+                assets: parsed.images.map(
+                  (i) => [i.id, options.images?.get(i.id)?.hash ?? ""] as const,
+                ),
+              }
+            : {}),
         });
 
       const built = buildModelWithDiagnostics({

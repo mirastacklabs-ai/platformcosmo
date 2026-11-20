@@ -197,7 +197,7 @@ function frameLayer(
   );
   // Figure boards: the exact pose and fades at this time, as attributes (no CSS in frames).
   const bm = boardsOf(model);
-  const attrs = bm ? boardsFrame(bm, t, speed) : undefined;
+  const attrs = bm ? boardsFrame(bm.tracks(speed), t, speed) : undefined;
   return {
     css: join(colors.css(), staticStepCss(model, k)),
     defs: [],
@@ -237,7 +237,7 @@ function stepLayer(
       : "";
   // Figure boards: the pose at the end of the step (its closing hold), as attributes.
   const bm = boardsOf(model);
-  const attrs = bm && count > 0 ? boardsStepEnd(bm, k + 1) : undefined;
+  const attrs = bm && count > 0 ? boardsStepEnd(bm.tracks(speed), k + 1) : undefined;
   return {
     css: join(
       colors.css(),
@@ -293,7 +293,8 @@ function loopLayer(
   // Figure boards: sprite and fade tracks (CSS in both motion modes, D32). Specs without
   // figure actions have none, and keep the 1.1 reduced-motion rule.
   const bm = boardsOf(model);
-  const boardCss = hasBoardMotion(bm) ? boardsLoop(bm, ids, kf, total) : undefined;
+  const bt = bm?.tracks(speed);
+  const boardCss = hasBoardMotion(bt) ? boardsLoop(bt, ids, kf, total) : undefined;
   const poseMotion = boardCss !== undefined && boardCss.rules.length > 0;
   const flowGroups: SvgElement[] = [];
   const particleRules: string[] = [];
@@ -424,7 +425,7 @@ function loopLayer(
     controlCssText = controlCss(ids.prefix);
     // Step pauses at the settled time of steps that have actions (§7.5), else at the start.
     const targets = win.starts.map((s, i) => {
-      const settled = bm?.settled[i];
+      const settled = bt?.settled[i];
       if (settled !== undefined) return settled / speed;
       return i === 0 && zooms[0] ? transitionSeconds(win.durations[0] ?? 0) : s;
     });

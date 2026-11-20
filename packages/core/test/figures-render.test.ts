@@ -4,6 +4,7 @@ import {
   buildModel,
   buildScene,
   createAnimator,
+  defaultIdPrefix,
   emit,
   render,
   validate,
@@ -16,7 +17,7 @@ import {
 } from "../src/index.js";
 import { DEFAULT_IMAGE_LIMITS } from "../src/assets/prepare.js";
 import type { BoardIdScheme } from "../src/emit/ids.js";
-import { assertDataHref, orientationMatrix } from "../src/emit/index.js";
+import { assertDataHref, orientationMatrix, unsafeSvgBody } from "../src/emit/index.js";
 import { decodePng } from "../src/export/png.js";
 import { boardsOf } from "../src/render/boards/types.js";
 import { drawOrder, layoutFigure, stackLabels } from "../src/render/boards/layout.js";
@@ -233,15 +234,12 @@ describe("emitter image rule (§11.3)", () => {
   test("refuses an asset that is not PNG or JPEG raster, and a placeholder with no asset", () => {
     const bm = boardsOf(model)!;
     const [hash, asset] = [...bm.assets][0] as [string, ImageAsset];
-    const gif = { ...model } as RenderModel;
-    Object.defineProperty(gif, Symbol.for("platformcosmo.boards"), {
-      value: { ...bm, assets: new Map([[hash, { ...asset, mime: "image/gif" }]]) },
-    });
+    const gif: RenderModel = {
+      ...model,
+      boards: { ...bm, assets: new Map([[hash, { ...asset, mime: "image/gif" }]]) },
+    };
     expect(() => svgOf(gif, animate(gif, { speed: 1, mode: "frame", time: 0 }))).toThrow(/gif/);
-    const none = { ...model } as RenderModel;
-    Object.defineProperty(none, Symbol.for("platformcosmo.boards"), {
-      value: { ...bm, assets: new Map() },
-    });
+    const none: RenderModel = { ...model, boards: { ...bm, assets: new Map() } };
     expect(() => svgOf(none, animate(none, { speed: 1, mode: "frame", time: 0 }))).toThrow(
       /no asset/,
     );
@@ -596,7 +594,7 @@ describe("motion: tracks, frame mode equals CSS, zero SMIL in css mode", () => {
 
   test("motion arrows fade in and out around the move; labels fade after arrival", () => {
     const bm = boardsOf(model)!;
-    const arrow = bm.fades.find((f) => f.id.includes("__a.p1.f"))!;
+    const arrow = bm.tracks(1).fades.find((f) => f.id.includes("__a.p1.f"))!;
     expect(arrow).toBeDefined();
     const at = (t: number) =>
       animate(model, { speed: 1, mode: "frame", time: t }).attrs![arrow.id]!.opacity as number;
@@ -605,13 +603,13 @@ describe("motion: tracks, frame mode equals CSS, zero SMIL in css mode", () => {
     expect(at(2.6)).toBe(1);
     expect(at(3.3)).toBe(0);
     // the reverse-direction arrow belongs to step 3's implode, not step 2
-    const rev = bm.fades.find((f) => f.id.includes("__a.p1.r"))!;
+    const rev = bm.tracks(1).fades.find((f) => f.id.includes("__a.p1.r"))!;
     const atRev = (t: number) =>
       animate(model, { speed: 1, mode: "frame", time: t }).attrs![rev.id]!.opacity as number;
     expect(atRev(2.6)).toBe(0);
     expect(atRev(7 + 1.9)).toBe(1); // implode: p1 moves 8.3 to 9.5
     // label of p1 at its seat (pose 0): visible at rest, hidden while it travels, back after 0.2 s
-    const l0 = bm.fades.find((f) => f.id.endsWith("__l.p1.0"))!;
+    const l0 = bm.tracks(1).fades.find((f) => f.id.endsWith("__l.p1.0"))!;
     const l0at = (t: number) =>
       animate(model, { speed: 1, mode: "frame", time: t }).attrs![l0.id]!.opacity as number;
     expect(l0at(0)).toBe(1);
@@ -635,7 +633,7 @@ describe("motion: tracks, frame mode equals CSS, zero SMIL in css mode", () => {
     ].find((m) => (m[1] as string).replace(/\\(.)/g, "$1") === id)!;
     const stops = kf.get(red[2] as string)!;
     const ends = [0, 1, 2].map((k) => {
-      const t = boardsOf(model)!.stepEnds[k] as number;
+      const t = boardsOf(model)!.tracks(1).stepEnds[k] as number;
       const f = animate(model, { speed: 1, mode: "step", step: k + 1 }).attrs![id]!;
       return { t, f: transformOf(f.transform) };
     });
@@ -659,7 +657,7 @@ describe("motion: tracks, frame mode equals CSS, zero SMIL in css mode", () => {
     const { model: m } = pipeline(fig({}, [{ caption: "a" }, { caption: "b" }]));
     const layer = animate(m, { speed: 1, mode: "loop" });
     expect(layer.css).toContain("animation:none!important");
-    expect(boardsOf(m)!.poses).toEqual([]);
+    expect(boardsOf(m)!.tracks(1).poses).toEqual([]);
   });
 
   test("interactive: Step pauses at the settled time of steps that have actions", () => {
@@ -671,7 +669,7 @@ describe("motion: tracks, frame mode equals CSS, zero SMIL in css mode", () => {
     expect(G[0]).toBe(0); // no actions: its start
     expect(G[1]).toBeCloseTo(2 + 2.5, 3);
     expect(G[2]).toBeCloseTo(7 + 2.5, 3);
-    expect(boardsOf(model)!.settled).toEqual([undefined, 4.5, 9.5]);
+    expect(boardsOf(model)!.tracks(1).settled).toEqual([undefined, 4.5, 9.5]);
   });
 
   test("interactive Step settled target is divided by the speed", () => {
@@ -773,7 +771,7 @@ describe("per-step outputs, static and raster frames", () => {
       return { minY, maxY, n };
     };
     const start = await redBox(0); // exploded: seat y 100
-    const end = await redBox(5.9); // implode done at 2 + 1.2 stage: seated at y 300
+    const end = await redBox(5.1); // implode done by 3.2, the closing return starts at 5.2
     expect(start.n).toBeGreaterThan(500);
     expect(end.n).toBe(start.n); // same sprite, same size
     // 200 base px = 85.33 panel px apart, at scale 1
@@ -1068,7 +1066,9 @@ describe("loop closure (§7.4)", () => {
     return pipeline(spec);
   };
   const track = (model: RenderModel) =>
-    boardsOf(model)!.poses.find((p) => p.id === sprite(model, "p1"))!;
+    boardsOf(model)!
+      .tracks(1)
+      .poses.find((p) => p.id === sprite(model, "p1"))!;
 
   test("last step zoomed: the loop ends back at the base pose by a fast return in the closing transition", () => {
     const { model } = closing(true);
@@ -1095,29 +1095,107 @@ describe("loop closure (§7.4)", () => {
     expect(y(4)).toBe(0);
   });
 
-  test("last step not zoomed: tr is 0, so the return is the cut at the loop end (no window, no NaN)", () => {
-    const { model, scene } = closing(false);
-    expect(scene.timeline[0]!.focus).toBeUndefined();
+  test("last step not zoomed: it reserves the closing window and returns smoothly, no snap (Q03)", () => {
+    const steps = [{ caption: "A" }, { assembly: [{ explode: "f" }] }];
+    const { model, scene } = pipeline(fig({}, steps));
+    expect(scene.timeline[1]!.focus).toBeUndefined();
+    // the window is the step's own: tr = min(0.8, 0.25 * 3) = 0.75, so the return is [5.25, 6]
     const keys = track(model).keys;
-    expect(keys[0]).toMatchObject({ t: 0, y: 0 });
-    expect(keys[keys.length - 1]).toMatchObject({ t: 4 });
-    expect(keys[keys.length - 1]!.y).toBeCloseTo(-200 * SCALE, 1); // ends exploded: the cut returns it
-    for (let i = 1; i < keys.length; i++) expect(keys[i]!.t).toBeGreaterThan(keys[i - 1]!.t);
-    expect(keys.every((k) => Number.isFinite(k.x) && Number.isFinite(k.y))).toBe(true);
-    // the CSS is well formed: 0% is the seated pose, 100% the exploded one, no duplicated percentages
-    const css = animate(model, { speed: 1, mode: "loop" }).css;
-    const stops = parseKeyframes(css).get(parseRules(css).get(track(model).id)!.name)!;
-    expect(stops[0]).toMatchObject({ p: 0 });
-    expect(stops[stops.length - 1]).toMatchObject({ p: 1 });
-    expect(new Set(stops.map((s) => s.p)).size).toBe(stops.length);
-    // the wrapped frame is the base pose
+    const startKey = keys.find((k) => k.t === 5.25)!;
+    expect(startKey).toBeDefined();
+    expect(startKey.y).toBeCloseTo(-200 * SCALE, 1);
+    expect(startKey.easing).toEqual([0.4, 0, 0.2, 1]);
+    expect(keys[keys.length - 1]).toMatchObject({ t: 6, y: 0 });
     const y = (t: number) =>
       transformOf(
         animate(model, { speed: 1, mode: "frame", time: t }).attrs![track(model).id]!.transform,
       )[1];
-    expect(y(4)).toBe(0);
-    expect(y(3.99)).toBeCloseTo(-200 * SCALE, 1);
+    // eased in between, and the frame just before the restart is (almost) the frame at 0
+    expect(y(5.6)).toBeLessThan(-5);
+    expect(y(5.6)).toBeGreaterThan(-200 * SCALE + 5);
+    expect(Math.abs(y(6 - 0.002) - y(0))).toBeLessThan(1);
+    // continuity everywhere: no sample jumps by more than a fraction of the travel
+    let prev = y(0);
+    for (let t = 0.01; t < 6; t += 0.01) {
+      expect(Math.abs(y(t) - prev)).toBeLessThan(6);
+      prev = y(t);
+    }
+    // the label follows: the exploded label fades out as it leaves, the seated one in as it lands
+    const l0 = boardsOf(model)!
+      .tracks(1)
+      .fades.find((f) => f.id.endsWith("__l.p1.0"))!;
+    expect(l0.keys[l0.keys.length - 1]).toMatchObject({ t: 6, v: 1 });
   });
+
+  test("scene and validate agree on the closing window, so compression and suggestions do", () => {
+    const stages = [
+      { parts: ["p1", "p2"], stagger: 0.5, duration: 1, delay: 0.25 },
+      { parts: ["p3"], delay: 0.5, duration: 0.6 },
+    ];
+    const parts = [
+      { id: "p1", image: "spr", seat: [0, 100] },
+      { id: "p2", image: "spr", seat: [50, 300] },
+      { id: "p3", image: "spr", seat: [90, 200] },
+    ];
+    const spec = fig({ stages, parts }, [{ duration: 2, assembly: [{ explode: "f" }] }]);
+    const v = validate(spec);
+    const fromValidate = v.diagnostics.find((d) => d.code === "assembly/compressed")!;
+    const act = buildScene(v.spec!, {}).assemblies!.plan[0]!.actions[0]!;
+    // 2 - tr (0.5) - 0.2 = 1.3: the same in both, and the suggestion removes it
+    expect(fromValidate.params!.window).toBe(1.3);
+    expect(fromValidate.params!.scale).toBe(act.scale);
+    expect(fromValidate.suggestion).toBe('Set "duration": 4 on this step');
+    const fixed = validate(fig({ stages, parts }, [{ duration: 4, assembly: [{ explode: "f" }] }]));
+    expect(fixed.diagnostics.filter((d) => d.code === "assembly/compressed")).toEqual([]);
+    // a loop that ends at its base pose reserves nothing: the full 2 - 0.2 window
+    const back = validate(
+      fig({ stages, parts }, [{ duration: 2, assembly: [{ explode: "f" }, { implode: "f" }] }]),
+    );
+    expect(back.diagnostics.find((d) => d.code === "assembly/compressed")?.params?.window).toBe(
+      1.8,
+    );
+  });
+
+  const zoomSpec = (speedSteps: unknown[]) =>
+    fig({ width: 3 }, speedSteps, {
+      nodes: [
+        { id: "a", type: "server", pos: { x: 0, y: 0 } },
+        { id: "m", type: "sql", pos: { x: 14, y: 0 } },
+      ],
+    });
+
+  test.each([2, 0.5, 1])(
+    "at speed %s the closure starts with the camera's ease-out and step 1 moves after the zoom-in",
+    (speed) => {
+      const { model } = pipeline(
+        zoomSpec([{ duration: 4, focus: "f", assembly: [{ explode: "f" }] }]),
+      );
+      const layer = animate(model, { speed, mode: "loop" });
+      const cam = /#pc-t-cam\{[^}]*animation:(\S+) ([\d.]+)s/.exec(layer.css)!;
+      const dur = Number(cam[2]);
+      expect(dur).toBeCloseTo(4 / speed, 3);
+      const stops = parseKeyframes(layer.css).get(cam[1] as string)!;
+      // camera stops: 0 overview, zoom-in done, ..., ease-out starts, end
+      const zoomInEnd = (stops[1] as { p: number }).p * dur;
+      const easeOutStart = (stops[stops.length - 2] as { p: number }).p * dur;
+      expect(easeOutStart).toBeLessThan(dur);
+      expect(zoomInEnd).toBeGreaterThan(0);
+      const keys = boardsOf(model)!
+        .tracks(speed)
+        .poses.find((p) => p.id === sprite(model, "p1"))!.keys;
+      const closure = keys.find((k) => Array.isArray(k.easing) && k.easing[0] === 0.4)!;
+      expect(closure).toBeDefined();
+      // loop seconds / speed = output seconds
+      expect(closure.t / speed).toBeCloseTo(easeOutStart, 3);
+      const firstMove = keys.find((k) => k.t > 0)!;
+      expect(firstMove.t / speed).toBeCloseTo(zoomInEnd, 3);
+      // and the CSS carries the same moments
+      const css = parseKeyframes(layer.css).get(
+        parseRules(layer.css).get(sprite(model, "p1"))!.name,
+      )!;
+      expect(css.some((s) => Math.abs(s.p * dur - easeOutStart) < 1e-3)).toBe(true);
+    },
+  );
 
   test("a loop that ends at its base pose needs no return", () => {
     const spec = fig({ pose: "exploded" }, [
@@ -1125,7 +1203,9 @@ describe("loop closure (§7.4)", () => {
       { duration: 4, assembly: [{ implode: "f" }, { explode: "f" }], focus: "f" },
     ]);
     const { model } = pipeline(spec);
-    const keys = boardsOf(model)!.poses.find((p) => p.id === sprite(model, "p1"))!.keys;
+    const keys = boardsOf(model)!
+      .tracks(1)
+      .poses.find((p) => p.id === sprite(model, "p1"))!.keys;
     expect(keys[keys.length - 1]!.y).toBeCloseTo(-200 * SCALE, 1);
     // no key at the closing transition start (7 - 0.8) other than part of the hold
     expect(keys.filter((k) => k.easing instanceof Array && k.easing[0] === 0.4)).toEqual([]);
@@ -1174,25 +1254,141 @@ describe("images: presence and caps before anything is encoded (§11.4)", () => 
     expect(none.diagnostics.filter((d) => d.code === "image/not-found")).toHaveLength(2);
   });
 
-  test("the embedded total: over 8 MiB is an error, over 1 MiB a warning; duplicates count once", () => {
-    const MiB = 1024 * 1024;
+  const MiB = 1024 * 1024;
+  const loose = { ...DEFAULT_IMAGE_LIMITS, maxBytes: 64 * MiB, maxDimension: 99999 };
+
+  test("the total counts base64 bytes: 6 MiB raw is 8 MiB embedded, the cap's edge (Q07)", () => {
+    // 2 x 3 MiB raw = 2 x 4 MiB of base64 = exactly 8 MiB: not over the cap, over the warning
     expect(
-      checkFigureImages(spec, resolver([fake("base", 3 * MiB), fake("spr", 3 * MiB)])),
+      checkFigureImages(spec, resolver([fake("base", 3 * MiB), fake("spr", 3 * MiB)]), loose),
     ).toEqual([expect.objectContaining({ code: "budget/images", severity: "warning" })]);
-    expect(
-      checkFigureImages(spec, resolver([fake("base", 5 * MiB), fake("spr", 5 * MiB)])).map((d) => [
-        d.code,
-        d.severity,
-      ]),
-    ).toEqual([["image/too-large", "error"]]);
+    // one raw byte more per file pushes the encoded total over 8 MiB (raw would not have)
+    const over = checkFigureImages(
+      spec,
+      resolver([fake("base", 3 * MiB + 1), fake("spr", 3 * MiB + 1)]),
+      loose,
+    );
+    expect(over.map((d) => [d.code, d.severity])).toEqual([["image/too-large", "error"]]);
+    expect(over[0]!.params!.bytes).toBe(2 * 4 * Math.ceil((3 * MiB + 1) / 3));
     // the same bytes under two ids are embedded once
     expect(
       checkFigureImages(
         spec,
         resolver([fake("base", 5 * MiB, "same"), fake("spr", 5 * MiB, "same")]),
+        loose,
       ).map((d) => d.code),
     ).toEqual(["budget/images"]);
     expect(checkFigureImages(spec, resolver([fake("base", 10), fake("spr", 10)]))).toEqual([]);
+  });
+
+  test("an SVG counts its UTF-8 bytes, not its UTF-16 length", () => {
+    const svgAsset = (key: string, body: string): ImageAsset => ({
+      key,
+      format: "svg",
+      mime: "image/svg+xml",
+      width: 10,
+      height: 10,
+      orientation: 1,
+      hash: `h-${key}`,
+      data: new Uint8Array(0),
+      svg: { viewBox: "0 0 10 10", body, monochrome: false },
+    });
+    // 3-byte characters: 90_000 chars = 270_000 bytes, over the 256 KiB SVG cap, 90_000 < cap
+    const body = `<text>${"€".repeat(90_000)}</text>`;
+    const d = checkFigureImages(spec, resolver([svgAsset("base", body), fake("spr", 10)]));
+    expect(d.map((x) => [x.code, x.path])).toEqual([["image/too-large", "/images/0/src"]]);
+  });
+
+  test("per-file caps are re-checked from the asset's sizes (caller-built images)", () => {
+    const d = (a: ImageAsset) => checkFigureImages(spec, resolver([a, fake("spr", 10)]));
+    expect(d(fake("base", 3 * MiB)).map((x) => x.code)).toEqual(["image/too-large"]);
+    expect(d({ ...fake("base", 10), width: 9000 }).map((x) => x.code)).toEqual(["image/too-large"]);
+    expect(d({ ...fake("base", 10), width: 8000, height: 8000 }).map((x) => x.code)).toEqual([
+      "image/too-large",
+    ]); // 64 MP
+    expect(d(fake("base", 10))).toEqual([]);
+  });
+
+  describe("user SVG safety is a diagnostic, before rendering (Q04, Q05)", () => {
+    const svgAsset = (key: string, body: string): ImageAsset => ({
+      key,
+      format: "svg",
+      mime: "image/svg+xml",
+      width: 10,
+      height: 10,
+      orientation: 1,
+      hash: `h-${key}`,
+      data: new Uint8Array(0),
+      svg: { viewBox: "0 0 10 10", body, monochrome: false },
+    });
+    test.each([
+      ["a handler", '<rect onclick="x()" width="1" height="1"/>'],
+      ["a link element", '<a href="#x"><rect width="1" height="1"/></a>'],
+      ["a set element", '<rect id="a"><set attributeName="x" to="9"/></rect>'],
+      [
+        "an animate element",
+        '<rect><animateTransform attributeName="transform" values="a"/></rect>',
+      ],
+      ["an external href", '<use href="http://x/y.svg"/>'],
+      ["an animation target", '<rect><foo to="http://x"/></rect>'],
+      ["a script", "<script>1</script>"],
+      ["an external url()", '<rect style="fill:url(http://x)"/>'],
+    ])("%s is image/format at the declaration, and render does not throw", async (_n, body) => {
+      const r = await render(fig(), {
+        theme: THEME,
+        font: "system",
+        images: resolver([svgAsset("base", body), fake("spr", 10)]),
+      });
+      expect(r.outputs).toEqual([]);
+      const dg = r.diagnostics.find((x) => x.code === "image/format")!;
+      expect(dg).toMatchObject({ severity: "error", path: "/images/0/src" });
+      expect(dg.message).toMatch(/SVG the renderer will not embed/);
+      expect(r.diagnostics.some((x) => x.code === "render/internal-error")).toBe(false);
+    });
+
+    test("text that merely contains 'on…=' or 'to=' is not attribute context", () => {
+      for (const body of [
+        "<text>online = 3</text>",
+        '<text x="1">onload = 1 and to="a"</text>',
+        "<text>a &lt;a href=&quot;x&quot;&gt; b</text>",
+        '<style>g > rect { fill: red }</style><rect width="1" height="1"/>',
+      ]) {
+        expect(unsafeSvgBody(body), body).toBeUndefined();
+      }
+      expect(unsafeSvgBody('<text onclick="x">hi</text>')).toBeDefined();
+      expect(unsafeSvgBody("<rect \tONCLICK = 'x'/>")).toBeDefined();
+      expect(unsafeSvgBody("<!-- <script> --><rect/>")).toBeUndefined();
+      expect(unsafeSvgBody("<rect")).toMatch(/unterminated/);
+    });
+
+    test("the predicate is linear: a hostile body of 256 KiB takes well under a second", () => {
+      const t = Date.now();
+      for (const body of [
+        "<".repeat(256 * 1024),
+        `<a ${"on".repeat(128 * 1024)}`,
+        `<rect ${' to=" '.repeat(50_000)}`,
+        " ".repeat(256 * 1024) + "<rect/>",
+        `<rect x="${">".repeat(256 * 1024)}"/>`,
+      ]) {
+        unsafeSvgBody(body);
+      }
+      expect(Date.now() - t).toBeLessThan(1000);
+    });
+
+    test("a clean SVG asset renders and is embedded as a symbol", async () => {
+      const r = await render(fig(), {
+        theme: THEME,
+        font: "system",
+        optimize: false,
+        images: resolver([
+          svgAsset("base", '<rect width="10" height="10" fill="#369"/>'),
+          fake("spr", 10),
+        ]),
+      });
+      const svg = r.outputs[0]?.data as string;
+      expect(svg).toContain("<symbol ");
+      expect(svg).toContain('viewBox="0 0 10 10"');
+    });
   });
 
   test("more distinct images than the cap is image/too-many (from sizes, no bytes touched)", () => {
@@ -1270,6 +1466,36 @@ describe("1.1 output is untouched", () => {
     expect(ids.board("f")).toBe("pc-t-bd_f");
     expect(ids.boardItem("f", "s.p1")).toBe("pc-t-bi_f__s.p1");
     expect(ids.credits()).toBe("pc-t-credits");
+  });
+
+  test("1.2.0 specs fold the asset hashes into the id prefix; 1.1 prefixes are unchanged (Q09)", async () => {
+    const mk = (spr: number) =>
+      resolverOf({
+        base: realPng(600, 480, () => [200, 200, 200, 255]),
+        spr: realPng(80, 60, () => [spr, 20, 30, 255]),
+      });
+    const prefix = async (images: ImageAssetResolver) => {
+      const r = await render(fig(), { theme: THEME, font: "system", optimize: false, images });
+      return /<svg [^>]*id="([^"]*)"/.exec(r.outputs[0]!.data as string)![1];
+    };
+    const a = await prefix(mk(10));
+    const b = await prefix(mk(11));
+    expect(a).not.toBe(b);
+    expect(await prefix(mk(10))).toBe(a);
+    // defaultIdPrefix: assets only enter the hash when present
+    const o = { theme: THEME, font: "system", speed: 1, optimize: true };
+    expect(defaultIdPrefix({ x: 1 }, o)).toBe(defaultIdPrefix({ x: 1 }, { ...o, assets: [] }));
+    expect(defaultIdPrefix({ x: 1 }, o)).not.toBe(
+      defaultIdPrefix({ x: 1 }, { ...o, assets: [["a", "h"]] }),
+    );
+    // a 1.1 spec renders with the prefix it always had, whether or not images are passed
+    const plain = { meta: { version: "1" }, nodes: [{ id: "a", type: "server" }] };
+    const p1 = await render(plain, { theme: THEME, font: "system" });
+    const p2 = await render(plain, { theme: THEME, font: "system", images: mk(10) });
+    expect(p1.outputs[0]!.data).toBe(p2.outputs[0]!.data);
+    expect(/id="(pc-[0-9a-f]{8})"/.exec(p1.outputs[0]!.data as string)![1]).toBe(
+      defaultIdPrefix(plain, { theme: THEME, font: "system", speed: 1, optimize: true }),
+    );
   });
 
   test("deterministic: the same inputs give the same bytes", async () => {

@@ -19,7 +19,7 @@ import type {
 } from "../contracts/index.js";
 import { depthOrder, orderGroups } from "../depth/index.js";
 import type { PlatformCosmoSpec } from "../schema/types.gen.js";
-import { attachBoards, buildBoards } from "./boards/index.js";
+import { buildBoards } from "./boards/index.js";
 import { createIds, iconDef } from "../emit/index.js";
 import { h } from "../emit/xml.js";
 import {
@@ -1017,8 +1017,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     metricRects,
     font: inputs.font,
     fontAssets: fontAssets(),
+    ...(boardsBuild ? { boards: boardsBuild.model } : {}),
   };
-  if (boardsBuild) attachBoards(model, boardsBuild.model);
   registry.set(model, inputs);
   return { model, diagnostics };
 }

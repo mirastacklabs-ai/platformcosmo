@@ -315,6 +315,7 @@ Step `i` spans `[T_i, T_i + d_i]`. Its **motion window** opens at `m_i = T_i + l
 transitions sit at the end of the previous step, D27) and closes at
 `c_i = T_i + d_i − tr_i − 0.2` where `tr_i = min(0.8, 0.25·d_i)` is the closing camera
 transition (0 when the next view is the same) and 0.2 s is a hold so the settled pose is seen.
+For the last step `tr_n` also applies when the end pose of any program differs from its base pose and no camera transition follows (the loop closure of §7.4 needs that window). All times use the output clock: `tr` and `lead` are `min(0.8, 0.25·d/speed)` seconds of output, i.e. that many times `speed` loop seconds.
 If the step's actions need `L_i > c_i − m_i`, all of them are compressed uniformly by
 `scale = (c_i − m_i)/L_i` (`ResolvedAction.scale`), with `assembly/compressed` (info; warning
 below 0.5) whose suggestion gives the duration that fits: `"duration": D`, the smallest whole
@@ -332,7 +333,7 @@ number of seconds with `D − lead(D) − tr(D) − 0.2 ≥ L_i`, where `lead(D)
   back to the overview) every program returns to its base level: explode levels by a fast
   implode (all moves reversed together, no stagger, compressed into `tr_n`); build levels by
   fades (parts present at rest but not at the end fade in, others out). Ending with an
-  explicit implode step avoids the fast return; the skill does that.
+  explicit implode step avoids the fast return; the skill does that. When the last step is not zoomed the window `tr_n = min(0.8, 0.25·d_n)` is still reserved at its end for the fast return, so the loop restart never snaps.
 - **Focus on assemblies**: `focus` on an assembly, sub-assembly or part frames its box at the
   END pose of the step (`AssemblyRenderModel.focusRect(step, id)`), so an exploded unit fits
   the zoom; B uses it instead of `RenderModel.focusRects` when present.
