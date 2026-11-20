@@ -45,7 +45,7 @@ import type {
 import { CIRCULAR_KINDS, partGeometry, reassignSplit } from "../../geometry/parts.js";
 import { AssemblyModel, LEAF_ERROR, MAX_DEPTH } from "../../schema/assembly-tree.js";
 import type { PlatformCosmoSpec, SpecPart, SpecState } from "../../schema/types.gen.js";
-import { belowGroundLift, frameMap, makeFrame, rnd, unionBoxes, unitMm } from "./frame.js";
+import { TILE_MM, belowGroundLift, frameMap, makeFrame, rnd, unionBoxes, unitMm } from "./frame.js";
 import { toSource } from "./source.js";
 import { classifySiblings, type LBox, type RoleItem } from "./roles.js";
 
@@ -643,17 +643,20 @@ function collectLeaves(d: Draft, out: Draft[]): void {
   }
 }
 
-function prepare(ctx: Ctx, index: number, used: Used): Prepared | undefined {
+function prepare(ctx: Ctx, index: number, used: Used, rootPath?: string): Prepared | undefined {
   const a = ctx.model.assemblies[index];
   if (a === undefined) return undefined;
   const children: Draft[] = [];
   const state = a.state ?? "healthy";
+  // a close-up instance is rooted at its own path (`<host>/closeup`, A2-5); depth counts it
+  const path = rootPath ?? a.id;
+  const depth = path.split("/").length;
   ctx.stack.push(index);
-  expandList(ctx, a.parts, `/assemblies/${index}/parts`, a.id, 1, [0, 0, 0], state, children);
+  expandList(ctx, a.parts, `/assemblies/${index}/parts`, path, depth, [0, 0, 0], state, children);
   ctx.stack.pop();
   const root: Draft = {
-    id: a.id,
-    path: a.id,
+    id: path.slice(path.lastIndexOf("/") + 1),
+    path,
     ptr: `/assemblies/${index}`,
     kind: "sub",
     part: { id: a.id },
@@ -758,7 +761,7 @@ function place(
   }
   const restBounds = unionBoxes(bounds) ?? map.box(prep.localBounds);
   return {
-    id: prep.root.id,
+    id: prep.root.path,
     source: "spec",
     ...(a.label === undefined ? {} : { label: a.label }),
     frame,
@@ -775,6 +778,104 @@ const shift = (b: Box3, dx: number, dy: number, dz: number): Box3 => ({
   origin: { x: rnd(b.origin.x + dx), y: rnd(b.origin.y + dy), z: rnd(b.origin.z + dz) },
   size: b.size,
 });
+
+export interface TemplateInstanceOptions extends AssemblyBuildOptions {
+  /** Extra quarter turn of the instance, added to the template's own `rotate`. */
+  readonly turn?: QuarterTurn;
+  /**
+   * Decides the instance's turn and uniform fit from the template's size in millimetres (local
+   * bounds x unit, the template's own `rotate` applied) once it is expanded: close-ups reconcile
+   * sizes with it (`closeup.ts`). `fit` is a factor on the true-scale frame (1 = true scale).
+   */
+  readonly adapt?: (
+    sizeMm: Vec3,
+    units: AssemblyUnits,
+  ) => { readonly turn?: QuarterTurn; readonly fit?: number };
+  /** Leaves the expansion may add (the caller's remaining budget); over it, nothing is built. */
+  readonly leafBudget?: number;
+}
+
+export interface TemplateInstance {
+  readonly assembly: SceneAssembly;
+  /** Index of the template in `spec.assemblies`. */
+  readonly index: number;
+  readonly leafCount: number;
+  readonly diagnostics: readonly Diagnostic[];
+}
+
+/**
+ * One instance of the assembly `templateId` rooted at the scene path `path` (a close-up,
+ * assemblies §8.4): paths are `<path>/<part>/…`, units are true scale unless `adapt` fits it,
+ * and it stands at the origin (rest and reach bounds start at x = y = 0, z lifted). Nothing is
+ * built (undefined) for an unknown, over-budget or cyclic template, or beyond `leafBudget`.
+ */
+export function buildTemplateInstance(
+  spec: PlatformCosmoSpec,
+  model: AssemblyModel,
+  templateId: string,
+  path: string,
+  opts: TemplateInstanceOptions = {},
+): TemplateInstance | undefined {
+  const i = model.byId.get(templateId);
+  const a = i === undefined ? undefined : (spec.assemblies ?? [])[i];
+  if (i === undefined || a === undefined || !model.fits(i)) return undefined;
+  const leaves = model.metrics(i).leaves;
+  if (leaves > (opts.leafBudget ?? LEAF_ERROR)) return undefined;
+  const diagnostics: Diagnostic[] = [];
+  const used: Used = { images: new Set(), credits: [], creditKeys: new Set() };
+  const units = (a.units ?? "mm") as AssemblyUnits;
+  const ctx: Ctx = { spec, model, opts, stack: [], diagnostics, units };
+  const prep = prepare(ctx, i, used, path);
+  if (prep === undefined) return undefined;
+  const base = (a.rotate ?? 0) as QuarterTurn;
+  const lb = prep.localBounds.size;
+  const mm = unitMm(units);
+  const odd = base === 90 || base === 270;
+  const sizeMm = {
+    x: odd ? lb.y * mm.y : lb.x * mm.x,
+    y: odd ? lb.x * mm.x : lb.y * mm.y,
+    z: lb.z * mm.z,
+  };
+  const asked = opts.adapt?.(sizeMm, units);
+  const turn = ((((base + (asked?.turn ?? opts.turn ?? 0)) % 360) + 360) % 360) as QuarterTurn;
+  const k = asked?.fit;
+  // a uniform factor on true scale: `fit` (tiles of the largest horizontal extent) = k x its true size
+  const extentMm = Math.max(lb.x * mm.x, lb.y * mm.y);
+  const fit =
+    k !== undefined && k !== 1 && k > 0 && Number.isFinite(k) && extentMm > 0
+      ? (k * extentMm) / TILE_MM
+      : undefined;
+  const frameOf = (origin: Vec3): AssemblyFrame =>
+    makeFrame({
+      units,
+      ...(fit === undefined ? {} : { fit }),
+      front: (a.front ?? "+y") as FrontSide,
+      rotate: turn,
+      localBounds: prep.localBounds,
+      ...(fit === undefined ? { trueScale: true } : {}),
+      origin,
+    });
+  const meta = {
+    ...(a.label === undefined ? {} : { label: a.label }),
+    ...(a.closeup === undefined ? {} : { closeup: a.closeup }),
+    ...(a.source === undefined ? {} : { source: a.source }),
+  };
+  const probe = place(prep, frameOf({ x: 0, y: 0, z: 0 }), meta);
+  const extra = opts.reach?.(probe);
+  const reach0 = unionBoxes(
+    extra === undefined ? [probe.restBounds] : [probe.restBounds, extra],
+  ) as Box3;
+  const lift = opts.lift === false ? 0 : belowGroundLift(reach0);
+  const ox = -reach0.origin.x;
+  const oy = -reach0.origin.y;
+  const placed = place(prep, frameOf({ x: ox, y: oy, z: lift }), meta);
+  const assembly: SceneAssembly = {
+    ...placed,
+    ...(a.program === undefined ? {} : { defaultProgram: a.program }),
+    reachBounds: shift(reach0, ox, oy, lift),
+  };
+  return { assembly, index: i, leafCount: prep.leaves.length, diagnostics };
+}
 
 /**
  * Resolves every non-template spec assembly. Assemblies without `pos` stand in a row along +x
