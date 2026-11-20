@@ -42,10 +42,11 @@ import type {
   SceneAssemblyNode,
   Vec3,
 } from "../../contracts/index.js";
-import { CIRCULAR_KINDS, partGeometry } from "../../geometry/parts.js";
+import { CIRCULAR_KINDS, partGeometry, reassignSplit } from "../../geometry/parts.js";
 import { AssemblyModel, LEAF_ERROR, MAX_DEPTH } from "../../schema/assembly-tree.js";
 import type { PlatformCosmoSpec, SpecPart, SpecState } from "../../schema/types.gen.js";
 import { belowGroundLift, frameMap, makeFrame, rnd, unionBoxes, unitMm } from "./frame.js";
+import { toSource } from "./source.js";
 import { classifySiblings, type LBox, type RoleItem } from "./roles.js";
 
 /** Gap between assemblies placed in a row, in tiles (as `DC_GAP` in `scene/index.ts`). */
@@ -309,6 +310,7 @@ function partDraft(
     role: "internal",
   });
 
+  // `size` on a sub-assembly with `parts` is ignored: its box is the union of its children
   if (p.parts !== undefined) {
     if (level < MAX_DEPTH - 1) {
       expandList(ctx, p.parts, `${ptr}/parts`, path, level + 1, off, state, children);
@@ -324,9 +326,12 @@ function partDraft(
     if (usable(ctx, t, level)) {
       const tpl = ctx.model.assemblies[t];
       if (tpl !== undefined) {
+        // the template is expanded in ITS units (inner `use` ratios and default sizes are
+        // relative to them); only the template-to-host ratio is applied below
+        const tctx: Ctx = { ...ctx, units: (tpl.units ?? "mm") as AssemblyUnits };
         ctx.stack.push(t);
         expandList(
-          ctx,
+          tctx,
           tpl.parts,
           `/assemblies/${t}/parts`,
           path,
@@ -450,26 +455,44 @@ function orientGeometry(g: PartGeometry, q: number, unrot: Vec3): PartGeometry {
       ? { rotate: ((((p.rotate ?? 0) / 90 + q) % 4) * 90) as QuarterTurn }
       : {}),
   }));
-  return {
+  const images = turnImages(g.images, q);
+  return reassignSplit({
     ...g,
     primitives,
     bounds: orientBox(g.bounds, q, unrot),
     depthBox: orientBox(g.depthBox, q, unrot),
-  };
+    ...(images === undefined ? {} : { images }),
+  });
+}
+
+/** +x, +y, -x, -y in turn order: a quarter turn moves a face one step. */
+const FACE_CYCLE = ["+x", "+y", "-x", "-y"] as const;
+
+/**
+ * Decal faces follow a turn: `right` (+x) and `left` (+y) move round the cycle; a decal whose
+ * face turns away from the viewer (-x, -y) cannot be drawn and is dropped. Billboards and
+ * `top` are unaffected.
+ */
+function turnImages(images: PartGeometry["images"], q: number): PartGeometry["images"] | undefined {
+  if (images === undefined) return undefined;
+  const out: PartImagePlacement[] = [];
+  for (const im of images) {
+    if (im.face !== "left" && im.face !== "right") {
+      out.push(im);
+      continue;
+    }
+    const at = FACE_CYCLE.indexOf(im.face === "right" ? "+x" : "+y");
+    const to = FACE_CYCLE[(at + q) % 4];
+    if (to === "+x") out.push({ ...im, face: "right" });
+    else if (to === "+y") out.push({ ...im, face: "left" });
+  }
+  return out;
 }
 
 interface Used {
   readonly images: Set<string>;
   readonly credits: AssetSource[];
   readonly creditKeys: Set<string>;
-}
-
-const SOURCE_KEYS = ["document", "page", "figure", "license", "attribution", "url"] as const;
-function toSource(s: SpecPart["source"]): AssetSource | undefined {
-  if (s === undefined) return undefined;
-  const out: Record<string, unknown> = {};
-  for (const k of SOURCE_KEYS) if (s[k] !== undefined) out[k] = s[k];
-  return Object.keys(out).length > 0 ? (out as AssetSource) : undefined;
 }
 
 function credit(used: Used, s: AssetSource | undefined): void {
@@ -756,7 +779,8 @@ const shift = (b: Box3, dx: number, dy: number, dz: number): Box3 => ({
 /**
  * Resolves every non-template spec assembly. Assemblies without `pos` stand in a row along +x
  * starting at `opts.origin`, spaced by their reach footprint (so an exploded unit never lands on
- * a neighbour); `pos` places the rest bounds' minimum x, y.
+ * a neighbour); `pos` places the rest bounds' minimum corner (x, y; the drawn extent including
+ * overhangs such as studs, not the frame origin).
  */
 export function buildAssemblies(
   spec: PlatformCosmoSpec,
@@ -807,10 +831,11 @@ export function buildAssemblies(
       asked === undefined ? [probe.restBounds] : [probe.restBounds, asked],
     ) as Box3;
     const lift = opts.lift === false ? 0 : belowGroundLift(reach0);
-    const dx = reach0.origin.x - probe.restBounds.origin.x;
-    const dy = reach0.origin.y - probe.restBounds.origin.y;
-    const ox = a.pos === undefined ? cx - dx : a.pos.x;
-    const oy = a.pos === undefined ? cy - dy : a.pos.y;
+    // the probe frame sits at the origin, so a frame origin of (ox, oy) moves everything by it:
+    // a row places the reach footprint's min corner at the cursor, `pos` the REST bounds' one
+    // (which can differ from the frame origin when a pack shape's bounds start below its box)
+    const ox = a.pos === undefined ? cx - reach0.origin.x : a.pos.x - probe.restBounds.origin.x;
+    const oy = a.pos === undefined ? cy - reach0.origin.y : a.pos.y - probe.restBounds.origin.y;
 
     const placed = place(prep, frameOf({ x: ox, y: oy, z: lift }), meta);
     const reach = shift(reach0, ox, oy, lift);

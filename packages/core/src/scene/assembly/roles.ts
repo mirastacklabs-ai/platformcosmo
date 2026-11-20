@@ -157,6 +157,8 @@ interface Neighbour {
   /** Index of the neighbour in `items`. */
   readonly j: number;
   readonly area: number;
+  /** Face contact (not just containment). */
+  readonly contact: boolean;
 }
 
 /** Neighbours of item `i` by (area desc, spec index): face contact, or `i` buried in `j`. */
@@ -166,12 +168,54 @@ function neighboursOf(items: readonly RoleItem[], i: number): Neighbour[] {
   items.forEach((other, j) => {
     if (j === i) return;
     const area = contactArea(a.box, other.box);
-    if (area > 0) out.push({ j, area });
+    if (area > 0) out.push({ j, area, contact: true });
     else if (inside(a.box, other.box) && volume(other.box) > volume(a.box) + EPS) {
-      out.push({ j, area: largestFace(a.box) });
+      out.push({ j, area: largestFace(a.box), contact: false });
     }
   });
   return out.sort((p, q) => q.area - p.area || p.j - q.j);
+}
+
+/** Is the point just outside face (`u`, `side`) over a footprint probe of `p` inside another member? */
+function coveredBeyond(
+  items: readonly RoleItem[],
+  members: readonly number[],
+  m: number,
+  i: number,
+  pl: readonly number[],
+  ph: readonly number[],
+  u: number,
+  plane: number,
+  side: 0 | 1,
+): boolean {
+  const v = [0, 1, 2].filter((k) => k !== u) as [number, number];
+  const probes: [number, number][] = [
+    [(pl[v[0]]! + ph[v[0]]!) / 2, (pl[v[1]]! + ph[v[1]]!) / 2],
+    [pl[v[0]]!, pl[v[1]]!],
+    [pl[v[0]]!, ph[v[1]]!],
+    [ph[v[0]]!, pl[v[1]]!],
+    [ph[v[0]]!, ph[v[1]]!],
+  ];
+  const beyond = plane + (side === 0 ? -1 : 1) * 4 * EPS;
+  return members.some((o) => {
+    if (o === m || o === i) return false;
+    const c = lo((items[o] as RoleItem).box);
+    const h = hi((items[o] as RoleItem).box);
+    return probes.some(([a, b]) => {
+      const pt = [0, 0, 0];
+      pt[u] = beyond;
+      pt[v[0]] = a;
+      pt[v[1]] = b;
+      return (
+        pt[0]! >= c[0]! - EPS &&
+        pt[0]! <= h[0]! + EPS &&
+        pt[1]! >= c[1]! - EPS &&
+        pt[1]! <= h[1]! + EPS &&
+        pt[2]! >= c[2]! - EPS &&
+        pt[2]! <= h[2]! + EPS
+      );
+    });
+  });
 }
 
 /** The solid block faces a leaf crosses: `(block member, axis, side)`; used for `inserts`. */
@@ -203,28 +247,13 @@ function crossingInsert(
             if (pl[v]! < bl[v]! - EPS || ph[v]! > bh[v]! + EPS) within = false;
           }
           if (!within) continue;
-          // the face is exterior: no other member of the block lies just beyond it
-          const probe: [number, number, number] = [
-            (pl[0]! + ph[0]!) / 2,
-            (pl[1]! + ph[1]!) / 2,
-            (pl[2]! + ph[2]!) / 2,
-          ];
-          probe[u] = plane + (side === 0 ? -1 : 1) * 4 * EPS;
-          const covered = members.some((o) => {
-            if (o === m || o === i) return false;
-            const c = (items[o] as RoleItem).box;
-            return (
-              probe[0] >= c.x0 &&
-              probe[0] <= c.x1 &&
-              probe[1] >= c.y0 &&
-              probe[1] <= c.y1 &&
-              probe[2] >= c.z0 &&
-              probe[2] <= c.z1
-            );
-          });
+          // the face is exterior: no other member lies just beyond it, at the footprint's
+          // centre or any of its corners
+          const covered = coveredBeyond(items, members, m, i, pl, ph, u, plane, side);
           if (covered) continue;
           crossings++;
           found.add(m);
+          if (crossings > 1) return undefined; // not exactly one: stop scanning
         }
       }
     }
@@ -286,7 +315,7 @@ export function classifySiblings(items: readonly RoleItem[]): Map<string, RoleRe
     ? items.map((_, i) => neighboursOf(items, i))
     : items.map(() => []);
 
-  // typed-away classes never become the body
+  // role words by type or shape; only fasteners and cables are never the body (a shell is)
   const typed = (it: RoleItem): PartRole | undefined => {
     const w = words(it);
     if (any(w, FASTENER)) return "fastener";
@@ -295,6 +324,10 @@ export function classifySiblings(items: readonly RoleItem[]): Map<string, RoleRe
     if (any(w, SHELL)) return "shell";
     if (any(w, COVER)) return "cover";
     return undefined;
+  };
+  const neverBody = (it: RoleItem): boolean => {
+    const t = typed(it);
+    return t === "fastener" || t === "cable";
   };
 
   // body: explicit, else the most-mated-with candidate, else the largest
@@ -312,7 +345,7 @@ export function classifySiblings(items: readonly RoleItem[]): Map<string, RoleRe
       }
     let best = -1;
     items.forEach((it, i) => {
-      if (it.role !== undefined || typed(it) !== undefined) return;
+      if (it.role !== undefined || neverBody(it)) return;
       if (
         best < 0 ||
         (incoming[i] as number) > (incoming[best] as number) ||
@@ -346,11 +379,11 @@ export function classifySiblings(items: readonly RoleItem[]): Map<string, RoleRe
       } else role = "internal";
     }
 
-    // mates: explicit, else the body when in contact, else the best neighbour
+    // mates: explicit, else the body when in face contact, else the best neighbour
     let mates = it.mates;
     if (mates === undefined && infer && i !== body) {
       const list = nb[i] as Neighbour[];
-      const hit = list.find((n) => n.j === body) ?? list[0];
+      const hit = list.find((n) => n.j === body && n.contact) ?? list[0];
       if (hit !== undefined) {
         // mutual best partners: only the smaller one mates (a lid on a tray, not the reverse)
         const other = (nb[hit.j] as Neighbour[])[0];

@@ -8,7 +8,14 @@ import type {
   SceneAssemblyNode,
 } from "../src/index.js";
 import { buildScene } from "../src/index.js";
-import { STUD_DIAMETER, STUD_HEIGHT, studGrid } from "../src/geometry/parts.js";
+import {
+  STUD_DIAMETER,
+  STUD_HEIGHT,
+  halfOf,
+  partGeometry,
+  reassignSplit,
+  studGrid,
+} from "../src/geometry/parts.js";
 import {
   ASSEMBLY_GAP,
   assemblyFocusTargets,
@@ -216,6 +223,45 @@ describe("expansion: count, pitch, use", () => {
       }
     }
     expect(checked).toBeGreaterThanOrEqual(4);
+  });
+
+  test("a use cycle: ids equal the validation tree's for the assembly that reaches it", () => {
+    // the validation tree caches under a cycle in first-entered order, so compare the entry
+    // assembly `a` (built first there) and the cycle member `x` reached through it
+    const s = spec({
+      assemblies: [
+        {
+          id: "a",
+          units: "tile",
+          parts: [
+            { id: "e", use: "x" },
+            { id: "own", size: [1, 1, 1] },
+          ],
+        },
+        {
+          id: "x",
+          units: "tile",
+          parts: [
+            { id: "u", use: "y" },
+            { id: "k", size: [1, 1, 1] },
+          ],
+        },
+        { id: "y", units: "tile", parts: [{ id: "u", use: "x", count: 2 }] },
+      ],
+    });
+    const model = new AssemblyModel(s);
+    const built = buildAssemblies(s);
+    expect(built.assemblies.map((a) => a.id)).toEqual(["a", "x", "y"]);
+    for (const id of ["a", "x"]) {
+      const asm = built.assemblies.find((x) => x.id === id) as SceneAssembly;
+      const expected = model.flat(model.root(id)!).map((f) => `${id}/${f.path}`);
+      expect(
+        assemblyNodes(asm)
+          .slice(1)
+          .map((n) => n.path),
+        id,
+      ).toEqual(expected);
+    }
   });
 
   test("every design-example assembly builds cleanly with finite boxes inside its bounds", () => {
@@ -562,7 +608,7 @@ describe("roles, mates and inserts inference", () => {
     ]);
     expect(node(a, "a/lid").mates).toBe("a/tray");
     expect(node(a, "a/lid").role).toBe("cover");
-    expect(node(a, "a/tray").role).toBe("shell");
+    expect(node(a, "a/tray").role).toBe("body"); // a shell may be the body
     expect(node(a, "a/tray").mates).toBeUndefined(); // the larger partner does not mate back
     expect(node(a, "a/lid").inserts).toBeUndefined();
   });
@@ -703,6 +749,8 @@ describe("roles, mates and inserts inference", () => {
 // ------------------------------------------------------------------------- below ground, bounds
 
 describe("below-ground lift and bounds", () => {
+  // TODO(A2-3): replace this synthetic pan drop with the real swept boxes of the engine's
+  // programs (`opts.reach` from the step plan) once the explode programs exist.
   const dropPan = (asm: SceneAssembly): Box3 => {
     const pan = node(asm, "engine/oil-pan").world;
     return {
@@ -712,7 +760,7 @@ describe("below-ground lift and bounds", () => {
   };
   const engineOnly = (): PlatformCosmoSpec => spec({ assemblies: [engineAssembly()] });
 
-  test("the engine example is lifted so its reach bounds start at z = 0", () => {
+  test("the engine example is lifted so its reach bounds start at z = 0 (synthetic reach)", () => {
     const plain = buildAssemblies(engineOnly()).assemblies[0] as SceneAssembly;
     expect(plain.restBounds.origin.z).toBe(0);
     expect(plain.frame.origin.z).toBe(0);
@@ -973,5 +1021,275 @@ describe("scene wiring (schema 1.2.0 only)", () => {
       "plan",
     ]);
     expect(alone.assemblies).toEqual(a.assemblies);
+  });
+});
+
+// ------------------------------------------------------------------- review round (PR #79)
+
+const shapeDef = (over: Partial<PartShapeDef> & Pick<PartShapeDef, "build">): PartShapeDef => ({
+  id: "s",
+  label: "S",
+  type: "s",
+  defaultSize: { x: 1, y: 1, z: 1 },
+  defaultUnits: "tile",
+  defaults: {},
+  readParams: () => ({ params: {}, diagnostics: [] }),
+  ...over,
+});
+const registryOf = (def: PartShapeDef): PartShapeRegistry => ({
+  get: (r) => (r === "t:s" ? def : undefined),
+  list: () => ["t:s"],
+});
+const boxGeometry = (size: { x: number; y: number; z: number }) => ({
+  primitives: [],
+  bounds: { origin: { x: 0, y: 0, z: 0 }, size },
+  depthBox: { origin: { x: 0, y: 0, z: 0 }, size },
+  solid: true,
+});
+
+describe("templates expand in their own units (no double conversion)", () => {
+  test("nested mixed-unit use: cm host, mm template, mm template", () => {
+    const r = asms([
+      { id: "t2", template: true, units: "mm", parts: [{ id: "p", size: [100, 50, 20] }] },
+      { id: "t1", template: true, units: "mm", parts: [{ id: "i", use: "t2", at: [10, 0, 0] }] },
+      { id: "h", units: "cm", parts: [{ id: "x", use: "t1" }] },
+    ]);
+    const h = r.assemblies[0] as SceneAssembly;
+    expect(s3(node(h, "h/x/i/p").local)).toEqual([10, 5, 2]);
+    expect(o3(node(h, "h/x/i/p").local)).toEqual([0, 0, 0]);
+    expect(s3(node(h, "h/x").local)).toEqual([10, 5, 2]);
+  });
+
+  test("nested mixed-unit use: mm host, cm template, mm template", () => {
+    const r = asms([
+      { id: "t2", template: true, units: "mm", parts: [{ id: "p", size: [100, 50, 20] }] },
+      { id: "t1", template: true, units: "cm", parts: [{ id: "i", use: "t2" }] },
+      { id: "h", units: "mm", parts: [{ id: "x", use: "t1" }] },
+    ]);
+    expect(s3(node(r.assemblies[0] as SceneAssembly, "h/x/i/p").local)).toEqual([100, 50, 20]);
+  });
+
+  test("a default-size pack leaf inside a template in a cm host", () => {
+    const def = shapeDef({
+      defaultSize: { x: 100, y: 50, z: 20 },
+      defaultUnits: "mm",
+      build: (_p, ctx) => boxGeometry(ctx.size),
+    });
+    const r = asms(
+      [
+        { id: "t", template: true, units: "mm", parts: [{ id: "p", shape: "t:s" }] },
+        { id: "h", units: "cm", parts: [{ id: "x", use: "t" }] },
+      ],
+      { parts: registryOf(def) },
+    );
+    const h = r.assemblies[0] as SceneAssembly;
+    expect(s3(node(h, "h/x/p").local)).toEqual([10, 5, 2]);
+    expect(s3(node(h, "h/x/p").geometry!.bounds)).toEqual([10, 5, 2]);
+  });
+});
+
+describe("turned pack geometry", () => {
+  const tray = shapeDef({
+    build: (_p, ctx) => partGeometry({ kind: "tray", size: ctx.size, tone: "base" }),
+  });
+  const halves = (q: number) => {
+    const a = one(
+      [{ id: "t", shape: "t:s", size: [8, 4, 2], rotate: q }],
+      {},
+      { parts: registryOf(tray) },
+    );
+    const g = node(a, "a/t").geometry!;
+    const out: Record<string, string | undefined> = {};
+    for (const p of g.primitives) out[p.id.replace("main.", "")] = halfOf(g, p.id);
+    return { out, g };
+  };
+
+  test.each([
+    [
+      0,
+      {
+        floor: "back",
+        "wall-nx": "back",
+        "wall-ny": "back",
+        "wall-px": "front",
+        "wall-py": "front",
+      },
+    ],
+    [
+      90,
+      {
+        floor: "back",
+        "wall-nx": "back",
+        "wall-ny": "front",
+        "wall-px": "front",
+        "wall-py": "back",
+      },
+    ],
+    [
+      180,
+      {
+        floor: "back",
+        "wall-nx": "front",
+        "wall-ny": "front",
+        "wall-px": "back",
+        "wall-py": "back",
+      },
+    ],
+    [
+      270,
+      {
+        floor: "back",
+        "wall-nx": "front",
+        "wall-ny": "back",
+        "wall-px": "back",
+        "wall-py": "front",
+      },
+    ],
+  ])("a pack tray turned %i keeps back = floor + -x/-y walls", (q, expected) => {
+    const { out, g } = halves(q);
+    expect(out).toEqual(expected);
+    expect([...g.split!.back, ...g.split!.front].sort()).toEqual(
+      g.primitives.map((p) => p.id).sort(),
+    );
+  });
+
+  test("reassignSplit is exported, idempotent, and leaves rings and unsplit parts alone", () => {
+    const { g } = halves(90);
+    expect(reassignSplit(g)).toEqual(g);
+    const ring = partGeometry({ kind: "ring", size: { x: 2, y: 2, z: 1 }, tone: "base" });
+    expect(reassignSplit(ring)).toEqual(ring);
+    const plain = partGeometry({ kind: "box", size: { x: 1, y: 1, z: 1 }, tone: "base" });
+    expect(reassignSplit(plain)).toBe(plain);
+  });
+
+  test("decal faces turn with the geometry; faces turned away are dropped", () => {
+    const img = (face: "left" | "right" | "top") => ({
+      image: "i",
+      face,
+      crop: { x: 0, y: 0, width: 1, height: 1 },
+      fit: "contain" as const,
+    });
+    const def = shapeDef({
+      build: (_p, ctx) => ({
+        ...boxGeometry(ctx.size),
+        images: [img("right"), img("left"), img("top")],
+      }),
+    });
+    const faces = (q: number) =>
+      node(
+        one(
+          [{ id: "p", shape: "t:s", size: [2, 2, 1], rotate: q }],
+          {},
+          { parts: registryOf(def) },
+        ),
+        "a/p",
+      ).geometry!.images!.map((x) => x.face);
+    expect(faces(0)).toEqual(["right", "left", "top"]);
+    expect(faces(90)).toEqual(["left", "top"]);
+    expect(faces(180)).toEqual(["top"]);
+    expect(faces(270)).toEqual(["right", "top"]);
+  });
+});
+
+describe("body choice and placement reference", () => {
+  test("a shell may be the body: tray + board + CPU", () => {
+    const a = one([
+      { id: "board", type: "board", at: [5, 5, 2], size: [90, 50, 2] },
+      { id: "cpu", type: "cpu", at: [40, 20, 4], size: [10, 10, 3] },
+      { id: "chassis", shape: "tray", at: [0, 0, 0], size: [100, 60, 20] },
+    ]);
+    expect(node(a, "a/chassis").role).toBe("body");
+    expect(node(a, "a/board").role).toBe("internal");
+    expect(node(a, "a/cpu").role).toBe("internal");
+    expect(node(a, "a/board").mates).toBe("a/chassis");
+    expect(node(a, "a/cpu").mates).toBe("a/board");
+  });
+
+  test("only fasteners and cables: there is no body", () => {
+    const a = one([
+      { id: "b1", type: "bolt", size: [1, 1, 1] },
+      { id: "w", type: "cable", at: [5, 0, 0], size: [1, 1, 1] },
+    ]);
+    expect(node(a, "a/b1").role).toBe("fastener");
+    expect(node(a, "a/w").role).toBe("cable");
+  });
+
+  test("pos places the REST bounds' min corner even when a shape's bounds start below its box", () => {
+    const def = shapeDef({
+      build: (_p, ctx) => ({
+        primitives: [],
+        bounds: {
+          origin: { x: -1, y: -1, z: 0 },
+          size: { x: ctx.size.x + 2, y: ctx.size.y + 2, z: ctx.size.z },
+        },
+        depthBox: { origin: { x: 0, y: 0, z: 0 }, size: ctx.size },
+        solid: true,
+      }),
+    });
+    const part = [{ id: "p", shape: "t:s", size: [2, 2, 1] }];
+    const r = asms(
+      [
+        { id: "a", units: "tile", parts: part },
+        { id: "b", units: "tile", parts: part },
+        { id: "c", units: "tile", parts: part, pos: { x: 10, y: 5 } },
+      ],
+      { parts: registryOf(def), origin: { x: 0, y: 0 } },
+    );
+    const at = (id: string) => (r.assemblies.find((x) => x.id === id) as SceneAssembly).restBounds;
+    expect(o3(at("a"))).toEqual([0, 0, 0]); // the row starts at the cursor, overhang included
+    expect(s3(at("a"))).toEqual([4, 4, 1]);
+    expect(o3(at("b"))).toEqual([4 + ASSEMBLY_GAP, 0, 0]);
+    expect(o3(at("c"))).toEqual([10, 5, 0]);
+  });
+});
+
+describe("insert scan bounds and exterior-face probes", () => {
+  const cell = (path: string, x: number, y: number, z: number): RoleItem => ({
+    path,
+    kind: "leaf",
+    solid: true,
+    box: { x0: x, y0: y, z0: z, x1: x + 1, y1: y + 1, z1: z + 1 },
+  });
+
+  test("the worst case at the inference cap stays fast", () => {
+    // one block of 300 touching cells plus 100 long spikes that cross many of their planes
+    const items: RoleItem[] = [];
+    for (let k = 0; k < 300; k++) items.push(cell(`c${k}`, k % 20, Math.floor(k / 20), 0));
+    for (let k = 0; k < 100; k++) {
+      items.push({
+        path: `s${k}`,
+        kind: "leaf",
+        solid: true,
+        box: { x0: (k % 20) + 0.25, y0: 0.25, z0: -3, x1: (k % 20) + 0.75, y1: 14.75, z1: 4 },
+      });
+    }
+    const t0 = Date.now();
+    const res = classifySiblings(items);
+    expect(Date.now() - t0).toBeLessThan(1500);
+    expect(res.size).toBe(400);
+  });
+
+  test("a face partly covered at a footprint corner is not an entry face", () => {
+    const casting = {
+      path: "c",
+      kind: "leaf" as const,
+      solid: true,
+      box: { x0: 0, y0: 0, z0: 0, x1: 10, y1: 10, z1: 10 },
+    };
+    const cover = {
+      path: "v",
+      kind: "leaf" as const,
+      solid: true,
+      box: { x0: 0, y0: 0, z0: 10, x1: 3, y1: 3, z1: 14 },
+    };
+    const valve = {
+      path: "p",
+      kind: "leaf" as const,
+      solid: true,
+      box: { x0: 2, y0: 2, z0: 8, x1: 8, y1: 8, z1: 14 },
+    };
+    expect(classifySiblings([casting, cover, valve]).get("p")?.inserts).toBeUndefined();
+    // the same valve with the cover away is inserted
+    expect(classifySiblings([casting, valve]).get("p")?.inserts).toBe("c");
   });
 });
