@@ -68,7 +68,7 @@ export const mirrorBezier = ([x1, y1, x2, y2]: Bezier): Bezier => [
  * Keyword of the time-reversed curve. `ease` has no keyword counterpart: it keeps its name and
  * the mirrored `bezier` (0.75, 0, 0.75, 0.9) is the authoritative curve of a reversed move.
  */
-const REVERSED_EASING: Readonly<Record<SpecEasing, SpecEasing>> = {
+export const REVERSED_EASING: Readonly<Record<SpecEasing, SpecEasing>> = {
   linear: "linear",
   ease: "ease",
   "ease-in": "ease-out",
@@ -514,6 +514,23 @@ export interface PlanOptions {
   /** Phases still gated by the merge guard. Non-figure targets of a gated phase are reported
    * as `assembly/unknown-target` once `phase1a` is lifted (tracks §0). */
   readonly gated?: Readonly<Record<RootPhase, boolean>>;
+  /**
+   * Actions on non-figure targets (assemblies, A2-3) planned by another track: `foreign(step,
+   * action)` (0-based indices into `steps[].assembly`) returns what the action needs, or
+   * undefined when the action is not theirs. Such actions share the step's cursor, motion
+   * window and compression with the figure actions, so one window computation serves both.
+   * Must be pure: the plan may be made twice (loop closure).
+   */
+  readonly foreign?: (step: number, action: number) => ForeignAction | undefined;
+  /** The last step ends away from the base pose for a reason other than a figure (§7.4). */
+  readonly closeLoop?: boolean;
+}
+
+/** One action planned by another track: `start` and `length` are filled in by the step. */
+export interface ForeignAction {
+  /** Seconds the action plays at speed 1, uncompressed. */
+  readonly natural: number;
+  readonly action: ResolvedAction;
 }
 
 const KEYS = ["explode", "implode", "build", "unbuild"] as const;
@@ -536,6 +553,8 @@ export function planFigureSteps(
   // Levels do not depend on the windows, so a first pass tells whether the loop must close
   // (the last step ends away from the base pose, §7.4); if so the last step reserves its
   // closing window and the plan is made again with it (compression and suggestions agree).
+  // `opts.closeLoop` (A2-3: an assembly ends away from its base pose) forces the closing window.
+  if (opts.closeLoop === true) return planPass(spec, figures, views, opts, true);
   const first = planPass(spec, figures, views, opts, false);
   return closesLoop(figures.values(), first.plan)
     ? planPass(spec, figures, views, opts, true)
@@ -611,6 +630,13 @@ function planPass(
       const target = (a as unknown as Record<string, string>)[kind] as string;
       const root = target.split("/")[0] as string;
       const fig = figures.get(root);
+      const foreign = fig === undefined ? opts.foreign?.(si, ai) : undefined;
+      if (foreign !== undefined) {
+        const start = (a as { start?: number }).start ?? cursor;
+        cursor = r4(start + foreign.natural);
+        planned.push({ natural: foreign.natural, action: { ...foreign.action, start } });
+        return;
+      }
       if (fig === undefined) {
         // A non-figure target. While its phase is gated the guard already rejects it; after
         // phase1a lifts it must not resolve here (tracks §0), so report it unknown.
@@ -774,6 +800,9 @@ function planPass(
       start: Math.floor(action.start * scale * 10000) / 10000,
       length: Math.floor(natural * scale * 10000) / 10000,
       scale,
+      ...(action.accessLength === undefined
+        ? {}
+        : { accessLength: Math.floor(action.accessLength * scale * 10000) / 10000 }),
     }));
     const poses: Record<string, readonly ProgramLevel[]> = {};
     for (const id of sortedFigs)
