@@ -144,6 +144,12 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/parts-base:
+    dependencies:
+      '@platformcosmo/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/themes:
     dependencies:
       '@platformcosmo/core':

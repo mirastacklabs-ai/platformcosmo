@@ -6,10 +6,11 @@
  * duplicate and twice-moved parts), and explode/implode actions on figures with their timing.
  * Every diagnostic has a path, and a did-you-mean where an id or selector is involved.
  *
- * The merge guard (`unsupported.ts`) keeps rejecting `images`/`figures` until R-1 lifts
- * `phase1a`; these checks run alongside it. Once `phase1a` is lifted they also report
- * `assembly/unknown-target` for actions whose target is not a figure while the guard still
- * gates that target's phase (tracks §0), so a Phase 1a build never resolves such a target.
+ * R-1 lifted `phase1a` in the merge guard (`unsupported.ts`): `images`, `figures` and figure
+ * actions render. These checks run alongside the guard, and, now that `phase1a` is lifted,
+ * also report `assembly/unknown-target` for actions whose target is not a figure while the
+ * guard still gates that target's phase (tracks §0), so a Phase 1a build never resolves such
+ * a target. Figure ids are camera focus targets.
  */
 import type { DcPack, Diagnostic, PartShapeDef, PartShapeRegistry } from "../contracts/index.js";
 import { planFigureSteps, resolveFigure, stepViews, type ResolvedFigure } from "../scene/boards.js";
