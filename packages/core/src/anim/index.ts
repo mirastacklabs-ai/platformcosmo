@@ -14,6 +14,14 @@ import type {
   SvgElement,
 } from "../contracts/index.js";
 import { boardsOf } from "../render/boards/types.js";
+import {
+  assemblyFrame,
+  assemblyLoop,
+  assemblyOf,
+  assemblySettled,
+  assemblyStepEnd,
+  hasAssemblyMotion,
+} from "./assembly.js";
 import { boardsFrame, boardsLoop, boardsStepEnd, hasBoardMotion } from "./boards.js";
 import { Keyframes, el, stopsFor, t4 } from "./css.js";
 import { controlCss, controlIds, controlNodes, interactiveScript } from "./interactive.js";
@@ -170,6 +178,14 @@ function compact<T>(items: readonly (T | undefined)[]): T[] {
   return items.filter((x): x is T => x !== undefined);
 }
 
+type Attrs = NonNullable<AnimationLayer["attrs"]>;
+
+/** Boards and assemblies write disjoint ids; undefined when neither has attributes. */
+function mergeAttrs(...parts: readonly (Attrs | undefined)[]): Attrs | undefined {
+  const present = parts.filter((p): p is Attrs => p !== undefined);
+  return present.length === 0 ? undefined : Object.assign({}, ...present);
+}
+
 function join(...parts: readonly string[]): string {
   return parts.filter((p) => p !== "").join("\n");
 }
@@ -197,7 +213,11 @@ function frameLayer(
   );
   // Figure boards: the exact pose and fades at this time, as attributes (no CSS in frames).
   const bm = boardsOf(model);
-  const attrs = bm ? boardsFrame(bm.tracks(speed), t, speed) : undefined;
+  // Assembly wrappers: the same, from the assembly tracks (full state of every wrapper).
+  const attrs = mergeAttrs(
+    bm ? boardsFrame(bm.tracks(speed), t, speed) : undefined,
+    assemblyFrame(assemblyOf(model), speed, t),
+  );
   return {
     css: join(colors.css(), staticStepCss(model, k)),
     defs: [],
@@ -237,7 +257,12 @@ function stepLayer(
       : "";
   // Figure boards: the pose at the end of the step (its closing hold), as attributes.
   const bm = boardsOf(model);
-  const attrs = bm && count > 0 ? boardsStepEnd(bm.tracks(speed), k + 1) : undefined;
+  const am = assemblyOf(model);
+  const attrs = mergeAttrs(
+    bm && count > 0 ? boardsStepEnd(bm.tracks(speed), k + 1) : undefined,
+    // Assembly wrappers: the end pose of the step; the rest frame without steps.
+    count > 0 ? assemblyStepEnd(am, speed, k + 1) : assemblyFrame(am, speed, 0),
+  );
   return {
     css: join(
       colors.css(),
@@ -295,7 +320,12 @@ function loopLayer(
   const bm = boardsOf(model);
   const bt = bm?.tracks(speed);
   const boardCss = hasBoardMotion(bt) ? boardsLoop(bt, ids, kf, total) : undefined;
-  const poseMotion = boardCss !== undefined && boardCss.rules.length > 0;
+  // Assembly wrappers: transform, visibility and opacity tracks (CSS in both motion modes, D32).
+  const am = assemblyOf(model);
+  const asmCss = hasAssemblyMotion(am) ? assemblyLoop(am, speed, ids, kf, total) : undefined;
+  const poseMotion =
+    (boardCss !== undefined && boardCss.rules.length > 0) ||
+    (asmCss !== undefined && asmCss.rules.length > 0);
   const flowGroups: SvgElement[] = [];
   const particleRules: string[] = [];
   for (const { flow, steps } of flowById.values()) {
@@ -375,6 +405,7 @@ function loopLayer(
   // Everything in the overlay layer (caption box, metric tiles, legend, interactive controls) sits
   // inside the camera group, so it gets the inverse transform on the same curve to stay put.
   if (boardCss) rules.push(...boardCss.rules);
+  if (asmCss) rules.push(...asmCss.rules);
   const zooms = tl.map((s) => zoomFor(model, s));
   const cam = ids.sel(ids.camera());
   const pinned = [
@@ -404,7 +435,7 @@ function loopLayer(
   // tween) and keep their step-end captions, states and metrics (§12).
   const root = ids.sel(ids.root());
   const motionOff = poseMotion
-    ? [...(boardCss as { reduced: readonly string[] }).reduced, ...reduced]
+    ? [...(boardCss?.reduced ?? []), ...(asmCss?.reduced ?? []), ...reduced]
     : [`${root} *{animation:none!important}`, ...reduced];
   if (flowGroups.length > 0) {
     motionOff.push(`${ids.sel(particlesId(ids.prefix))}{display:none}`);
@@ -425,8 +456,12 @@ function loopLayer(
     controlCssText = controlCss(ids.prefix);
     // Step pauses at the settled time of steps that have actions (§7.5), else at the start.
     const targets = win.starts.map((s, i) => {
-      const settled = bt?.settled[i];
-      if (settled !== undefined) return settled / speed;
+      // Both settled times are loop seconds; the later one is when everything has landed.
+      const fig = bt?.settled[i];
+      const asm = assemblySettled(am, speed, i);
+      if (fig !== undefined || asm !== undefined) {
+        return Math.max(fig !== undefined ? fig / speed : 0, asm ?? 0);
+      }
       return i === 0 && zooms[0] ? transitionSeconds(win.durations[0] ?? 0) : s;
     });
     script = interactiveScript(

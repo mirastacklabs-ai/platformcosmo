@@ -1,0 +1,681 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { describe, expect, test } from "vitest";
+import {
+  buildModel,
+  buildScene,
+  createAnimator,
+  emit,
+  type AnimationLayer,
+  type AssemblyFrameState,
+  type PlatformCosmoSpec,
+  type RenderModel,
+} from "../../src/index.js";
+import type { AssemblyRenderModel } from "../../src/contracts/index.js";
+import {
+  MAX_KEYS,
+  MAX_PROPS,
+  assemblyAnim,
+  assemblyFrame,
+  assemblyLoop,
+  assemblySettled,
+} from "../../src/anim/assembly.js";
+import { Keyframes } from "../../src/anim/css.js";
+import { fixtureTheme } from "../fixtures/theme.js";
+import { realPng, resolverOf } from "../figure-fixtures.js";
+import { buildFixture } from "./fixtures/render-model.js";
+
+// B-1: the assembly animator (docs/design/assemblies.md §7.5, §9.4, §12; tracks doc B-1).
+
+type Obj = Record<string, unknown>;
+const examples = (): Obj[] => {
+  const md = readFileSync(
+    new URL("../../../../docs/design/assemblies.md", import.meta.url),
+    "utf8",
+  );
+  return [...md.matchAll(/```json\n([\s\S]*?)```/g)]
+    .map((m) => JSON.parse(m[1] as string) as Obj)
+    .filter((s) => typeof s.meta === "object");
+};
+const example = (prefix: string): PlatformCosmoSpec =>
+  structuredClone(
+    examples().find((s) => (s.meta as { title: string }).title.startsWith(prefix)),
+  ) as unknown as PlatformCosmoSpec;
+
+function build(spec: PlatformCosmoSpec): RenderModel {
+  const imgs = resolverOf({ "gpu-photo": realPng(640, 240, (x, y) => [x % 256, y, 120, 255]) });
+  const scene = buildScene(spec, { images: imgs });
+  return buildModel({
+    scene,
+    theme: fixtureTheme(),
+    font: "system",
+    prefix: "pc-t",
+    spec,
+    images: imgs,
+  });
+}
+const A = (m: RenderModel): AssemblyRenderModel => m.assembly as AssemblyRenderModel;
+const animate = (m: RenderModel, o: Parameters<ReturnType<typeof createAnimator>["animate"]>[1]) =>
+  createAnimator().animate(m, o);
+const svgOf = (m: RenderModel, l: AnimationLayer, raster = false): string =>
+  emit(m, l, { font: "system", ...(raster ? { target: "raster" as const } : {}) });
+const sha = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 16);
+
+const engine = (): PlatformCosmoSpec => example("Inline-4");
+const gpu = (): PlatformCosmoSpec => example("2U GPU");
+/** The engine without its closing implode: it ends exploded, so the loop closure plays. */
+const engineClosing = (): PlatformCosmoSpec => {
+  const s = engine() as unknown as { steps: unknown[] };
+  s.steps.pop();
+  return s as unknown as PlatformCosmoSpec;
+};
+/** Assemblies but no assembly actions anywhere. */
+const noActions = (): PlatformCosmoSpec => {
+  const s = engine() as unknown as { steps: Obj[] };
+  for (const st of s.steps) delete st.assembly;
+  return s as unknown as PlatformCosmoSpec;
+};
+
+// ---------------------------------------------------------------------------------------------
+// An independent CSS animation evaluator: reads only the emitted text.
+// ---------------------------------------------------------------------------------------------
+
+type Stop = { p: number; decl: string; tf: string };
+function parseKeyframes(css: string): Map<string, Stop[]> {
+  const out = new Map<string, Stop[]>();
+  for (const m of css.matchAll(/@keyframes (\S+?)\{((?:[\d.]+%\{[^}]*\})+)\}/g)) {
+    const stops = [...(m[2] as string).matchAll(/([\d.]+)%\{([^}]*)\}/g)].map((s) => {
+      const decl = (s[2] as string)
+        .split(";")
+        .filter((d) => !d.startsWith("animation-timing-function"));
+      const tf = /animation-timing-function:([^;]*)/.exec(s[2] as string)?.[1] ?? "";
+      return { p: Number(s[1]) / 100, decl: decl.join(";"), tf };
+    });
+    out.set(m[1] as string, stops);
+  }
+  return out;
+}
+interface Anim {
+  name: string;
+  dur: number;
+  tf: string;
+}
+/** Ids of assembly wrappers (host, motion, visible, fade, label), not captions. */
+const isWrapper = (id: string): boolean => /^pc-t-p[hmvfl]_/.test(id);
+/** id -> its animations, from `sel,sel{animation:a 9s linear infinite,b 9s step-end infinite}`. */
+function parseRules(css: string): Map<string, Anim[]> {
+  const out = new Map<string, Anim[]>();
+  for (const m of css.matchAll(/^([^{}@\n]+)\{animation:([^};]+)\}$/gm)) {
+    const anims = (m[2] as string).split(",").map((one): Anim => {
+      const [name, dur, tf] = one.split(" ") as [string, string, string];
+      return { name, dur: Number(dur.replace("s", "")), tf };
+    });
+    for (const sel of (m[1] as string).split(",")) {
+      if (!sel.startsWith("#")) continue;
+      const id = sel.slice(1).replace(/\\(.)/g, "$1");
+      if (!isWrapper(id)) continue;
+      out.set(id, [...(out.get(id) ?? []), ...anims]);
+    }
+  }
+  return out;
+}
+function bezier(tf: string, x: number): number {
+  if (tf === "linear" || tf === "") return x;
+  if (tf === "step-end") return x < 1 ? 0 : 1;
+  const named: Record<string, string> = {
+    ease: "0.25,0.1,0.25,1",
+    "ease-in": "0.42,0,1,1",
+    "ease-out": "0,0,0.58,1",
+    "ease-in-out": "0.42,0,0.58,1",
+  };
+  const args = named[tf] ?? /cubic-bezier\(([^)]*)\)/.exec(tf)![1]!;
+  const [x1, y1, x2, y2] = args.split(",").map(Number) as [number, number, number, number];
+  const f = (a: number, b: number, u: number) =>
+    3 * a * u * (1 - u) ** 2 + 3 * b * u * u * (1 - u) + u ** 3;
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    if (f(x1, x2, mid) < x) lo = mid;
+    else hi = mid;
+  }
+  return f(y1, y2, (lo + hi) / 2);
+}
+type Value = { transform?: [number, number]; opacity?: number; visibility?: string };
+/** The properties an element has at output time `t`, as a browser would compute them. */
+function cssPose(css: string, rules: Map<string, Anim[]>, id: string, t: number): Value {
+  const kfs = parseKeyframes(css);
+  const out: Value = {};
+  for (const anim of rules.get(id) ?? []) {
+    const stops = kfs.get(anim.name) as Stop[];
+    const u = (((t % anim.dur) + anim.dur) % anim.dur) / anim.dur;
+    let i = 0;
+    while (i < stops.length - 1 && u >= (stops[i + 1] as Stop).p) i++;
+    const a = stops[i] as Stop;
+    const b = stops[i + 1];
+    const nums = (s: Stop) => (s.decl.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+    if (a.decl.startsWith("visibility:")) {
+      out.visibility = a.decl.slice("visibility:".length);
+      continue;
+    }
+    const va = nums(a);
+    const v =
+      b === undefined
+        ? va
+        : va.map(
+            (x, k) =>
+              x + ((nums(b)[k] as number) - x) * bezier(a.tf || anim.tf, (u - a.p) / (b.p - a.p)),
+          );
+    if (a.decl.startsWith("transform:")) out.transform = [v[0] as number, v[1] as number];
+    else out.opacity = v[0] as number;
+  }
+  return out;
+}
+const transformOf = (attr: string | number | undefined): [number, number] => {
+  const m = /translate\((-?[\d.]+) (-?[\d.]+)\)/.exec(String(attr));
+  return [Number(m?.[1]), Number(m?.[2])];
+};
+/** Splits the layer's CSS: the `@media (prefers-reduced-motion)` body, and the rest. */
+function splitReduced(css: string): { live: string; reduced: string } {
+  const m = /@media \(prefers-reduced-motion:reduce\)\{\n([\s\S]*?)\n\}/.exec(css);
+  return { live: m ? css.replace(m[0], "") : css, reduced: m ? (m[1] as string) : "" };
+}
+/** Attribute `name` of the element with `id` in an SVG string. */
+function attrOf(svg: string, id: string, name: string): string | undefined {
+  const tag = new RegExp(`<g id="${id.replace(/[.\\]/g, "\\$&")}"[^>]*>`).exec(svg)?.[0];
+  return tag === undefined ? undefined : new RegExp(` ${name}="([^"]*)"`).exec(tag)?.[1];
+}
+const stripStyle = (svg: string): string => svg.replace(/<style>[\s\S]*?<\/style>/g, "");
+
+/** What frame mode must show for a full frame state, per id and attribute. */
+function expectedAttrs(f: AssemblyFrameState): Record<string, Record<string, string | number>> {
+  const out: Record<string, Record<string, string | number>> = {};
+  for (const [id, t] of Object.entries(f.transforms)) (out[id] ??= {}).transform = t;
+  for (const id of f.hidden) (out[id] ??= {}).visibility = "hidden";
+  for (const id of f.visible) (out[id] ??= {}).visibility = "visible";
+  for (const [id, o] of Object.entries(f.opacity)) (out[id] ??= {}).opacity = o;
+  return out;
+}
+
+const specs: [string, () => PlatformCosmoSpec][] = [
+  ["Inline-4 engine (19.3)", engine],
+  ["2U GPU server (19.2)", gpu],
+];
+
+// ---------------------------------------------------------------------------------------------
+
+describe("keyframes per wrapper property (snapshots)", () => {
+  test.each(specs)("%s", (_n, make) => {
+    const model = build(make());
+    const am = A(model);
+    const css = animate(model, { speed: 1, mode: "loop", motion: "css" }).css;
+    const kfs = parseKeyframes(css);
+    const rules = parseRules(css.replace(/@media[\s\S]*$/, ""));
+    // one @keyframes per distinct track body: equal tracks share
+    expect(kfs.size).toBeLessThan([...rules.values()].flat().length);
+    const bodyOf = (id: string): string[] =>
+      (rules.get(id) ?? []).map(
+        (a) =>
+          `${a.dur}s ${a.tf} ` +
+          (kfs.get(a.name) as Stop[])
+            .map((s) => `${s.p}:${s.decl}${s.tf ? `/${s.tf}` : ""}`)
+            .join(" "),
+      );
+    // a moving part, a copy wrapper, a label: their exact keyframes
+    const pick = [
+      am.tracks.find((t) => t.motion.length > 0 && t.visibility.length === 0),
+      am.tracks.find((t) => t.visibility.length > 0),
+      am.tracks.find((t) => t.opacity.length > 0),
+    ];
+    const ids = [
+      ...pick.flatMap((t) =>
+        t === undefined
+          ? []
+          : [
+              [t.copy, "motion", am.ids.partMotion(t.copy)],
+              [t.copy, "visible", am.ids.partVisible(t.copy)],
+              [t.copy, "fade", am.ids.partFade(t.copy)],
+            ].filter(([, , id]) => rules.has(id as string)),
+      ),
+      ...am.labelTracks.slice(0, 1).map((l) => [l.id, "label", l.id]),
+    ];
+    expect({
+      loopSeconds: am.loop,
+      keyframes: kfs.size,
+      animatedIds: rules.size,
+      sha: sha(css),
+      samples: ids.map(([copy, kind, id]) => ({ copy, kind, kf: bodyOf(id as string) })),
+    }).toMatchSnapshot();
+  });
+});
+
+describe("no SMIL from the assembly layer", () => {
+  test.each(specs)("%s: zero SMIL in css mode, and none in smil mode either (D32)", (_n, make) => {
+    const model = build(make());
+    for (const motion of ["css", "smil"] as const) {
+      for (const mode of ["loop", "interactive"] as const) {
+        const svg = svgOf(model, animate(model, { speed: 1, mode, motion }));
+        expect(svg, `${mode}/${motion}`).not.toMatch(
+          /<(animate|animateTransform|animateMotion|set)\b/,
+        );
+      }
+    }
+    const css = animate(model, { speed: 1, mode: "loop", motion: "smil" }).css;
+    expect(css).toContain("@keyframes");
+    expect(css).toContain("translate(");
+  });
+});
+
+describe("frame mode is the CSS pose at the same time", () => {
+  const speeds = [1, 0.5, 2];
+  test.each(speeds)("%s x: every wrapper, sampled across the loop", (speed) => {
+    for (const [name, make] of [
+      ...specs,
+      ["closing", engineClosing] as [string, () => PlatformCosmoSpec],
+    ]) {
+      const model = build(make());
+      const loop = animate(model, { speed, mode: "loop", motion: "css" });
+      const rules = parseRules(splitReduced(loop.css).live);
+      const dur = A(model).loop / speed;
+      let compared = 0;
+      for (let k = 0; k < 24; k++) {
+        const t = dur * (0.0123 + ((k * 0.0407 * 1.0) % 1));
+        const attrs = animate(model, { speed, mode: "frame", time: t }).attrs ?? {};
+        for (const [id, set] of Object.entries(attrs)) {
+          if (!rules.has(id)) continue; // board ids (none here) or DOM-only
+          const css = cssPose(loop.css, rules, id, t);
+          if (set.transform !== undefined) {
+            const [fx, fy] = transformOf(set.transform);
+            const [cx, cy] = css.transform as [number, number];
+            expect(Math.abs(fx - cx), `${name} ${id} x @${t}`).toBeLessThan(0.05);
+            expect(Math.abs(fy - cy), `${name} ${id} y @${t}`).toBeLessThan(0.05);
+          }
+          if (set.opacity !== undefined) {
+            expect(
+              Math.abs((set.opacity as number) - (css.opacity as number)),
+              `${name} ${id} o @${t}`,
+            ).toBeLessThan(0.02);
+          }
+          if (set.visibility !== undefined) {
+            expect(set.visibility, `${name} ${id} v @${t}`).toBe(css.visibility);
+          }
+          compared++;
+        }
+      }
+      expect(compared, name).toBeGreaterThan(100);
+    }
+  });
+
+  test("the frame writes every wrapper; those without a CSS rule never change", () => {
+    const model = build(gpu());
+    const am = A(model);
+    const loop = animate(model, { speed: 1, mode: "loop", motion: "css" });
+    const rules = parseRules(splitReduced(loop.css).live);
+    const attrs = animate(model, { speed: 1, mode: "frame", time: 3.3 }).attrs ?? {};
+    const registered = Object.keys(expectedAttrs(am.frameAt(0))).sort();
+    expect(Object.keys(attrs).sort()).toEqual(registered);
+    for (const id of rules.keys()) expect(attrs[id], id).toBeDefined();
+    const still = registered.filter((id) => !rules.has(id));
+    expect(still.length).toBeGreaterThan(0);
+    for (const t of [0, 1.7, 5.2, 9.9, 14.4, 19.9]) {
+      const f = animate(model, { speed: 1, mode: "frame", time: t }).attrs ?? {};
+      for (const id of still) expect(f[id], `${id} @${t}`).toEqual(attrs[id]);
+    }
+  });
+
+  test("at speed 1 a frame is exactly frameAt(t) of the model (full state)", () => {
+    for (const make of [engine, gpu, engineClosing]) {
+      const model = build(make());
+      const am = A(model);
+      for (const t of [0, 0.7, 2.3, 5.01, 9.9, am.loop - 0.31, am.loop + 1.1, am.loop * 2 + 4]) {
+        expect(animate(model, { speed: 1, mode: "frame", time: t }).attrs, `t=${t}`).toEqual(
+          expectedAttrs(am.frameAt(t)),
+        );
+      }
+    }
+  });
+
+  test("the loop wraps on the output clock", () => {
+    const model = build(engine());
+    const am = A(model);
+    for (const speed of [0.5, 1, 2]) {
+      const dur = am.loop / speed;
+      const f = (t: number) => animate(model, { speed, mode: "frame", time: t }).attrs;
+      expect(f(dur)).toEqual(f(0));
+      expect(f(dur * 3 + 1.7)).toEqual(f(1.7));
+      expect(f(-dur + 2.2)).toEqual(f(2.2));
+      expect(f(0)).toEqual(expectedAttrs(am.frameAt(0)));
+    }
+  });
+});
+
+describe("every output path writes the assembly state", () => {
+  test.each(specs)("%s: static, steps, frames and GIF frames (CSS stripped)", (_n, make) => {
+    const model = build(make());
+    const am = A(model);
+    const check = (
+      layer: AnimationLayer,
+      expected: AssemblyFrameState,
+      raster: boolean,
+      label: string,
+    ) => {
+      const svg = stripStyle(svgOf(model, layer, raster));
+      const want = expectedAttrs(expected);
+      let seen = 0;
+      for (const [id, set] of Object.entries(want)) {
+        for (const [name, value] of Object.entries(set)) {
+          const got = attrOf(svg, id, name);
+          // an attribute equal to the SVG default may be omitted by the emitter
+          const dflt =
+            name === "opacity" ? "1" : name === "visibility" ? "visible" : "translate(0 0)";
+          expect(got ?? dflt, `${label} ${id} ${name}`).toBe(String(value));
+          seen++;
+        }
+      }
+      expect(seen, label).toBeGreaterThan(50);
+    };
+    // static / default PNG: the rest frame
+    check(animate(model, { speed: 1, mode: "frame", time: 0 }), am.frameAt(0), false, "static");
+    check(animate(model, { speed: 1, mode: "frame", time: 0 }), am.frameAt(0), true, "png");
+    // --steps: the end pose of each step
+    for (let k = 1; k <= am.clock.length; k++) {
+      check(
+        animate(model, { speed: 1, mode: "step", step: k, motion: "css" }),
+        am.stepEnd(k),
+        false,
+        `step ${k}`,
+      );
+    }
+    // frames (GIF/MP4): raster
+    for (const t of [0.4, 2.7, 6.1, 11.3]) {
+      check(animate(model, { speed: 1, mode: "frame", time: t }), am.frameAt(t), true, `gif ${t}`);
+    }
+    // the step poses differ (the test would pass on a constant otherwise)
+    const poses = new Set(
+      am.clock.map((_, i) =>
+        JSON.stringify(animate(model, { speed: 1, mode: "step", step: i + 1 }).attrs),
+      ),
+    );
+    expect(poses.size).toBeGreaterThan(2);
+  });
+
+  test("step mode without a timeline falls back to the rest frame", () => {
+    const spec = engine() as unknown as { steps?: unknown };
+    delete spec.steps;
+    const model = build(spec as unknown as PlatformCosmoSpec);
+    const layer = animate(model, { speed: 1, mode: "step", step: 1 });
+    expect(layer.attrs ?? {}).toEqual(
+      animate(model, { speed: 1, mode: "frame", time: 0 }).attrs ?? {},
+    );
+  });
+
+  test("loop output sets no attributes (the DOM carries the rest frame)", () => {
+    const model = build(engine());
+    expect(animate(model, { speed: 1, mode: "loop", motion: "css" }).attrs).toBeUndefined();
+  });
+});
+
+describe("reduced motion", () => {
+  test("with actions: discrete per-step poses, the 1.1 rule is not used", () => {
+    const model = build(engine());
+    const am = A(model);
+    const { live, reduced } = splitReduced(
+      animate(model, { speed: 1, mode: "loop", motion: "css" }).css,
+    );
+    expect(reduced).not.toContain("animation:none!important");
+    expect(reduced).toContain("step-end");
+    const rules = parseRules(reduced);
+    const all = parseRules(live);
+    // the same elements as the live motion
+    expect([...rules.keys()].filter((k) => all.has(k)).sort()).toEqual([...all.keys()].sort());
+    const css = live + "\n" + reduced;
+    for (const c of am.clock) {
+      const want = expectedAttrs(am.stepEnd(c.step));
+      for (const frac of [0.02, 0.5, 0.97]) {
+        const t = c.start + c.duration * frac; // speed 1
+        for (const [id, set] of Object.entries(want)) {
+          if (!rules.has(id)) continue;
+          // only the reduced animations: evaluate against the reduced block's keyframes
+          const got = cssPose(css, rules, id, t);
+          if (set.transform !== undefined) {
+            const [wx, wy] = transformOf(set.transform);
+            expect(got.transform?.[0], `${id} step ${c.step}`).toBeCloseTo(wx, 1);
+            expect(got.transform?.[1], `${id} step ${c.step}`).toBeCloseTo(wy, 1);
+          }
+          if (set.opacity !== undefined)
+            expect(got.opacity, `${id} o step ${c.step}`).toBeCloseTo(set.opacity as number, 1);
+          if (set.visibility !== undefined)
+            expect(got.visibility, `${id} v step ${c.step}`).toBe(set.visibility);
+        }
+      }
+    }
+    // constant within a step: no tween (every stop of a reduced keyframes sits on a step start)
+    const starts = new Set(am.clock.map((c) => Number((c.start / am.loop).toFixed(6))));
+    for (const stops of parseKeyframes(reduced).values()) {
+      for (const s of stops) expect(starts.has(Number(s.p.toFixed(6))), `stop ${s.p}`).toBe(true);
+    }
+  });
+
+  test("the camera stays on the overview and particles-style 1.1 behaviour is kept for the rest", () => {
+    const model = build(engine());
+    const { reduced } = splitReduced(animate(model, { speed: 1, mode: "loop", motion: "css" }).css);
+    expect(reduced).toContain("transform:none");
+  });
+
+  test("without actions the output is byte-identical to the model without an assembly layer", () => {
+    const model = build(noActions());
+    expect(A(model)).toBeDefined();
+    const bare: RenderModel = { ...model, assembly: undefined };
+    for (const motion of ["css", "smil"] as const) {
+      for (const mode of ["loop", "interactive"] as const) {
+        const a = animate(model, { speed: 1, mode, motion });
+        const b = animate(bare, { speed: 1, mode, motion });
+        expect(a.css).toBe(b.css);
+        expect(a.script).toBe(b.script);
+        expect(a.duration).toBe(b.duration);
+      }
+    }
+    // and its reduced rule is the 1.1 one
+    const css = animate(model, { speed: 1, mode: "loop", motion: "css" }).css;
+    expect(splitReduced(css).reduced).toContain("*{animation:none!important}");
+  });
+
+  test("a 1.1 model is untouched: no assembly rule, same bytes with or without the code path", () => {
+    const model = buildFixture();
+    expect(model.assembly).toBeUndefined();
+    const css = animate(model, { speed: 1, mode: "loop", motion: "css" }).css;
+    expect(css).not.toMatch(/-p[mhvfl]_/);
+    expect(sha(css)).toBe(
+      sha(
+        animate({ ...model, assembly: undefined }, { speed: 1, mode: "loop", motion: "css" }).css,
+      ),
+    );
+    expect(animate(model, { speed: 1, mode: "frame", time: 1 }).attrs).toBeUndefined();
+    expect(animate(model, { speed: 1, mode: "step", step: 1 }).attrs).toBeUndefined();
+  });
+});
+
+describe("interactive Step pauses at the settled pose", () => {
+  const targets = (script: string | undefined): number[] =>
+    JSON.parse(/G=(\[[^\]]*\])/.exec(script ?? "")![1] as string) as number[];
+
+  test.each([1, 0.5, 2])(
+    "%s x: the Step target of a step with actions is its settled time",
+    (speed) => {
+      const model = build(gpu());
+      const am = A(model);
+      const layer = animate(model, { speed, mode: "interactive", motion: "css" });
+      const g = targets(layer.script);
+      expect(g).toHaveLength(am.clock.length);
+      const rules = parseRules(splitReduced(layer.css).live);
+      let withActions = 0;
+      am.settled.forEach((s, i) => {
+        if (s === undefined) return;
+        withActions++;
+        // the settled time lies inside the step, after its start
+        const c = am.clock[i]!;
+        expect(g[i]).toBeGreaterThan(c.start / speed);
+        expect(g[i]).toBeLessThanOrEqual((c.start + c.duration) / speed);
+        expect(g[i]).toBeCloseTo(assemblySettled(am, speed, i)!, 3);
+        // and the pose there is the settled pose: everything the step moves has arrived
+        const want = expectedAttrs(am.stepEnd(i + 1));
+        for (const [id, set] of Object.entries(want)) {
+          if (!rules.has(id) || set.transform === undefined) continue;
+          const got = cssPose(layer.css, rules, id, g[i] as number);
+          const [wx, wy] = transformOf(set.transform);
+          expect(
+            Math.abs((got.transform as [number, number])[0] - wx),
+            `${id} x step ${i + 1}`,
+          ).toBeLessThan(0.1);
+          expect(
+            Math.abs((got.transform as [number, number])[1] - wy),
+            `${id} y step ${i + 1}`,
+          ).toBeLessThan(0.1);
+        }
+      });
+      expect(withActions).toBeGreaterThan(2);
+      // steps without actions (step 1) keep the existing targets
+      expect(am.settled[0]).toBeUndefined();
+    },
+  );
+
+  test("the script pauses every CSS animation under the root, assembly ones included", () => {
+    const model = build(engine());
+    const { script } = animate(model, { speed: 1, mode: "interactive", motion: "css" });
+    expect(script).toContain("getAnimations({subtree:true})");
+    expect(script).toContain("a.pause()");
+    // assembly wrappers animate inside the root, so the subtree walk sees them
+    const css = animate(model, { speed: 1, mode: "interactive", motion: "css" }).css;
+    expect(css).toContain("pc-t-pm_");
+  });
+});
+
+describe("speed and the camera", () => {
+  test("keyframe percentages do not depend on speed; the duration is the output loop", () => {
+    const model = build(engine());
+    const at = (speed: number) => animate(model, { speed, mode: "loop", motion: "css" });
+    const a = at(1);
+    const b = at(2);
+    expect(a.duration).toBeCloseTo(18, 3);
+    expect(b.duration).toBeCloseTo(9, 3);
+    const durs = new Set(
+      [...parseRules(splitReduced(b.css).live).values()].flat().map((x) => x.dur),
+    );
+    expect([...durs].filter((d) => d !== 9 && d !== 18)).toEqual([]);
+    expect(durs.has(9)).toBe(true);
+  });
+
+  test.each([1, 0.5, 2])(
+    "%s x: the loop closure ends where the camera's closing transition does",
+    (speed) => {
+      const model = build(engineClosing());
+      const am = A(model);
+      expect(am.closure).toBeDefined(); // the test would be vacuous without it
+      const loop = animate(model, { speed, mode: "loop", motion: "css" });
+      const rules = parseRules(splitReduced(loop.css).live);
+      const last = am.clock[am.clock.length - 1]!;
+      const total = am.loop / speed;
+      // tr on the output clock, as the camera computes it
+      const tr = Math.min(0.8, (0.25 * last.duration) / speed);
+      const rest = expectedAttrs(am.frameAt(0));
+      const hold = expectedAttrs(am.stepEnd(last.step));
+      const moved = Object.keys(hold).filter((id) => {
+        const h = hold[id]!.transform;
+        return h !== undefined && h !== rest[id]?.transform && rules.has(id);
+      });
+      expect(moved.length).toBeGreaterThan(5);
+      const dist = (t: number): number =>
+        Math.max(
+          ...moved.map((id) => {
+            const got = cssPose(loop.css, rules, id, t).transform as [number, number];
+            const [wx, wy] = transformOf(hold[id]!.transform);
+            return Math.hypot(got[0] - wx, got[1] - wy);
+          }),
+        );
+      const back = (t: number): number =>
+        Math.max(
+          ...moved.map((id) => {
+            const got = cssPose(loop.css, rules, id, t).transform as [number, number];
+            const [wx, wy] = transformOf(rest[id]!.transform);
+            return Math.hypot(got[0] - wx, got[1] - wy);
+          }),
+        );
+      // before the camera starts easing back, the exploded pose is held; after it, the rest pose
+      expect(dist(total - tr - 0.05)).toBeLessThan(0.1);
+      expect(dist(total - tr * 0.8)).toBeGreaterThan(2);
+      expect(dist(total - tr * 0.5)).toBeGreaterThan(1);
+      expect(back(total - 0.0005)).toBeLessThan(1.5);
+      // the fast return plays the camera's curve
+      expect(loop.css).toContain("cubic-bezier(0.4,0,0.2,1)");
+    },
+  );
+});
+
+describe("determinism and bounds", () => {
+  test("the same model gives the same bytes, in every mode", () => {
+    const m1 = build(gpu());
+    const m2 = build(gpu());
+    for (const mode of ["loop", "interactive"] as const) {
+      expect(animate(m1, { speed: 1, mode, motion: "css" }).css).toBe(
+        animate(m2, { speed: 1, mode, motion: "css" }).css,
+      );
+    }
+    expect(JSON.stringify(animate(m1, { speed: 2, mode: "frame", time: 4.4 }).attrs)).toBe(
+      JSON.stringify(animate(m2, { speed: 2, mode: "frame", time: 4.4 }).attrs),
+    );
+  });
+
+  test("equal tracks share one @keyframes", () => {
+    const model = build(gpu());
+    const css = animate(model, { speed: 1, mode: "loop", motion: "css" }).css;
+    const rules = parseRules(splitReduced(css).live);
+    const names = [...rules.values()].flat().map((a) => a.name);
+    expect(new Set(names).size).toBeLessThan(names.length / 1.5);
+    // ... and each @keyframes is defined once
+    const defs = [...css.matchAll(/@keyframes (\S+?)\{/g)].map((m) => m[1]);
+    expect(new Set(defs).size).toBe(defs.length);
+  });
+
+  test("keys per track and animated wrappers are bounded; nothing throws", () => {
+    const keys = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        t: (i / (n - 1)) * 10,
+        offset: { x: Math.sin(i) * 50, y: i % 7 },
+        easing: "linear" as const,
+      }));
+    const ids = {
+      partHost: (k: string) => `h_${k}`,
+      partMotion: (k: string) => `m_${k}`,
+      partVisible: (k: string) => `v_${k}`,
+      partFade: (k: string) => `f_${k}`,
+    };
+    const tracks = Array.from({ length: MAX_PROPS + 500 }, (_, i) => ({
+      copy: `p${String(i).padStart(6, "0")}`,
+      host: [],
+      motion: i === 0 ? keys(MAX_KEYS * 4) : keys(3),
+      visibility: [],
+      opacity: [],
+    }));
+    const am = {
+      ids,
+      tracks,
+      labelTracks: [],
+      staticFades: [],
+      loop: 10,
+      clock: [{ step: 1, start: 0, duration: 10, open: 0, end: 10 }],
+      settled: [5],
+    } as unknown as AssemblyRenderModel;
+    const a = assemblyAnim(am, 1);
+    expect(a.props.length).toBe(MAX_PROPS);
+    expect(Math.max(...a.props.map((p) => p.keys.length))).toBeLessThanOrEqual(MAX_KEYS);
+    const idsOf = { sel: (s: string) => `#${s}` } as unknown as Parameters<typeof assemblyLoop>[2];
+    const r = assemblyLoop(am, 1, idsOf, new Keyframes("x"), 10);
+    expect(r.rules.length).toBeGreaterThan(0);
+    expect(assemblyFrame(am, 1, 3)).toBeDefined();
+    // degenerate inputs: no loop, speed 0 / NaN, empty tracks
+    expect(() => assemblyLoop({ ...am, loop: 0 }, 1, idsOf, new Keyframes("x"), 10)).not.toThrow();
+    expect(assemblyLoop({ ...am, loop: 0 }, 1, idsOf, new Keyframes("x"), 10).rules).toEqual([]);
+    expect(() => assemblyFrame(am, 0, Number.NaN)).not.toThrow();
+    expect(assemblyFrame({ ...am, tracks: [] } as AssemblyRenderModel, 1, 1)).toBeUndefined();
+  });
+});
