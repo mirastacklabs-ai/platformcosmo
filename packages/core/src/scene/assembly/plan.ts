@@ -605,6 +605,12 @@ export class AssemblyPrograms {
         // an instance is rooted at a multi-segment path (`r2/srv/closeup`): the target is
         // `<asm.id>` or `<asm.id>/<rel>`, and segs[0] stands for the whole root path
         if (target !== asm.id && !target.startsWith(`${asm.id}/`)) return;
+        // the longest registered instance prefix owns the target (a deeper close-up's action)
+        for (const k of this.templates.keys()) {
+          if (k.length > asm.id.length && k.startsWith(`${asm.id}/`)) {
+            if (target === k || target.startsWith(`${k}/`)) return;
+          }
+        }
         const segs = [
           asm.id,
           ...(target === asm.id ? [] : target.slice(asm.id.length + 1).split("/")),

@@ -219,62 +219,85 @@ describe("close-up instances (§8.4, §19.4)", () => {
     expect(plan[1]!.poses["hall"]).toBeDefined();
   });
 
-  test("rack slot hosts (DC) take part, with their own size", () => {
-    const s = spec({
-      assemblies: [
-        {
-          id: "srv-2u",
-          template: true,
-          units: "mm",
-          parts: [box("chassis", [0, 0, 0], [430, 700, 85])],
-        },
-      ],
-    });
+  test("rack slot hosts (DC): a 450 mm template fits the 450 mm interior of the 540 mm box", () => {
+    const tpl = (x: number): PlatformCosmoSpec =>
+      spec({
+        assemblies: [
+          {
+            id: "srv-2u",
+            template: true,
+            units: "mm",
+            parts: [box("chassis", [0, 0, 0], [x, 700, 85])],
+          },
+        ],
+      });
     const host: CloseupHost = {
       path: "r2/srv",
       closeup: "srv-2u",
-      box: { origin: { x: 0, y: 0, z: 0 }, size: { x: 0.7, y: 1.1, z: 0.14 } },
-      sizeMm: { x: 430, y: 700, z: 85 },
+      // the DC device box is 540 mm wide; the template is matched to the 450 mm interior
+      box: { origin: { x: 0, y: 0, z: 0 }, size: { x: 0.9, y: 1.1, z: 0.14 } },
+      interiorMm: { x: 450, y: 700, z: 88.9 },
       pointer: "/racks/1/slots/0/closeup",
     };
-    const out = levels(s, [host]);
-    expect(out.levels.map((l) => l.path)).toEqual(["r2/srv/closeup"]);
-    expect(out.diagnostics).toEqual([]);
-    // 12% too long: warns at the slot's pointer
-    const off = levels(s, [{ ...host, sizeMm: { x: 430, y: 625, z: 85 } }]);
-    expect(codes(off.diagnostics, "assembly/size-mismatch")[0]?.path).toBe(
-      "/racks/1/slots/0/closeup",
-    );
+    const ok = levels(tpl(450), [host]);
+    expect(ok.levels.map((l) => l.path)).toEqual(["r2/srv/closeup"]);
+    expect(ok.diagnostics).toEqual([]);
+    expect(ok.levels[0]).toMatchObject({ fit: 1, turn: 0 });
+    // 12% wider than the interior: warns at the slot's pointer and shrinks
+    const big = levels(tpl(504), [host]);
+    const w = codes(big.diagnostics, "assembly/size-mismatch");
+    expect(w).toHaveLength(1);
+    expect(w[0]).toMatchObject({ severity: "warning", path: "/racks/1/slots/0/closeup" });
+    expect(big.levels[0]!.fit).toBeCloseTo(450 / 504, 9);
+    expect(big.levels[0]!.assembly!.restBounds.size.x).toBeCloseTo(450 / 600, 6);
   });
 });
 
 describe("size reconciliation (§8.5)", () => {
-  // host 100 x 100 x 50 mm; the template's x is the variable
-  const withX = (x: number, hostUnits = "mm", tplUnits = "mm"): PlatformCosmoSpec =>
+  // host interior 100 x 100 x 50 mm; the template is x x 100 x 50
+  const mk = (
+    tpl: number[],
+    host: number[] = [100, 100, 50],
+    hostExtra: Obj = {},
+    tplExtra: Obj = {},
+    hostUnits = "mm",
+    tplUnits = "mm",
+  ): PlatformCosmoSpec =>
     spec({
       assemblies: [
-        { id: "tpl", template: true, units: tplUnits, parts: [box("b", [0, 0, 0], [x, 100, 50])] },
+        {
+          id: "tpl",
+          template: true,
+          units: tplUnits,
+          parts: [box("b", [0, 0, 0], tpl)],
+          ...tplExtra,
+        },
         {
           id: "host",
           units: hostUnits,
-          parts: [box("p", [0, 0, 0], [100, 100, 50], { closeup: "tpl" })],
+          parts: [box("p", [0, 0, 0], host, { closeup: "tpl" })],
+          ...hostExtra,
         },
       ],
     });
+  const withX = (x: number): PlatformCosmoSpec => mk([x, 100, 50]);
 
-  test("9% off: no warning, true scale", () => {
-    const out = levels(withX(109));
-    expect(codes(out.diagnostics, "assembly/size-mismatch")).toEqual([]);
-    expect(out.levels[0]).toMatchObject({ fit: 1, turn: 0 });
-    expect(out.levels[0]!.mismatch!.x).toBeCloseTo(0.09, 9);
+  test("up to 10% larger: no warning, true scale", () => {
+    for (const x of [109, 110]) {
+      const out = levels(withX(x));
+      expect(codes(out.diagnostics, "assembly/size-mismatch")).toEqual([]);
+      expect(out.levels[0]).toMatchObject({ fit: 1, turn: 0 });
+    }
+    expect(levels(withX(109)).levels[0]!.mismatch!.x).toBeCloseTo(0.09, 9);
   });
 
-  test("exactly 10% is still fine", () => {
-    expect(codes(levels(withX(110)).diagnostics, "assembly/size-mismatch")).toEqual([]);
-    expect(codes(levels(withX(90)).diagnostics, "assembly/size-mismatch")).toEqual([]);
+  test("9% smaller is fine too, and never enlarged", () => {
+    const out = levels(withX(91));
+    expect(out.diagnostics).toEqual([]);
+    expect(out.levels[0]!.fit).toBe(1);
   });
 
-  test("11% off: warning, and the close-up is fitted uniformly (contain)", () => {
+  test("11% larger: warning, and the close-up is shrunk uniformly to fit the interior", () => {
     const out = levels(withX(111));
     const w = codes(out.diagnostics, "assembly/size-mismatch");
     expect(w).toHaveLength(1);
@@ -285,87 +308,91 @@ describe("size reconciliation (§8.5)", () => {
     });
     expect(w[0]!.params!.mismatch as number).toBeCloseTo(0.11, 9);
     const l = out.levels[0]!;
-    expect(l.fit).toBeCloseTo(100 / 111, 9); // the tightest axis decides
-    // the instance really is smaller: 111 mm drawn as 100 mm
+    expect(l.fit).toBeCloseTo(100 / 111, 9);
     expect(l.assembly!.restBounds.size.x).toBeCloseTo(100 / 600, 6);
     expect(l.assembly!.restBounds.size.y).toBeCloseTo((100 * 100) / 111 / 600, 6);
   });
 
-  test("contain: fitted up only as far as every axis allows", () => {
-    // 80 x 100 x 50 against 100 x 100 x 50: y and z already touch, so there is no room to grow
-    const edge = levels(withX(80));
-    expect(codes(edge.diagnostics, "assembly/size-mismatch")).toHaveLength(1);
-    expect(edge.levels[0]!.fit).toBe(1);
-    const small = spec({
-      assemblies: [
-        { id: "tpl", template: true, units: "mm", parts: [box("b", [0, 0, 0], [80, 80, 40])] },
-        {
-          id: "host",
-          units: "mm",
-          parts: [box("p", [0, 0, 0], [100, 100, 50], { closeup: "tpl" })],
-        },
-      ],
-    });
-    const l = levels(small).levels[0]!;
-    expect(l.fit).toBeCloseTo(1.25, 9);
-    expect(l.assembly!.restBounds.size.x).toBeCloseTo(100 / 600, 6);
-    expect(l.assembly!.restBounds.size.z).toBeCloseTo(50 / 600, 6);
+  test("oversize in z warns too; a short z never does", () => {
+    const tall = levels(mk([100, 100, 56]));
+    expect(codes(tall.diagnostics, "assembly/size-mismatch")[0]!.params!.axis).toBe("z");
+    expect(tall.levels[0]!.fit).toBeCloseTo(50 / 56, 9);
+    const board = levels(mk([100, 100, 5])); // a flat board in a 50 mm tall interior
+    expect(board.diagnostics).toEqual([]);
+    expect(board.levels[0]!.fit).toBe(1);
   });
 
-  test("the worst axis is the one reported", () => {
-    const z = spec({
-      assemblies: [
-        { id: "tpl", template: true, units: "mm", parts: [box("b", [0, 0, 0], [100, 100, 56])] },
-        {
-          id: "host",
-          units: "mm",
-          parts: [box("p", [0, 0, 0], [100, 100, 50], { closeup: "tpl" })],
-        },
-      ],
-    });
-    const out = levels(z);
-    expect(codes(out.diagnostics, "assembly/size-mismatch")[0]!.params!.axis).toBe("z");
+  test("much smaller in x or y: info only, never enlarged", () => {
+    const out = levels(mk([40, 100, 50]));
+    const d = codes(out.diagnostics, "assembly/size-mismatch");
+    expect(d).toHaveLength(1);
+    expect(d[0]!.severity).toBe("info");
+    expect(out.levels[0]!.fit).toBe(1);
+    expect(out.levels[0]!.assembly!.restBounds.size.x).toBeCloseTo(40 / 600, 6);
+    // 60%: neither
+    expect(levels(mk([60, 100, 50])).diagnostics).toEqual([]);
   });
 
-  test("a quarter turn that matches x and y is chosen, without a warning", () => {
-    const s = spec({
-      assemblies: [
-        { id: "tpl", template: true, units: "mm", parts: [box("b", [0, 0, 0], [200, 100, 50])] },
-        {
-          id: "host",
-          units: "mm",
-          parts: [box("p", [0, 0, 0], [100, 200, 50], { closeup: "tpl" })],
-        },
-      ],
-    });
-    const out = levels(s);
+  test("no automatic turn: a near-square board keeps its front", () => {
+    const out = levels(mk([101, 99, 50]));
     expect(out.diagnostics).toEqual([]);
-    expect(out.levels[0]).toMatchObject({ turn: 90, fit: 1 });
-    expect(out.levels[0]!.assembly!.frame.rotate).toBe(90);
-    expect(out.levels[0]!.assembly!.restBounds.size.x).toBeCloseTo(100 / 600, 6);
+    expect(out.levels[0]).toMatchObject({ turn: 0, fit: 1 });
+    expect(out.levels[0]!.assembly!.frame.rotate).toBe(0);
+  });
+
+  test("a footprint that fits better swapped is reported (info), not turned", () => {
+    // template 120 x 100 in a 100 x 120 interior: swapped would match, aligned is 20% over in x
+    const out = levels(mk([120, 100, 50], [100, 120, 50]));
+    expect(codes(out.diagnostics, "assembly/closeup-turned")).toHaveLength(1);
+    expect(codes(out.diagnostics, "assembly/closeup-turned")[0]!.severity).toBe("info");
+    expect(out.levels[0]!.turn).toBe(0);
+    expect(out.levels[0]!.assembly!.frame.rotate).toBe(0);
+    expect(codes(out.diagnostics, "assembly/size-mismatch")[0]!.severity).toBe("warning");
+  });
+
+  test("the template front is aligned with the host front in world axes (host rotate: 90)", () => {
+    // host interior 100 x 200 (local), assembly turned 90: 200 x 100 in the world, front -x
+    const s = mk([100, 200, 50], [100, 200, 50], { rotate: 90 });
+    const out = levels(s);
+    const host = main(s).base.find((a) => a.id === "host")!;
+    expect(host.frame.front).toBe("-x");
+    expect(out.diagnostics).toEqual([]);
+    expect(out.levels[0]!.turn).toBe(90);
+    // the template front (+y) now faces -x, like the host's
+    expect(out.levels[0]!.assembly!.frame.front).toBe("-x");
+    expect(out.levels[0]!.assembly!.restBounds.size.x).toBeCloseTo(200 / 600, 6);
+    expect(out.levels[0]!.assembly!.restBounds.size.y).toBeCloseTo(100 / 600, 6);
+    // without the host turn nothing is turned
+    expect(levels(mk([100, 200, 50], [100, 200, 50])).levels[0]!.turn).toBe(0);
+  });
+
+  test("a template with its own rotate keeps it and is still aligned", () => {
+    // template authored 200 x 100 then rotated 90: 100 x 200 in the world, front -x; the host is
+    // 200 x 100 (front +y): one more quarter turn aligns the fronts, and the sizes then match
+    const s = mk([200, 100, 50], [200, 100, 50], {}, { rotate: 90 });
+    const out = levels(s);
+    expect(out.levels[0]!.assembly!.frame.front).toBe("+y");
+    expect(out.diagnostics).toEqual([]);
   });
 
   test("units convert: a 4 in template against a 101.6 mm host matches", () => {
-    const s = spec({
-      assemblies: [
-        { id: "tpl", template: true, units: "in", parts: [box("b", [0, 0, 0], [4, 4, 2])] },
-        {
-          id: "host",
-          units: "mm",
-          parts: [box("p", [0, 0, 0], [101.6, 101.6, 50.8], { closeup: "tpl" })],
-        },
-      ],
-    });
+    const s = mk([4, 4, 2], [101.6, 101.6, 50.8], {}, {}, "mm", "in");
     expect(levels(s).diagnostics).toEqual([]);
   });
 
   test("non-physical units are not reconciled", () => {
-    expect(levels(withX(300, "tile", "mm")).diagnostics).toEqual([]);
-    expect(levels(withX(300, "mm", "tile")).diagnostics).toEqual([]);
-    expect(levels(withX(300, "mm", "stud")).diagnostics).toEqual([]);
+    expect(levels(mk([300, 100, 50], [100, 100, 50], {}, {}, "tile", "mm")).diagnostics).toEqual(
+      [],
+    );
+    expect(levels(mk([300, 100, 50], [100, 100, 50], {}, {}, "mm", "tile")).diagnostics).toEqual(
+      [],
+    );
+    expect(levels(mk([300, 100, 50], [100, 100, 50], {}, {}, "mm", "stud")).diagnostics).toEqual(
+      [],
+    );
   });
 
-  test("the correct fit is part of the instance, not a post-hoc scale of the pose", () => {
+  test("the fit is part of the instance, not a post-hoc scale of the pose", () => {
     const l = levels(withX(111)).levels[0]!.assembly!;
     const n = assemblyNodes(l).find((x) => x.path.endsWith("/b"))!;
     expect(n.world.size.x).toBeCloseTo(100 / 600, 6);

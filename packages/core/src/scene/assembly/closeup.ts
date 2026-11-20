@@ -10,23 +10,30 @@
  * units, standing at its own origin; its programs are the template's, resolved by the shared
  * `AssemblyPrograms` (so actions on `<host>/closeup/...` plan like any assembly's). Two hosts of
  * one template are two independent instances. A figure or storyboard instance is a level
- * without geometry (the render fits it to the host's zoomed screen rect).
+ * without geometry (the render fits it to the host's zoomed screen rect). Instances stay out of
+ * `SceneAssemblies.assemblies`; the images and credits they use are returned for merging.
  *
- * Size reconciliation (§8.5): a physical template against a physical host compares the
- * template's size in millimetres with the host's, per axis, in the better of two orientations
- * (x/y as authored or swapped by a quarter turn). Within 10% the instance keeps true scale; above,
- * `assembly/size-mismatch` (warning) and the instance is fitted uniformly (contain). Hosts that
- * are not physical (`tile`, `stud`) or have no size are not reconciled.
+ * Size reconciliation (§8.5) is containment in the host's INTERIOR (`interiorMm`, world axes:
+ * a DC slot passes its 450 mm interior, any other host its box). The template front is turned
+ * onto the host front in world axes (the host assembly's `frame.rotate` included), never by a
+ * footprint guess. Only a template LARGER than the interior by more than 10% on an axis warns
+ * (`assembly/size-mismatch`) and is shrunk uniformly to fit; a short z never warns; a template
+ * much smaller in x/y (< 50%) gets an info and is never scaled up. When the footprint would
+ * match better turned a quarter, `assembly/closeup-turned` (info) says so and nothing turns.
+ * Hosts that are not physical (`tile`, `stud`) or have no size are not reconciled.
  *
- * Bounded: the depth (<= 4) and count (<= 8) caps are checked BEFORE an instance is expanded,
+ * Bounded: the depth (<= 4), count (<= 8) and path-length (<= 8 segments, template height
+ * included) caps are checked BEFORE an instance is expanded and each skip is reported;
  * template leaves are charged to the spec's 2000-leaf budget, and a reference cycle stops the
- * chain, so nothing here is sized by input before a check. Nothing throws; an unusable close-up
- * is skipped (validation reports unknown references, cycles and too-deep paths).
+ * chain (validation reports cycles), so nothing here is sized by input before a check. Nothing
+ * throws.
  */
 import type {
   AssemblyUnits,
+  AssetSource,
   Box3,
   Diagnostic,
+  FrontSide,
   QuarterTurn,
   SceneAssemblies,
   SceneAssembly,
@@ -39,8 +46,10 @@ import { levelLimit, levelOverflow, type Level, type LevelKind } from "./levels.
 import type { AssemblyPrograms } from "./plan.js";
 import { assemblyNodes, buildTemplateInstance, type AssemblyBuildOptions } from "./tree.js";
 
-/** Relative size difference above which a close-up is fitted and reported (§8.5). */
+/** Oversize above which a close-up is shrunk and reported (§8.5). */
 export const SIZE_TOLERANCE = 0.1;
+/** A template under this fraction of the interior in x or y gets an info (§8.5). */
+export const SMALL_RATIO = 0.5;
 const EPS = 1e-9;
 
 /** A coarse node outside the spec assemblies that carries a close-up (a DC rack slot, E-1). */
@@ -51,8 +60,13 @@ export interface CloseupHost {
   readonly closeup: string;
   /** World box of the host in the main scene. */
   readonly box: Box3;
-  /** Physical size in millimetres (DC device boxes), for size reconciliation. */
-  readonly sizeMm?: Vec3;
+  /**
+   * Interior the template must fit, in millimetres along the WORLD axes (a DC slot: the 450 mm
+   * interior of the 540 mm device box, §8.5). Absent: not reconciled.
+   */
+  readonly interiorMm?: Vec3;
+  /** World side of the host's front (default `+y`). */
+  readonly front?: FrontSide;
   /** JSON pointer of the spec field, for diagnostics. */
   readonly pointer?: string;
 }
@@ -73,6 +87,10 @@ export interface CloseupOptions extends Pick<
 export interface CloseupBuild {
   /** Sorted by path. */
   readonly levels: readonly Level[];
+  /** Image keys the instances use, sorted. */
+  readonly images: readonly string[];
+  /** Credits of the instances in first-use order (deduplicate against the main scene's). */
+  readonly credits: readonly AssetSource[];
   readonly diagnostics: readonly Diagnostic[];
 }
 
@@ -80,7 +98,8 @@ interface Pending {
   readonly host: string;
   readonly ref: string;
   readonly box: Box3;
-  readonly sizeMm?: Vec3;
+  readonly interiorMm?: Vec3;
+  readonly front: FrontSide;
   readonly ptr: string;
   readonly parent?: string;
   /** Template ids from the main assembly down to the host's level (cycle guard). */
@@ -90,6 +109,7 @@ interface Pending {
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const isPhysical = (u: AssemblyUnits): boolean => u === "mm" || u === "cm" || u === "in";
 const r1 = (v: number): number => Math.round(v * 10) / 10;
+const SIDES: readonly FrontSide[] = ["+x", "+y", "-x", "-y"];
 
 function hostsOf(
   a: SceneAssembly,
@@ -100,22 +120,20 @@ function hostsOf(
 ): Pending[] {
   const mm = unitMm(a.frame.units);
   const physical = isPhysical(a.frame.units);
+  const odd = a.frame.rotate === 90 || a.frame.rotate === 270;
   const out: Pending[] = [];
   for (const n of assemblyNodes(a)) {
     if (n.closeup === undefined) continue;
+    const s = n.local.size;
+    // local axes turn with the host assembly's own rotate: the interior in WORLD axes
+    const ix = (odd ? s.y * mm.y : s.x * mm.x) as number;
+    const iy = (odd ? s.x * mm.x : s.y * mm.y) as number;
     out.push({
       host: n.path,
       ref: n.closeup,
       box: n.world,
-      ...(physical
-        ? {
-            sizeMm: {
-              x: n.local.size.x * mm.x,
-              y: n.local.size.y * mm.y,
-              z: n.local.size.z * mm.z,
-            },
-          }
-        : {}),
+      ...(physical ? { interiorMm: { x: ix, y: iy, z: s.z * mm.z } } : {}),
+      front: a.frame.front,
       ptr,
       ...(parent === undefined ? {} : { parent }),
       chain: [...chain, templateId],
@@ -124,37 +142,51 @@ function hostsOf(
   return out;
 }
 
-/** Relative difference of `t` to the reference `h` (> 0). */
-const rel = (t: number, h: number): number => Math.abs(t - h) / h;
-
 interface Fit {
   readonly turn: QuarterTurn;
   readonly fit: number;
+  /** Template size over the interior, minus 1, per axis (world axes, after `turn`). */
   readonly dev: Vec3;
   readonly worst: number;
   readonly axis: "x" | "y" | "z";
+  readonly small: boolean;
+  /** The footprint would match better with x and y swapped (nothing is turned). */
+  readonly swapBetter: boolean;
 }
 
-/** The better orientation of a template of size `t` against the host size `h` (§8.5). */
-function reconcile(t: Vec3, h: Vec3): Fit | undefined {
+/** Template of world size `t` (front still to be turned by `turn`) in the interior `h` (§8.5). */
+function reconcile(size: Vec3, turn: QuarterTurn, h: Vec3): Fit | undefined {
+  const odd = turn === 90 || turn === 270;
+  const t = odd ? { x: size.y, y: size.x, z: size.z } : size;
   if (!(h.x > 0 && h.y > 0 && h.z > 0) || !(t.x > 0 && t.y > 0 && t.z > 0)) return undefined;
-  const dev = (s: Vec3): Vec3 => ({ x: rel(s.x, h.x), y: rel(s.y, h.y), z: rel(s.z, h.z) });
-  const worstOf = (d: Vec3): { v: number; axis: "x" | "y" | "z" } =>
+  const dev: Vec3 = { x: t.x / h.x - 1, y: t.y / h.y - 1, z: t.z / h.z - 1 };
+  const over = (d: Vec3): { v: number; axis: "x" | "y" | "z" } =>
     d.x >= d.y && d.x >= d.z
       ? { v: d.x, axis: "x" }
       : d.y >= d.z
         ? { v: d.y, axis: "y" }
         : { v: d.z, axis: "z" };
-  const a = dev(t);
-  const swapped = { x: t.y, y: t.x, z: t.z };
-  const b = dev(swapped);
-  const turned = worstOf(b).v < worstOf(a).v - EPS;
-  const d = turned ? b : a;
-  const s = turned ? swapped : t;
-  const w = worstOf(d);
-  const fit = w.v > SIZE_TOLERANCE + EPS ? Math.min(h.x / s.x, h.y / s.y, h.z / s.z) : 1;
-  return { turn: turned ? 90 : 0, fit, dev: d, worst: w.v, axis: w.axis };
+  const w = over(dev);
+  const warn = w.v > SIZE_TOLERANCE + EPS;
+  const fit = warn ? Math.min(1, h.x / t.x, h.y / t.y, h.z / t.z) : 1;
+  const xy = (a: number, b: number): number =>
+    Math.max(Math.abs(a / h.x - 1), Math.abs(b / h.y - 1));
+  const aligned = xy(t.x, t.y);
+  const swapped = xy(t.y, t.x);
+  return {
+    turn: 0,
+    fit,
+    dev,
+    worst: w.v,
+    axis: w.axis,
+    small: t.x / h.x < SMALL_RATIO || t.y / h.y < SMALL_RATIO,
+    swapBetter: aligned > SIZE_TOLERANCE + EPS && swapped < aligned - EPS,
+  };
 }
+
+/** Quarter turns that bring the world side `from` onto `to`. */
+const turnBetween = (from: FrontSide, to: FrontSide): QuarterTurn =>
+  ((((SIDES.indexOf(to) - SIDES.indexOf(from)) % 4) + 4) % 4) * 90 as QuarterTurn;
 
 /**
  * Builds every close-up level of `base` (placed, programs attached) and `opts.hosts`. The levels
@@ -167,6 +199,9 @@ export function buildCloseups(
 ): CloseupBuild {
   const diagnostics: Diagnostic[] = [];
   const levels: Level[] = [];
+  const images = new Set<string>();
+  const credits: AssetSource[] = [];
+  const creditKeys = new Set<string>();
   const model = new AssemblyModel(spec);
   const figures = new Set((spec.figures ?? []).map((f) => f.id));
   const boards = new Set((spec.storyboards ?? []).map((b) => b.id));
@@ -191,15 +226,27 @@ export function buildCloseups(
       host: h.path,
       ref: h.closeup,
       box: h.box,
-      ...(h.sizeMm === undefined ? {} : { sizeMm: h.sizeMm }),
+      ...(h.interiorMm === undefined ? {} : { interiorMm: h.interiorMm }),
+      front: h.front ?? "+y",
       ptr: h.pointer ?? "",
       chain: [],
     });
   }
   frontier.sort((p, q) => cmp(p.host, q.host));
 
+  const tooDeep = (h: Pending, path: string, depth: number, limit: number): void => {
+    diagnostics.push({
+      severity: "error",
+      code: "assembly/too-deep",
+      path: h.ptr,
+      message: `Close-up of ${JSON.stringify(h.host)} would reach ${depth} path segments (limit ${limit}); it is not built`,
+      suggestion: "Use a shallower host or a flatter template",
+      params: { host: h.host, closeup: h.ref, depth, limit },
+    });
+  };
+
   let overflow = false;
-  for (let depth = 1; frontier.length > 0 && !overflow; depth++) {
+  for (let d = 1; frontier.length > 0 && !overflow; d++) {
     const next: Pending[] = [];
     for (const h of frontier) {
       const path = `${h.host}/closeup`;
@@ -207,10 +254,16 @@ export function buildCloseups(
       const kind = kindOf(h.ref);
       if (kind === undefined) continue; // unknown reference: `assembly/unknown-target`
       if (h.chain.includes(h.ref)) continue; // cycle: `assembly/template-cycle` (validation)
-      if (path.split("/").length > MAX_DEPTH) continue; // `assembly/too-deep` (validation)
-      const why = levelLimit(depth, levels.length);
+      const segs = path.split("/").length;
+      const ai = kind === "assembly" ? model.byId.get(h.ref) : undefined;
+      const height = ai === undefined ? 0 : model.metrics(ai).height;
+      if (segs + height > MAX_DEPTH) {
+        tooDeep(h, path, segs + height, MAX_DEPTH);
+        continue;
+      }
+      const why = levelLimit(d, levels.length);
       if (why !== undefined) {
-        diagnostics.push(levelOverflow(why, h.host, depth, levels.length));
+        diagnostics.push(levelOverflow(why, h.host, d, levels.length, h.ptr));
         overflow = true; // the rest is not looked at: nothing past the cap is built or counted
         break;
       }
@@ -221,7 +274,7 @@ export function buildCloseups(
         ref: h.ref,
         kind,
         ...(h.parent === undefined ? {} : { parent: h.parent }),
-        depth,
+        depth: d,
         hostBox: h.box,
       };
       if (kind !== "assembly") {
@@ -230,6 +283,7 @@ export function buildCloseups(
       }
       opts.programs?.registerInstance(path, h.ref);
       let fitted: Fit | undefined;
+      let turnUsed: QuarterTurn = 0;
       const built = buildTemplateInstance(spec, model, h.ref, path, {
         ...(opts.parts === undefined ? {} : { parts: opts.parts }),
         ...(opts.dcShapes === undefined ? {} : { dcShapes: opts.dcShapes }),
@@ -237,10 +291,13 @@ export function buildCloseups(
         ...(opts.color === undefined ? {} : { color: opts.color }),
         ...(opts.programs === undefined ? {} : { reach: opts.programs.reach }),
         leafBudget,
-        adapt: (size, units) => {
-          if (h.sizeMm === undefined || !isPhysical(units)) return {};
-          fitted = reconcile(size, h.sizeMm);
-          return fitted === undefined ? {} : { turn: fitted.turn, fit: fitted.fit };
+        adapt: (size, units, front) => {
+          // align the template front with the host front in world axes (never by footprint)
+          const turn = turnBetween(front, h.front);
+          turnUsed = turn;
+          if (h.interiorMm === undefined || !isPhysical(units)) return turn === 0 ? {} : { turn };
+          fitted = reconcile(size, turn, h.interiorMm);
+          return { turn, ...(fitted === undefined ? {} : { fit: fitted.fit }) };
         },
       });
       if (built === undefined) {
@@ -260,6 +317,13 @@ export function buildCloseups(
       }
       leafBudget -= built.leafCount;
       diagnostics.push(...built.diagnostics);
+      for (const k of built.images) images.add(k);
+      for (const c of built.credits) {
+        const key = JSON.stringify(c);
+        if (creditKeys.has(key)) continue;
+        creditKeys.add(key);
+        credits.push(c);
+      }
       let assembly: SceneAssembly = built.assembly;
       if (opts.programs !== undefined) {
         const att = opts.programs.attach<SceneAssemblies>({
@@ -277,7 +341,7 @@ export function buildCloseups(
           severity: "warning",
           code: "assembly/size-mismatch",
           path: h.ptr,
-          message: `Close-up ${JSON.stringify(h.ref)} differs from ${JSON.stringify(h.host)} by ${r1(f.worst * 100)}% on ${f.axis} (limit ${SIZE_TOLERANCE * 100}%); fitted uniformly at ${r1(f.fit * 100) / 100}x`,
+          message: `Close-up ${JSON.stringify(h.ref)} is ${r1(f.worst * 100)}% larger than the interior of ${JSON.stringify(h.host)} on ${f.axis} (limit ${SIZE_TOLERANCE * 100}%); shrunk uniformly to ${r1(f.fit * 100) / 100}x`,
           suggestion: "Correct the template's size or the part's size so they agree",
           params: {
             host: h.host,
@@ -288,11 +352,30 @@ export function buildCloseups(
             fit: f.fit,
           },
         });
+      } else if (f !== undefined && f.small) {
+        diagnostics.push({
+          severity: "info",
+          code: "assembly/size-mismatch",
+          path: h.ptr,
+          message: `Close-up ${JSON.stringify(h.ref)} is less than ${SMALL_RATIO * 100}% of the interior of ${JSON.stringify(h.host)} in x or y; it is drawn at true scale, not enlarged`,
+          suggestion: "Check the template's size against the part's",
+          params: { host: h.host, closeup: h.ref, ratio: SMALL_RATIO },
+        });
+      }
+      if (f?.swapBetter === true) {
+        diagnostics.push({
+          severity: "info",
+          code: "assembly/closeup-turned",
+          path: h.ptr,
+          message: `The footprint of close-up ${JSON.stringify(h.ref)} would match ${JSON.stringify(h.host)} better turned a quarter; its front stays aligned with the host's front and it is not turned`,
+          suggestion: "Rotate the template or the part if the other orientation is meant",
+          params: { host: h.host, closeup: h.ref },
+        });
       }
       levels.push({
         ...common,
         assembly,
-        turn: f?.turn ?? 0,
+        turn: turnUsed,
         fit: f?.fit ?? 1,
         ...(f === undefined ? {} : { mismatch: f.dev }),
       });
@@ -301,5 +384,5 @@ export function buildCloseups(
     frontier = next.sort((p, q) => cmp(p.host, q.host));
   }
   levels.sort((p, q) => cmp(p.path, q.path));
-  return { levels, diagnostics };
+  return { levels, images: [...images].sort(), credits, diagnostics };
 }

@@ -7,7 +7,7 @@
  * start), so `viewScenes` returns the placed assemblies rotated by -v: world boxes, frames,
  * bounds and the world-space offsets of every program move. Local boxes and part geometry are
  * untouched (the frame carries the turn, as for the assembly's own `rotate`). Decals on faces
- * turned away from the viewer are dropped. View 0 is the input itself (same objects), so a spec
+ * stay in the data (their `face` is assembly-local, the renderer maps it through the frame). View 0 is the input itself (same objects), so a spec
  * without views is untouched.
  *
  * Several assemblies turn rigidly about the centre of their union (one assembly: its own rest
@@ -17,7 +17,6 @@
 import type {
   Box3,
   Diagnostic,
-  PartGeometry,
   QuarterTurn,
   ResolvedProgram,
   SceneAssembly,
@@ -53,7 +52,10 @@ const VALID: ReadonlySet<number> = new Set([0, 90, 180, 270]);
  */
 export function usedViews(spec: PlatformCosmoSpec): QuarterTurn[] {
   const turns = new Set<number>();
-  const stack: { programs?: unknown; parts?: readonly SpecPart[] }[] = [...(spec.assemblies ?? [])];
+  // templates are not scene assemblies (their steps never play): skipped
+  const stack: { programs?: unknown; parts?: readonly SpecPart[] }[] = (
+    spec.assemblies ?? []
+  ).filter((a) => a.template !== true);
   while (stack.length > 0) {
     const owner = stack.pop() as { programs?: unknown; parts?: readonly SpecPart[] };
     if (Array.isArray(owner.programs)) {
@@ -100,24 +102,6 @@ function rotateBox(b: Box3, turn: QuarterTurn, cx: number, cy: number): Box3 {
   };
 }
 
-/** Is the local face visible once the assembly is turned `n` quarter turns counter-clockwise? */
-const faceShown = (face: string, n: number): boolean =>
-  face === "right"
-    ? n % 4 === 0 || n % 4 === 1
-    : face === "left"
-      ? n % 4 === 0 || n % 4 === 3
-      : true;
-
-function turnGeometry(g: PartGeometry, n: number): PartGeometry {
-  if (g.images === undefined) return g;
-  const kept = g.images.filter((im) => faceShown(im.face, n));
-  if (kept.length === g.images.length) return g;
-  if (kept.length > 0) return { ...g, images: kept };
-  const rest: { -readonly [K in keyof PartGeometry]: PartGeometry[K] } = { ...g };
-  delete rest.images;
-  return rest;
-}
-
 function turnProgram(p: ResolvedProgram, turn: QuarterTurn): ResolvedProgram {
   const mv = <T extends { offset: Vec3 }>(m: T): T => ({ ...m, offset: vec(m.offset, turn) });
   if (p.kind === "explode") {
@@ -146,27 +130,69 @@ function rotateAssembly(
 ): SceneAssembly {
   const back = ((360 - turn) % 360) as QuarterTurn;
   const rotate = ((a.frame.rotate + back) % 360) as QuarterTurn;
-  const n = rotate / 90;
   // the rotated bounds' minimum corner is the new frame origin (`AssemblyFrame`)
   const whole = frameMap(a.frame, a.root.local).box(a.root.local);
   const turned = rotateBox(whole, turn, cx, cy);
-  const node = (x: SceneAssemblyNode): SceneAssemblyNode => ({
-    ...x,
-    world: rotateBox(x.world, turn, cx, cy),
-    ...(x.geometry === undefined ? {} : { geometry: turnGeometry(x.geometry, n) }),
-    children: x.children.map(node),
-  });
+  const frame = {
+    ...a.frame,
+    rotate,
+    front: turnFront(a.frame.front, back),
+    origin: { x: turned.origin.x, y: turned.origin.y, z: a.frame.origin.z },
+  };
+  // ONE source for every world box of the node tree and the rest bounds: the new frame, mapped
+  // exactly as `place` in tree.ts does (a part's decal faces stay assembly-local, see contract)
+  const map = frameMap(frame, a.root.local);
+  const node = (x: SceneAssemblyNode): SceneAssemblyNode => {
+    const children = x.children.map(node);
+    const g = x.geometry;
+    const world =
+      x.kind === "leaf"
+        ? map.box(
+            g === undefined
+              ? x.local
+              : {
+                  origin: {
+                    x: x.local.origin.x + g.depthBox.origin.x,
+                    y: x.local.origin.y + g.depthBox.origin.y,
+                    z: x.local.origin.z + g.depthBox.origin.z,
+                  },
+                  size: g.depthBox.size,
+                },
+          )
+        : (unionBoxes(children.map((k) => k.world)) ?? map.box(x.local));
+    return { ...x, world, children };
+  };
+  const root = node(a.root);
+  const bounds: Box3[] = [];
+  const leaves = (n: SceneAssemblyNode): void => {
+    for (const c of n.children) {
+      if (c.kind !== "leaf") leaves(c);
+      else {
+        const g = c.geometry;
+        bounds.push(
+          map.box(
+            g === undefined
+              ? c.local
+              : {
+                  origin: {
+                    x: c.local.origin.x + g.bounds.origin.x,
+                    y: c.local.origin.y + g.bounds.origin.y,
+                    z: c.local.origin.z + g.bounds.origin.z,
+                  },
+                  size: g.bounds.size,
+                },
+          ),
+        );
+      }
+    }
+  };
+  leaves(root);
   return {
     ...a,
-    frame: {
-      ...a.frame,
-      rotate,
-      front: turnFront(a.frame.front, back),
-      origin: { x: turned.origin.x, y: turned.origin.y, z: a.frame.origin.z },
-    },
-    root: node(a.root),
+    frame,
+    root,
     programs: a.programs.map((p) => turnProgram(p, turn)),
-    restBounds: rotateBox(a.restBounds, turn, cx, cy),
+    restBounds: unionBoxes(bounds) ?? rotateBox(a.restBounds, turn, cx, cy),
     reachBounds: rotateBox(a.reachBounds, turn, cx, cy),
   };
 }
@@ -186,7 +212,9 @@ export function rotateScene(
 
 /**
  * The scenes of the requested views (duplicates and invalid turns dropped, at most four), with
- * `budget/views` when all views together exceed `ELEMENT_WARN` elements (§7.7, §13).
+ * `budget/views` when all views together exceed `ELEMENT_WARN` elements (§7.7, §13). The count
+ * is a PRE-RENDER LOWER BOUND (one element per primitive of every leaf); A1-4 computes the real
+ * one (copies, labels, leaders) and applies the same threshold.
  */
 export function viewScenes(base: readonly SceneAssembly[], turns: readonly number[]): ViewsBuild {
   const wanted = [...new Set(turns.filter((t) => VALID.has(t)))].sort(

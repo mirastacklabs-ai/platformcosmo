@@ -45,7 +45,16 @@ import type {
 import { CIRCULAR_KINDS, partGeometry, reassignSplit } from "../../geometry/parts.js";
 import { AssemblyModel, LEAF_ERROR, MAX_DEPTH } from "../../schema/assembly-tree.js";
 import type { PlatformCosmoSpec, SpecPart, SpecState } from "../../schema/types.gen.js";
-import { TILE_MM, belowGroundLift, frameMap, makeFrame, rnd, unionBoxes, unitMm } from "./frame.js";
+import {
+  TILE_MM,
+  belowGroundLift,
+  frameMap,
+  makeFrame,
+  rnd,
+  turnFront,
+  unionBoxes,
+  unitMm,
+} from "./frame.js";
 import { toSource } from "./source.js";
 import { classifySiblings, type LBox, type RoleItem } from "./roles.js";
 
@@ -790,6 +799,7 @@ export interface TemplateInstanceOptions extends AssemblyBuildOptions {
   readonly adapt?: (
     sizeMm: Vec3,
     units: AssemblyUnits,
+    front: FrontSide,
   ) => { readonly turn?: QuarterTurn; readonly fit?: number };
   /** Leaves the expansion may add (the caller's remaining budget); over it, nothing is built. */
   readonly leafBudget?: number;
@@ -800,6 +810,10 @@ export interface TemplateInstance {
   /** Index of the template in `spec.assemblies`. */
   readonly index: number;
   readonly leafCount: number;
+  /** Image keys used, sorted. */
+  readonly images: readonly string[];
+  /** Credits (§11.6) of the instance's images and sources, first-use order, deduplicated. */
+  readonly credits: readonly AssetSource[];
   readonly diagnostics: readonly Diagnostic[];
 }
 
@@ -836,7 +850,11 @@ export function buildTemplateInstance(
     y: odd ? lb.x * mm.x : lb.y * mm.y,
     z: lb.z * mm.z,
   };
-  const asked = opts.adapt?.(sizeMm, units);
+  const asked = opts.adapt?.(
+    sizeMm,
+    units,
+    turnFront((a.front ?? "+y") as FrontSide, base),
+  );
   const turn = ((((base + (asked?.turn ?? opts.turn ?? 0)) % 360) + 360) % 360) as QuarterTurn;
   const k = asked?.fit;
   // a uniform factor on true scale: `fit` (tiles of the largest horizontal extent) = k x its true size
@@ -874,7 +892,16 @@ export function buildTemplateInstance(
     ...(a.program === undefined ? {} : { defaultProgram: a.program }),
     reachBounds: shift(reach0, ox, oy, lift),
   };
-  return { assembly, index: i, leafCount: prep.leaves.length, diagnostics };
+  for (const l of prep.leaves) credit(used, toSource(l.part.source));
+  credit(used, toSource(a.source));
+  return {
+    assembly,
+    index: i,
+    leafCount: prep.leaves.length,
+    images: [...used.images].sort(),
+    credits: used.credits,
+    diagnostics,
+  };
 }
 
 /**
@@ -998,8 +1025,16 @@ export function mergeSceneAssemblies(
 ): SceneAssemblies {
   if (other === undefined) {
     // a plain `SceneAssemblies`: an `AssemblyBuild` also carries its diagnostics
-    const { assemblies, boards, plan, images, credits } = asm;
-    return { assemblies, boards, plan, images, credits };
+    const { assemblies, boards, plan, images, credits, levels, views } = asm;
+    return {
+      assemblies,
+      boards,
+      plan,
+      images,
+      credits,
+      ...(levels === undefined ? {} : { levels }),
+      ...(views === undefined ? {} : { views }),
+    };
   }
   const keys = new Set(asm.credits.map((c) => JSON.stringify(c)));
   return {
@@ -1012,5 +1047,7 @@ export function mergeSceneAssemblies(
     plan: other.plan.length > 0 ? other.plan : asm.plan,
     images: [...new Set([...asm.images, ...other.images])].sort(),
     credits: [...asm.credits, ...other.credits.filter((c) => !keys.has(JSON.stringify(c)))],
+    ...(asm.levels === undefined ? {} : { levels: asm.levels }),
+    ...(asm.views === undefined ? {} : { views: asm.views }),
   };
 }

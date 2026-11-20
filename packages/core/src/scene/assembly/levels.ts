@@ -7,7 +7,7 @@
  * is this data plus the addressing helpers below. Everything here is pure and total: nothing
  * throws, nothing is sized by input before a cap check.
  */
-import type { Box3, Diagnostic, QuarterTurn, SceneAssembly, Vec3 } from "../../contracts/index.js";
+import type { Box3, Diagnostic, SceneAssembly, SceneLevel } from "../../contracts/index.js";
 import { assemblyNodes } from "./tree.js";
 
 /** Levels nest at most this deep (the main scene is level 0), §8.4, §13. */
@@ -18,32 +18,10 @@ export const MAX_LEVELS = 8;
 export const ELEMENT_WARN = 5000;
 
 /** What a close-up shows. */
-export type LevelKind = "assembly" | "figure" | "storyboard";
+export type LevelKind = SceneLevel["kind"];
 
-/** One close-up instance (a level of detail). */
-export interface Level {
-  /** Scene path of the instance: `<host>/closeup`. Unique. */
-  readonly path: string;
-  /** The coarse node (part, sub-assembly, rack slot) the instance replaces when focused. */
-  readonly host: string;
-  /** Id of the assembly, figure or storyboard drawn. */
-  readonly ref: string;
-  readonly kind: LevelKind;
-  /** Path of the level the host lives in (an instance path); undefined: the main scene. */
-  readonly parent?: string;
-  /** 1 = a close-up of a node of the main scene; at most `MAX_LEVEL_DEPTH`. */
-  readonly depth: number;
-  /** World box of the host in its own level: where the close-up cross-fades in from. */
-  readonly hostBox: Box3;
-  /** Assemblies only: the instance. `id === root.path === path`; its own world, at the origin. */
-  readonly assembly?: SceneAssembly;
-  /** Extra quarter turn chosen to best match the host's x/y size (size reconciliation). */
-  readonly turn: QuarterTurn;
-  /** Uniform factor on true scale (1 = true scale; below or above 1: fitted, §8.5). */
-  readonly fit: number;
-  /** Per-axis relative size difference to the host after `turn` (physical units only). */
-  readonly mismatch?: Vec3;
-}
+/** One close-up instance (a level of detail): `SceneLevel` of the contract. */
+export type Level = SceneLevel;
 
 /** Deepest level whose path is `path` or a prefix of it; undefined: the main scene. */
 export function levelOf(levels: readonly Level[], path: string): Level | undefined {
@@ -68,11 +46,12 @@ export function levelOverflow(
   host: string,
   depth: number,
   built: number,
+  path = "",
 ): Diagnostic {
   return {
     severity: "error",
     code: "budget/levels",
-    path: "",
+    path,
     message:
       why === "depth"
         ? `Close-up of ${JSON.stringify(host)} would be level ${depth}; levels nest at most ${MAX_LEVEL_DEPTH} deep`
@@ -105,7 +84,11 @@ export function assemblyElements(a: SceneAssembly): number {
   return n;
 }
 
-/** Elements of the main assemblies, `views` copies of them, and every level (§13). */
+/**
+ * Pre-render lower bound of the elements (one per primitive of every leaf): the main assemblies,
+ * `views` copies of them, and every level (§13). A1-4 computes the real count (copies, labels,
+ * leaders, callouts) in `AssemblyRenderModel.elements` and uses this as its floor.
+ */
 export function sceneElements(
   base: readonly SceneAssembly[],
   levels: readonly Level[],
