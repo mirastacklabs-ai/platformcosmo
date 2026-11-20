@@ -45,7 +45,16 @@ export {
   round2,
   fmt,
   DEFAULT_TILE_WIDTH,
+  partGeometryFaces,
+  partPrimitiveFaces,
+  halfOf,
 } from "./geometry/index.js";
+export type { Half, PartFace, PartPrimitiveFaces } from "./geometry/index.js";
+/**
+ * @internal For pack authors that need the same typo hints as core diagnostics. The suggestion
+ * text and matching are not stable across releases; do not parse or snapshot them.
+ */
+export { didYouMean } from "./schema/suggest.js";
 export type { ProjectionOptions, Silhouette } from "./geometry/index.js";
 
 // Depth ordering and text (Track A1).
