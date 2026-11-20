@@ -13,6 +13,7 @@ import {
   type SvgNode,
 } from "../src/index.js";
 import type { Box3, PartGeometry, SceneAssemblyNode } from "../src/contracts/index.js";
+import { depthEpochs, moveOffsetAt } from "../src/depth/epochs.js";
 import { serialize } from "../src/emit/xml.js";
 import { buildModelWithDiagnostics } from "../src/render/model.js";
 import { createProjection, partGeometry, studGrid } from "../src/geometry/index.js";
@@ -490,6 +491,41 @@ describe("structure next to the example snapshots", () => {
     });
     expect(built.model.assembly).toBeUndefined();
     expect(built.diagnostics.some((d) => d.code === "budget/assembly-parts")).toBe(true);
+  });
+});
+
+describe("closure easing is one function for depth and drawing", () => {
+  const mv = (bezier?: readonly [number, number, number, number]) => ({
+    path: "p",
+    t0: 0,
+    t1: 1,
+    from: { x: 0, y: 0, z: 0 },
+    to: { x: 0, y: 0, z: 1 },
+    easing: "ease-in-out" as const,
+    ...(bezier === undefined ? {} : { bezier }),
+  });
+  test("depth evaluates the bezier, not the keyword", () => {
+    const keyword = moveOffsetAt(mv(), 0.3).z;
+    const camera = moveOffsetAt(mv([0.4, 0, 0.2, 1]), 0.3).z;
+    expect(camera).toBeCloseTo(bezierProgress([0.4, 0, 0.2, 1], 0.3), 3);
+    expect(Math.abs(camera - keyword)).toBeGreaterThan(0.02);
+  });
+  test("an invalid bezier is ignored with a diagnostic, not thrown", () => {
+    const item = {
+      key: "a",
+      path: "a",
+      box: { origin: { x: 0, y: 0, z: 0 }, size: { x: 1, y: 1, z: 1 } },
+    };
+    const r = depthEpochs([item], [mv([2, 0, 0, 1])], 1);
+    expect(r.diagnostics.some((d) => d.code === "assembly/depth-input")).toBe(true);
+  });
+  test("the closure's moves carry the camera bezier into depth", () => {
+    const spec = structuredClone(example("Inline-4")) as unknown as { steps: unknown[] };
+    spec.steps = spec.steps.slice(0, -1);
+    const a = X(build(spec as unknown as PlatformCosmoSpec));
+    const closing = a.moves.filter((m) => m.bezier !== undefined);
+    expect(closing.length).toBeGreaterThan(0);
+    for (const m of closing) expect(m.bezier).toEqual([0.4, 0, 0.2, 1]);
   });
 });
 

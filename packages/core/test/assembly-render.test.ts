@@ -19,7 +19,6 @@ import { serialize } from "../src/emit/xml.js";
 import { partGeometry, studGrid } from "../src/geometry/index.js";
 import { depthItems, worldLeaves, type WorldLeaf } from "../src/render/assembly/world.js";
 import type { AssemblyRenderModelX } from "../src/render/assembly/types.js";
-import { bezierProgress } from "../src/render/boards/timeline.js";
 import { evalOffset, round2 } from "../src/render/assembly/tracks.js";
 import { fixtureTheme } from "./fixtures/theme.js";
 import { realPng, resolverOf } from "./figure-fixtures.js";
@@ -509,16 +508,7 @@ describe("z-buffer spot check on emitted frames", () => {
     const a = X(m);
     const leaves = worldLeaves(m.scene.assemblies!.assemblies);
     const items = depthItems(leaves);
-    // the reference evaluates keyword easings only: freeze the closure's bezier moves at their
-    // true progress for this instant (instant moves at 0)
-    const moves = a.moves.map((mv) => {
-      if (mv.bezier === undefined) return mv;
-      const p = bezierProgress(
-        mv.bezier as unknown as [number, number, number, number],
-        (t - mv.t0) / (mv.t1 - mv.t0),
-      );
-      return { ...mv, t0: 0, t1: 0, to: { x: mv.to.x * p, y: mv.to.y * p, z: mv.to.z * p } };
-    });
+    const moves = a.moves;
     const scene: Scene = { items, moves, loop: a.loop };
     const view = viewOf(scene, [t]);
     const frame = a.frameAt(t);

@@ -32,9 +32,7 @@ export const TOLERANCE_PX = 0.25;
 const MAX_SPLIT = 7;
 
 /** A loop move that plays a CSS cubic-bezier (the camera curve of the closure); depth sees `easing`. */
-export interface BezierMove extends LoopMove {
-  readonly bezier?: readonly [number, number, number, number];
-}
+export type BezierMove = LoopMove;
 
 type KeyEasing = TrackKey["easing"];
 
@@ -47,24 +45,8 @@ export function keyProgress(easing: KeyEasing, x: number): number {
   return easeProgress(easing as SpecEasing, x);
 }
 
-/** Contribution of one move at `t` (exact curve, also for bezier moves). */
-export function moveOffset(m: BezierMove, t: number): Vec3 {
-  if (m.bezier === undefined) return moveOffsetAt(m, t);
-  const p =
-    t >= m.t1
-      ? 1
-      : t <= m.t0
-        ? 0
-        : bezierProgress(
-            m.bezier as unknown as [number, number, number, number],
-            (t - m.t0) / (m.t1 - m.t0),
-          );
-  return {
-    x: m.from.x + (m.to.x - m.from.x) * p,
-    y: m.from.y + (m.to.y - m.from.y) * p,
-    z: m.from.z + (m.to.z - m.from.z) * p,
-  };
-}
+/** Contribution of one move at `t`: depth's own function, bezier moves included. */
+export const moveOffset = (m: BezierMove, t: number): Vec3 => moveOffsetAt(m, t);
 
 const sameCurve = (a: BezierMove, b: BezierMove): boolean =>
   a.easing === b.easing &&
