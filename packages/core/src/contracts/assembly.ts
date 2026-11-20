@@ -124,7 +124,12 @@ export interface PartPrimitive {
 export interface PartImagePlacement {
   /** `ImageAsset.key` (spec image id). */
   readonly image: string;
-  /** `billboard`: upright, never skewed; otherwise an affine decal on that face of `bounds`. */
+  /**
+   * `billboard`: upright, never skewed; otherwise an affine decal on that face of `bounds`.
+   * `left`/`right` are faces of the part in the ASSEMBLY-LOCAL frame; the renderer maps them
+   * through `AssemblyFrame.rotate` (also in quarter-turn views, where scenes keep the data and
+   * only the frame changes), so a face turned away is the renderer's to omit, never the scene's.
+   */
   readonly face: "billboard" | FaceName;
   /** Pixel rect (part crop, else image crop, else the whole image). */
   readonly crop: Rect;
@@ -525,6 +530,51 @@ export interface SceneAssemblies {
   readonly images: readonly string[];
   /** Credits line entries (§11.6), in first-use order, deduplicated. */
   readonly credits: readonly AssetSource[];
+  /**
+   * Close-up levels (§8.4), sorted by path; absent without close-ups. Instances are NOT in
+   * `assemblies`. `images` and `credits` above include theirs.
+   */
+  readonly levels?: readonly SceneLevel[];
+  /**
+   * Quarter-turn view scenes (§7.7), sorted by turn and including 0; absent when no build step
+   * uses `view`.
+   */
+  readonly views?: readonly SceneView[];
+}
+
+/** One close-up instance (a level of detail, assemblies §8.4). */
+export interface SceneLevel {
+  /** Scene path of the instance: `<host>/closeup`. Unique. */
+  readonly path: string;
+  /** The coarse node (part, sub-assembly, rack slot) the instance replaces when focused. */
+  readonly host: string;
+  /** Id of the assembly, figure or storyboard drawn. */
+  readonly ref: string;
+  readonly kind: "assembly" | "figure" | "storyboard";
+  /** Path of the level the host lives in (an instance path); absent: the main scene. */
+  readonly parent?: string;
+  /** 1 = a close-up of a node of the main scene; at most 4. */
+  readonly depth: number;
+  /** World box of the host in its own level: where the close-up cross-fades in from. */
+  readonly hostBox: Box3;
+  /**
+   * Assemblies only: the instance, in its own world at the origin. `id === root.path === path`.
+   * Focus targets inside it (its node paths) are in this world, not the main scene's.
+   */
+  readonly assembly?: SceneAssembly;
+  /** Quarter turn that aligns the template's front with the host's front in world axes. */
+  readonly turn: QuarterTurn;
+  /** Uniform factor on true scale, at most 1 (shrunk to fit the host's interior, §8.5). */
+  readonly fit: number;
+  /** Per-axis template size relative to the host interior, minus 1 (physical units only). */
+  readonly mismatch?: Vec3;
+}
+
+/** The main scene turned by -`turn` about the centre of the assemblies' rest bounds (§7.7). */
+export interface SceneView {
+  readonly turn: QuarterTurn;
+  /** The placed assemblies of the scene, rotated; turn 0 is `SceneAssemblies.assemblies`. */
+  readonly assemblies: readonly SceneAssembly[];
 }
 
 // ---------------------------------------------------------------------------------------------

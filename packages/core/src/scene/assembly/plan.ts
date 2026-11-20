@@ -197,6 +197,8 @@ export class AssemblyPrograms {
   private readonly reaches = new Map<string, Box3 | undefined>();
   private readonly leafMemo = new WeakMap<SceneAssemblyNode, SceneAssemblyNode[]>();
   private warned = false;
+  /** Close-up instances (A2-5): instance path -> id of the template it instances. */
+  private readonly templates = new Map<string, string>();
 
   constructor(
     readonly spec: PlatformCosmoSpec,
@@ -205,6 +207,20 @@ export class AssemblyPrograms {
     this.model = new AssemblyModel(spec);
     this.work = opts.work ?? makeWork();
     this.sweepWork = opts.sweepWork ?? makeWork(SWEEP_CAP);
+  }
+
+  /**
+   * Declares `path` (a close-up instance, `<host>/closeup`, built from the assembly `templateId`)
+   * so its programs resolve and actions on `path/…` plan against it like those of a top-level
+   * assembly. Call before `reach`, `attach` or `plan` see the instance.
+   */
+  registerInstance(path: string, templateId: string): void {
+    this.templates.set(path, templateId);
+  }
+
+  /** Index of the spec assembly an assembly (or close-up instance) is built from. */
+  private specIndex(id: string): number | undefined {
+    return this.model.byId.get(this.templates.get(id) ?? id);
   }
 
   private budgetWarning(): void {
@@ -226,7 +242,7 @@ export class AssemblyPrograms {
   private resolve(asm: SceneAssembly): Resolved | undefined {
     const memo = this.resolved.get(asm.id);
     if (memo !== undefined) return memo ?? undefined;
-    const i = this.model.byId.get(asm.id);
+    const i = this.specIndex(asm.id);
     const specAsm = i === undefined ? undefined : (this.spec.assemblies ?? [])[i];
     let tree: TNode | undefined;
     try {
@@ -586,8 +602,19 @@ export class AssemblyPrograms {
         if (kind !== "explode" && kind !== "implode") return; // build programs: A2-6
         const target = (a as unknown as Record<string, string>)[kind] as string;
         if (typeof target !== "string") return;
-        const segs = target.split("/");
-        if (segs[0] !== asm.id) return;
+        // an instance is rooted at a multi-segment path (`r2/srv/closeup`): the target is
+        // `<asm.id>` or `<asm.id>/<rel>`, and segs[0] stands for the whole root path
+        if (target !== asm.id && !target.startsWith(`${asm.id}/`)) return;
+        // the longest registered instance prefix owns the target (a deeper close-up's action)
+        for (const k of this.templates.keys()) {
+          if (k.length > asm.id.length && k.startsWith(`${asm.id}/`)) {
+            if (target === k || target.startsWith(`${k}/`)) return;
+          }
+        }
+        const segs = [
+          asm.id,
+          ...(target === asm.id ? [] : target.slice(asm.id.length + 1).split("/")),
+        ];
         const rel = segs.slice(1).join("/");
         const owner = res.owners.get(rel);
         if (!res.nodes.has(target) || owner === undefined) return;
@@ -810,7 +837,7 @@ export class AssemblyPrograms {
           mk(
             "info",
             "assembly/bounds-growth",
-            `/assemblies/${this.model.byId.get(probe.id) ?? 0}`,
+            `/assemblies/${this.specIndex(probe.id) ?? 0}`,
             `Assembly ${JSON.stringify(probe.id)} needs more than ${GROWTH}x its assembled area to explode`,
             "Use smaller distances, or fade the other parts",
             { assembly: probe.id },
