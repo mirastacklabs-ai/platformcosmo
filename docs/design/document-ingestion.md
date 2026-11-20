@@ -1214,6 +1214,15 @@ assumption, and anything that needs a screenshot.
 `asset/*` gate codes of §6.5 and `asset/too-expensive`, `asset/unsafe-path`. All carry page,
 image index and bbox in `params`.
 
+Raster operations (`@platformcosmo/assets`, §5) use these `asset/*` codes, with a bbox in
+`params` wherever a region applies: errors `bad-option` (`params.option` names the option:
+tolerance, maxPx, rect, region, top, minScore, scales, svgSize, maxShift, exclude, input),
+`bad-raster`, `too-large`, `too-expensive`, `empty`, `flat` (no texture under the mask),
+`not-found` (nothing fits or matches), `renderer-failed` (resvg wasm could not start); warnings
+`rect-clamped`, `no-background`, `background-covers-image`, `ambiguous` (align: no majority or a
+small best-vs-second margin), `flat` (one scale skipped), and info/warning `shrink-passthrough`.
+Image validation errors keep C-1's `image/*` codes.
+
 ## 14. Limits
 
 PDF: §4.6. Images: assemblies §11.4. Figure pipeline: ≤ 16 MP per source, ≤ 64 parts per

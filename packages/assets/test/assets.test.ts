@@ -1,3 +1,4 @@
+import { decodePng } from "@platformcosmo/core";
 import { describe, expect, it } from "vitest";
 import {
   MAX_MULTIPLY_ADDS,
@@ -5,7 +6,6 @@ import {
   applyOrientation,
   crop,
   decodeImage,
-  decodeRgbaPng,
   encodePng,
   locate,
   removeBackground,
@@ -32,10 +32,10 @@ function circleSprite(size: number, seed: number): Raster {
 }
 
 describe("png codec and decode", () => {
-  it("round-trips RGBA through encodePng/decodeRgbaPng and has no ancillary chunks", () => {
+  it("round-trips RGBA through encodePng/decodePng and has no ancillary chunks", () => {
     const r = makeRaster(13, 9, (x, y) => [x * 19, y * 27, (x * y) & 255, x === 3 ? 0 : 200]);
     const png = encodePng(r);
-    expect(decodeRgbaPng(png)).toEqual(r);
+    expect(decodePng(png)).toEqual(r);
     const types: string[] = [];
     for (let o = 8; o < png.length;) {
       const len = new DataView(png.buffer, png.byteOffset).getUint32(o);
@@ -130,9 +130,9 @@ describe("crop and trim", () => {
     const c = crop(r, { x: 8, y: 6, w: 10, h: 10 });
     expect([c.value!.width, c.value!.height]).toEqual([2, 2]);
     expect(codes(c)).toEqual(["asset/rect-clamped"]);
-    expect(codes(crop(r, { x: 20, y: 0, w: 2, h: 2 }))).toEqual(["asset/bad-rect"]);
-    expect(codes(crop(r, { x: 0, y: 0, w: 0, h: 2 }))).toEqual(["asset/bad-rect"]);
-    expect(codes(crop(r, { x: 0.5, y: 0, w: 2, h: 2 }))).toEqual(["asset/bad-rect"]);
+    expect(codes(crop(r, { x: 20, y: 0, w: 2, h: 2 }))).toEqual(["asset/bad-option"]);
+    expect(codes(crop(r, { x: 0, y: 0, w: 0, h: 2 }))).toEqual(["asset/bad-option"]);
+    expect(codes(crop(r, { x: 0.5, y: 0, w: 2, h: 2 }))).toEqual(["asset/bad-option"]);
   });
   it("trims to the non-transparent box", () => {
     const t = makeRaster(9, 9, (x, y) =>
@@ -200,7 +200,7 @@ describe("removeBackground (edge-connected)", () => {
     expect(codes(removeBackground(makeRaster(8, 8, () => [0, 0, 0, 0])))).toEqual([
       "asset/no-background",
     ]);
-    expect(codes(removeBackground(ring, { tolerance: 300 }))).toEqual(["asset/bad-tolerance"]);
+    expect(codes(removeBackground(ring, { tolerance: 300 }))).toEqual(["asset/bad-option"]);
   });
 });
 
@@ -226,9 +226,9 @@ describe("shrink", () => {
     const png = encodePng(big);
     const s = (await shrinkImage(png, 16)).value!;
     expect([s.format, s.width, s.height, s.resized]).toEqual(["png", 16, 8, true]);
-    expect(decodeRgbaPng(s.bytes).width).toBe(16);
+    expect(decodePng(s.bytes).width).toBe(16);
     const same = (await shrinkImage(png, 128)).value!;
-    expect(same.bytes).toBe(png);
+    expect(same.bytes).toEqual(png);
     expect(same.resized).toBe(false);
 
     const jpg = makeJpeg(64, 32, (bx) => 20 + bx * 10);
@@ -243,11 +243,11 @@ describe("shrink", () => {
     const svg = new TextEncoder().encode(
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><rect width="4" height="4"/></svg>',
     );
-    expect(codes(await shrinkImage(svg, 2))).toContain("asset/shrink-format");
+    expect(codes(await shrinkImage(svg, 2))).toContain("asset/bad-option");
   });
 
   it("rejects a bad max-px", () => {
-    expect(codes(shrink(noise(4, 4, 1), 0))).toEqual(["asset/bad-max-px"]);
+    expect(codes(shrink(noise(4, 4, 1), 0))).toEqual(["asset/bad-option"]);
   });
 });
 
@@ -300,9 +300,12 @@ describe("locate", () => {
       [],
     );
     const flat = makeRaster(20, 20, () => [90, 90, 90, 255]);
-    expect(codes(locate(bg, flat))).toEqual(["asset/locate-flat"]);
+    const flatRes = locate(bg, flat);
+    expect(flatRes.value).toBeUndefined();
+    expect(flatRes.diagnostics.at(-1)).toMatchObject({ severity: "error", code: "asset/flat" });
+    expect(flatRes.diagnostics.slice(0, -1).every((d) => d.severity === "warning")).toBe(true);
     expect(codes(locate(bg, sprite, { top: 0 }))).toEqual(["asset/bad-option"]);
-    expect(codes(locate(sprite, bg))).toEqual(["asset/bad-rect"]);
+    expect(codes(locate(sprite, bg))).toEqual(["asset/not-found"]);
   });
 
   it("is deterministic across runs", () => {
@@ -337,8 +340,8 @@ describe("align", () => {
     const res = align(scene, shifted(scene, 4, 3), { patch: { x: 76, y: 46, w: 36, h: 40 } });
     expect([res.value!.dx, res.value!.dy]).toEqual([4, 3]);
     const flat = makeRaster(60, 60, () => WHITE);
-    expect(codes(align(flat, flat))).toEqual(["asset/align-flat"]);
-    expect(codes(align(scene, noise(160, 120, 99)))).toEqual(["asset/align-failed"]);
+    expect(codes(align(flat, flat))).toEqual(["asset/flat"]);
+    expect(codes(align(scene, noise(160, 120, 99)))).toEqual(["asset/not-found"]);
   });
 });
 

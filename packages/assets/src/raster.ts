@@ -61,6 +61,31 @@ export function checkRaster(r: Raster, what = "image"): Diagnostic | undefined {
   return undefined;
 }
 
+/** Straight luminance of the RGB channels (alpha ignored), 0..255 integers. Used for sprites, whose alpha is the match mask. */
+export function luminance(r: Raster): Uint8Array {
+  const n = r.width * r.height;
+  const out = new Uint8Array(n);
+  const d = r.data;
+  for (let i = 0; i < n; i++) {
+    out[i] = Math.round(0.299 * d[i * 4]! + 0.587 * d[i * 4 + 1]! + 0.114 * d[i * 4 + 2]!);
+  }
+  return out;
+}
+
+export const bboxOf = (r: Rect): Rect => ({ x: r.x, y: r.y, w: r.w, h: r.h });
+
+/** `asset/bad-option` with `params.option` (and a bbox when a region applies). */
+export const badOption = (option: string, message: string, bbox?: Rect): Diagnostic =>
+  err("asset/bad-option", message, {
+    params: { option, ...(bbox ? { bbox: bboxOf(bbox) } : {}) },
+  });
+
+export const warning = (
+  code: string,
+  message: string,
+  params?: Record<string, unknown>,
+): Diagnostic => ({ severity: "warning", code, path: "", message, ...(params ? { params } : {}) });
+
 /** Luminance over white, 0..255 integers (alpha composited on white first). */
 export function luminanceOverWhite(r: Raster): Uint8Array {
   const n = r.width * r.height;

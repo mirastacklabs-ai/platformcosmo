@@ -12,8 +12,8 @@ import {
   type ImageAsset,
   type ImageLimits,
 } from "@platformcosmo/core";
-import { decodeRgbaPng } from "./png.js";
-import { err, type OpResult, type Raster } from "./raster.js";
+import { decodePng } from "@platformcosmo/core";
+import { MAX_PIXELS, badOption, err, type OpResult, type Raster } from "./raster.js";
 
 export interface DecodeOptions {
   /** C-1 limits; default `DEFAULT_IMAGE_LIMITS`. */
@@ -32,6 +32,16 @@ export interface DecodedImage {
 
 const toBase64 = (b: Uint8Array): string =>
   Buffer.from(b.buffer, b.byteOffset, b.length).toString("base64");
+
+const tooLarge = (w: number, h: number) =>
+  err(
+    "asset/too-large",
+    `the decoded image would be ${w}x${h}, above the ${MAX_PIXELS} pixel limit`,
+    {
+      suggestion: "use a smaller svgSize or image",
+      params: { width: w, height: h },
+    },
+  );
 
 /** Applies EXIF orientation 1-8 (8-bit RGBA); the result is the upright image. */
 export function applyOrientation(r: Raster, orientation: number): Raster {
@@ -91,6 +101,12 @@ export async function decodeImage(
   options: DecodeOptions = {},
 ): Promise<OpResult<DecodedImage>> {
   const key = options.key ?? "image";
+  const svgSize = options.svgSize ?? 1024;
+  if (!Number.isInteger(svgSize) || svgSize < 1 || svgSize > 8192) {
+    return {
+      diagnostics: [badOption("svgSize", "svgSize must be an integer from 1 to 8192")],
+    };
+  }
   const prepared = prepareImage({ key, src: key, bytes }, options.limits ?? DEFAULT_IMAGE_LIMITS);
   const diagnostics: Diagnostic[] = [...prepared.diagnostics];
   const asset = prepared.asset;
@@ -109,10 +125,10 @@ export async function decodeImage(
       if (!(vw > 0 && vh > 0)) {
         return { diagnostics: [...diagnostics, err("image/format", "SVG has no usable viewBox")] };
       }
-      const side = Math.min(8192, Math.max(1, Math.round(options.svgSize ?? 1024)));
-      const k = side / Math.max(vw, vh);
+      const k = svgSize / Math.max(vw, vh);
       w = Math.max(1, Math.round(vw * k));
       h = Math.max(1, Math.round(vh * k));
+      if (w * h > MAX_PIXELS) return { diagnostics: [...diagnostics, tooLarge(w, h)] };
       const body = asset.svg.body.replaceAll("__PCID__", "p");
       svg =
         `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ` +
@@ -122,13 +138,24 @@ export async function decodeImage(
       const swap = asset.orientation >= 5;
       w = swap ? asset.height : asset.width;
       h = swap ? asset.width : asset.height;
+      if (w * h > MAX_PIXELS) return { diagnostics: [...diagnostics, tooLarge(w, h)] };
       svg =
         `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ` +
         `width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><image width="${w}" height="${h}" ` +
         `preserveAspectRatio="none" href="data:${asset.mime};base64,${toBase64(asset.data)}"/></svg>`;
     }
-    const png = await rasterize(svg, { scale: 1, fonts: [] });
-    let raster = decodeRgbaPng(png);
+    let png: Uint8Array;
+    try {
+      png = await rasterize(svg, { scale: 1, fonts: [] });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/resvg wasm/.test(msg)) {
+        return { diagnostics: [...diagnostics, err("asset/renderer-failed", msg)] };
+      }
+      throw e;
+    }
+    // Only ever called on resvg output (8-bit RGBA); core's decoder bounds the inflate size.
+    let raster: Raster = decodePng(png);
     if (raster.width !== w || raster.height !== h) {
       return {
         diagnostics: [

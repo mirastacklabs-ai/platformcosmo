@@ -1,15 +1,18 @@
 /** Crop, trim, edge-connected background removal and box-filter shrink (ingestion §3, §5). */
+import { floodFill } from "./cc.js";
 import { decodeImage } from "./decode.js";
 import { encodePng } from "./png.js";
-import { checkRaster, createRaster, err, type OpResult, type Raster, type Rect } from "./raster.js";
-
-const warn = (code: string, message: string, params?: Record<string, unknown>) => ({
-  severity: "warning" as const,
-  code,
-  path: "",
-  message,
-  ...(params ? { params } : {}),
-});
+import { boxResample } from "./resample.js";
+import {
+  badOption,
+  checkRaster,
+  createRaster,
+  err,
+  warning,
+  type OpResult,
+  type Raster,
+  type Rect,
+} from "./raster.js";
 
 /** Crops to `rect` (integers). A rectangle partly outside is clamped with `asset/rect-clamped`; fully outside is an error. */
 export function crop(r: Raster, rect: Rect): OpResult<Raster> {
@@ -18,12 +21,10 @@ export function crop(r: Raster, rect: Rect): OpResult<Raster> {
   if (![rect.x, rect.y, rect.w, rect.h].every(Number.isInteger) || rect.w <= 0 || rect.h <= 0) {
     return {
       diagnostics: [
-        err(
-          "asset/bad-rect",
+        badOption(
+          "rect",
           "the crop rectangle must be integers with positive width and height",
-          {
-            params: { ...rect },
-          },
+          rect,
         ),
       ],
     };
@@ -35,9 +36,7 @@ export function crop(r: Raster, rect: Rect): OpResult<Raster> {
   if (x1 <= x0 || y1 <= y0) {
     return {
       diagnostics: [
-        err("asset/bad-rect", `the crop rectangle lies outside the ${r.width}x${r.height} image`, {
-          params: { ...rect, width: r.width, height: r.height },
-        }),
+        badOption("rect", `the crop rectangle lies outside the ${r.width}x${r.height} image`, rect),
       ],
     };
   }
@@ -55,11 +54,8 @@ export function crop(r: Raster, rect: Rect): OpResult<Raster> {
     value: out,
     diagnostics: clamped
       ? [
-          warn("asset/rect-clamped", "the crop rectangle was clamped to the image", {
-            x: x0,
-            y: y0,
-            w,
-            h,
+          warning("asset/rect-clamped", "the crop rectangle was clamped to the image", {
+            bbox: { x: x0, y: y0, w, h },
           }),
         ]
       : [],
@@ -90,8 +86,9 @@ export function trim(r: Raster): OpResult<Raster> {
   const bad = checkRaster(r);
   if (bad) return { diagnostics: [bad] };
   const b = opaqueBounds(r);
-  if (!b)
+  if (!b) {
     return { diagnostics: [err("asset/empty", "nothing to trim: the image is fully transparent")] };
+  }
   return crop(r, b);
 }
 
@@ -104,16 +101,20 @@ export interface BackgroundOptions {
 
 export interface BackgroundResult {
   readonly raster: Raster;
-  /** Border median colour (R, G, B) of the pixels that were not already transparent. */
+  /** Border median colour (R, G, B) of the border pixels that were not already transparent. */
   readonly background: readonly [number, number, number];
   /** Pixels made transparent by this call. */
   readonly removed: number;
+  /** 1 where the edge-connected background was (includes pixels that were already transparent). */
+  readonly mask: Uint8Array;
 }
 
 /**
- * Edge-connected background removal. Flood fill (4-connected) from every border pixel through
- * pixels within `tolerance` of the border median colour (or already fully transparent); only that
- * region becomes transparent, so enclosed whites (fin gaps, holes) stay opaque.
+ * Edge-connected background removal. Flood fill (4-connected, so a diagonal 1-px outline still
+ * seals its inside) from every border pixel through pixels within `tolerance` of the border
+ * median colour (or already fully transparent); only that region becomes transparent, so
+ * enclosed whites (fin gaps, holes) stay opaque. When every border pixel is already transparent
+ * the input is returned unchanged with `asset/no-background`.
  */
 export function removeBackground(
   r: Raster,
@@ -123,9 +124,7 @@ export function removeBackground(
   if (bad) return { diagnostics: [bad] };
   const tol = options.tolerance ?? 12;
   if (!Number.isInteger(tol) || tol < 0 || tol > 255) {
-    return {
-      diagnostics: [err("asset/bad-tolerance", "tolerance must be an integer from 0 to 255")],
-    };
+    return { diagnostics: [badOption("tolerance", "tolerance must be an integer from 0 to 255")] };
   }
   const { width: w, height: h, data } = r;
   const border: number[] = [];
@@ -138,6 +137,16 @@ export function removeBackground(
     counted++;
     for (let c = 0; c < 3; c++) hist[c]![data[p * 4 + c]!]!++;
   }
+  let nonTransparent = 0;
+  for (let p = 0; p < w * h; p++) if (data[p * 4 + 3] !== 0) nonTransparent++;
+  if (counted === 0) {
+    return {
+      value: { raster: r, background: [255, 255, 255], removed: 0, mask: new Uint8Array(w * h) },
+      diagnostics: [
+        warning("asset/no-background", "the border is already transparent; nothing was removed"),
+      ],
+    };
+  }
   const median = (c: number): number => {
     let acc = 0;
     for (let v = 0; v < 256; v++) {
@@ -146,40 +155,14 @@ export function removeBackground(
     }
     return 255;
   };
-  const bg: [number, number, number] = counted
-    ? [median(0), median(1), median(2)]
-    : [255, 255, 255];
+  const bg: [number, number, number] = [median(0), median(1), median(2)];
   const isBg = (p: number): boolean =>
     data[p * 4 + 3] === 0 ||
     (Math.abs(data[p * 4]! - bg[0]) <= tol &&
       Math.abs(data[p * 4 + 1]! - bg[1]) <= tol &&
       Math.abs(data[p * 4 + 2]! - bg[2]) <= tol);
 
-  const seen = new Uint8Array(w * h);
-  const stack = new Int32Array(w * h);
-  let sp = 0;
-  for (const p of border) {
-    if (!seen[p] && isBg(p)) {
-      seen[p] = 1;
-      stack[sp++] = p;
-    }
-  }
-  while (sp > 0) {
-    const p = stack[--sp]!;
-    const x = p % w;
-    const y = (p - x) / w;
-    const push = (n: number): void => {
-      if (!seen[n] && isBg(n)) {
-        seen[n] = 1;
-        stack[sp++] = n;
-      }
-    };
-    if (x > 0) push(p - 1);
-    if (x < w - 1) push(p + 1);
-    if (y > 0) push(p - w);
-    if (y < h - 1) push(p + w);
-  }
-
+  const seen = floodFill(w, h, border, isBg, 4);
   const out = new Uint8Array(data);
   let removed = 0;
   for (let p = 0; p < w * h; p++) {
@@ -205,17 +188,17 @@ export function removeBackground(
   const diagnostics = [];
   if (removed === 0) {
     diagnostics.push(
-      warn("asset/no-background", "no edge-connected background was found", { background: bg }),
+      warning("asset/no-background", "no edge-connected background was found", { background: bg }),
     );
-  } else if (removed >= w * h) {
+  } else if (removed >= nonTransparent) {
     diagnostics.push(
-      warn("asset/background-covers-image", "the background colour covers the whole image", {
+      warning("asset/background-covers-image", "the background colour covers the whole image", {
         background: bg,
       }),
     );
   }
   return {
-    value: { raster: { width: w, height: h, data: out }, background: bg, removed },
+    value: { raster: { width: w, height: h, data: out }, background: bg, removed, mask: seen },
     diagnostics,
   };
 }
@@ -225,58 +208,13 @@ export function shrink(r: Raster, maxPx: number): OpResult<Raster> {
   const bad = checkRaster(r);
   if (bad) return { diagnostics: [bad] };
   if (!Number.isInteger(maxPx) || maxPx < 1 || maxPx > 8192) {
-    return { diagnostics: [err("asset/bad-max-px", "max-px must be an integer from 1 to 8192")] };
+    return { diagnostics: [badOption("maxPx", "max-px must be an integer from 1 to 8192")] };
   }
   const long = Math.max(r.width, r.height);
   if (long <= maxPx) return { value: r, diagnostics: [] };
   const nw = Math.max(1, Math.round((r.width * maxPx) / long));
   const nh = Math.max(1, Math.round((r.height * maxPx) / long));
   return { value: boxResample(r, nw, nh), diagnostics: [] };
-}
-
-/** Area-average resample to `nw` x `nh` (premultiplied accumulation). */
-export function boxResample(r: Raster, nw: number, nh: number): Raster {
-  const { width: w, height: h, data } = r;
-  const sx = w / nw;
-  const sy = h / nh;
-  const area = sx * sy;
-  const out = createRaster(nw, nh);
-  const acc = new Float64Array(nw * 4);
-  for (let oy = 0; oy < nh; oy++) {
-    acc.fill(0);
-    const y0 = oy * sy;
-    const y1 = (oy + 1) * sy;
-    for (let y = Math.floor(y0); y < Math.min(h, Math.ceil(y1)); y++) {
-      const wy = Math.min(y + 1, y1) - Math.max(y, y0);
-      if (wy <= 0) continue;
-      for (let ox = 0; ox < nw; ox++) {
-        const x0 = ox * sx;
-        const x1 = (ox + 1) * sx;
-        for (let x = Math.floor(x0); x < Math.min(w, Math.ceil(x1)); x++) {
-          const wx = Math.min(x + 1, x1) - Math.max(x, x0);
-          if (wx <= 0) continue;
-          const wgt = wx * wy;
-          const i = (y * w + x) * 4;
-          const a = data[i + 3]!;
-          acc[ox * 4] = acc[ox * 4]! + data[i]! * a * wgt;
-          acc[ox * 4 + 1] = acc[ox * 4 + 1]! + data[i + 1]! * a * wgt;
-          acc[ox * 4 + 2] = acc[ox * 4 + 2]! + data[i + 2]! * a * wgt;
-          acc[ox * 4 + 3] = acc[ox * 4 + 3]! + a * wgt;
-        }
-      }
-    }
-    for (let ox = 0; ox < nw; ox++) {
-      const a = acc[ox * 4 + 3]!;
-      const o = (oy * nw + ox) * 4;
-      if (a > 0) {
-        out.data[o] = Math.round(acc[ox * 4]! / a);
-        out.data[o + 1] = Math.round(acc[ox * 4 + 1]! / a);
-        out.data[o + 2] = Math.round(acc[ox * 4 + 2]! / a);
-        out.data[o + 3] = Math.round(a / area);
-      }
-    }
-  }
-  return out;
 }
 
 export interface ShrunkImage {
@@ -290,9 +228,9 @@ export interface ShrunkImage {
 
 /**
  * `assets shrink`: PNG gets a deterministic box-filter downscale and a PNG re-encode; a PNG that
- * already fits is returned unchanged. JPEG is never re-encoded: passed through unchanged
- * (`asset/shrink-passthrough`, a warning when it is larger than `maxPx`), or with `toPng`
- * decoded, shrunk and written as PNG. SVG is rejected.
+ * already fits is returned as C-1's cleaned bytes. JPEG is never re-encoded: passed through
+ * unchanged (`asset/shrink-passthrough`, a warning when it is larger than `maxPx`), or with
+ * `toPng` decoded (orientation applied), shrunk and written as PNG. SVG is rejected.
  */
 export async function shrinkImage(
   bytes: Uint8Array,
@@ -305,10 +243,7 @@ export async function shrinkImage(
   const diagnostics = [...dec.diagnostics];
   if (asset.format === "svg") {
     return {
-      diagnostics: [
-        ...diagnostics,
-        err("asset/shrink-format", "shrink works on PNG and JPEG, not SVG"),
-      ],
+      diagnostics: [...diagnostics, badOption("input", "shrink works on PNG and JPEG, not SVG")],
     };
   }
   const s = shrink(raster, maxPx);
@@ -329,9 +264,15 @@ export async function shrinkImage(
       diagnostics,
     };
   }
-  if (asset.format === "png" && !resized) {
+  if (asset.format === "png" && !resized && asset.orientation === 1) {
     return {
-      value: { bytes, format: "png", width: raster.width, height: raster.height, resized: false },
+      value: {
+        bytes: asset.data,
+        format: "png",
+        width: raster.width,
+        height: raster.height,
+        resized: false,
+      },
       diagnostics,
     };
   }
