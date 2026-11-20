@@ -115,21 +115,20 @@ function check(s: PartShapeDef, g: PartGeometry, size: Vec3): void {
   }
 }
 
-/** The scene's rule (A1-2a): a solid fills its depthBox iff it is one box/plate/card equal to it. */
-function fills(g: PartGeometry): boolean {
-  const only = g.primitives[0];
-  return (
-    g.solid &&
-    g.primitives.length === 1 &&
-    only !== undefined &&
-    ["box", "plate", "card"].includes(only.kind) &&
-    AXES.every(
-      (k) =>
-        Math.abs(only.box.origin[k] - g.depthBox.origin[k]) < 1e-9 &&
-        Math.abs(only.box.size[k] - g.depthBox.size[k]) < 1e-9,
-    )
+/** The scene's rule (A1-3): a solid fills its depthBox iff ANY one box/plate/card equals it. */
+function bodyBox(g: PartGeometry): PartGeometry["primitives"][number] | undefined {
+  return g.primitives.find(
+    (p) =>
+      ["box", "plate", "card"].includes(p.kind) &&
+      AXES.every(
+        (k) =>
+          Math.abs(p.box.origin[k] - g.depthBox.origin[k]) < 1e-9 &&
+          Math.abs(p.box.size[k] - g.depthBox.size[k]) < 1e-9,
+      ),
   );
 }
+const fills = (g: PartGeometry): boolean => g.solid && bodyBox(g) !== undefined;
+const HOUSINGS = ["block-i4", "head", "valve-cover", "oil-pan"];
 
 const ODD = [
   [1, 1, 1],
@@ -180,7 +179,7 @@ describe.each(autoShapes.map((s) => [s.id, s] as const))("auto:%s", (_id, s) => 
   test("every param value and combination builds valid geometry at odd sizes", () => {
     for (const p of paramSets(s)) {
       const r = s.readParams(p);
-      expect(r.diagnostics).toEqual([]);
+      expect(r.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
       for (const f of ODD) {
         const size = f === ODD[0] ? s.defaultSize : scaled(s.defaultSize, f);
         const g = s.build(r.params, ctx(size));
@@ -229,13 +228,13 @@ describe.each(autoShapes.map((s) => [s.id, s] as const))("auto:%s", (_id, s) => 
     }
   });
 
-  test("huge sizes are clamped; the maximum params stay within the 64-primitive cap", () => {
+  test("huge sizes are clamped; the maximum params stay within 40 primitives (cap 64)", () => {
     const huge = s.build(s.defaults, ctx({ x: 1e30, y: 1e30, z: 1e30 }));
     expect(huge.bounds.size.x).toBeLessThanOrEqual(MAX_EXTENT_MM);
     for (const p of paramSets(s)) {
       expect(
         s.build(s.readParams(p).params, ctx(s.defaultSize)).primitives.length,
-      ).toBeLessThanOrEqual(64);
+      ).toBeLessThanOrEqual(40);
     }
   });
 
@@ -259,7 +258,7 @@ describe("depthBox is the solid core (section 9.6), separate from bounds", () =>
     shape(id).build(shape(id).readParams(p).params, ctx(shape(id).defaultSize));
   const near = (a: number, b: number): void => expect(Math.abs(a - b)).toBeLessThan(EPS);
 
-  test.each(ORDER.filter((id) => !["oil-pan", "piston", "rod", "valve"].includes(id)))(
+  test.each(ORDER.filter((id) => !["piston", "rod", "valve"].includes(id)))(
     "auto:%s depthBox is strictly smaller than bounds",
     (id) => {
       const g = def(id);
@@ -294,40 +293,92 @@ describe("depthBox is the solid core (section 9.6), separate from bounds", () =>
     near(belt.size.x, 16); // sprockets and tensioner outside
   });
 
-  test("a part seated on the block deck is not enclosed by its depthBox", () => {
-    // The lugs would widen the box; the core keeps a crank-case-wide part from vanishing.
+  test("a head on the deck (z = 260) and an oil pan below are not enclosed by the block core", () => {
     const b = def("block-i4");
-    const lugBox: Box3 = { origin: { x: 24, y: 0, z: 60 }, size: { x: 40, y: 12, z: 40 } };
-    expect(inside(lugBox, b.bounds)).toBe(true);
-    expect(inside(lugBox, b.depthBox)).toBe(false);
+    const head = def("head");
+    const pan = def("oil-pan");
+    const at = (g: PartGeometry, x: number, y: number, z: number): Box3 => ({
+      origin: {
+        x: x + g.depthBox.origin.x,
+        y: y + g.depthBox.origin.y,
+        z: z + g.depthBox.origin.z,
+      },
+      size: g.depthBox.size,
+    });
+    const onDeck = at(head, 0, 0, 260);
+    const below = at(pan, 0, 0, -90);
+    for (const [name, box] of [
+      ["head", onDeck],
+      ["pan", below],
+    ] as const) {
+      expect(inside(box, b.depthBox), `${name} vs block core`).toBe(false);
+      for (const q of b.primitives) expect(overlaps(box, q.box), `${name} x ${q.id}`).toBe(false);
+    }
+    // Control: a part really inside the core IS enclosed, so the check can fail.
+    expect(inside(at(head, 0, 0, 100), b.depthBox)).toBe(true);
+    // The core stops 1 mm under the deck (the bore plugs are the top millimetre).
+    expect(b.depthBox.origin.z + b.depthBox.size.z).toBeCloseTo(259, 2);
+    expect(b.bounds.origin.z + b.bounds.size.z).toBeCloseTo(260, 2);
   });
 
-  test.each(["oil-pan", "piston", "rod", "valve"])(
-    "%s: nothing protrudes, depthBox equals bounds",
-    (id) => {
-      const g = def(id);
-      expect(g.depthBox).toEqual(g.bounds);
-    },
-  );
+  test.each(["piston", "rod", "valve"])("%s: nothing protrudes, depthBox equals bounds", (id) => {
+    const g = def(id);
+    expect(g.depthBox).toEqual(g.bounds);
+  });
 });
 
-describe("fills (A1-2a): only a single box filling its depthBox may occlude", () => {
-  test("detail:false housings are one filling box", () => {
-    for (const id of ["block-i4", "head", "valve-cover", "oil-pan"]) {
-      const g = shape(id).build({ detail: false }, ctx(shape(id).defaultSize));
-      expect(g.primitives).toHaveLength(1);
-      expect(g.primitives[0]?.kind, id).toBe("box");
-      expect(fills(g), id).toBe(true);
+describe("fills (A1-3): a housing occludes through one body box equal to its depthBox", () => {
+  test.each(HOUSINGS)(
+    "auto:%s has a single body box equal to depthBox, detailed or plain",
+    (id) => {
+      for (const detail of [true, false]) {
+        const g = shape(id).build({ detail }, ctx(shape(id).defaultSize));
+        const bodies = g.primitives.filter((p) => bodyBox(g) === p);
+        expect(bodies, `${id} detail=${detail}`).toHaveLength(1);
+        expect(bodies[0]?.kind).toBe("box");
+        expect(fills(g)).toBe(true);
+        if (detail) expect(g.primitives.length).toBeGreaterThan(1);
+      }
+    },
+  );
+
+  test("the body box equals depthBox at odd sizes too", () => {
+    for (const id of HOUSINGS) {
+      for (const f of ODD) {
+        const s = shape(id);
+        const g = s.build(s.defaults, ctx(scaled(s.defaultSize, f)));
+        expect(bodyBox(g), `${id} @${f}`).toBeDefined();
+      }
     }
   });
 
-  test("every other build is multi-primitive and never fills", () => {
-    for (const s of autoShapes) {
+  test("every other shape never fills", () => {
+    for (const s of autoShapes.filter((x) => !HOUSINGS.includes(x.id))) {
       for (const p of paramSets(s)) {
         const g = s.build(s.readParams(p).params, ctx(s.defaultSize));
-        expect(fills(g), `${s.id} ${JSON.stringify(p)}`).toBe(p["detail"] === false);
+        expect(fills(g), `${s.id} ${JSON.stringify(p)}`).toBe(false);
       }
     }
+  });
+
+  test("at most 40 primitives anywhere, reached by crankshaft and camshaft at 8 cylinders", () => {
+    let max = 0;
+    for (const s of autoShapes) {
+      for (const p of paramSets(s)) {
+        max = Math.max(max, s.build(s.readParams(p).params, ctx(s.defaultSize)).primitives.length);
+      }
+    }
+    expect(max).toBe(40);
+  });
+
+  test("roles: housing body, covers, internals; bolt-on manifolds and the head have none", () => {
+    expect(shape("block-i4").role).toBe("body");
+    for (const id of ["oil-pan", "valve-cover", "timing-belt"])
+      expect(shape(id).role).toBe("cover");
+    for (const id of ["crankshaft", "camshaft", "piston", "rod", "valve"]) {
+      expect(shape(id).role).toBe("internal");
+    }
+    for (const id of ["head", "intake", "exhaust"]) expect(shape(id).role).toBeUndefined();
   });
 });
 
@@ -346,13 +397,37 @@ describe("orientation", () => {
     expect(bores.primitives.filter((p) => p.id.startsWith("bore-"))).toHaveLength(6);
   });
 
-  test("bore is clamped to the cylinder pitch so bores never touch", () => {
+  test("bore is true mm, clamped to the pitch, and stays round under anisotropic sizes", () => {
     const s = shape("block-i4");
-    const g = s.build({ cylinders: 8, bore: 110 }, ctx(s.defaultSize));
-    const bores = g.primitives.filter((p) => p.id.startsWith("bore-"));
-    expect(bores[0]!.box.size.x).toBeLessThanOrEqual(0.8 * (420 / 8) + 0.01);
-    const wide = s.build({ cylinders: 4, bore: 80 }, ctx(s.defaultSize));
-    expect(wide.primitives.find((p) => p.id === "bore-0")!.box.size.x).toBeCloseTo(80, 1);
+    const bore = (p: Params, size: Vec3, i = 0) =>
+      s.build(s.readParams(p).params, ctx(size)).primitives.find((q) => q.id === `bore-${i}`)!;
+    const clamped = bore({ cylinders: 8, bore: 110 }, s.defaultSize);
+    expect(clamped.box.size.x).toBeCloseTo(42, 1); // floor(0.8 * 52.5)
+    expect(clamped.box.size.y).toBeCloseTo(42, 1);
+    expect(bore({ cylinders: 4, bore: 80 }, s.defaultSize).box.size.x).toBeCloseTo(80, 1);
+    for (const size of [
+      { x: 840, y: 115, z: 260 },
+      { x: 300, y: 460, z: 130 },
+      { x: 420, y: 230, z: 260 },
+    ]) {
+      const q = bore({ cylinders: 4, bore: 58 }, size);
+      expect(q.box.size.x, JSON.stringify(size)).toBeCloseTo(58, 0);
+      expect(q.box.size.y, JSON.stringify(size)).toBeCloseTo(58, 0);
+    }
+    // The pitch follows the actual length: an 80 mm bore fits at 840 mm, is clamped at 210 mm.
+    expect(bore({ cylinders: 8, bore: 80 }, { x: 840, y: 230, z: 260 }).box.size.x).toBeCloseTo(
+      80,
+      0,
+    );
+    expect(bore({ cylinders: 8, bore: 80 }, { x: 210, y: 230, z: 260 }).box.size.x).toBeCloseTo(
+      21,
+      0,
+    );
+    // Bores are centred in equal cells and never touch.
+    const g = s.build({ cylinders: 5 }, ctx({ x: 500, y: 230, z: 260 }));
+    const bs = g.primitives.filter((q) => q.id.startsWith("bore-"));
+    bs.forEach((q, i) => expect(q.box.origin.x + q.box.size.x / 2).toBeCloseTo(50 + i * 100, 1));
+    expectNoIntersections(g, "bores");
   });
 });
 
@@ -365,8 +440,8 @@ describe("readParams", () => {
   });
 
   test("unknown param: shape-params error with did-you-mean", () => {
-    const r = blk.readParams({ cylinder: 6, bore: 90 });
-    expect(r.params).toEqual({ cylinders: 4, bore: 90, detail: true });
+    const r = blk.readParams({ cylinder: 6, bore: 80 });
+    expect(r.params).toEqual({ cylinders: 4, bore: 80, detail: true });
     const d = r.diagnostics[0];
     expect(r.diagnostics).toHaveLength(1);
     expect(d?.code).toBe("assembly/shape-params");
@@ -397,13 +472,30 @@ describe("readParams", () => {
 
   test("bounds are inclusive and enums are checked", () => {
     expect(blk.readParams({ cylinders: 2, bore: 50 }).diagnostics).toEqual([]);
-    expect(blk.readParams({ cylinders: 8, bore: 110 }).diagnostics).toEqual([]);
+    expect(blk.readParams({ cylinders: 4, bore: 84 }).diagnostics).toEqual([]);
     expect(shape("valve").readParams({ kind: "exhaust" }).diagnostics).toEqual([]);
     const bad = shape("valve").readParams({ kind: "sideways" });
     expect(bad.diagnostics[0]?.code).toBe("assembly/shape-params");
     expect(bad.params["kind"]).toBe("intake");
     expect(shape("head").readParams({ valves: 5 }).diagnostics).toHaveLength(1);
     expect(shape("head").readParams({ valves: 1 }).diagnostics).toHaveLength(1);
+  });
+
+  test("a bore that exceeds the clamp warns with the effective bore; defaults never warn", () => {
+    const d = blk.readParams({ cylinders: 8, bore: 110 }).diagnostics;
+    expect(d).toHaveLength(1);
+    expect(d[0]?.severity).toBe("warning");
+    expect(d[0]?.code).toBe("assembly/shape-params");
+    expect(d[0]?.path).toBe("/params/bore");
+    expect(d[0]?.message).toContain("effective bore is 42 mm");
+    // The minimum bore does not fit eight cylinders either: warn, draw the clamp.
+    expect(blk.readParams({ cylinders: 8, bore: 50 }).diagnostics[0]?.severity).toBe("warning");
+    expect(blk.readParams({ cylinders: 6, bore: 50 }).diagnostics).toEqual([]); // 50 <= 56
+    expect(blk.readParams({ cylinders: 8 }).diagnostics).toEqual([]); // default bore: silent clamp
+    expect(blk.readParams({ cylinders: 5, bore: 67 }).diagnostics).toEqual([]);
+    expect(blk.readParams({ cylinders: 5, bore: 68 }).diagnostics).toHaveLength(1);
+    // An invalid bore is an error only, not also a warning.
+    expect(blk.readParams({ bore: 500 }).diagnostics.map((x) => x.severity)).toEqual(["error"]);
   });
 
   test("hostile keys and values do not pollute, throw or leak", () => {
@@ -551,11 +643,21 @@ describe("deny-list", () => {
     "nvidia",
     "intel",
   ];
-  test("no shape id, label, type, pack text or param name carries a brand", () => {
-    const text = [autoPack.id, autoPack.name]
+  test("no id, label, type, param, enum value or primitive id carries a brand", () => {
+    const enums = autoShapes.flatMap((s) =>
+      specsOf(s).flatMap(([, sp]) => (sp.kind === "enum" ? sp.values : [])),
+    );
+    const primIds = autoShapes.flatMap((s) =>
+      paramSets(s).flatMap((p) =>
+        s.build(s.readParams(p).params, ctx(s.defaultSize)).primitives.map((q) => q.id),
+      ),
+    );
+    expect(enums.length).toBeGreaterThan(0);
+    expect(primIds.length).toBeGreaterThan(100);
+    const text = [autoPack.id, autoPack.name, ...enums, ...primIds]
       .concat(autoShapes.flatMap((s) => [s.id, s.label, s.type, ...specsOf(s).map(([k]) => k)]))
       .join(" ")
       .toLowerCase();
-    for (const b of BRANDS) expect(text, b).not.toMatch(new RegExp(`\\b${b}`));
+    for (const b of BRANDS) expect(text, b).not.toMatch(new RegExp(`\\b${b}\\b`));
   });
 });

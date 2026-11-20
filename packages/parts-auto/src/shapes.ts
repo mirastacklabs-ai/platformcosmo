@@ -1,4 +1,5 @@
 import type { Axis, PartPrimitiveKind, PartShapeDef, PartTone } from "@platformcosmo/core";
+import type { Diagnostic } from "@platformcosmo/core";
 import { round2 } from "@platformcosmo/core";
 import { defineShape, type Draft, type ParamSpec } from "./define.js";
 
@@ -8,10 +9,30 @@ import { defineShape, type Draft, type ParamSpec } from "./define.js";
  * origin. One canonical, upright orientation (turn it with the part's `rotate`). The intake side
  * is +y (the side the iso viewer sees), the exhaust side -y, as in assemblies §19.3.
  * Each shape is authored at its default size and scaled per axis when the spec gives `size`.
+ *
  * `depthBox` is the solid core (see `finish`): crank throws, cam lobes, manifold flanges, port
- * bosses, mounting lugs, pulleys and the belt's sprockets are drawn but excluded.
- * Geometry claims: only the `detail: false` housings are ONE box that fills its `depthBox`;
- * everything else is multi-primitive (or round) and never fills (the scene derives `fills`).
+ * bosses, mounting lugs, pulleys, the belt's sprockets and the bore plugs are drawn but excluded.
+ *
+ * Occlusion: the housings (`block-i4`, `head`, `valve-cover`, `oil-pan`) occlude through their
+ * BODY box. Each has exactly one core `box` primitive equal to its `depthBox` (`detail: true` and
+ * `detail: false` alike); everything else on a housing is decorative and non-core. The scene's
+ * fill rule (a solid fills its depthBox when any single box/plate/card equals it) therefore holds
+ * for housings only. Every other shape is multi-primitive or round and never fills.
+ *
+ * Bores (`block-i4`) are flush plugs: 1 mm dark discs on the deck, outside the core, one per
+ * cylinder, centred in each of `cylinders` equal cells along the block's x extent (so their
+ * positions follow `cylinders` and the spec `size`). `bore` is in true mm: the disc is sized
+ * against the actual size, so it stays round under anisotropic sizes, and it is clamped to 80% of
+ * the cylinder pitch (and 90% of the core width) so bores never touch. `readParams` warns when an
+ * explicit `bore` exceeds the clamp at the default length; the clamp is what gets drawn, even
+ * below the param minimum when the pitch cannot fit it.
+ *
+ * The timing belt's `depthBox` is the belt frame only (x 2..18): it is a hollow loop, so its
+ * sprockets and tensioner (x 0..20) are excluded, and the box is not claimed as a solid fill.
+ *
+ * Bounds are smaller than `size` only for: an exhaust `valve` (its head is narrower than the
+ * default) and a `crankshaft` with `flange: false` (the flange gives the full y/z extent).
+ * Maximum primitive count: 40 (crankshaft or camshaft at 8 cylinders).
  * Nothing here copies a manufacturer's industrial design; the shapes are generic.
  */
 
@@ -73,9 +94,14 @@ function spread(i: number, n: number, w: number, lo: number, hi: number): number
 
 const cyl = int(2, 8, 4);
 
-/** `detail: false` housings: one plain box (fills its depthBox, so it encloses and hides). */
+/** `detail: false` housings: one plain box, the body (equal to its depthBox). */
 function plain(g: Draft, size: V3, tone: PartTone): void {
   put(g, "body", "box", [0, 0, 0], size, tone, { paint: true });
+}
+
+/** Largest bore (true mm) that keeps neighbouring bores apart in a block `length` mm long. */
+function boreCap(length: number, cylinders: number): number {
+  return Math.max(1, Math.floor((0.8 * length) / cylinders));
 }
 
 const blockI4 = defineShape({
@@ -85,28 +111,46 @@ const blockI4 = defineShape({
   role: "body",
   size: [420, 230, 260],
   params: { cylinders: cyl, bore: int(50, 110, 82), detail: bool(true) },
+  check(p, input) {
+    const cap = boreCap(420, p.cylinders as number);
+    if (input["bore"] !== p.bore || (p.bore as number) <= cap) return [];
+    return [
+      {
+        severity: "warning",
+        code: "assembly/shape-params",
+        path: "/params/bore",
+        message: `auto:block-i4 bore ${p.bore} mm does not fit ${p.cylinders} cylinders in the default 420 mm length; the effective bore is ${cap} mm (80% of the pitch).`,
+        params: { shape: "auto:block-i4", param: "bore", effective: cap },
+      },
+    ];
+  },
   draw(g, p, tone) {
     const [L, W, H] = [420, 230, 260];
     if (!p.detail) return void plain(g, [L, W, H], tone);
     const n = p.cylinders as number;
-    const pitch = L / n;
-    const b = Math.min(p.bore as number, Math.floor(0.8 * pitch)); // bores never touch
-    const [y0, y1, deck] = [12, W - 12, 140];
-    const r = (y1 - y0 - b) / 2;
-    put(g, "crankcase", "box", [0, y0, 0], [L, y1, deck], tone, { paint: true });
-    put(g, "rail-f", "box", [0, y0, deck], [L, y0 + r, H], tone, { paint: true });
-    put(g, "rail-b", "box", [0, y1 - r, deck], [L, y1, H], tone, { paint: true });
-    // One edge array, so a bore's end and the next web's start are the same number.
-    const x0 = Array.from({ length: n }, (_, i) => round2(i * pitch + (pitch - b) / 2));
-    const x1 = x0.map((x) => round2(x + b));
-    for (let i = 0; i <= n; i++) {
-      const lo = i === 0 ? 0 : (x1[i - 1] as number);
-      const hi = i === n ? L : (x0[i] as number);
-      put(g, `web-${i}`, "box", [lo, y0 + r, deck], [hi, y1 - r, H], tone, { paint: true });
-    }
+    const [y0, y1, plug] = [12, W - 12, 1];
+    // The body: the solid core, one box (it fills its depthBox and occludes).
+    put(g, "body", "box", [0, y0, 0], [L, y1, H - plug], tone, { paint: true });
+    // Bore plugs: true-mm discs (default-frame extents divided by the axis scale), non-core.
+    const [sx, sy] = [g.size.x / g.def.x, g.size.y / g.def.y];
+    const b = Math.min(
+      p.bore as number,
+      boreCap(g.size.x, n),
+      Math.max(1, Math.floor(0.9 * (y1 - y0) * sy)),
+    );
+    const [bw, bd] = [b / sx, b / sy];
     for (let i = 0; i < n; i++) {
-      const [xa, xb] = [x0[i] as number, x1[i] as number];
-      round(g, `bore-${i}`, "cylinder", "z", [xa, y0 + r, deck], [xb, y1 - r, H], "muted");
+      const cx = ((i + 0.5) * L) / n;
+      round(
+        g,
+        `bore-${i}`,
+        "cylinder",
+        "z",
+        [cx - bw / 2, W / 2 - bd / 2, H - plug],
+        [cx + bw / 2, W / 2 + bd / 2, H],
+        "muted",
+        { core: false },
+      );
     }
     // Engine-mount lugs: drawn, outside the solid core.
     for (const [k, x] of [
@@ -124,7 +168,6 @@ const head = defineShape({
   id: "head",
   label: "Cylinder head",
   type: "head",
-  role: "body",
   size: [420, 230, 100],
   params: { cylinders: cyl, valves: int(2, 4, 2), detail: bool(true) },
   draw(g, p, tone) {
@@ -171,8 +214,7 @@ const valveCover = defineShape({
     if (!p.detail) return void plain(g, [L, W, H], tone);
     const n = p.cylinders as number;
     const pitch = L / n;
-    put(g, "gasket", "plate", [0, 0, 0], [L, W, 3], "muted");
-    put(g, "body", "box", [0, 0, 3], [L, W, H - 10], tone, { paint: true });
+    put(g, "body", "box", [0, 0, 0], [L, W, H - 10], tone, { paint: true });
     const d = Math.min(24, 0.5 * pitch);
     for (let i = 0; i < n; i++) {
       const x = i * pitch + (pitch - d) / 2;
@@ -360,9 +402,9 @@ const oilPan = defineShape({
   draw(g, p, tone) {
     const [L, W, H] = [420, 230, 90];
     if (!p.detail) return void plain(g, [L, W, H], tone);
-    put(g, "flange", "plate", [0, 0, H - 6], [L, W, H], "metal");
-    put(g, "body", "box", [10, 10, 24], [L - 10, W - 10, H - 6], tone, { paint: true });
-    put(g, "sump", "box", [10, 10, 0], [170, W - 10, 24], tone, { paint: true });
+    // The tub is the core (one box); the mounting rim and the drain plug are outside it.
+    put(g, "body", "box", [10, 10, 0], [L - 10, W - 10, H - 6], tone, { paint: true });
+    put(g, "rim", "plate", [0, 0, H - 6], [L, W, H], "metal", { core: false });
     round(g, "drain", "cylinder", "x", [0, W / 2 - 8, 8], [10, W / 2 + 8, 20], "muted", {
       core: false,
     });
@@ -374,7 +416,6 @@ const intake = defineShape({
   id: "intake",
   label: "Intake manifold",
   type: "intake",
-  role: "internal",
   size: [380, 110, 90],
   params: { cylinders: cyl, throttle: bool(true) },
   draw(g, p, tone) {
@@ -400,7 +441,6 @@ const exhaust = defineShape({
   id: "exhaust",
   label: "Exhaust manifold",
   type: "exhaust",
-  role: "internal",
   size: [380, 90, 80],
   params: { cylinders: cyl, shield: bool(false) },
   draw(g, p, tone) {

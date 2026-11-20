@@ -284,6 +284,11 @@ export interface ShapeInit {
   readonly params: Readonly<Record<string, ParamSpec>>;
   /** Map x <-> z when true (an `orientation` param); the default size is swapped with it. */
   readonly swapXZ?: (p: AutoParams) => boolean;
+  /**
+   * Extra advisory diagnostics for valid params (warnings, e.g. a value that will be clamped).
+   * `input` is what the spec gave, so a default is never reported.
+   */
+  readonly check?: (p: AutoParams, input: Readonly<Record<string, unknown>>) => Diagnostic[];
   /** Author the shape at its default size; `p` is already validated. */
   readonly draw: (
     g: Draft,
@@ -314,7 +319,12 @@ export function defineShape(init: ShapeInit): PartShapeDef {
     defaults,
     readParams: (input) => {
       const r = readParamSpecs(init.id, specs, input);
-      return { params: r.params, diagnostics: r.diagnostics };
+      const given = typeof input === "object" && input !== null && !Array.isArray(input);
+      const extra =
+        given && init.check !== undefined
+          ? init.check(r.params, input as Record<string, unknown>)
+          : [];
+      return { params: r.params, diagnostics: [...r.diagnostics, ...extra] };
     },
     build(params, ctx) {
       const p = normalize(specs, params);
