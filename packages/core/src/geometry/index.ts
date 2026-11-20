@@ -16,3 +16,27 @@ export {
   faceToPath,
 } from "./primitives.js";
 export type { Silhouette } from "./primitives.js";
+export {
+  CIRCULAR_KINDS,
+  RING_INNER_RATIO,
+  TRAY_WALL_RATIO,
+  partGeometry,
+  partPrimitiveFaces,
+  partPrimitiveSilhouette,
+  studGrid,
+  trayParts,
+  halfOf,
+  partGeometryFaces,
+  STUD_DIAMETER,
+  STUD_HEIGHT,
+} from "./parts.js";
+export type {
+  Half,
+  PartFace,
+  PartGeometrySpec,
+  PartPrimitiveFaces,
+  StudGridOptions,
+  TrayPart,
+} from "./parts.js";
+export { applyMatrix, billboardRect, decalPlacement } from "./decals.js";
+export type { BillboardPlacement, DecalPlacement, Fit, Matrix } from "./decals.js";
