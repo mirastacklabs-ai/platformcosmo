@@ -149,7 +149,7 @@ export async function decodeImage(
       png = await rasterize(svg, { scale: 1, fonts: [] });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (/resvg wasm/.test(msg)) {
+      if ((e as { code?: unknown }).code === "RENDERER_INIT") {
         return { diagnostics: [...diagnostics, err("asset/renderer-failed", msg)] };
       }
       throw e;

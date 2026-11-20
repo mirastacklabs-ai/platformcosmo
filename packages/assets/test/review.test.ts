@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { crc32 } from "node:zlib";
 import { decodePng } from "@platformcosmo/core";
 import { describe, expect, it } from "vitest";
 import {
@@ -9,10 +10,12 @@ import {
   encodePng,
   floodFill,
   label,
+  labelBox,
   locate,
   nccAt,
   removeBackground,
   scaleSprite,
+  shrinkImage,
   type Raster,
 } from "../src/index.js";
 import { makeJpeg, makeRaster, noise, paste, px, shifted, type Px } from "./fixtures.js";
@@ -105,12 +108,39 @@ describe("locate: limits before allocation (Q01)", () => {
   });
 
   it("skips a flat scale with a warning but still searches the others", () => {
-    // Sprite 8x4 px: a 2 px black bar on grey; at 0.25 it has no texture left under its mask.
-    const sprite = makeRaster(8, 8, (x) => (x < 2 ? BLACK : [128, 128, 128, 255]));
+    // 8x8 checkerboard: at scale 0.5 every 2x2 box averages to the same grey (flat), at 1 it is textured.
+    const sprite = makeRaster(8, 8, (x, y) => ((x + y) % 2 ? WHITE : BLACK));
     const bg = makeRaster(60, 40, () => [128, 128, 128, 255]);
     const img = paste(bg, sprite, 20, 10);
-    const res = locate(img, sprite, { scales: [1] });
-    expect(res.value!.matches[0]).toMatchObject({ x: 20, y: 10 });
+    const res = locate(img, sprite, { scales: [0.5, 1] });
+    expect(res.diagnostics).toContainEqual(
+      expect.objectContaining({ severity: "warning", code: "asset/flat", params: { scale: 0.5 } }),
+    );
+    expect(res.value!.matches[0]).toMatchObject({ x: 20, y: 10, scale: 1 });
+    // Only the flat scale: an error.
+    expect(locate(img, sprite, { scales: [0.5] }).diagnostics.at(-1)).toMatchObject({
+      severity: "error",
+      code: "asset/flat",
+    });
+  });
+
+  it("re-checks the real cost per scale: a dithered mask that grows under resampling is refused", () => {
+    // 1 in 4 pixels masked; at 0.8 the box filter smears the mask over the whole sprite.
+    const n = noise(40, 40, 7, 2);
+    const dots = makeRaster(40, 40, (x, y) =>
+      x % 2 === 0 && y % 2 === 0 ? px(n, x, y) : [0, 0, 0, 0],
+    );
+    const img = paste(
+      noise(120, 90, 8, 2),
+      makeRaster(40, 40, (x, y) => px(n, x, y)),
+      50,
+      30,
+    );
+    const free = locate(img, dots, { scales: [0.8] }).value!;
+    expect(free.multiplyAdds).toBeGreaterThan(free.estimate); // the estimate is not an upper bound
+    const refused = locate(img, dots, { scales: [0.8], maxMultiplyAdds: Math.ceil(free.estimate) });
+    expect(refused.value).toBeUndefined();
+    expect(refused.diagnostics.at(-1)).toMatchObject({ code: "asset/too-expensive" });
   });
 });
 
@@ -122,24 +152,57 @@ describe("locate: overlap suppression by mask IoU (Q02)", () => {
       x < 6 || y < 6 || x >= 294 || y >= 114 ? px(n, x, y) : [0, 0, 0, 0],
     );
   }
-  it("finds every instance of a vertical stack at a 20 px pitch, in deterministic order", () => {
-    const sp = frame();
+  const ys = [10, 30, 50, 70, 90];
+  const stack = (sp: Raster): Raster => {
     let img = makeRaster(320, 240, () => [200, 200, 200, 255]);
-    const ys = [10, 30, 50, 70, 90];
     for (const y of ys) img = paste(img, sp, 10, y);
-    const a = locate(img, sp, { scales: [1], top: 5, minScore: 0.3 });
+    return img;
+  };
+  const inOrder = (m: readonly { score: number; y: number }[]): boolean =>
+    m.every(
+      (c, i) =>
+        i === 0 || m[i - 1]!.score > c.score || (m[i - 1]!.score === c.score && m[i - 1]!.y <= c.y),
+    );
+
+  it("finds every instance of a solid 300x120 stack at a 20 px pitch with nmsIoU 0.8, not at the default", () => {
+    const solid = noise(300, 120, 31);
+    const img = stack(solid);
+    const opts = { scales: [1], top: 5, minScore: 0.1 } as const;
+    const a = locate(img, solid, { ...opts, nmsIoU: 0.8 });
     const m = a.value!.matches;
     expect(m.map((x) => x.y).sort((p, q) => p - q)).toEqual(ys);
     expect(m.every((x) => x.x === 10)).toBe(true);
-    // Ordered by score (1e-6 buckets), then y.
-    for (let i = 1; i < m.length; i++) {
-      const p = m[i - 1]!;
-      const c = m[i]!;
-      expect(p.score > c.score || (p.score === c.score && p.y <= c.y)).toBe(true);
-    }
-    expect(JSON.stringify(locate(img, sp, { scales: [1], top: 5, minScore: 0.3 }).value)).toBe(
+    expect(inOrder(m)).toBe(true);
+    expect(JSON.stringify(locate(img, solid, { ...opts, nmsIoU: 0.8 }).value)).toBe(
       JSON.stringify(a.value),
     );
+    // Default 0.5: neighbours 20 px apart (IoU 0.71) are one instance, so fewer come back.
+    const d = locate(img, solid, opts).value!.matches;
+    expect(d.length).toBeLessThan(5);
+    expect(d.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("works on hollow frames too, because the silhouette is hole-filled", () => {
+    const sp = frame();
+    const img = stack(sp);
+    const dflt = locate(img, sp, { scales: [1], top: 5, minScore: 0.1 }).value!.matches;
+    expect(dflt.length).toBeLessThan(5);
+    const all = locate(img, sp, { scales: [1], top: 5, minScore: 0.1, nmsIoU: 0.8 }).value!.matches;
+    expect(all.map((x) => x.y).sort((p, q) => p - q)).toEqual(ys);
+    expect(inOrder(all)).toBe(true);
+  });
+
+  it("validates nmsIoU and always collapses an identical placement", () => {
+    const sp = noise(30, 30, 2);
+    const img = paste(noise(100, 80, 3), sp, 30, 20);
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      expect(locate(img, sp, { nmsIoU: bad }).diagnostics[0]).toMatchObject({
+        code: "asset/bad-option",
+        params: { option: "nmsIoU" },
+      });
+    }
+    const m = locate(img, sp, { scales: [1], top: 10, nmsIoU: 1 }).value!.matches;
+    expect(new Set(m.map((x) => `${x.x},${x.y},${x.scale}`)).size).toBe(m.length);
   });
 });
 
@@ -217,7 +280,16 @@ describe("floodFill and label (Q09)", () => {
     expect(l8.labels[0]).toBe(1);
     expect(l8.labels[w + 1]).toBe(1);
     expect(l8.labels[3 * w + 4]).toBe(2);
-    expect(l8.bboxes[0]).toEqual({ x: 0, y: 0, w: 2, h: 2 });
+    expect(labelBox(l8, 1)).toEqual({ x: 0, y: 0, w: 2, h: 2 });
+    expect(l8.areas).toBeInstanceOf(Int32Array);
+    expect(l8.bboxes).toBeInstanceOf(Int32Array);
+    expect([...l8.bboxes]).toEqual([0, 0, 2, 2, 4, 3, 1, 1]);
+  });
+
+  it("refuses sizes above the pixel cap", () => {
+    expect(() => floodFill(5000, 5000, [], () => true)).toThrow(RangeError);
+    expect(() => label(5000, 5000, () => false)).toThrow(RangeError);
+    expect(() => label(0, 5, () => false)).toThrow(RangeError);
   });
 
   it("floods from seeds through a predicate", () => {
@@ -341,12 +413,22 @@ describe("align (Q08)", () => {
 });
 
 describe("shrink pass-through (Q14)", () => {
-  it("returns C-1's cleaned bytes for a PNG that already fits", async () => {
-    const { shrinkImage } = await import("../src/index.js");
-    const png = encodePng(noise(20, 10, 2));
-    const out = (await shrinkImage(png, 64)).value!;
+  it("returns C-1's cleaned bytes (metadata gone) for a PNG that already fits", async () => {
+    const clean = encodePng(noise(20, 10, 2));
+    // Splice a tEXt chunk after IHDR (8 byte signature + 25 byte IHDR chunk), with a valid CRC.
+    const body = Buffer.from("Comment\0secret");
+    const chunk = Buffer.alloc(12 + body.length);
+    chunk.writeUInt32BE(body.length, 0);
+    chunk.write("tEXt", 4, "latin1");
+    body.copy(chunk, 8);
+    chunk.writeUInt32BE(crc32(chunk.subarray(4, 8 + body.length)), 8 + body.length);
+    const dirty = Uint8Array.from([...clean.subarray(0, 33), ...chunk, ...clean.subarray(33)]);
+    expect(Buffer.from(dirty).includes("tEXt")).toBe(true);
+    const out = (await shrinkImage(dirty, 64)).value!;
     expect(out.resized).toBe(false);
-    expect(out.bytes).toEqual(png);
+    expect(Buffer.from(out.bytes).includes("tEXt")).toBe(false);
+    expect(Buffer.from(out.bytes).includes("secret")).toBe(false);
+    expect(out.bytes).toEqual(clean);
   });
 });
 
@@ -354,14 +436,45 @@ describe("ordering and goldens (Q18, Q19)", () => {
   const bg = noise(220, 140, 11);
   const sprite = circleSprite(36, 77);
 
-  it("rounds scores to 1e-6 buckets and is independent of paste order", () => {
-    const a = paste(paste(paste(bg, sprite, 150, 30), sprite, 20, 90), sprite, 60, 30);
-    const b = paste(paste(paste(bg, sprite, 60, 30), sprite, 150, 30), sprite, 20, 90);
-    const ra = locate(a, sprite, { scales: [1], top: 3 }).value!.matches;
-    const rb = locate(b, sprite, { scales: [1], top: 3 }).value!.matches;
-    expect(ra).toEqual(rb);
-    for (const m of ra)
-      expect(Math.abs(m.score * 1e6 - Math.round(m.score * 1e6))).toBeLessThan(1e-6);
+  it("rounds scores to 1e-6 buckets and returns rank order for every paste order of overlapping twins", () => {
+    const at = [
+      [40, 30],
+      [66, 30],
+      [92, 30],
+    ] as const;
+    const perms = [
+      [0, 1, 2],
+      [0, 2, 1],
+      [1, 0, 2],
+      [1, 2, 0],
+      [2, 0, 1],
+      [2, 1, 0],
+    ];
+    const images = perms.map((p) =>
+      p.reduce((img, i) => paste(img, sprite, at[i]![0], at[i]![1]), bg),
+    );
+    // The orders really give different images (overlapping twins overwrite each other differently).
+    expect(new Set(images.map((i) => sha(i.data))).size).toBeGreaterThan(1);
+    for (const img of images) {
+      const r = locate(img, sprite, { scales: [1], top: 3, minScore: 0.2, nmsIoU: 0.9 }).value!
+        .matches;
+      expect(r).toHaveLength(3);
+      for (let i = 1; i < r.length; i++) {
+        const p = r[i - 1]!;
+        const c = r[i]!;
+        expect(
+          p.score > c.score || (p.score === c.score && (p.y < c.y || (p.y === c.y && p.x <= c.x))),
+        ).toBe(true);
+      }
+      for (const m of r)
+        expect(Math.abs(m.score * 1e6 - Math.round(m.score * 1e6))).toBeLessThan(1e-6);
+    }
+    const ra = locate(images[0]!, sprite, { scales: [1], top: 3, minScore: 0.2, nmsIoU: 0.9 });
+    expect(JSON.stringify(ra.value)).toBe(
+      JSON.stringify(
+        locate(images[0]!, sprite, { scales: [1], top: 3, minScore: 0.2, nmsIoU: 0.9 }).value,
+      ),
+    );
     // Score-bucket order, not reading order: a perturbed twin ranks below the exact ones even though it is higher on the page.
     const dim = makeRaster(36, 36, (x, y) => {
       const p = px(sprite, x, y);

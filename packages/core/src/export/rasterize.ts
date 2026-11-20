@@ -31,9 +31,12 @@ async function init(): Promise<void> {
         await initWasm(wasm);
       } catch (e) {
         ready = undefined; // allow a retry, e.g. after setResvgWasm with good bytes
-        throw new Error(
-          `could not initialise the resvg wasm renderer: ${e instanceof Error ? e.message : String(e)}`,
-          { cause: e },
+        throw Object.assign(
+          new Error(
+            `could not initialise the resvg wasm renderer: ${e instanceof Error ? e.message : String(e)}`,
+            { cause: e },
+          ),
+          { code: "RENDERER_INIT" },
         );
       }
     })();

@@ -16,6 +16,8 @@
  * resolution, which is exact but costs more on big images (use `region`).
  */
 import type { Diagnostic } from "@platformcosmo/core";
+import { floodFill } from "./cc.js";
+import { crop } from "./ops.js";
 import { bilinear, boxResample } from "./resample.js";
 import {
   MAX_MULTIPLY_ADDS,
@@ -43,6 +45,13 @@ export interface LocateOptions {
   readonly minScore?: number;
   /** Multiply-add cap (default `MAX_MULTIPLY_ADDS`). */
   readonly maxMultiplyAdds?: number;
+  /**
+   * Two placements are one instance when the IoU of their placed, hole-filled silhouettes is
+   * above this (0 < v <= 1, default 0.5); an identical (x, y, scale) is always suppressed. Applies
+   * to the coarse and the final stage. Stacked or tightly overlapping twin parts (a pitch well
+   * below the part's size) need a higher value: **C-4 should pass about 0.8**.
+   */
+  readonly nmsIoU?: number;
 }
 
 export interface Match {
@@ -72,7 +81,11 @@ export interface LocateResult {
   readonly multiplyAdds: number;
   /** Of which refinement. */
   readonly refineMultiplyAdds: number;
-  /** The up-front estimate the cap was checked against (an upper bound of `multiplyAdds`). */
+  /**
+   * The up-front estimate the cap was checked against, from dimensions and the sprite's mask
+   * count. It is a heuristic, not an upper bound (resampling can grow a sparse mask): the real
+   * cost of each scale is re-checked against the cap before that scale is scored.
+   */
   readonly estimate: number;
 }
 
@@ -82,7 +95,7 @@ const COARSE = 4;
 const MIN_COARSE_SIDE = 16;
 const MACS_PER_PIXEL = 3;
 const MASK_MIN_ALPHA = 3;
-const IOU_LIMIT = 0.5;
+const DEFAULT_NMS_IOU = 0.5;
 const SHAPE_SAMPLES = 4096;
 const MAX_SIDE = 65535;
 
@@ -189,13 +202,15 @@ function score(L: Float32Array, stride: number, t: Template, px: number, py: num
  * arguments are malformed; 0 when either side is flat under the mask.
  */
 export function nccAt(
-  image: Raster,
+  image: Raster | LuminancePlane,
   sprite: Raster,
   x: number,
   y: number,
   mask?: Uint8Array,
 ): number | undefined {
-  if (checkRaster(image) || checkRaster(sprite)) return undefined;
+  if (checkRaster(sprite)) return undefined;
+  const plane = isPlane(image) ? image : undefined;
+  if (plane ? !validPlane(plane) : checkRaster(image as Raster)) return undefined;
   if (!Number.isInteger(x) || !Number.isInteger(y)) return undefined;
   if (x < 0 || y < 0 || x + sprite.width > image.width || y + sprite.height > image.height) {
     return undefined;
@@ -210,8 +225,40 @@ export function nccAt(
   }
   const t = buildTemplate(luminance(sprite), weights, sprite.width, sprite.height);
   if (!t) return 0;
-  return q(score(Float32Array.from(luminanceOverWhite(image)), image.width, t, x, y));
+  if (plane) return q(score(plane.data, plane.width, t, x, y));
+  // Only the placed footprint is converted (same per-pixel formula as `luminancePlane`).
+  const foot = crop(image as Raster, { x, y, w: sprite.width, h: sprite.height }).value;
+  if (!foot) return undefined;
+  return q(score(Float32Array.from(luminanceOverWhite(foot)), foot.width, t, 0, 0));
 }
+
+/**
+ * The image luminance `locate` and `nccAt` use: each pixel composited on white, then
+ * round(0.299 R + 0.587 G + 0.114 B), as float32. Compute it once and pass the plane to `nccAt`
+ * for many placements; the scores are identical to passing the raster.
+ */
+export interface LuminancePlane {
+  readonly width: number;
+  readonly height: number;
+  readonly data: Float32Array;
+}
+
+export function luminancePlane(image: Raster): LuminancePlane {
+  return {
+    width: image.width,
+    height: image.height,
+    data: Float32Array.from(luminanceOverWhite(image)),
+  };
+}
+
+const isPlane = (v: Raster | LuminancePlane): v is LuminancePlane => v.data instanceof Float32Array;
+const validPlane = (p: LuminancePlane): boolean =>
+  Number.isInteger(p.width) &&
+  Number.isInteger(p.height) &&
+  p.width > 0 &&
+  p.height > 0 &&
+  p.data.length === p.width * p.height &&
+  p.data.length <= MAX_PIXELS;
 
 /** Plain block average of a plane (integer factor, trailing partial blocks dropped). */
 function blockAverage(src: ArrayLike<number>, w: number, h: number, f: number) {
@@ -270,23 +317,32 @@ interface Shape {
   readonly step: number;
 }
 
+/**
+ * Silhouette of a mask: enclosed holes are filled (a hollow outline counts as the solid part it
+ * outlines), and the intersection sample is a 2-D grid with stride ceil(sqrt(n / 4096)) in x
+ * and y, so every part of the shape is sampled evenly.
+ */
 function makeShape(alpha: ArrayLike<number>, w: number, h: number): Shape {
+  const ink = new Uint8Array(w * h);
+  for (let i = 0; i < ink.length; i++) ink[i] = alpha[i]! >= MASK_MIN_ALPHA ? 1 : 0;
+  const border: number[] = [];
+  for (let x = 0; x < w; x++) border.push(x, (h - 1) * w + x);
+  for (let y = 1; y < h - 1; y++) border.push(y * w, y * w + w - 1);
+  const outside = floodFill(w, h, border, (i) => ink[i] === 0, 4);
   const mask = new Uint8Array(w * h);
   let n = 0;
   for (let i = 0; i < mask.length; i++) {
-    if (alpha[i]! >= MASK_MIN_ALPHA) {
+    if (!outside[i]) {
       mask[i] = 1;
       n++;
     }
   }
-  const step = Math.max(1, Math.ceil(n / SHAPE_SAMPLES));
-  const pts = new Int32Array(Math.ceil(n / step));
-  let seen = 0;
-  let k = 0;
-  for (let i = 0; i < mask.length; i++) {
-    if (mask[i] && seen++ % step === 0) pts[k++] = i;
+  const step = Math.max(1, Math.ceil(Math.sqrt(n / SHAPE_SAMPLES)));
+  const pts: number[] = [];
+  for (let y = 0; y < h; y += step) {
+    for (let x = 0; x < w; x += step) if (mask[y * w + x]) pts.push(y * w + x);
   }
-  return { w, h, mask, n, pts, step };
+  return { w, h, mask, n, pts: Int32Array.from(pts), step };
 }
 
 interface At {
@@ -306,7 +362,7 @@ function iou(a: Shape, pa: At, b: Shape, pb: At): number {
     const ly = Math.floor(p / a.w) + pa.y - pb.y;
     if (lx >= 0 && ly >= 0 && lx < b.w && ly < b.h && b.mask[ly * b.w + lx]) hit++;
   }
-  const inter = Math.min(hit * a.step, a.n, b.n);
+  const inter = Math.min(hit * a.step * a.step, a.n, b.n);
   const union = a.n + b.n - inter;
   return union > 0 ? inter / union : 0;
 }
@@ -326,7 +382,8 @@ const tooExpensive = (estimate: number, cap: number, bbox: Rect): Diagnostic =>
     "asset/too-expensive",
     `matching needs about ${Math.round(estimate).toLocaleString("en-US")} multiply-adds, above the ${cap.toLocaleString("en-US")} limit`,
     {
-      suggestion: "search a smaller --region, use fewer scales, or shrink the images",
+      suggestion:
+        "search a smaller --region (for align, set --max-shift), use fewer scales, or shrink the images",
       params: { estimate: Math.round(estimate), limit: cap, bbox: bboxOf(bbox) },
     },
   );
@@ -357,6 +414,14 @@ export function locate(
   if (!(cap > 0)) {
     return { diagnostics: [badOption("maxMultiplyAdds", "maxMultiplyAdds must be positive")] };
   }
+  const nms = options.nmsIoU ?? DEFAULT_NMS_IOU;
+  if (!(nms > 0 && nms <= 1)) {
+    return { diagnostics: [badOption("nmsIoU", "nmsIoU must be above 0 and at most 1")] };
+  }
+  /** Same instance: identical placement, or masks overlapping above `nmsIoU`. */
+  const sameInstance = (a: Shape, pa: Ranked, b: Shape, pb: Ranked): boolean =>
+    (pa.x === pb.x && pa.y === pb.y && (pa.scale ?? 1) === (pb.scale ?? 1)) ||
+    iou(a, pa, b, pb) > nms;
   if (scales.length === 0 || scales.length > 16 || scales.some((s) => !(s >= 0.25 && s <= 4))) {
     return {
       diagnostics: [badOption("scales", "scales must be 1 to 16 numbers, each from 0.25 to 4")],
@@ -476,8 +541,11 @@ export function locate(
     const mapH = y1 - y0 + 1;
     if (mapW <= 0 || mapH <= 0) continue;
     const coarseCost = MACS_PER_PIXEL * mapW * mapH * coarse.n;
-    if (spent + coarseCost > cap) {
-      return { diagnostics: [...diagnostics, tooExpensive(spent + coarseCost, cap, region)] };
+    // Real cost of this scale (actual mask counts), checked before any scoring: coarse pass
+    // plus the largest refinement the picked candidates can need.
+    const worst = spent + coarseCost + MACS_PER_PIXEL * keep * (2 * REFINE + 1) ** 2 * full.n;
+    if (worst > cap) {
+      return { diagnostics: [...diagnostics, tooExpensive(worst, cap, region)] };
     }
     searched++;
     let C: Float32Array = L;
@@ -541,7 +609,7 @@ export function locate(
     const picked: Peak[] = [];
     for (const c of cand) {
       if (picked.length >= keep) break;
-      if (picked.every((a) => iou(cshape, c, cshape, a) <= IOU_LIMIT)) picked.push(c);
+      if (picked.every((a) => !sameInstance(cshape, c, cshape, a))) picked.push(c);
     }
     for (const c of picked) {
       let best: Peak | undefined;
@@ -592,7 +660,7 @@ export function locate(
   for (const m of found) {
     if (matches.length >= top) break;
     const sm = shapes.get(m.scale)!;
-    if (matches.every((a) => iou(sm, m, shapes.get(a.scale)!, a) <= IOU_LIMIT)) matches.push(m);
+    if (matches.every((a) => !sameInstance(sm, m, shapes.get(a.scale)!, a))) matches.push(m);
   }
   const used: ScaledSprite[] = [];
   for (const k of [...new Set(matches.map((m) => m.scale))].sort((a, b) => a - b)) {

@@ -59,13 +59,30 @@ export function bilinear(r: Raster, nw: number, nh: number): Raster {
       const x0 = Math.floor(fx);
       const x1 = Math.min(r.width - 1, x0 + 1);
       const tx = fx - x0;
-      for (let c = 0; c < 4; c++) {
-        const v =
-          r.data[(y0 * r.width + x0) * 4 + c]! * (1 - tx) * (1 - ty) +
-          r.data[(y0 * r.width + x1) * 4 + c]! * tx * (1 - ty) +
-          r.data[(y1 * r.width + x0) * 4 + c]! * (1 - tx) * ty +
-          r.data[(y1 * r.width + x1) * 4 + c]! * tx * ty;
-        out[(y * nw + x) * 4 + c] = Math.round(v);
+      // Premultiplied interpolation: transparent pixels' colour never bleeds into the result.
+      const taps = [
+        [(y0 * r.width + x0) * 4, (1 - tx) * (1 - ty)],
+        [(y0 * r.width + x1) * 4, tx * (1 - ty)],
+        [(y1 * r.width + x0) * 4, (1 - tx) * ty],
+        [(y1 * r.width + x1) * 4, tx * ty],
+      ] as const;
+      let a = 0;
+      let cr = 0;
+      let cg = 0;
+      let cb = 0;
+      for (const [i, wgt] of taps) {
+        const al = r.data[i + 3]! * wgt;
+        a += al;
+        cr += r.data[i]! * al;
+        cg += r.data[i + 1]! * al;
+        cb += r.data[i + 2]! * al;
+      }
+      const o = (y * nw + x) * 4;
+      if (a > 0) {
+        out[o] = Math.round(cr / a);
+        out[o + 1] = Math.round(cg / a);
+        out[o + 2] = Math.round(cb / a);
+        out[o + 3] = Math.round(a);
       }
     }
   }

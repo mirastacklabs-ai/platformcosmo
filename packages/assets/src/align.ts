@@ -7,6 +7,7 @@ import type { Diagnostic } from "@platformcosmo/core";
 import { locate } from "./locate.js";
 import { crop } from "./ops.js";
 import {
+  MAX_MULTIPLY_ADDS,
   badOption,
   bboxOf,
   checkRaster,
@@ -40,7 +41,7 @@ export interface Alignment {
   readonly score: number;
   /** Best score minus the second-best distinct position in the search window (or `minScore` when there is none): small means ambiguous. */
   readonly margin: number;
-  /** Patches that agree with (dx, dy) within 1 px, of `tried` patches that matched. */
+  /** Patches that agree with (dx, dy) within 1 px, of `tried` patches that were found in the second drawing. */
   readonly support: number;
   readonly tried: number;
   /** The winning patch of `a`. */
@@ -55,6 +56,7 @@ function exclusionMask(a: Raster, ex: AlignOptions["exclude"]): Uint8Array | und
   if (ex instanceof Uint8Array) return ex.length === a.width * a.height ? ex : undefined;
   const m = new Uint8Array(a.width * a.height);
   for (const r of ex) {
+    if (![r.x, r.y, r.w, r.h].every(Number.isInteger) || r.w <= 0 || r.h <= 0) return undefined;
     for (let y = Math.max(0, r.y); y < Math.min(a.height, r.y + r.h); y++) {
       for (let x = Math.max(0, r.x); x < Math.min(a.width, r.x + r.w); x++) m[y * a.width + x] = 1;
     }
@@ -149,7 +151,12 @@ export function align(a: Raster, b: Raster, options: AlignOptions = {}): OpResul
   const excluded = exclusionMask(a, options.exclude);
   if (options.exclude && !excluded) {
     return {
-      diagnostics: [badOption("exclude", "the exclusion mask must have width * height entries")],
+      diagnostics: [
+        badOption(
+          "exclude",
+          "exclude must be a width * height mask or rectangles of positive integers",
+        ),
+      ],
     };
   }
   const patches = options.patch ? [options.patch] : candidatePatches(a, excluded, count);
@@ -165,6 +172,9 @@ export function align(a: Raster, b: Raster, options: AlignOptions = {}): OpResul
   const diagnostics: Diagnostic[] = [];
   const hits: Hit[] = [];
   let failure: Diagnostic | undefined;
+  const cap = options.maxMultiplyAdds ?? MAX_MULTIPLY_ADDS;
+  let spent = 0;
+  let budgetLeft = true;
   for (const p of patches) {
     const cut = crop(a, p);
     if (!cut.value) return { diagnostics: cut.diagnostics };
@@ -184,23 +194,38 @@ export function align(a: Raster, b: Raster, options: AlignOptions = {}): OpResul
       ms === undefined
         ? undefined
         : { x: px - ms, y: py - ms, w: sprite.width + 2 * ms, h: sprite.height + 2 * ms };
+    // One align run shares one budget: each patch gets what the earlier ones left.
+    const remaining = cap - spent;
+    if (remaining <= 0) {
+      budgetLeft = false;
+      break;
+    }
+    // nmsIoU 1: only identical placements collapse, so the runner-up below is a real second peak.
     const res = locate(b, sprite, {
       scales: [1],
-      top: 2,
+      top: 6,
       minScore,
+      nmsIoU: 1,
       ...(region ? { region } : {}),
-      ...(options.maxMultiplyAdds !== undefined
-        ? { maxMultiplyAdds: options.maxMultiplyAdds }
-        : {}),
+      maxMultiplyAdds: remaining,
     });
     const real = res.diagnostics.filter((d) => d.code !== "asset/rect-clamped");
     if (!res.value) {
-      if (real.some((d) => d.code === "asset/too-expensive")) return { diagnostics: real };
+      if (real.some((d) => d.code === "asset/too-expensive")) {
+        budgetLeft = false;
+        failure = real.find((d) => d.code === "asset/too-expensive");
+        break;
+      }
       failure = real[0];
       continue;
     }
-    const [m1, m2] = res.value.matches;
+    spent += res.value.multiplyAdds;
+    const [m1] = res.value.matches;
     if (!m1) continue;
+    // Runner-up: the best placement more than 1 px away from the winner.
+    const m2 = res.value.matches.find(
+      (m) => Math.max(Math.abs(m.x - m1.x), Math.abs(m.y - m1.y)) > 1,
+    );
     hits.push({
       dx: m1.x - px,
       dy: m1.y - py,
@@ -208,6 +233,14 @@ export function align(a: Raster, b: Raster, options: AlignOptions = {}): OpResul
       margin: m1.score - (m2 ? m2.score : minScore),
       patch: { x: px, y: py, w: sprite.width, h: sprite.height },
     });
+  }
+  if (!budgetLeft && hits.length > 0) {
+    diagnostics.push(
+      warning("asset/too-expensive", "the matching budget ran out; fewer patches were tried", {
+        tried: hits.length,
+        limit: cap,
+      }),
+    );
   }
   if (hits.length === 0) {
     return {
@@ -258,7 +291,7 @@ export function align(a: Raster, b: Raster, options: AlignOptions = {}): OpResul
       score: win.score,
       margin: win.margin,
       support: bestSupport,
-      tried: patches.length,
+      tried: hits.length,
       patch: win.patch,
     },
     diagnostics,
