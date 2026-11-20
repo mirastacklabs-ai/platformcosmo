@@ -152,6 +152,18 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/parts-brick:
+    dependencies:
+      '@platformcosmo/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/pdf:
+    dependencies:
+      fflate:
+        specifier: 0.8.3
+        version: 0.8.3
+
   packages/themes:
     dependencies:
       '@platformcosmo/core':
