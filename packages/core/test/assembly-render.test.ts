@@ -354,9 +354,9 @@ describe("studs and fills (E-3 review)", () => {
     expect(it?.fills).toBe(true);
     const bare = partGeometry({ kind: "box", size: brickBox.size, tone: "base" });
     expect(depthItems([leafOf("b", bare, brickBox)])[0]?.fills).toBe(true);
-    // a stud beside the body (not above it) still disqualifies
+    // general rule: ANY primitive equal to the depth box fills, whatever else is present
     const g = studded();
-    const side: PartGeometry = {
+    const extra: PartGeometry = {
       ...g,
       primitives: [
         ...g.primitives,
@@ -367,7 +367,12 @@ describe("studs and fills (E-3 review)", () => {
         },
       ],
     };
-    expect(depthItems([leafOf("b", side, brickBox)])[0]?.fills).toBeUndefined();
+    expect(depthItems([leafOf("b", extra, brickBox)])[0]?.fills).toBe(true);
+    // without a primitive equal to the depth box it does not fill
+    const small = partGeometry({ kind: "box", size: { x: 1, y: 1, z: 1 }, tone: "base" });
+    expect(depthItems([leafOf("c", small, brickBox)])[0]?.fills).toBeUndefined();
+    const cyl = partGeometry({ kind: "cylinder", size: brickBox.size, tone: "base" });
+    expect(depthItems([leafOf("d", cyl, brickBox)])[0]?.fills).toBeUndefined();
   });
 
   test("an axle inserted into a studded brick clips instead of falling back", () => {
@@ -389,6 +394,51 @@ describe("studs and fills (E-3 review)", () => {
     expect(good.clips.some((c) => c.item === "axle")).toBe(true);
     const bad = depthEpochs([{ ...brick!, fills: false }, axle], moves, 2);
     expect(bad.clips.length).toBe(0);
+  });
+
+  test("a multi-primitive housing (lug + flush cylinder) encloses a piston and clips an insert", () => {
+    const base = partGeometry({ kind: "box", size: brickBox.size, tone: "base" });
+    const body = base.primitives[0]!;
+    const lug = {
+      ...body,
+      id: "lug",
+      box: { origin: { x: 4, y: 1, z: 0.5 }, size: { x: 1, y: 1, z: 1 } },
+    };
+    const cap = {
+      ...body,
+      id: "cap",
+      kind: "cylinder" as const,
+      box: { origin: { x: 1, y: 1, z: 3 }, size: { x: 2, y: 2, z: 0.5 } },
+    };
+    const g: PartGeometry = { ...base, primitives: [body, lug, cap] };
+    const [housing] = depthItems([leafOf("housing", g, brickBox)]);
+    expect(housing?.fills).toBe(true);
+    const piston = {
+      key: "piston",
+      path: "piston",
+      box: { origin: { x: 1, y: 1, z: 0.5 }, size: { x: 1, y: 1, z: 1 } },
+    };
+    const axle = {
+      key: "axle",
+      path: "axle",
+      box: { origin: { x: 2, y: 2, z: 0.5 }, size: { x: 1, y: 1, z: 6 } },
+      inserts: "housing",
+    };
+    const moves = [
+      {
+        path: "axle",
+        t0: 0,
+        t1: 2,
+        from: { x: 0, y: 0, z: 0 },
+        to: { x: 0, y: 0, z: 5 },
+        easing: "linear" as const,
+      },
+    ];
+    const r = depthEpochs([housing!, piston, axle], moves, 2);
+    // the piston sits inside the housing: hidden (enclosed) in every epoch
+    expect(r.epochs.every((e) => !e.order.includes("piston"))).toBe(true);
+    expect(r.clips.some((c) => c.item === "axle")).toBe(true);
+    expect(r.diagnostics.filter((d) => d.code === "assembly/clip-fallback")).toEqual([]);
   });
 
   test("stud faces merge into compound paths per part", () => {

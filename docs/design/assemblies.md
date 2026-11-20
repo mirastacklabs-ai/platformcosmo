@@ -549,11 +549,13 @@ of `a` lies inside or on `b` (flush faces count, so camshafts flush with a cover
 inside it).
 
 Every rule of this section reasons about the faces of a solid's `depthBox`, so only solids that
-**fill** their box take part: one `box`, `plate` or `card` primitive whose box is the
-`depthBox`. A cylinder, shaft, wedge, prism or multi-primitive solid leaves empty box corners
-where a crossing leaf can be visible in front of it, so it never encloses, hides, clips or
-orders by the hidden-face rule; it is ordered by separation or bisection only (approximate where
-those cannot decide).
+**fill** their box take part: a solid fills its `depthBox` when ANY single `box`, `plate` or
+`card` primitive has a box equal to the `depthBox`. Other primitives (studs, bores, lugs, decals,
+flush cylinders) may exist alongside it: the solid region still contains the whole `depthBox`, so
+detailed housings occlude like plain boxes. A solid without such a primitive (a cylinder, shaft,
+wedge, prism or an assembly of smaller pieces) leaves empty box corners where a crossing leaf can
+be visible in front of it, so it never encloses, hides, clips or orders by the hidden-face rule;
+it is ordered by separation or bisection only (approximate where those cannot decide).
 
 - **Enclosed** leaf: its `depthBox` lies inside a `solid` leaf's `depthBox`, or inside the
   **union of touching solids** (solids whose boxes share a face, merged into connected blocks;

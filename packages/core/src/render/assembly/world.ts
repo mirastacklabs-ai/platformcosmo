@@ -148,14 +148,12 @@ export function depthItems(leaves: readonly WorldLeaf[]): DepthItemInput[] {
       }
       continue;
     }
-    // Studs standing entirely above the top face do not stop a brick from filling its box (§5.1).
-    const top = l.depthBox.origin.z + l.depthBox.size.z;
-    const body = g.primitives.filter((p) => !(p.kind === "stud" && p.box.origin.z >= top - 1e-6));
-    const only = body.length === 1 ? body[0] : undefined;
-    const fills =
-      only !== undefined &&
-      (only.kind === "box" || only.kind === "plate" || only.kind === "card") &&
-      sameBox(only.box, l.depthBox);
+    // Fills (§9.5): any single box, plate or card primitive equal to the depth box makes the
+    // solid region contain the whole box; other primitives (studs, lugs, bores) may coexist.
+    const fills = g.primitives.some(
+      (p) =>
+        (p.kind === "box" || p.kind === "plate" || p.kind === "card") && sameBox(p.box, l.depthBox),
+    );
     out.push({
       key: l.path,
       ...base,
