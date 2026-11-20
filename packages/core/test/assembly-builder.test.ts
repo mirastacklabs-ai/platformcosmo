@@ -113,6 +113,28 @@ const rebuild = (e: PlatformCosmoSpec): PlatformCosmoSpec => {
   return s.toJSON();
 };
 
+/**
+ * The only errors the real wiring reports for builder output: the guard's `assembly/unsupported`
+ * and, for actions on non-figure targets whose phase is still gated (tracks §0),
+ * `assembly/unknown-target` at an action path.
+ */
+const onlyGuardErrors = (doc: PlatformCosmoSpec): void => {
+  const errors = validate(doc).diagnostics.filter((d) => d.severity === "error");
+  const figureIds = new Set((doc.figures ?? []).map((f) => f.id));
+  for (const d of errors) {
+    expect(["assembly/unsupported", "assembly/unknown-target"], d.path).toContain(d.code);
+    if (d.code !== "assembly/unknown-target") continue;
+    expect(d.path).toMatch(/^\/steps\/\d+\/assembly\/\d+\/(explode|implode|build|unbuild)$/);
+    const m = /^\/steps\/(\d+)\/assembly\/(\d+)\//.exec(d.path)!;
+    const act = doc.steps![Number(m[1])]!.assembly![Number(m[2])] as unknown as Record<
+      string,
+      unknown
+    >;
+    const target = String(Object.values(act)[0]);
+    expect(figureIds.has(target.split("/")[0] as string), d.path).toBe(false);
+  }
+};
+
 describe("design examples", () => {
   test("every design example is built (none excluded)", () => {
     const total =
@@ -130,10 +152,9 @@ describe("design examples", () => {
   test.each(EXAMPLES)("$name: builder output validates (only the guard objects)", ({ e }) => {
     const out = rebuild(e);
     expect(validateSpec(out).valid).toBe(true);
-    const errors = validate(out).diagnostics.filter((d) => d.severity === "error");
-    for (const d of errors) expect(d.code).toBe("assembly/unsupported");
-    // identical to what the plain example gets
+    // identical to what the plain example gets under the real guard wiring
     expect(validate(out).diagnostics).toEqual(validate(plain(e)).diagnostics);
+    onlyGuardErrors(out);
   });
 
   test("the comparison detects differences", () => {
@@ -355,8 +376,7 @@ describe("builder forms", () => {
       }),
     );
     expect(validateSpec(doc).valid).toBe(true);
-    for (const d of validate(doc).diagnostics.filter((x) => x.severity === "error"))
-      expect(d.code).toBe("assembly/unsupported");
+    onlyGuardErrors(doc);
   });
 
   test("no defaults: empty builders emit only what was given", () => {
