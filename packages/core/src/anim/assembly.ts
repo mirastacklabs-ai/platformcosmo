@@ -18,18 +18,19 @@
  */
 import type {
   AssemblyRenderModel,
+  Diagnostic,
   IdScheme,
   OpacityKey,
   RenderModel,
   TrackKey,
   VisibilityKey,
 } from "../contracts/index.js";
-import { evalOffset, evalOpacity, evalVisible, round2 } from "../render/assembly/tracks.js";
+import { keyProgress, round2 } from "../render/assembly/tracks.js";
 import { Keyframes, pct, t4 } from "./css.js";
 
 type Attrs = Record<string, Record<string, string | number>>;
 
-/** Keys per animated property above which the middle ones are thinned (first and last kept). */
+/** Keys per animated property above which linear sampled runs are thinned. */
 export const MAX_KEYS = 1024;
 /** Animated wrappers above which the rest stay at the rest pose (the model's budgets stop earlier). */
 export const MAX_PROPS = 12000;
@@ -63,6 +64,9 @@ export interface AssemblyAnim {
   /** Per step (0-based): start and end-of-hold in the speed's loop seconds. */
   readonly starts: readonly number[];
   readonly ends: readonly number[];
+  /** Tracks still above `MAX_KEYS` after thinning, and wrappers above `MAX_PROPS` (left at rest). */
+  readonly overKeys: number;
+  readonly overProps: number;
 }
 
 const r4 = (v: number): number => Math.round(v * 10000) / 10000 + 0;
@@ -71,7 +75,16 @@ const r4 = (v: number): number => Math.round(v * 10000) / 10000 + 0;
 // Preparation: warp, bound, order
 // ---------------------------------------------------------------------------------------------
 
-/** Piecewise-linear retiming of the speed-1 clock onto the speed's camera windows. */
+/** The hold at the end of a step's motion window, in loop seconds (§7.3). */
+const HOLD = 0.2;
+
+/**
+ * Piecewise-linear retiming of the speed-1 clock onto the speed's camera windows (§7.3). Per
+ * step, with the camera's lead and closing transition `min(0.8 speed, 0.25 d)` loop seconds:
+ * `open -> open'`; the end of the motion `open + L -> open' + min(L, room')` (moves play at spec
+ * speed and are compressed only when they overflow the window `room'` at this speed);
+ * `holdEnd -> holdEnd'`. Poses are unchanged, only their times move.
+ */
 function warpFor(am: AssemblyRenderModel, speed: number): (t: number) => number {
   if (speed === 1) return (t) => t;
   const pts: [number, number][] = [[0, 0]];
@@ -81,15 +94,22 @@ function warpFor(am: AssemblyRenderModel, speed: number): (t: number) => number 
   };
   const camera = (baked: number, d: number): number =>
     baked > 0 ? r4(Math.min(0.8 * speed, 0.25 * d)) : 0;
-  for (const c of am.clock) {
+  am.clock.forEach((c, i) => {
     const end = c.start + c.duration;
     const lead = camera(r4(c.open - c.start), c.duration);
     const tr = camera(r4(end - c.end), c.duration);
+    const open2 = c.start + lead;
+    const end2 = end - tr;
     push(c.start, c.start);
-    push(c.open, c.start + lead);
-    push(c.end, end - tr);
+    push(c.open, open2);
+    const settled = am.settled[i];
+    if (settled !== undefined && settled > c.open && settled < c.end) {
+      const room2 = Math.max(0, end2 - HOLD - open2);
+      push(settled, open2 + Math.min(settled - c.open, room2));
+    }
+    push(c.end, end2);
     push(end, end);
-  }
+  });
   return (t) => {
     const first = pts[0] as [number, number];
     if (!(t > first[0])) return t;
@@ -105,14 +125,87 @@ function warpFor(am: AssemblyRenderModel, speed: number): (t: number) => number 
   };
 }
 
-/** At most `MAX_KEYS` keys: thinned by a fixed stride, first and last kept. */
-function bound<K>(keys: readonly K[]): K[] {
-  if (keys.length <= MAX_KEYS) return [...keys];
-  const out: K[] = [];
-  const step = (keys.length - 1) / (MAX_KEYS - 1);
-  for (let i = 0; i < MAX_KEYS; i++) out.push(keys[Math.round(i * step)] as K);
-  return out;
+/** Times at which a pose must stay exact: every key there is kept by `thin`. */
+function protectedTimes(am: AssemblyRenderModel): Set<number> {
+  const set = new Set<number>();
+  const add = (t: number | undefined): void => {
+    if (t !== undefined && Number.isFinite(t)) set.add(r4(t));
+  };
+  for (const e of am.epochs) {
+    add(e.t0);
+    add(e.t1);
+  }
+  for (const x of am.approximate) {
+    add(x.t0);
+    add(x.t1);
+  }
+  for (const c of am.clock) {
+    add(c.start);
+    add(c.open);
+    add(c.end);
+    add(c.start + c.duration);
+  }
+  for (const s of am.settled) add(s);
+  add(am.closure?.t0);
+  add(am.closure?.t1);
+  for (const t of am.tracks) for (const k of t.visibility) add(k.t);
+  // move boundaries (the render-side model keeps its moves)
+  const moves = (am as unknown as { moves?: readonly { t0: number; t1: number }[] }).moves;
+  for (const m of moves ?? []) {
+    add(m.t0);
+    add(m.t1);
+  }
+  return set;
 }
+
+/** Largest chord error (user units; opacity x 100) `thin` may introduce. */
+const MAX_ERR = 0.5;
+const linear = (e: Easing): boolean => e === "linear";
+
+/**
+ * Keeps a track within `MAX_KEYS` by dropping keys inside runs of LINEAR sampled keys whose
+ * chord error stays under `MAX_ERR` (growing tolerance, one pass per step). Never dropped: the
+ * ends, keys at protected times (move and epoch boundaries, visibility times), keys with a
+ * non-linear easing and the key after one (the end of an eased segment). `ok` is false when the
+ * budget could not be met this way (the track is then left as thinned, never cut blindly).
+ */
+function thin<K extends { readonly t: number; readonly easing: Easing }>(
+  keys: readonly K[],
+  protect: ReadonlySet<number>,
+  error: (a: K, mid: K, b: K) => number,
+): { keys: K[]; ok: boolean } {
+  let cur = [...keys];
+  for (let eps = 0.01; eps <= MAX_ERR && cur.length > MAX_KEYS; eps *= 2) {
+    const out: K[] = [cur[0] as K];
+    let removedPrev = false;
+    for (let i = 1; i < cur.length - 1; i++) {
+      const k = cur[i] as K;
+      const prev = cur[i - 1] as K;
+      const keep: boolean =
+        removedPrev ||
+        protect.has(r4(k.t)) ||
+        !linear(k.easing) ||
+        !linear(prev.easing) ||
+        error(out[out.length - 1] as K, k, cur[i + 1] as K) > eps;
+      if (keep) out.push(k);
+      removedPrev = !keep;
+    }
+    out.push(cur[cur.length - 1] as K);
+    cur = out;
+  }
+  return { keys: cur, ok: cur.length <= MAX_KEYS };
+}
+
+const lerpAt = (a: number, b: number, f: number): number => a + (b - a) * f;
+const moveError = (a: TrackKey, k: TrackKey, b: TrackKey): number => {
+  const f = (k.t - a.t) / (b.t - a.t);
+  return Math.hypot(
+    k.offset.x - lerpAt(a.offset.x, b.offset.x, f),
+    k.offset.y - lerpAt(a.offset.y, b.offset.y, f),
+  );
+};
+const fadeError = (a: OpacityKey, k: OpacityKey, b: OpacityKey): number =>
+  Math.abs(k.opacity - lerpAt(a.opacity, b.opacity, (k.t - a.t) / (b.t - a.t))) * 100;
 
 /** Retimed keys with strictly increasing times (a collision keeps the later key). */
 function retime<K extends { readonly t: number }>(
@@ -156,16 +249,20 @@ export function assemblyAnim(am: AssemblyRenderModel, speed: number): AssemblyAn
   const hit = bySpeed.get(s);
   if (hit !== undefined) return hit;
   const warp = warpFor(am, s);
+  const protect = protectedTimes(am);
   const props: AssemblyProp[] = [];
+  let overKeys = 0;
   const move = (id: string, keys: readonly TrackKey[]): void => {
-    if (keys.length > 0) {
-      props.push({ kind: "transform", id, keys: prune(retime(bound(keys), warp), sameOffset) });
-    }
+    if (keys.length === 0) return;
+    const t = thin(prune([...keys], sameOffset), protect, moveError);
+    if (!t.ok) overKeys++;
+    props.push({ kind: "transform", id, keys: retime(t.keys, warp) });
   };
   const fade = (id: string, keys: readonly OpacityKey[]): void => {
-    if (keys.length > 0) {
-      props.push({ kind: "opacity", id, keys: prune(retime(bound(keys), warp), sameOpacity) });
-    }
+    if (keys.length === 0) return;
+    const t = thin(prune([...keys], sameOpacity), protect, fadeError);
+    if (!t.ok) overKeys++;
+    props.push({ kind: "opacity", id, keys: retime(t.keys, warp) });
   };
   for (const t of am.tracks) {
     // the wrappers exist exactly for the tracks that have keys (A1-3 `Registered`)
@@ -191,6 +288,8 @@ export function assemblyAnim(am: AssemblyRenderModel, speed: number): AssemblyAn
     warp,
     starts: am.clock.map((c) => c.start),
     ends: am.clock.map((c) => warp(Math.min(c.end, am.loop))),
+    overKeys,
+    overProps: Math.max(0, props.length - MAX_PROPS),
   };
   bySpeed.set(s, anim);
   return anim;
@@ -215,6 +314,61 @@ export const hasAssemblyMotion = (am: AssemblyRenderModel | undefined): am is As
 // ---------------------------------------------------------------------------------------------
 // Attribute overrides (frame, step, static)
 // ---------------------------------------------------------------------------------------------
+
+const EPS = 1e-9;
+
+/** Index of the first key with `t < key.t - EPS` (binary search), or `keys.length`. */
+function segmentEnd(keys: readonly { readonly t: number }[], t: number): number {
+  let lo = 1;
+  let hi = keys.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (t < (keys[mid] as { t: number }).t - EPS) hi = mid;
+    else lo = mid + 1;
+  }
+  return lo;
+}
+
+/** Same values as `render/assembly/tracks` `evalOffset`, by binary search. */
+function evalOffset(keys: readonly TrackKey[], t: number): { x: number; y: number } {
+  const first = keys[0];
+  if (first === undefined) return { x: 0, y: 0 };
+  if (t <= first.t + EPS) return first.offset;
+  const j = segmentEnd(keys, t);
+  if (j >= keys.length) return (keys[keys.length - 1] as TrackKey).offset;
+  const a = keys[j - 1] as TrackKey;
+  const b = keys[j] as TrackKey;
+  if (a.easing === "step") return a.offset;
+  const u = keyProgress(a.easing, (t - a.t) / (b.t - a.t));
+  return {
+    x: a.offset.x + (b.offset.x - a.offset.x) * u,
+    y: a.offset.y + (b.offset.y - a.offset.y) * u,
+  };
+}
+
+function evalOpacity(keys: readonly OpacityKey[], t: number): number {
+  const first = keys[0];
+  if (first === undefined) return 1;
+  if (t <= first.t + EPS) return first.opacity;
+  const j = segmentEnd(keys, t);
+  if (j >= keys.length) return (keys[keys.length - 1] as OpacityKey).opacity;
+  const a = keys[j - 1] as OpacityKey;
+  const b = keys[j] as OpacityKey;
+  if (a.easing === "step") return a.opacity;
+  return a.opacity + (b.opacity - a.opacity) * keyProgress(a.easing, (t - a.t) / (b.t - a.t));
+}
+
+function evalVisible(keys: readonly VisibilityKey[], t: number): boolean {
+  if (keys.length === 0) return true;
+  let lo = 0;
+  let hi = keys.length; // first key with k.t > t + EPS
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if ((keys[mid] as VisibilityKey).t <= t + EPS) lo = mid + 1;
+    else hi = mid;
+  }
+  return (keys[Math.max(0, lo - 1)] as VisibilityKey).visible;
+}
 
 const translateAttr = (x: number, y: number): string => `translate(${round2(x)} ${round2(y)})`;
 
@@ -285,6 +439,32 @@ export interface AssemblyRules {
   readonly rules: readonly string[];
   /** Reduced-motion rules: discrete per-step poses, each step showing its end pose. */
   readonly reduced: readonly string[];
+  /** `budget/elements` warnings: tracks or wrappers above the animator's bounds. */
+  readonly diagnostics: readonly Diagnostic[];
+}
+
+/** Budget warnings of a speed's preparation (empty when every track fits). */
+export function assemblyDiagnostics(a: AssemblyAnim): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  if (a.overKeys > 0) {
+    out.push({
+      severity: "warning",
+      code: "budget/elements",
+      path: "",
+      message: `${a.overKeys} assembly track(s) keep more than ${MAX_KEYS} keyframes after thinning their linear runs.`,
+      suggestion: "Use fewer concurrent moves with different timing, or split the assembly.",
+    });
+  }
+  if (a.overProps > 0) {
+    out.push({
+      severity: "warning",
+      code: "budget/elements",
+      path: "",
+      message: `${a.overProps} animated assembly wrapper(s) beyond ${MAX_PROPS} stay at the rest pose.`,
+      suggestion: "Group parts into sub-assemblies that move as one, or split the assembly.",
+    });
+  }
+  return out;
 }
 
 /** Stops of one property with a decl per key; consecutive stops at one percentage keep the last. */
@@ -324,7 +504,10 @@ export function assemblyLoop(
 ): AssemblyRules {
   const a = assemblyAnim(am, speed);
   const moving = a.props.filter((p) => !isConstant(p));
-  if (!(a.loop > 0) || !(total > 0) || moving.length === 0) return { rules: [], reduced: [] };
+  const diagnostics = assemblyDiagnostics(a);
+  if (!(a.loop > 0) || !(total > 0) || moving.length === 0) {
+    return { rules: [], reduced: [], diagnostics };
+  }
   const dur = `${t4(total)}s`;
   // An element can carry two properties (a label group moves and fades): one `animation` list.
   const perId = new Map<string, string[]>();
@@ -419,7 +602,7 @@ export function assemblyLoop(
     }
     return [...grouped].map(([decl, sels]) => `${sels.join(",")}{animation:${decl}}`);
   };
-  return { rules: emit(perId), reduced: emit(reducedPerId) };
+  return { rules: emit(perId), reduced: emit(reducedPerId), diagnostics };
 }
 
 /**

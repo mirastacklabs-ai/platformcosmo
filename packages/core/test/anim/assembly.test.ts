@@ -16,10 +16,11 @@ import {
   MAX_KEYS,
   MAX_PROPS,
   assemblyAnim,
+  assemblyDiagnostics,
   assemblyFrame,
   assemblyLoop,
-  assemblySettled,
 } from "../../src/anim/assembly.js";
+import { evalOffset as evalOffsetOrig, translateFull } from "../../src/render/assembly/tracks.js";
 import { Keyframes } from "../../src/anim/css.js";
 import { fixtureTheme } from "../fixtures/theme.js";
 import { realPng, resolverOf } from "../figure-fixtures.js";
@@ -524,7 +525,13 @@ describe("interactive Step pauses at the settled pose", () => {
         const c = am.clock[i]!;
         expect(g[i]).toBeGreaterThan(c.start / speed);
         expect(g[i]).toBeLessThanOrEqual((c.start + c.duration) / speed);
-        expect(g[i]).toBeCloseTo(assemblySettled(am, speed, i)!, 3);
+        // independent expectation (§7.3): the motion plays from its start at spec speed and is
+        // compressed only if it overflows the window left by the camera's closing transition
+        const trBaked = c.start + c.duration - c.end;
+        const tr = trBaked > 0 ? Math.min(0.8 * speed, 0.25 * c.duration) : 0;
+        const room = c.duration - tr - 0.2; // lead is 0 here: open === start
+        expect(c.open).toBe(c.start);
+        expect(g[i]).toBeCloseTo((c.start + Math.min(s - c.start, room)) / speed, 3);
         // and the pose there is the settled pose: everything the step moves has arrived
         const want = expectedAttrs(am.stepEnd(i + 1));
         for (const [id, set] of Object.entries(want)) {
@@ -619,6 +626,263 @@ describe("speed and the camera", () => {
   );
 });
 
+describe("speed: the warp follows 7.3 (compress only on overflow)", () => {
+  const fakeClock = (settled: number | undefined) =>
+    ({
+      ids: {},
+      tracks: [],
+      labelTracks: [],
+      staticFades: [],
+      epochs: [],
+      approximate: [],
+      loop: 4,
+      // one 4 s step with a closing transition (0.8) and no lead
+      clock: [{ step: 1, start: 0, duration: 4, open: 0, end: 3.2 }],
+      settled: [settled],
+    }) as unknown as AssemblyRenderModel;
+
+  test("the end of the motion overflows at speed 2 and is compressed; not at speed 0.5", () => {
+    // 2: transition min(1.6, 1) = 1, window 4 - 1 - 0.2 = 2.8 < L = 3
+    const w2 = assemblyAnim(fakeClock(3), 2).warp;
+    expect(w2(0)).toBe(0);
+    expect(w2(3)).toBeCloseTo(2.8, 4);
+    expect(w2(3.2)).toBeCloseTo(3, 4); // hold end meets the camera's transition
+    expect(w2(4)).toBe(4);
+    expect(w2(1.5)).toBeCloseTo(1.4, 4); // linear inside the motion
+    // 0.5: transition min(0.4, 1) = 0.4, window 3.4 - 0.2 = 3.2 >= L = 3: plays at spec speed
+    const w05 = assemblyAnim(fakeClock(3), 0.5).warp;
+    expect(w05(3)).toBeCloseTo(3, 4);
+    expect(w05(3.2)).toBeCloseTo(3.6, 4);
+    // a motion that fits at 2 is not compressed
+    expect(assemblyAnim(fakeClock(1), 2).warp(1)).toBeCloseTo(1, 4);
+    // speed 1 is the identity
+    expect(assemblyAnim(fakeClock(3), 1).warp(2.7)).toBe(2.7);
+  });
+
+  /** Baked times near which values change abruptly: not sampled. */
+  function nearBreakpoint(am: AssemblyRenderModel, t: number): boolean {
+    const special = [
+      ...am.clock.flatMap((c) => [c.start, c.open, c.end, c.start + c.duration]),
+      ...am.settled.filter((x): x is number => x !== undefined),
+      ...am.epochs.flatMap((e) => [e.t0, e.t1]),
+      ...am.tracks.flatMap((k) => k.visibility.map((v) => v.t)),
+      ...am.labelTracks.flatMap((l) => l.opacity.map((o) => o.t)),
+    ];
+    return special.some((x) => Math.abs(x - t) < 0.06);
+  }
+
+  test.each([0.5, 2])(
+    "%s x: frame(warp(t)/speed) is the model's pose at t (independent oracle)",
+    (speed) => {
+      const model = build(gpu());
+      const am = A(model);
+      let compared = 0;
+      for (let t = 0.11; t < am.loop; t += 0.29) {
+        if (nearBreakpoint(am, t)) continue;
+        const tau = assemblyAnim(am, speed).warp(t) / speed;
+        const got = animate(model, { speed, mode: "frame", time: tau }).attrs ?? {};
+        const want = expectedAttrs(am.frameAt(t));
+        for (const [id, set] of Object.entries(want)) {
+          for (const [name, v] of Object.entries(set)) {
+            const g = got[id]?.[name];
+            if (name === "transform") {
+              const [gx, gy] = transformOf(g);
+              const [wx, wy] = transformOf(v);
+              expect(Math.hypot(gx - wx, gy - wy), `${id} @${t} x${speed}`).toBeLessThan(0.1);
+            } else if (name === "opacity") {
+              expect(
+                Math.abs((g as number) - (v as number)),
+                `${id} o @${t} x${speed}`,
+              ).toBeLessThan(0.03);
+            } else {
+              expect(g, `${id} v @${t} x${speed}`).toBe(v);
+            }
+            compared++;
+          }
+        }
+      }
+      expect(compared).toBeGreaterThan(2000);
+    },
+  );
+
+  test.each([0.5, 2])(
+    "%s x: every step's motion has finished before the camera's transition",
+    (speed) => {
+      const model = build(gpu());
+      const am = A(model);
+      let checked = 0;
+      for (const c of am.clock) {
+        if (am.settled[c.step - 1] === undefined || c.start + c.duration - c.end <= 0) continue;
+        expect(c.duration).toBeGreaterThan(3.2); // the 0.8 s cap binds, so the warp matters
+        const tr = Math.min(0.8, (0.25 * c.duration) / speed); // the camera's, in output seconds
+        const tau = (c.start + c.duration) / speed - tr - 0.02;
+        const got = animate(model, { speed, mode: "frame", time: tau }).attrs ?? {};
+        const want = expectedAttrs(am.stepEnd(c.step));
+        for (const [id, set] of Object.entries(want)) {
+          if (set.transform === undefined) continue;
+          const [gx, gy] = transformOf(got[id]?.transform);
+          const [wx, wy] = transformOf(set.transform);
+          expect(Math.hypot(gx - wx, gy - wy), `${id} step ${c.step} x${speed}`).toBeLessThan(0.1);
+        }
+        checked++;
+      }
+      expect(checked).toBeGreaterThanOrEqual(3);
+    },
+  );
+
+  test.each([0.5, 2])("%s x: a figure and an assembly in one step move together", (speed) => {
+    const spec = engine() as unknown as { steps: { assembly?: unknown[] }[] } & Obj;
+    spec.images = [
+      { id: "base", src: "base.png" },
+      { id: "spr", src: "spr.png" },
+    ];
+    spec.figures = [
+      {
+        id: "f",
+        base: "base",
+        parts: [
+          { id: "p1", image: "spr", seat: [100, 300], exploded: [100, 100], label: "Part one" },
+          { id: "p2", image: "spr", seat: [300, 320] },
+        ],
+      },
+    ];
+    spec.steps[2]!.assembly!.push({ explode: "f" });
+    const imgs = resolverOf({
+      base: realPng(600, 480, (_x, y) => [230 - (y >> 3), 235, 240, 255]),
+      spr: realPng(80, 60, (x, y) => [40 + x, 90, 160 - y, 255]),
+    });
+    const parsed = spec as unknown as PlatformCosmoSpec;
+    const scene = buildScene(parsed, { images: imgs });
+    const model = buildModel({
+      scene,
+      theme: fixtureTheme(),
+      font: "system",
+      prefix: "pc-t",
+      spec: parsed,
+      images: imgs,
+    });
+    const am = A(model);
+    const asmIds = new Set(Object.keys(expectedAttrs(am.frameAt(0))));
+    const c = am.clock[2]!;
+    const at = (tau: number) => animate(model, { speed, mode: "frame", time: tau }).attrs ?? {};
+    const step = (k: number) =>
+      animate(model, { speed, mode: "step", step: k, motion: "css" }).attrs ?? {};
+    const dist = (a: Obj2, b: Obj2, pick: (id: string) => boolean): number => {
+      let worst = 0;
+      for (const id of Object.keys(a)) {
+        if (!pick(id) || a[id]!.transform === undefined || b[id]?.transform === undefined) continue;
+        const [ax, ay] = transformOf(a[id]!.transform);
+        const [bx, by] = transformOf(b[id]!.transform);
+        worst = Math.max(worst, Math.hypot(ax - bx, ay - by));
+      }
+      return worst;
+    };
+    type Obj2 = Record<string, Record<string, string | number>>;
+    const isAsm = (id: string) => asmIds.has(id);
+    const isFig = (id: string) => !asmIds.has(id);
+    const tr = Math.min(0.8, (0.25 * c.duration) / speed);
+    const before = c.start / speed - 0.01;
+    const done = (c.start + c.duration) / speed - tr - 0.02;
+    // the figure part ids really are in the frame
+    expect(Object.keys(at(0)).some(isFig)).toBe(true);
+    for (const [name, pick] of [
+      ["assembly", isAsm],
+      ["figure", isFig],
+    ] as const) {
+      // still at the previous step's pose until the step starts
+      expect(dist(at(before), step(2), pick), `${name} before`).toBeLessThan(0.1);
+      // moving at some time inside the window (actions of one step play one after another)
+      let moved = 0;
+      for (let k = 1; k <= 24; k++) {
+        const tau = before + 0.01 + ((done - before) * k) / 25;
+        moved = Math.max(moved, dist(at(tau), step(2), pick));
+      }
+      expect(moved, `${name} moves`).toBeGreaterThan(0.5);
+      // settled at the step's pose before the camera moves
+      expect(dist(at(done), step(3), pick), `${name} done`).toBeLessThan(0.1);
+    }
+  });
+});
+
+describe("output without assemblies is pinned (hashes produced on main, before B-1)", () => {
+  const figureOnly = (): PlatformCosmoSpec =>
+    ({
+      meta: { version: "1", title: "fig" },
+      images: [
+        { id: "base", src: "base.png" },
+        { id: "spr", src: "spr.png" },
+      ],
+      figures: [
+        {
+          id: "f",
+          base: "base",
+          stages: [
+            { parts: ["p1"], duration: 1.2, easing: "ease-in-out" },
+            { parts: ["p2"], duration: 1, easing: "ease", delay: 0.3 },
+          ],
+          parts: [
+            {
+              id: "p1",
+              image: "spr",
+              seat: [100, 300],
+              exploded: [100, 100],
+              label: "Part one",
+              arrow: true,
+            },
+            { id: "p2", image: "spr", seat: [300, 320], label: "Part two", detail: ["a detail"] },
+          ],
+        },
+      ],
+      steps: [
+        { caption: "a", duration: 2 },
+        { caption: "b", duration: 5, assembly: [{ explode: "f" }] },
+        { caption: "c", duration: 5, assembly: [{ implode: "f" }] },
+      ],
+    }) as unknown as PlatformCosmoSpec;
+  const figureModel = (): RenderModel => {
+    const imgs = resolverOf({
+      base: realPng(600, 480, (_x, y) => [230 - (y >> 3), 235, 240, 255]),
+      spr: realPng(80, 60, (x, y) => [40 + x, 90, 160 - y, 255]),
+    });
+    const spec = figureOnly();
+    const scene = buildScene(spec, { images: imgs });
+    return buildModel({
+      scene,
+      theme: fixtureTheme(),
+      font: "system",
+      prefix: "pc-t",
+      spec,
+      images: imgs,
+    });
+  };
+  const digest = (model: RenderModel): string => {
+    const parts: string[] = [];
+    for (const speed of [1, 2]) {
+      for (const motion of ["css", "smil"] as const) {
+        for (const mode of ["loop", "interactive"] as const) {
+          const l = animate(model, { speed, mode, motion });
+          parts.push(l.css, l.script ?? "", String(l.duration));
+        }
+        parts.push(JSON.stringify(animate(model, { speed, mode: "step", step: 2, motion }).attrs));
+      }
+      for (const time of [0, 1.3, 3.1]) {
+        parts.push(JSON.stringify(animate(model, { speed, mode: "frame", time }).attrs));
+      }
+    }
+    return sha(parts.join("\n--\n"));
+  };
+
+  test("a figure-only spec", () => {
+    const model = figureModel();
+    expect(model.assembly).toBeUndefined();
+    expect(digest(model)).toBe("5da00ce7b5050175");
+  });
+
+  test("a 1.1 diagram", () => {
+    expect(digest(buildFixture())).toBe("cca3fcd6c1df479f");
+  });
+});
+
 describe("determinism and bounds", () => {
   test("the same model gives the same bytes, in every mode", () => {
     const m1 = build(gpu());
@@ -644,46 +908,162 @@ describe("determinism and bounds", () => {
     expect(new Set(defs).size).toBe(defs.length);
   });
 
-  test("keys per track and animated wrappers are bounded; nothing throws", () => {
-    const keys = (n: number) =>
-      Array.from({ length: n }, (_, i) => ({
-        t: (i / (n - 1)) * 10,
-        offset: { x: Math.sin(i) * 50, y: i % 7 },
-        easing: "linear" as const,
-      }));
+  /** A hand-made assembly model: tracks as given, frameAt from the ORIGINAL keys. */
+  function fake(
+    tracks: AssemblyRenderModel["tracks"],
+    extra: Partial<AssemblyRenderModel> & { moves?: { t0: number; t1: number }[] } = {},
+  ): AssemblyRenderModel {
     const ids = {
       partHost: (k: string) => `h_${k}`,
       partMotion: (k: string) => `m_${k}`,
       partVisible: (k: string) => `v_${k}`,
       partFade: (k: string) => `f_${k}`,
     };
-    const tracks = Array.from({ length: MAX_PROPS + 500 }, (_, i) => ({
-      copy: `p${String(i).padStart(6, "0")}`,
-      host: [],
-      motion: i === 0 ? keys(MAX_KEYS * 4) : keys(3),
-      visibility: [],
-      opacity: [],
-    }));
     const am = {
       ids,
       tracks,
       labelTracks: [],
       staticFades: [],
+      epochs: [],
+      approximate: [],
       loop: 10,
       clock: [{ step: 1, start: 0, duration: 10, open: 0, end: 10 }],
       settled: [5],
-    } as unknown as AssemblyRenderModel;
+      frameAt: (t: number) => ({
+        transforms: Object.fromEntries(
+          tracks.flatMap((k) =>
+            k.motion.length === 0
+              ? []
+              : [[ids.partMotion(k.copy), translateFull(evalOffsetOrig(k.motion, t))]],
+          ),
+        ),
+        hidden: [],
+        visible: [],
+        opacity: {},
+      }),
+      ...extra,
+    };
+    return am as unknown as AssemblyRenderModel;
+  }
+  const idsOf = { sel: (s: string) => `#${s}` } as unknown as Parameters<typeof assemblyLoop>[2];
+
+  test("a track over the budget keeps its protected keys: poses at move and visibility times are exact", () => {
+    const n = 4001;
+    const T = (i: number) => Math.round(i * 25) / 10000;
+    // a gentle curve sampled densely (thinnable), one eased segment, boundaries at 5, 6, 8
+    const motion = Array.from({ length: n }, (_, i) => ({
+      t: T(i),
+      offset: { x: Math.round(Math.sin(T(i) * 0.3) * 4000) / 100, y: i / 100 },
+      easing: (i === 1000 ? "ease-in-out" : "linear") as "linear" | "ease-in-out",
+    }));
+    const am = fake(
+      [
+        {
+          copy: "a",
+          host: [],
+          motion,
+          visibility: [
+            { t: 0, visible: true },
+            { t: 3.3, visible: false },
+            { t: 7.1, visible: true },
+            { t: 10, visible: true },
+          ],
+          opacity: [],
+        },
+      ],
+      { moves: [{ t0: 5, t1: 6 }], epochs: [{ t0: 8, t1: 9, order: [], approximate: false }] },
+    );
+    const a = assemblyAnim(am, 1);
+    const prop = a.props.find((p) => p.kind === "transform")!;
+    expect(prop.keys.length).toBeLessThanOrEqual(MAX_KEYS);
+    expect(prop.keys.length).toBeLessThan(n);
+    // protected times and the eased segment's two ends are still keys
+    const times = new Set(prop.keys.map((k) => k.t));
+    for (const t of [0, 2.5, 2.5025, 3.3, 5, 6, 7.1, 8, 10])
+      expect(times.has(t), `key @${t}`).toBe(true);
+    // the pose there equals the model's frameAt
+    for (const t of [0, 2.5, 2.5025, 3.3, 5, 6, 7.1, 8, 10 - 0.0001]) {
+      const got = assemblyFrame(am, 1, t)!["m_a"]!.transform;
+      expect(got, `pose @${t}`).toBe(am.frameAt(t).transforms["m_a"]);
+    }
+    expect(assemblyFrame(am, 1, 3.4)!["v_a"]!.visibility).toBe("hidden");
+    expect(assemblyFrame(am, 1, 7.2)!["v_a"]!.visibility).toBe("visible");
+    // between keys the thinned track stays within the tolerance of the original
+    for (let t = 0.013; t < 10; t += 0.0371) {
+      const [x, y] = transformOf(assemblyFrame(am, 1, t)!["m_a"]!.transform);
+      const [ox, oy] = transformOf(am.frameAt(t).transforms["m_a"]);
+      expect(Math.hypot(x - ox, y - oy), `@${t}`).toBeLessThan(0.6);
+    }
+    expect(assemblyDiagnostics(a)).toEqual([]);
+  });
+
+  test("a track that cannot be thinned is kept whole and reported (budget/elements), never cut", () => {
+    const n = 3000;
+    const motion = Array.from({ length: n }, (_, i) => ({
+      t: (i / (n - 1)) * 10,
+      offset: { x: i % 2 === 0 ? 0 : 50, y: 0 },
+      easing: "linear" as const,
+    }));
+    const am = fake([{ copy: "z", host: [], motion, visibility: [], opacity: [] }]);
+    const a = assemblyAnim(am, 1);
+    expect(a.props[0]!.keys).toHaveLength(n);
+    const diags = assemblyDiagnostics(a);
+    expect(diags.map((d) => [d.severity, d.code])).toEqual([["warning", "budget/elements"]]);
+    const r = assemblyLoop(am, 1, idsOf, new Keyframes("x"), 10);
+    expect(r.diagnostics).toEqual(diags);
+    // the pose at a key is the model's
+    for (const i of [1, 1500, 2999]) {
+      const t = motion[i]!.t;
+      expect(assemblyFrame(am, 1, t - 1e-9)!["m_z"]!.transform).toBe(
+        am.frameAt(t - 1e-9).transforms["m_z"],
+      );
+    }
+  });
+
+  test("more wrappers than MAX_PROPS: the rest stay at rest, reported; nothing throws", () => {
+    const keys = (k: number) =>
+      Array.from({ length: 3 }, (_, i) => ({
+        t: i * 5,
+        offset: { x: i === 1 ? k : 0, y: 0 },
+        easing: "linear" as const,
+      }));
+    const tracks = Array.from({ length: MAX_PROPS + 500 }, (_, i) => ({
+      copy: `p${String(i).padStart(6, "0")}`,
+      host: [],
+      motion: keys(i + 1),
+      visibility: [],
+      opacity: [],
+    }));
+    const am = fake(tracks);
     const a = assemblyAnim(am, 1);
     expect(a.props.length).toBe(MAX_PROPS);
-    expect(Math.max(...a.props.map((p) => p.keys.length))).toBeLessThanOrEqual(MAX_KEYS);
-    const idsOf = { sel: (s: string) => `#${s}` } as unknown as Parameters<typeof assemblyLoop>[2];
+    expect(a.overProps).toBe(500);
     const r = assemblyLoop(am, 1, idsOf, new Keyframes("x"), 10);
+    expect(r.diagnostics.map((d) => d.code)).toEqual(["budget/elements"]);
     expect(r.rules.length).toBeGreaterThan(0);
     expect(assemblyFrame(am, 1, 3)).toBeDefined();
-    // degenerate inputs: no loop, speed 0 / NaN, empty tracks
-    expect(() => assemblyLoop({ ...am, loop: 0 }, 1, idsOf, new Keyframes("x"), 10)).not.toThrow();
+    // degenerate inputs
     expect(assemblyLoop({ ...am, loop: 0 }, 1, idsOf, new Keyframes("x"), 10).rules).toEqual([]);
     expect(() => assemblyFrame(am, 0, Number.NaN)).not.toThrow();
     expect(assemblyFrame({ ...am, tracks: [] } as AssemblyRenderModel, 1, 1)).toBeUndefined();
+  });
+
+  test("binary-search evaluation agrees with the model's linear scans, at every key and between", () => {
+    const model = build(gpu());
+    const am = A(model);
+    for (const t of am.tracks.slice(0, 40)) {
+      for (const keys of [t.motion, t.host]) {
+        for (let x = 0; x <= am.loop; x += 0.173) {
+          const want = translateFull(evalOffsetOrig(keys, x));
+          if (keys.length === 0) continue;
+          const id = keys === t.motion ? am.ids.partMotion(t.copy) : am.ids.partHost(t.copy);
+          const got = assemblyFrame(am, 1, x)?.[id]?.transform;
+          if (got !== undefined && got !== want) {
+            // pruned flat keys cannot change a value
+            throw new Error(`${id} @${x}: ${got} vs ${want}`);
+          }
+        }
+      }
+    }
   });
 });

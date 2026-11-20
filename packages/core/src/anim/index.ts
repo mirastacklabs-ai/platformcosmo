@@ -490,5 +490,8 @@ function loopLayer(
     layers,
     ...(script !== undefined ? { script } : {}),
     duration,
+    ...(asmCss !== undefined && asmCss.diagnostics.length > 0
+      ? { diagnostics: asmCss.diagnostics }
+      : {}),
   };
 }
