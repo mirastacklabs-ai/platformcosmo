@@ -7,8 +7,10 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { stringify as yamlStringify } from "yaml";
 import { describe, expect, test } from "vitest";
-import type { Diagnostic, ThemeRegistry } from "../src/contracts/index.js";
+import type { Diagnostic, PartShapeRegistry, ThemeRegistry } from "../src/contracts/index.js";
 import { parseSpec, render, validate } from "../src/index.js";
+import { assemblyDiagnostics } from "../src/schema/assembly-semantic.js";
+import type { PlatformCosmoSpec } from "../src/schema/types.gen.js";
 import { fixtureTheme } from "./fixtures/theme.js";
 
 const SEED = Number(process.env["FUZZ_SEED"] ?? 20240607) >>> 0;
@@ -718,5 +720,305 @@ describe("fuzz: valid specs render", TIMEOUT, () => {
       ).toEqual(b.outputs.map((o) => o.data));
       expect(a.diagnostics, ex.name).toEqual(b.diagnostics);
     }
+  });
+});
+
+// ---------------------------------------------------------------- schema 1.2.0 shapes (A2-1)
+
+const designSpecs: { name: string; json: string }[] = ["assemblies.md", "document-ingestion.md"]
+  .flatMap((file) => {
+    const md = readFileSync(
+      fileURLToPath(new URL(`../../../docs/design/${file}`, import.meta.url)),
+      "utf8",
+    );
+    return [...md.matchAll(/```json\n([\s\S]*?)```/g)]
+      .map((m, i) => ({ name: `${file}#${i}`, json: m[1] as string }))
+      .filter((e) => (JSON.parse(e.json) as Obj)["meta"] !== undefined);
+  })
+  .sort((a, b) => (a.name < b.name ? -1 : 1));
+
+const LIFTED = { phase1a: false, phase1b: false, phase2: false, phase3: false };
+const REF12 = new Set([
+  "explode",
+  "implode",
+  "build",
+  "unbuild",
+  "use",
+  "closeup",
+  "mates",
+  "inserts",
+  "assembly",
+  "focus",
+  "program",
+  "subBuild",
+  "model",
+  "image",
+  "ref",
+  "base",
+  "parts",
+]);
+
+/** Dangling or retargeted references on 1.2.0 keys, on top of the generic mutators. */
+function mutate12(r: Rand, spec: Json): Json {
+  if (r() < 0.5) return mutate(r, spec);
+  const slots = collect(spec).filter(
+    (x) => typeof x.key === "string" && REF12.has(x.key) && typeof x.value === "string",
+  );
+  if (slots.length === 0) return mutate(r, spec);
+  const t = pick(r, slots);
+  const names = collect(spec)
+    .filter((x) => x.key === "id" && typeof x.value === "string")
+    .map((x) => x.value as string);
+  setSlot(
+    t,
+    pick(r, [
+      "ghost-" + int(r, 9),
+      (t.value as string) + "x",
+      (t.value as string).split("/").slice(0, 2).join("/") + "/deep/er",
+      names.length > 0 ? pick(r, names) : "a",
+      "a/".repeat(9) + "b",
+      "closeup",
+      "x/closeup/y",
+    ]),
+  );
+  return spec;
+}
+
+/** Schema-valid-shaped assemblies with colliding ids, cycles, counts and odd selectors. */
+function genAssemblySpec(r: Rand): Obj {
+  const IDS = ["pa", "pb", "pc", "pd", "pe"];
+  const tmpl = ["t0", "t1", "t2"];
+  const refs = [...tmpl, "top", "ghost"];
+  const SELS = [
+    "pa",
+    "*",
+    "**",
+    "p?",
+    "type:cpu",
+    "**/pb",
+    "pa/pb",
+    "role:cover",
+    "pa*",
+    "tag:x",
+    "pa/**",
+  ];
+  const parts = (depth: number): Json[] =>
+    Array.from({ length: 1 + int(r, depth < 2 ? 3 : 2) }, () => {
+      const p: Obj = { id: pick(r, IDS) };
+      if (r() < 0.3) p["count"] = pick(r, [1, 2, 3, 8, 64]);
+      if (r() < 0.2) p["use"] = pick(r, refs);
+      else if (depth < 9 && r() < 0.35) p["parts"] = parts(depth + 1);
+      if (r() < 0.15) p["mates"] = pick(r, IDS);
+      if (r() < 0.1) p["inserts"] = pick(r, IDS);
+      if (r() < 0.1) p["closeup"] = pick(r, refs);
+      if (r() < 0.25) p["type"] = pick(r, ["cpu", "dimm"]);
+      if (r() < 0.1) p["role"] = "cover";
+      if (r() < 0.1) p["shape"] = pick(r, ["box", "hw:dimm", "cylindr", "brick:brick"]);
+      if (r() < 0.05) p["params"] = { studs: true };
+      if (r() < 0.1) p["image"] = pick(r, ["im", "ghost"]);
+      if (r() < 0.1 && p["parts"] !== undefined) p["programs"] = programs();
+      return p as unknown as Json;
+    });
+  const sel = (): string[] => Array.from({ length: 1 + int(r, 3) }, () => pick(r, SELS));
+  const programs = (): Json[] =>
+    Array.from({ length: 1 + int(r, 3) }, (_, i) =>
+      r() < 0.7
+        ? {
+            id: `pr${i}`,
+            stages: Array.from({ length: 1 + int(r, 4) }, () => ({
+              parts: sel(),
+              ...(r() < 0.3 ? { except: sel() } : {}),
+              ...(r() < 0.2
+                ? { overrides: { [pick(r, ["pa", "pa/pb", "ghost"])]: { delay: 1 } } }
+                : {}),
+            })),
+          }
+        : {
+            id: `pr${i}`,
+            kind: "build",
+            steps: Array.from({ length: 1 + int(r, 4) }, () => ({
+              add: sel(),
+              ...(r() < 0.2 ? { view: 90 } : {}),
+              ...(r() < 0.2 ? { subBuild: pick(r, IDS), program: "pr0" } : {}),
+            })),
+          },
+    ) as unknown as Json[];
+  const assemblies: Obj[] = tmpl.map((id) => ({
+    id,
+    template: true,
+    parts: parts(0),
+    programs: programs(),
+  }));
+  assemblies.push({
+    id: "top",
+    parts: parts(0),
+    programs: programs(),
+    ...(r() < 0.2 ? { closeup: pick(r, refs) } : {}),
+  });
+  const targets = [
+    "top",
+    "t0",
+    "top/pa",
+    "top/pa/pb",
+    "top/pa-2",
+    "top/closeup",
+    "r1",
+    "r1/s",
+    "r1/s/pa",
+    "ghost",
+    "sb",
+  ];
+  const steps = Array.from({ length: 1 + int(r, 4) }, () => ({
+    assembly: Array.from({ length: 1 + int(r, 3) }, () => {
+      const kind = pick(r, ["explode", "implode", "build", "unbuild"]);
+      return {
+        [kind]: pick(r, targets),
+        ...(r() < 0.3 ? { to: int(r, 6) } : {}),
+        ...(r() < 0.2 && (kind === "build" || kind === "unbuild")
+          ? { advance: 1 + int(r, 3) }
+          : {}),
+        ...(r() < 0.2 ? { program: pick(r, ["pr0", "pr1", "zz"]) } : {}),
+      };
+    }),
+    ...(r() < 0.5 ? { focus: pick(r, targets) } : {}),
+    ...(r() < 0.3 ? { set: { [pick(r, targets)]: "down" } } : {}),
+  }));
+  return {
+    meta: { version: "1" },
+    images: [{ id: "im", src: "a.png" }],
+    assemblies,
+    racks: [{ id: "r1", slots: [{ id: "s", at: 1, type: "server-2u", assembly: pick(r, refs) }] }],
+    storyboards: [{ id: "sb", frames: [{ model: "im" }, { model: "im" }] }],
+    steps,
+  };
+}
+
+describe("fuzz: schema 1.2.0 assemblies", TIMEOUT, () => {
+  const checkDiagnostics = (ds: readonly Diagnostic[], label: string): void => {
+    for (const d of ds) {
+      expect(d.code.length, label).toBeGreaterThan(0);
+      expect(d.message.length, label).toBeGreaterThan(0);
+      expect(POINTER.test(d.path), `${label}: bad pointer ${JSON.stringify(d.path)}`).toBe(true);
+      expect(["error", "warning", "info"], label).toContain(d.severity);
+    }
+  };
+  // One installed pack shape (`hw:dimm`, which rejects every param): other pack refs are unknown.
+  const parts = {
+    get: (ref: string) =>
+      ref === "hw:dimm"
+        ? {
+            id: "dimm",
+            type: "dimm",
+            readParams: (p: Record<string, unknown>) => ({
+              params: p,
+              diagnostics: Object.keys(p).map((k) => ({
+                severity: "error" as const,
+                code: "x",
+                path: `/${k}`,
+                message: `Unknown param ${k}`,
+              })),
+            }),
+          }
+        : undefined,
+    list: () => ["hw:dimm"],
+  } as unknown as PartShapeRegistry;
+  const lifted = (spec: unknown): Diagnostic[] =>
+    assemblyDiagnostics(spec as PlatformCosmoSpec, LIFTED, { parts });
+
+  test("the design examples are the seed corpus", () => {
+    expect(designSpecs.length).toBeGreaterThanOrEqual(10);
+  });
+
+  test("mutated design examples: validate and the lifted checks never throw, deterministically", () => {
+    const r = mulberry32(SEED + 11);
+    let schemaValid = 0;
+    let withAssemblyDiags = 0;
+    for (let i = 0; i < RUNS * 2; i++) {
+      const ex = pick(r, designSpecs);
+      let spec = JSON.parse(ex.json) as Json;
+      for (let m = 1 + int(r, 3); m > 0; m--) spec = mutate12(r, spec);
+      const parsed = parseSpec(JSON.stringify(spec), "json").spec;
+      const res = checkResult(validate(parsed), `${ex.name} case ${i}`);
+      if (res.diagnostics.some((d) => d.code.startsWith("schema/"))) continue;
+      schemaValid++;
+      const a = lifted(parsed);
+      checkDiagnostics(a, `${ex.name} case ${i}`);
+      expect(JSON.stringify(lifted(parsed)), `${ex.name} case ${i}`).toBe(JSON.stringify(a));
+      if (a.some((d) => d.code.startsWith("assembly/"))) withAssemblyDiags++;
+    }
+    expect(schemaValid, "mutants that stay schema-valid").toBeGreaterThan(RUNS / 10);
+    expect(withAssemblyDiags, "mutants reporting assembly diagnostics").toBeGreaterThan(RUNS / 20);
+    assertClean();
+  });
+
+  test("generated assemblies with collisions, cycles, counts and odd selectors", () => {
+    const r = mulberry32(SEED + 12);
+    const codes = new Set<string>();
+    let valid = 0;
+    for (let i = 0; i < RUNS; i++) {
+      const spec = genAssemblySpec(r);
+      const res = checkResult(validate(spec), `generated case ${i}`);
+      if (res.diagnostics.some((d) => d.code.startsWith("schema/"))) continue;
+      valid++;
+      const a = lifted(spec);
+      checkDiagnostics(a, `generated case ${i}`);
+      expect(JSON.stringify(lifted(spec)), `generated case ${i}`).toBe(JSON.stringify(a));
+      for (const d of a) codes.add(d.code);
+    }
+    expect(valid, "generated specs that pass the schema").toBeGreaterThan(RUNS / 2);
+    // the generator reaches the main checks, not just the schema
+    for (const c of [
+      "assembly/duplicate-part",
+      "assembly/unknown-target",
+      "assembly/selector-empty",
+      "assembly/template-cycle",
+      "assembly/moved-twice",
+      "assembly/unknown-shape",
+    ]) {
+      expect(codes.has(c), `generated specs reach ${c}`).toBe(true);
+    }
+    assertClean();
+  });
+
+  test("count 64 chains, wide templates and thousands of selectors stay bounded", () => {
+    const wide = Array.from({ length: 500 }, (_, i) => ({
+      id: `w${i}`,
+      count: 64,
+      use: i === 0 ? "t0" : "t1",
+    }));
+    const spec = {
+      meta: { version: "1" },
+      assemblies: [
+        {
+          id: "t0",
+          template: true,
+          parts: [
+            {
+              id: "x",
+              count: 64,
+              parts: [{ id: "y", count: 64, parts: [{ id: "z", count: 64 }] }],
+            },
+          ],
+        },
+        { id: "t1", template: true, parts: [{ id: "u", use: "t0", count: 64 }] },
+        {
+          id: "top",
+          parts: wide,
+          programs: [
+            {
+              id: "p",
+              stages: Array.from({ length: 32 }, () => ({
+                parts: Array.from({ length: 64 }, (_, i) => `q-${i}-*`),
+              })),
+            },
+          ],
+        },
+      ],
+      steps: [{ assembly: [{ explode: "top/w0/x-1/y-2/z-3" }] }],
+    };
+    expect(validate(spec).diagnostics.filter((d) => d.code.startsWith("schema/"))).toEqual([]);
+    const a = lifted(spec);
+    expect(a.some((d) => d.code === "budget/assembly-parts" && d.severity === "error")).toBe(true);
+    expect(JSON.stringify(lifted(spec))).toBe(JSON.stringify(a));
   });
 });

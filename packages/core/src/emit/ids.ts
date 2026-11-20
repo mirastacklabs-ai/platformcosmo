@@ -1,4 +1,4 @@
-import type { FaceName, IdScheme } from "../contracts/index.js";
+import type { AssemblyIdScheme, FaceName, IdScheme } from "../contracts/index.js";
 
 /**
  * Deterministic id scheme (contracts/render.ts `IdScheme`).
@@ -45,10 +45,20 @@ export function cssEscapeId(id: string): string {
   return id.replace(/[^A-Za-z0-9_-]/g, "\\$&");
 }
 
-export function createIds(prefix: string): IdScheme {
+/**
+ * The image and board part of `AssemblyIdScheme` (contracts/assembly.ts), implemented here for
+ * figure rendering (R-1); the other assembly ids are A1's.
+ */
+export type BoardIdScheme = Pick<AssemblyIdScheme, "image" | "board" | "boardItem" | "credits">;
+
+export function createIds(prefix: string): IdScheme & BoardIdScheme {
   if (!PREFIX_RE.test(prefix)) throw new Error(`invalid id prefix: ${prefix}`);
   const p = prefix;
   return {
+    image: (hash) => `${p}-im_${encodeRef(hash)}`,
+    board: (id) => `${p}-bd_${seg(id)}`,
+    boardItem: (id, item) => `${p}-bi_${seg(id)}__${seg(item)}`,
+    credits: () => `${p}-credits`,
     prefix: p,
     root: () => p,
     title: () => `${p}-title`,
