@@ -30,6 +30,7 @@ import { RouteLanes, routeEdge, type Rect } from "../routing/router.js";
 import { labelFontSizeFor } from "../text/index.js";
 import { particleCount, PARTICLE_LIMIT } from "../schema/semantic.js";
 import type { PlatformCosmoSpec, SpecFlow, SpecNode } from "../schema/types.gen.js";
+import { buildFigureScene } from "./boards.js";
 import { NODE_TYPES, PRIMITIVE_HEIGHT } from "./categories.js";
 import { NODE_HEIGHT, footprintOf } from "./sizes.js";
 
@@ -642,6 +643,17 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
     ...edges.flatMap((e) => e.path.map((p) => ({ origin: p, size: { x: 0, y: 0, z: 0 } }))),
   ]);
 
+  // Figures (schema 1.2.0, A2-F): boards sit +x of everything else, one row. Their diagnostics
+  // belong to `validate`; the scene only carries the resolved content.
+  const figureScene = buildFigureScene(spec, {
+    origin: {
+      x: bounds.size.x > 0 ? r2(bounds.origin.x + bounds.size.x + DC_GAP) : 0,
+      y: bounds.origin.y,
+      z: 0,
+    },
+    views: timeline.map((t) => t.focus),
+  });
+
   const outDiagnostics = diagnostics.sort(
     (a, b) =>
       (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) ||
@@ -669,5 +681,6 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
     focusTargets,
     bounds,
     diagnostics: outDiagnostics,
+    ...(figureScene === undefined ? {} : { assemblies: figureScene.assemblies }),
   };
 };

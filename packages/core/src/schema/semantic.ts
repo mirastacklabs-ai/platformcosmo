@@ -2,12 +2,13 @@ import type { DcPack, Diagnostic, IconResolver } from "../contracts/index.js";
 import { DEFAULT_RACK_U, SLOT_HEIGHT_U, footprintOf } from "../scene/sizes.js";
 import type { PlatformCosmoSpec, SpecFlow } from "./types.gen.js";
 import { closest, didYouMean, q } from "./suggest.js";
+import { figureDiagnostics } from "./assembly-semantic.js";
 import { unsupportedDiagnostics } from "./unsupported.js";
 
 /** Σ over every flow of ceil(rate × 2); shared formula with Track B (no path lengths needed). */
 export const PARTICLE_LIMIT = 2000;
 
-type Kind = "node" | "group" | "rack" | "equipment" | "row" | "aisle" | "cable";
+type Kind = "node" | "group" | "rack" | "equipment" | "row" | "aisle" | "cable" | "figure";
 
 export interface SemanticContext {
   readonly icons?: IconResolver;
@@ -44,6 +45,8 @@ export function semanticDiagnostics(
 
   // Schema 1.2.0 fields that this build cannot render yet (merge guard, unsupported.ts).
   out.push(...unsupportedDiagnostics(spec));
+  // Images, figures and figure actions (A2-F); these run alongside the guard.
+  out.push(...figureDiagnostics(spec));
 
   const nodes = spec.nodes ?? [];
   const groups = spec.groups ?? [];
@@ -77,6 +80,7 @@ export function semanticDiagnostics(
   cables.forEach((c, i) => {
     if (c.id !== undefined) declare(c.id, "cable", `/cables/${i}/id`);
   });
+  (spec.figures ?? []).forEach((f, i) => declare(f.id, "figure", `/figures/${i}/id`));
 
   // Edge ids and cable ids share the namespace flows refer to.
   const edgeIds = new Map<string, string>();

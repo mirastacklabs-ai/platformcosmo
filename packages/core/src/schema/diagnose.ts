@@ -41,6 +41,120 @@ function describeBranch(s: unknown): string {
   return "a valid value";
 }
 
+type Resolved = Record<string, unknown>;
+
+/** A oneOf branch with `$ref`s followed (they point into the spec's `$defs`). */
+function derefBranch(b: unknown): Resolved | undefined {
+  let cur: unknown = b;
+  for (let i = 0; i < 4 && isObj(cur) && typeof cur.$ref === "string"; i++) {
+    cur = (rootDefs as Record<string, unknown>)[cur.$ref.replace("#/$defs/", "")];
+  }
+  return isObj(cur) ? cur : undefined;
+}
+
+const jsonType = (v: unknown): string =>
+  v === null ? "null" : Array.isArray(v) ? "array" : typeof v;
+
+/** What a oneOf's discriminator selected: a branch to report on, or a ready diagnostic. */
+export type BranchChoice = { readonly branch: number } | { readonly diagnostic: Diagnostic };
+
+/**
+ * Picks the branch of a `oneOf` that the data's own discriminator names, so diagnostics come
+ * from that branch instead of "Not a valid <Title>" (assembly actions, programs and part
+ * images; written for A2-F, shared with A2-1). Rules, in order:
+ *  1. `kind`: branches declaring `properties.kind.const` are matched by the data's `kind`
+ *     (absent: the one branch where `kind` is optional, i.e. the default kind);
+ *  2. key: every branch has a required key no other branch requires (the action keys
+ *     `explode`/`implode`/`build`/`unbuild`); the branch whose key is present wins;
+ *  3. type: string vs object (`$ref`s followed) when exactly one branch has the data's type.
+ * Returns undefined when no rule decides (the generic union message applies).
+ */
+export function discriminateBranch(
+  branches: readonly unknown[],
+  data: unknown,
+  path: string,
+  title = "value",
+): BranchChoice | undefined {
+  const res = branches.map(derefBranch);
+  if (res.some((r) => r === undefined)) return undefined;
+  const rs = res as Resolved[];
+  const required = rs.map((r) => (Array.isArray(r.required) ? r.required.map(String) : []));
+
+  if (isObj(data)) {
+    // 1. kind
+    const consts = rs.map((r) => {
+      const k = isObj(r.properties) ? r.properties.kind : undefined;
+      return isObj(k) && typeof k.const === "string" ? k.const : undefined;
+    });
+    if (consts.some((c) => c !== undefined)) {
+      const kind = data.kind;
+      if (kind === undefined) {
+        const open = rs.map((_, i) => i).filter((i) => !required[i]!.includes("kind"));
+        return open.length === 1 ? { branch: open[0]! } : undefined;
+      }
+      const at = typeof kind === "string" ? consts.indexOf(kind) : -1;
+      if (at >= 0) return { branch: at };
+      const allowed = consts.filter((c): c is string => c !== undefined);
+      const hint = typeof kind === "string" ? didYouMean(kind, allowed) : undefined;
+      return {
+        diagnostic: {
+          severity: "error",
+          code: "schema/enum",
+          path: childPath(path, "kind"),
+          message: `Invalid kind; expected one of: ${allowed.join(", ")}`,
+          suggestion: hint ?? `Use one of: ${allowed.join(", ")}`,
+          params: { allowedValues: allowed },
+        },
+      };
+    }
+    // 2. key
+    const tags = required.map((req, i) =>
+      req.filter((k) => required.every((other, j) => j === i || !other.includes(k))),
+    );
+    if (tags.every((t) => t.length > 0)) {
+      const hit = tags.map((t) => t.filter((k) => k in data));
+      const present = hit.map((h, i) => (h.length > 0 ? i : -1)).filter((i) => i >= 0);
+      if (present.length === 1) return { branch: present[0]! };
+      const all = tags.map((t) => t[0]!);
+      if (present.length > 1) {
+        const keys = present.map((i) => hit[i]![0]!);
+        return {
+          diagnostic: {
+            severity: "error",
+            code: "schema/one-of",
+            path,
+            message: `Has more than one of ${keys.map((k) => q(k)).join(", ")}; exactly one is allowed`,
+            suggestion: `Keep one of: ${all.join(", ")}`,
+            params: { keys, branches: all, title },
+          },
+        };
+      }
+      for (const key of Object.keys(data)) {
+        const hint = closest(key, all);
+        if (hint !== undefined) {
+          return {
+            diagnostic: {
+              severity: "error",
+              code: "schema/one-of",
+              path,
+              message: `Unknown key ${q(key)}; expected one of: ${all.join(", ")}`,
+              suggestion: `Did you mean "${hint}"?`,
+              params: { key, branches: all, title },
+            },
+          };
+        }
+      }
+      return undefined;
+    }
+  }
+  // 3. type
+  const t = jsonType(data);
+  const same = rs
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => r.type === t || (t === "number" && r.type === "integer"));
+  return same.length === 1 ? { branch: same[0]!.i } : undefined;
+}
+
 const branchAjv = new Ajv2020({
   strict: false,
   allowUnionTypes: true,
@@ -71,6 +185,7 @@ function process(errors: ErrorObject[]): Diagnostic[] {
   errors.forEach((u, ui) => {
     if ((u.keyword !== "oneOf" && u.keyword !== "anyOf") || removed.has(ui)) return;
     const root = u.instancePath === "";
+    const refRoot = u.schemaPath === `#/${u.keyword}` && !root;
     const inSub = (e: ErrorObject): boolean =>
       e.instancePath === u.instancePath || e.instancePath.startsWith(`${u.instancePath}/`);
     const run: number[] = [];
@@ -81,7 +196,9 @@ function process(errors: ErrorObject[]): Diagnostic[] {
         run.push(j);
         continue;
       }
-      const prefixed = e.schemaPath.startsWith(`${u.schemaPath}/`);
+      // A union that is the root of a `$ref`'d definition (schema path `#/oneOf`) has nothing
+      // before it but its branches, whose errors carry paths relative to their own `$ref`s.
+      const prefixed = refRoot || e.schemaPath.startsWith(`${u.schemaPath}/`);
       const leaf =
         !root && e.instancePath !== u.instancePath && e.schemaPath.startsWith("#/$defs/");
       if (!prefixed && !leaf) break;
@@ -112,13 +229,29 @@ function process(errors: ErrorObject[]): Diagnostic[] {
         tie = false;
       } else if (score === bestScore) tie = true;
     });
+    const parent = isObj(u.parentSchema) ? u.parentSchema : undefined;
+    const title = parent && typeof parent.title === "string" ? parent.title : undefined;
+    // The data's own discriminator (kind, action key, string vs object) names the branch:
+    // report that branch's errors, ahead of the closest-branch heuristic.
+    const pick =
+      u.keyword === "oneOf"
+        ? discriminateBranch(branches, u.data, u.instancePath, title)
+        : undefined;
+    if (pick !== undefined) {
+      if ("diagnostic" in pick) {
+        unionDiags.set(ui, [pick.diagnostic]);
+        return;
+      }
+      if (results[pick.branch]!.length > 0) {
+        unionDiags.set(ui, process(results[pick.branch]!));
+        return;
+      }
+    }
     if (best !== undefined && !tie && bestScore < 10) {
       unionDiags.set(ui, process(results[best]!));
       return;
     }
     const desc = branches.map(describeBranch);
-    const parent = isObj(u.parentSchema) ? u.parentSchema : undefined;
-    const title = parent && typeof parent.title === "string" ? parent.title : undefined;
     const allRequired =
       branches.length > 0 &&
       branches.every((b) => isObj(b) && Array.isArray(b.required) && !("type" in b));
