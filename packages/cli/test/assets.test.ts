@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { decodeImage, encodePng, type Raster } from "@platformcosmo/assets";
 import { describe, expect, test } from "vitest";
@@ -184,24 +184,22 @@ describe("assets crop", () => {
 });
 
 describe("outputs stay inside the working directory", () => {
-  test("../, absolute paths outside, a symlinked directory and a symlinked file are refused", async () => {
+  test("../, absolute paths outside, and a symlinked directory are refused", async () => {
     const dir = await tmp();
     const outside = await tmp();
     await writeFile(join(dir, "i.png"), encodePng(sample()));
     await writeFile(join(outside, "victim.png"), "VICTIM");
     await symlink(outside, join(dir, "linkdir"));
     await symlink(join(outside, "victim.png"), join(dir, "linkfile.png"));
-    for (const o of [
-      "../escape.png",
-      join(outside, "x.png"),
-      "linkdir/x.png",
-      "linkfile.png",
-      "a/../../e.png",
-    ]) {
+    for (const o of ["../escape.png", join(outside, "x.png"), "linkdir/x.png", "a/../../e.png"]) {
       const r = await cli(dir, ["crop", "i.png", "--rect", "0,0,5,5", "-o", o, "--json"]);
       expect(r.code, o).toBe(1);
       expect(json(r.stdout).diagnostics[0].code, o).toBe("asset/unsafe-path");
     }
+    // a symlink AT the output name is replaced by a new file; what it pointed to is untouched
+    const r2 = await cli(dir, ["crop", "i.png", "--rect", "0,0,5,5", "-o", "linkfile.png"]);
+    expect(r2.code).toBe(0);
+    expect((await lstat(join(dir, "linkfile.png"))).isSymbolicLink()).toBe(false);
     expect(await readFile(join(outside, "victim.png"), "utf8")).toBe("VICTIM");
     expect(await readdir(outside)).toEqual(["victim.png"]);
   });
@@ -393,7 +391,7 @@ describe("assets figure", () => {
     ).toBe(true);
   });
 
-  test("a failing gate exits 1 but still writes report.json and the files", async () => {
+  test("a failing gate exits 1 and writes only report.json and the overlays", async () => {
     const dir = await tmp();
     await fixture(dir, "twins", (m) => {
       m.parts = m.parts.slice(0, 1); // the second twin stays in the base: a ghost
@@ -404,6 +402,16 @@ describe("assets figure", () => {
     expect(j.ok).toBe(false);
     expect(j.diagnostics.some((d: { severity: string }) => d.severity === "error")).toBe(true);
     expect(JSON.parse(await readFile(join(dir, "out/report.json"), "utf8")).ok).toBe(false);
+    expect(await readdir(join(dir, "out"))).toEqual(["report.json"]);
+    expect(j.fragment).toBeUndefined();
+    expect(j.files.map((f: { name: string }) => f.name)).toEqual(["out/report.json"]);
+    const withOverlay = await cli(dir, args(dir, ["--show-exclusions"]));
+    expect(withOverlay.code).toBe(1);
+    expect((await readdir(join(dir, "out"))).sort()).toEqual([
+      "exclusions-assembled.png",
+      "exclusions-exploded.png",
+      "report.json",
+    ]);
     const text = await cli(dir, ["figure", "in/manifest.json", "-d", "out3"]);
     expect(text.code).toBe(1);
     expect(text.stdout).toContain("gate: FAIL");
@@ -529,19 +537,54 @@ describe("assets check", () => {
     expect((await cli(dir, ["check", "in/manifest.json", "-d", "out"])).code).toBe(1);
   });
 
-  test("a symlinked fragment.json or sprite in the output directory is refused", async () => {
+  test("a symlinked fragment.json is refused (it is the file that is read)", async () => {
     const dir = await tmp();
     const outside = await tmp();
     await fixture(dir, "twins");
     await cli(dir, ["figure", "in/manifest.json", "-d", "out"]);
     await writeFile(join(outside, "f.json"), await readFile(join(dir, "out/fragment.json")));
-    await symlink(join(outside, "f.json"), join(dir, "out/fragment2.json"));
-    const bytes = await readFile(join(dir, "out/sprite-1.png"));
-    await writeFile(join(outside, "sprite-1.png"), bytes);
-    await execFileSync("rm", [join(dir, "out/sprite-1.png")]);
+    await rm(join(dir, "out/fragment.json"));
+    await symlink(join(outside, "f.json"), join(dir, "out/fragment.json"));
+    const r = await cli(dir, ["check", "in/manifest.json", "-d", "out", "--json"]);
+    expect(r.code).toBe(1);
+    expect(json(r.stdout).diagnostics[0]).toMatchObject({ code: "image/unsafe-path" });
+    expect(json(r.stdout).diagnostics[0].message).toContain("out/fragment.json");
+  });
+
+  test("a symlinked sprite in the output directory is refused", async () => {
+    const dir = await tmp();
+    const outside = await tmp();
+    await fixture(dir, "twins");
+    await cli(dir, ["figure", "in/manifest.json", "-d", "out"]);
+    await writeFile(join(outside, "sprite-1.png"), await readFile(join(dir, "out/sprite-1.png")));
+    await rm(join(dir, "out/sprite-1.png"));
     await symlink(join(outside, "sprite-1.png"), join(dir, "out/sprite-1.png"));
     const r = await cli(dir, ["check", "in/manifest.json", "-d", "out", "--json"]);
     expect(r.code).toBe(1);
     expect(json(r.stdout).diagnostics[0].code).toBe("image/unsafe-path");
+  });
+
+  test("src must be one shared plain directory plus a fixed name, each name once", async () => {
+    const dir = await tmp();
+    await fixture(dir, "twins");
+    await cli(dir, ["figure", "in/manifest.json", "-d", "out", "--src-dir", "figs/"]);
+    const good = await cli(dir, ["check", "in/manifest.json", "-d", "out", "--json"]);
+    expect(good.code, good.stdout.slice(0, 500)).toBe(0);
+    const frag = JSON.parse(await readFile(join(dir, "out/fragment.json"), "utf8"));
+    const bad: [string, (f: typeof frag) => void][] = [
+      ["dotdot prefix", (f) => (f.images[1].src = "../../x/sprite-1.png")],
+      ["different prefix", (f) => (f.images[1].src = "other/sprite-1.png")],
+      ["no prefix on one", (f) => (f.images[1].src = "sprite-1.png")],
+      ["duplicate name", (f) => (f.images[1].src = f.images[0].src)],
+      ["absolute", (f) => (f.images[0].src = "/figs/base.png")],
+    ];
+    for (const [name, edit] of bad) {
+      const f = structuredClone(frag);
+      edit(f);
+      await writeFile(join(dir, "out/fragment.json"), JSON.stringify(f));
+      const r = await cli(dir, ["check", "in/manifest.json", "-d", "out", "--json"]);
+      expect(r.code, name).toBe(1);
+      expect(json(r.stdout).diagnostics[0].code, name).toBe("image/unsafe-path");
+    }
   });
 });

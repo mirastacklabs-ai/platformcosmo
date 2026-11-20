@@ -7,7 +7,7 @@
  * from a file's content. Every problem is a diagnostic plus an exit code.
  */
 import { access, constants as fsc, stat } from "node:fs/promises";
-import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { delimiter, dirname, basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DEFAULT_IMAGE_LIMITS, type Diagnostic, type ImageLimits } from "@platformcosmo/core";
 import {
   MANIFEST_LIMITS,
@@ -34,8 +34,15 @@ import {
 import { type Parsed, flag, num, parse, str } from "../args.js";
 import { type Ctx, EXIT, UsageError } from "../deps.js";
 import { formatDiagnostics, hasErrors, plural } from "../format.js";
-import { UnsafePathError, writeInside } from "../fsafe.js";
-import { HAS_NOFOLLOW, readExplicitFile, readFileSafe, type SafeRead } from "../images.js";
+import {
+  HAS_NOFOLLOW,
+  insideAssetsRoot,
+  readExplicitFile,
+  readFileSafe,
+  type SafeRead,
+} from "../images.js";
+import { relFromCwd, staleOutputs, writeSet } from "../outputs.js";
+import schema from "../../schema/figure-manifest.v1.json" with { type: "json" };
 
 export const HELP = `Usage: pcosmo assets <command> [options]
 
@@ -44,6 +51,7 @@ SVG; symlinks and special files are refused); outputs are written below the work
 
 Commands:
   doctor                                   Check the environment and print the limits
+  schema                                   Print the figure manifest JSON Schema
   crop <img> --rect x,y,w,h -o out.png     Crop (--transparent [--tolerance 12] removes the
                                            edge-connected background, --trim drops empty margins)
   cutout <img> --seed x,y[;x,y...] -o sprite.png
@@ -54,7 +62,8 @@ Commands:
   align <imgA> <imgB>                      Translation between two drawings (--patch x,y,w,h
                                            --max-shift N --min-score 0.5)
   figure <manifest.json> -d <dir>          The whole figure pipeline: base.png, sprite-N.png,
-                                           report.json, fragment.json (--figure-id id, --src-dir fig/,
+                                           report.json, fragment.json; when the gate fails only
+                                           report.json and the overlays are written (--figure-id id, --src-dir fig/,
                                            --label text, --strict, --show-exclusions, provenance:
                                            --source-document --source-page --source-figure
                                            --attribution --license --source-url)
@@ -68,11 +77,14 @@ Options:
   -d <dir>       Output directory (inside the working directory; created if missing)
   -h, --help     Show this help
 
-Manifest: schema/figure-manifest.v1.json (shipped with the package). Source file names in a manifest
+PCOSMO_ASSETS_ROOT: when set, every input and output path must resolve inside that directory
+(the Claude Code plugin launcher sets it to the working directory).
+
+Manifest: pcosmo assets schema (also schema/figure-manifest.v1.json) (shipped with the package). Source file names in a manifest
 are relative to the manifest's directory and may not contain '..'.
 
 Exit codes: 0 ok, 1 diagnostics with errors (gate failures included), 2 usage, 3 internal error
-or a broken environment (doctor).
+or, for doctor, an unavailable renderer (a missing optional tool is a warning, exit 0).
 `;
 
 /** Read limits for the files of these commands: scans are bigger than diagram images (§14). */
@@ -164,6 +176,26 @@ function readDiag(r: Extract<SafeRead, { ok: false }>, what: string): Diagnostic
   };
 }
 
+/** The path as the user should see it: relative to the working directory when inside it. */
+const shown = (ctx: Ctx, path: string): string =>
+  relFromCwd(resolve(ctx.deps.cwd), resolve(ctx.deps.cwd, path)).slice(0, 160);
+
+const assetsRoot = (ctx: Ctx): string | undefined => ctx.deps.env.PCOSMO_ASSETS_ROOT;
+
+/** An explicit input: confined by PCOSMO_ASSETS_ROOT when set, then read through the path guard. */
+async function readIn(ctx: Ctx, path: string, maxBytes: number): Promise<SafeRead> {
+  const abs = resolve(ctx.deps.cwd, path);
+  if (!(await insideAssetsRoot(assetsRoot(ctx), dirname(abs)))) {
+    return {
+      ok: false,
+      code: "image/unsafe-path",
+      message: "it is outside PCOSMO_ASSETS_ROOT",
+      suggestion: "work inside the directory the plugin was started in",
+    };
+  }
+  return readExplicitFile(ctx.deps.cwd, path, maxBytes);
+}
+
 /** An image named on the command line, decoded to RGBA. Diagnostics are appended to `diags`. */
 async function loadImage(
   ctx: Ctx,
@@ -171,9 +203,9 @@ async function loadImage(
   diags: Diagnostic[],
   key = "image",
 ): Promise<Raster | undefined> {
-  const r = await readExplicitFile(ctx.deps.cwd, path, ASSET_LIMITS.maxBytes);
+  const r = await readIn(ctx, path, ASSET_LIMITS.maxBytes);
   if (!r.ok) {
-    diags.push(readDiag(r, path.slice(0, 160)));
+    diags.push(readDiag(r, shown(ctx, path)));
     return undefined;
   }
   const d = await decodeImage(r.bytes, { limits: ASSET_LIMITS, key });
@@ -187,9 +219,9 @@ async function loadJson(
   what: string,
   diags: Diagnostic[],
 ): Promise<unknown | undefined> {
-  const r = await readExplicitFile(ctx.deps.cwd, path, MAX_MANIFEST_BYTES);
+  const r = await readIn(ctx, path, MAX_MANIFEST_BYTES);
   if (!r.ok) {
-    diags.push(readDiag(r, `${what} ${path.slice(0, 160)}`));
+    diags.push(readDiag(r, `${what} ${shown(ctx, path)}`));
     return undefined;
   }
   try {
@@ -241,55 +273,58 @@ interface Written {
   readonly bytes: number;
 }
 
-/** Writes `data` to `target` (relative to the working directory, or absolute but inside it). */
-async function writeOut(
+/**
+ * Writes `files` into the directory `dirTarget` (relative to the working directory, or absolute
+ * but inside it) as one set: temp directory first, then rename into place (outputs.ts). Refusals
+ * are `asset/unsafe-path` diagnostics and leave every final name untouched.
+ */
+async function writeFiles(
   ctx: Ctx,
-  target: string,
-  data: Uint8Array,
+  dirTarget: string,
+  files: readonly { name: string; data: Uint8Array }[],
   diags: Diagnostic[],
-): Promise<Written | undefined> {
+): Promise<Written[]> {
   const cwd = resolve(ctx.deps.cwd);
-  const rel = relative(cwd, resolve(cwd, target));
-  const refuse = (why: string): undefined => {
+  const abs = resolve(cwd, dirTarget);
+  const rel = relative(cwd, abs);
+  const label = relFromCwd(cwd, abs);
+  const refuse = (why: string): Written[] => {
     diags.push({
       severity: "error",
       code: "asset/unsafe-path",
       path: "",
-      message: `refusing to write ${target.slice(0, 160)}: ${why}`,
+      message: `refusing to write to ${label.slice(0, 160)}: ${why}`,
       suggestion: "write below the working directory, without symbolic links",
     });
-    return undefined;
+    return [];
   };
-  if (target.includes("\0")) return refuse("the path is not valid");
-  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+  if (dirTarget.includes("\0")) return refuse("the path is not valid");
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     return refuse("it is outside the working directory");
   }
-  try {
-    await writeInside(cwd, rel, data);
-  } catch (e) {
-    if (e instanceof UnsafePathError) return refuse(e.message);
-    return refuse((e as NodeJS.ErrnoException).code ?? "it could not be written");
+  if (!(await insideAssetsRoot(assetsRoot(ctx), abs))) {
+    return refuse("it is outside PCOSMO_ASSETS_ROOT");
   }
-  return { name: rel.split(sep).join("/"), bytes: data.byteLength };
+  const r = await writeSet(cwd, rel.split(sep).join("/"), files, {}, label);
+  if (!r.ok) return refuse(r.message);
+  return r.written.map((w) => ({
+    name: rel === "" ? w.name : `${rel.split(sep).join("/")}/${w.name}`,
+    bytes: w.bytes,
+  }));
 }
 
-/** All targets are checked before the first byte is written, so a bad `-d` leaves nothing behind. */
-async function writeAll(
+/** One file at a typed `-o` path. */
+function writeOne(
   ctx: Ctx,
-  files: readonly { target: string; data: Uint8Array }[],
+  target: string,
+  data: Uint8Array,
   diags: Diagnostic[],
 ): Promise<Written[]> {
-  const out: Written[] = [];
-  for (const f of files) {
-    const w = await writeOut(ctx, f.target, f.data, diags);
-    if (!w) break;
-    out.push(w);
-  }
-  return out;
+  const abs = resolve(ctx.deps.cwd, target);
+  return writeFiles(ctx, dirname(abs), [{ name: basename(abs), data }], diags);
 }
 
 const pngExt = (p: string): boolean => /\.png$/i.test(p);
-const outPath = (dir: string, name: string): string => `${dir.replace(/\/+$/, "")}/${name}`;
 
 function finish(
   ctx: Ctx,
@@ -350,10 +385,24 @@ async function doctor(ctx: Ctx, args: string[]): Promise<number> {
     const path = await toolPath(ctx.deps.env, t);
     tools[t] = path === undefined ? { found: false } : { found: true, path };
   }
+  for (const [name, t] of Object.entries(tools)) {
+    if (!t.found) {
+      diags.push({
+        severity: "warning",
+        code: "asset/tool-missing",
+        path: "",
+        message: `optional tool ${name} was not found on PATH`,
+        suggestion: "only needed for PDF and video work; image and figure commands run without it",
+        params: { tool: name },
+      });
+    }
+  }
   const payload = {
+    assetsRoot: ctx.deps.env.PCOSMO_ASSETS_ROOT ?? null,
     node: process.version,
     platform: process.platform,
     noFollow: HAS_NOFOLLOW,
+    readGuard: process.platform === "linux" ? "proc-fd" : "writable-directory-refusal",
     renderer: renderer ? "ok" : "failed",
     optionalTools: tools,
     limits: {
@@ -372,6 +421,8 @@ async function doctor(ctx: Ctx, args: string[]): Promise<number> {
     `node ${payload.node} on ${payload.platform}`,
     `renderer (resvg-wasm): ${payload.renderer}`,
     `symlink refusal at open (O_NOFOLLOW): ${HAS_NOFOLLOW ? "yes" : "no (checked after open instead)"}`,
+    `swap detection after open: ${payload.readGuard === "proc-fd" ? "/proc/self/fd path comparison (Linux)" : "directories writable by other users are refused (no /proc here); a rename race by the directory's owner stays possible"}`,
+    `PCOSMO_ASSETS_ROOT: ${payload.assetsRoot ?? "not set (explicit paths are not confined)"}`,
     ...Object.entries(tools).map(([n, t]) => `${n}: ${t.found ? t.path : "not found (optional)"}`),
     `limits: ${MAX_PIXELS} px per source, ${MANIFEST_LIMITS.parts} parts, ${MAX_MULTIPLY_ADDS} multiply-adds, ${ASSET_LIMITS.maxBytes} bytes per file`,
   ];
@@ -415,8 +466,8 @@ async function cropCmd(ctx: Ctx, args: string[]): Promise<number> {
     cur = t.value;
   }
   if (!cur || hasErrors(diags)) return finish(ctx, json, "crop", diags, {}, [], []);
-  const w = await writeOut(ctx, out, encodePng(cur), diags);
-  return finish(ctx, json, "crop", diags, { width: cur.width, height: cur.height }, w ? [w] : [], [
+  const w = await writeOne(ctx, out, encodePng(cur), diags);
+  return finish(ctx, json, "crop", diags, { width: cur.width, height: cur.height }, w, [
     `${cur.width}x${cur.height}`,
   ]);
 }
@@ -458,14 +509,14 @@ async function cutoutCmd(ctx: Ctx, args: string[]): Promise<number> {
   diags.push(...r.diagnostics);
   if (!r.value || hasErrors(diags)) return finish(ctx, json, "cutout", diags, {}, [], []);
   const { sprite, x, y } = r.value;
-  const w = await writeOut(ctx, out, encodePng(sprite), diags);
+  const w = await writeOne(ctx, out, encodePng(sprite), diags);
   return finish(
     ctx,
     json,
     "cutout",
     diags,
     { x, y, width: sprite.width, height: sprite.height },
-    w ? [w] : [],
+    w,
     [`sprite ${sprite.width}x${sprite.height} at ${x},${y}`],
   );
 }
@@ -568,9 +619,9 @@ async function shrinkCmd(ctx: Ctx, args: string[]): Promise<number> {
   const out = needed(p, "out", "assets shrink");
   const json = flag(p, "json");
   const diags: Diagnostic[] = [];
-  const r = await readExplicitFile(ctx.deps.cwd, file!, ASSET_LIMITS.maxBytes);
+  const r = await readIn(ctx, file!, ASSET_LIMITS.maxBytes);
   if (!r.ok) {
-    diags.push(readDiag(r, file!.slice(0, 160)));
+    diags.push(readDiag(r, shown(ctx, file!)));
     return finish(ctx, json, "shrink", diags, {}, [], []);
   }
   const s = await shrinkImage(r.bytes, maxPx, { toPng: flag(p, "to-png"), limits: ASSET_LIMITS });
@@ -584,14 +635,14 @@ async function shrinkCmd(ctx: Ctx, args: string[]): Promise<number> {
     );
     return finish(ctx, json, "shrink", diags, {}, [], []);
   }
-  const w = await writeOut(ctx, out, v.bytes, diags);
+  const w = await writeOne(ctx, out, v.bytes, diags);
   return finish(
     ctx,
     json,
     "shrink",
     diags,
     { format: v.format, width: v.width, height: v.height, resized: v.resized },
-    w ? [w] : [],
+    w,
     [`${v.width}x${v.height} ${v.format}${v.resized ? " (resized)" : ""}`],
   );
 }
@@ -663,21 +714,35 @@ async function figureCmd(ctx: Ctx, args: string[]): Promise<number> {
   diags.push(...r.diagnostics);
   if (!r.value) return finish(ctx, json, "figure", diags, {}, [], []);
 
-  const files: { target: string; data: Uint8Array }[] = r.value.files.map((f) => ({
-    target: outPath(dir, f.name),
-    data: f.bytes,
-  }));
+  // A figure that fails the gate is never shipped (ingestion §10): then only the report and the
+  // exclusion overlays are written, not base.png, sprites or fragment.json.
+  const pass = r.value.report.ok && !hasErrors(diags);
+  const files: { name: string; data: Uint8Array }[] = r.value.files
+    .filter((f) => pass || f.name === "report.json")
+    .map((f) => ({ name: f.name, data: f.bytes }));
   if (flag(p, "show-exclusions")) {
     const o = exclusionOverlay(manifest, sources, strict ? { strict } : {});
     if (!o.value) diags.push(...o.diagnostics);
     for (const state of ["exploded", "assembled"] as const) {
       const img = o.value?.[state];
-      if (img)
-        files.push({ target: outPath(dir, `exclusions-${state}.png`), data: encodePng(img) });
+      if (img) files.push({ name: `exclusions-${state}.png`, data: encodePng(img) });
     }
   }
-  // The report is written even when the gate fails: it says what to fix.
-  const written = await writeAll(ctx, files, diags);
+  const written = await writeFiles(ctx, dir, files, diags);
+  if (written.length > 0) {
+    const abs = resolve(ctx.deps.cwd, dir);
+    const stale = await staleOutputs(abs, new Set(files.map((f) => f.name)));
+    if (stale.length > 0) {
+      diags.push({
+        severity: "warning",
+        code: "asset/stale-output",
+        path: "",
+        message: `${relFromCwd(resolve(ctx.deps.cwd), abs)} still has files from an earlier run that this run did not write: ${stale.join(", ")}`,
+        suggestion: "delete them or use a fresh directory; they are not part of this result",
+        params: { files: stale },
+      });
+    }
+  }
   const rep = r.value.report;
   const errors = diags.filter((d) => d.severity === "error").length;
   const warnings = diags.filter((d) => d.severity === "warning").length;
@@ -686,12 +751,12 @@ async function figureCmd(ctx: Ctx, args: string[]): Promise<number> {
     json,
     "figure",
     diags,
-    { report: rep, fragment: r.value.fragment },
+    pass ? { report: rep, fragment: r.value.fragment } : { report: rep },
     written,
     [
-      `gate: ${rep.ok && errors === 0 ? "pass" : "FAIL"} (${plural(errors, "error")}, ${plural(warnings, "warning")}), confidence ${rep.confidence}`,
+      `gate: ${pass ? "pass" : "FAIL (only report.json and the overlays were written)"} (${plural(errors, "error")}, ${plural(warnings, "warning")}), confidence ${rep.confidence}`,
     ],
-    rep.ok,
+    pass,
   );
 }
 
@@ -714,9 +779,18 @@ async function checkCmd(ctx: Ctx, args: string[]): Promise<number> {
     return finish(ctx, json, "check", diags, {}, [], []);
   }
   const root = resolve(ctx.deps.cwd, dir);
+  if (!(await insideAssetsRoot(assetsRoot(ctx), root))) {
+    diags.push(
+      readDiag(
+        { ok: false, code: "image/unsafe-path", message: "it is outside PCOSMO_ASSETS_ROOT" },
+        shown(ctx, dir),
+      ),
+    );
+    return finish(ctx, json, "check", diags, {}, [], []);
+  }
   const fr = await readFileSafe(root, "fragment.json", MAX_MANIFEST_BYTES);
   if (!fr.ok) {
-    diags.push(readDiag(fr, "fragment.json"));
+    diags.push(readDiag(fr, `${shown(ctx, dir)}/fragment.json`));
     return finish(ctx, json, "check", diags, {}, [], []);
   }
   let fragment: unknown;
@@ -736,23 +810,38 @@ async function checkCmd(ctx: Ctx, args: string[]): Promise<number> {
     return finish(ctx, json, "check", diags, {}, [], []);
   }
   const byName = new Map<string, Raster>();
+  // `src` must be exactly "<figure dir>/<fixed name>": one shared, plain directory prefix (what
+  // `--src-dir` wrote) and a fixed name, each name once.
+  let prefix: string | undefined;
+  const seen = new Set<string>();
   for (const im of list) {
     if (!isObj(im) || typeof im.src !== "string") continue;
-    const name = im.src.slice(im.src.lastIndexOf("/") + 1);
-    if (!FIXED_OUTPUT.test(name)) {
+    const cut = im.src.lastIndexOf("/") + 1;
+    const name = im.src.slice(cut);
+    const here = im.src.slice(0, cut);
+    prefix ??= here;
+    const plainPrefix =
+      here === "" ||
+      (here.length <= 256 &&
+        here
+          .slice(0, -1)
+          .split("/")
+          .every((x) => /^[A-Za-z0-9._-]+$/.test(x) && x !== "." && x !== ".."));
+    if (!FIXED_OUTPUT.test(name) || !plainPrefix || here !== prefix || seen.has(name)) {
       diags.push({
         severity: "error",
         code: "image/unsafe-path",
         path: "",
-        message: `fragment image "${im.src.slice(0, 80)}" is not one of base.png or sprite-N.png`,
+        message: `fragment image "${im.src.slice(0, 80)}" is not "<figure dir>/base.png" or "<figure dir>/sprite-N.png" (one shared plain directory, each name once)`,
       });
       continue;
     }
+    seen.add(name);
     let raster = byName.get(name);
     if (!raster) {
       const r = await readFileSafe(root, name, ASSET_LIMITS.maxBytes);
       if (!r.ok) {
-        diags.push(readDiag(r, name));
+        diags.push(readDiag(r, `${shown(ctx, dir)}/${name}`));
         continue;
       }
       const d = await decodeImage(r.bytes, { limits: ASSET_LIMITS, key: name });
@@ -783,8 +872,17 @@ async function checkCmd(ctx: Ctx, args: string[]): Promise<number> {
   );
 }
 
+/** Prints the figure manifest schema (the plugin skill reads it from here). */
+function schemaCmd(ctx: Ctx, args: string[]): Promise<number> {
+  const p = parse(args, {});
+  oneInput(p, "assets schema", 0, "no arguments");
+  ctx.out(`${JSON.stringify(schema, null, 2)}\n`);
+  return Promise.resolve(EXIT.ok);
+}
+
 const SUBCOMMANDS: Readonly<Record<string, (ctx: Ctx, args: string[]) => Promise<number>>> = {
   doctor,
+  schema: schemaCmd,
   crop: cropCmd,
   cutout: cutoutCmd,
   locate: locateCmd,

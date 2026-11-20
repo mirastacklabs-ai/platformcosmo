@@ -14,6 +14,18 @@
  *      to the same place (catches a directory component swapped for a symlink after step 2,
  *      which `O_NOFOLLOW` does not cover).
  *
+ *   7. On Linux the kernel's own answer is compared with the expected path
+ *      (`readlink /proc/self/fd/N`), which also catches a parent directory renamed after the walk
+ *      even when the new file is a hard link to ours. Elsewhere the read is refused when a
+ *      directory above the file is writable by another user (and not sticky) or owned by a user
+ *      other than us or root.
+ *
+ * Residual race (documented in assemblies §11.1): there is no `openat`/`O_PATH` walk in Node, so
+ * an attacker who may rename directories above the file can still swap them between the walk and
+ * the open on platforms without /proc; the file read is then a real file of the same directory
+ * tree at open time, never one reached through a symlink we followed. Within one user's private
+ * directories the race does not exist.
+ *
  * Platforms without `O_NOFOLLOW` (Windows): the flag is simply absent, so step 3 does not refuse
  * a symlink by itself; steps 2 and 6 still refuse symlinks (lstat, realpath, dev/ino), which
  * narrows the race but cannot close it. `assets doctor` reports which mode is in effect.
@@ -23,8 +35,8 @@
  * file contains.
  */
 import { constants } from "node:fs";
-import { lstat, opendir, open, realpath } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { lstat, opendir, open, readlink, realpath } from "node:fs/promises";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import {
   DEFAULT_IMAGE_LIMITS,
   didYouMean,
@@ -49,12 +61,20 @@ export type SafeRead =
 /** Test seam: runs between the checks and the open (an attacker's window). Never set in production. */
 export interface SafeReadHooks {
   readonly afterChecks?: () => void | Promise<void>;
+  /** Runs right after the open succeeded. */
+  readonly afterOpen?: () => void | Promise<void>;
+  /** Runs after `fstat`, before the read. */
+  readonly afterStat?: () => void | Promise<void>;
+  /** Overrides `process.platform` for the fallback directory-permission rule. */
+  readonly platform?: NodeJS.Platform;
 }
 
 /** True when the platform can refuse a symlink as the last component at open time. */
 export const HAS_NOFOLLOW = constants.O_NOFOLLOW !== undefined;
 
 const MAX_REL = 512;
+/** Windows device names (with or without an extension): never a file we should open. */
+const WINDOWS_ODD = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 const MAX_SUGGEST_ENTRIES = 1000;
 
 const fail = (
@@ -68,11 +88,37 @@ const fail = (
   ...(suggestion === undefined ? {} : { suggestion }),
 });
 
+/** True when `a` and `b` differ only by case or Unicode normalization. */
+const sameSpelling = (a: string, b: string): boolean =>
+  a.normalize("NFC").toLowerCase() === b.normalize("NFC").toLowerCase();
+
+/**
+ * Directory writable by someone other than its owner (and not sticky), or by a uid that is not
+ * ours: anyone there could rename a component under a reader between our checks and our open.
+ */
+export function foreignWritableDir(mode: number, uid: number, me: number | undefined): boolean {
+  if (me !== undefined && uid !== me && uid !== 0) return true;
+  const otherWritable = (mode & 0o022) !== 0;
+  const sticky = (mode & 0o1000) !== 0;
+  return otherWritable && !sticky;
+}
+
+/** The path the kernel reports for an open descriptor (Linux `/proc/self/fd`), or undefined. */
+async function descriptorPath(fd: number, platform: NodeJS.Platform): Promise<string | undefined> {
+  if (platform !== "linux") return undefined;
+  try {
+    return await readlink(`/proc/self/fd/${fd}`);
+  } catch {
+    return undefined;
+  }
+}
+
 const errno = (e: unknown): string | undefined => (e as NodeJS.ErrnoException | undefined)?.code;
 
 /**
  * Splits a spec-relative path into components, refusing anything that could leave the directory:
- * absolute paths, drive letters and URLs (`:`), backslashes, NUL, empty or `..` components.
+ * absolute paths, drive letters and URLs (`:`), backslashes, NUL, empty or `..` components,
+ * components ending in `.` or a space and Windows device names (CON, NUL, COM1, ...).
  * `.` components are dropped.
  */
 export function relativeParts(rel: string): string[] | undefined {
@@ -83,7 +129,7 @@ export function relativeParts(rel: string): string[] | undefined {
   const parts: string[] = [];
   for (const p of rel.split("/")) {
     if (p === ".") continue;
-    if (p === "" || p === "..") return undefined;
+    if (p === "" || p === ".." || WINDOWS_ODD.test(p) || /[. ]$/.test(p)) return undefined;
     parts.push(p);
   }
   return parts.length > 0 ? parts : undefined;
@@ -127,10 +173,17 @@ export async function readFileSafe(
   try {
     root = await realpath(rootDir);
   } catch {
-    return fail("image/not-found", `the directory ${rootDir} does not exist`);
+    return fail("image/not-found", "the directory does not exist");
   }
 
   // 2. walk the components
+  const dirModes: { mode: number; uid: number }[] = [];
+  try {
+    const rs = await lstat(root);
+    dirModes.push({ mode: rs.mode, uid: rs.uid });
+  } catch {
+    return fail("image/not-found", "the directory does not exist");
+  }
   let cur = root;
   for (let i = 0; i < parts.length; i++) {
     cur = join(cur, parts[i]!);
@@ -157,6 +210,7 @@ export async function readFileSafe(
         `${parts.slice(0, i + 1).join("/")} is not a ${last ? "regular file" : "directory"}`,
       );
     }
+    if (!last) dirModes.push({ mode: st.mode, uid: st.uid });
   }
 
   await hooks.afterChecks?.();
@@ -176,6 +230,7 @@ export async function readFileSafe(
     );
   }
   try {
+    await hooks.afterOpen?.();
     // 4. fstat the descriptor we hold
     const st = await fh.stat();
     if (!st.isFile()) {
@@ -184,17 +239,45 @@ export async function readFileSafe(
     if (st.size > maxBytes) {
       return fail("image/too-large", `${parts.join("/")} is ${st.size} bytes (limit ${maxBytes})`);
     }
+    await hooks.afterStat?.();
     // 6. the path must still name this file and still resolve inside the directory
     try {
       const now = await lstat(cur);
       if (now.isSymbolicLink() || now.dev !== st.dev || now.ino !== st.ino) {
         return fail("image/unsafe-path", `${parts.join("/")} changed while it was being opened`);
       }
-      if ((await realpath(cur)) !== cur) {
+      const real = await realpath(cur);
+      if (real !== cur) {
+        if (sameSpelling(real, cur)) {
+          return fail(
+            "image/not-found",
+            `no such file: ${parts.join("/")}`,
+            `the file system matched it case-insensitively; spell it exactly as "${basename(real)}"`,
+          );
+        }
         return fail("image/unsafe-path", `${parts.join("/")} resolves outside its directory`);
       }
     } catch {
       return fail("image/unsafe-path", `${parts.join("/")} changed while it was being opened`);
+    }
+    // 6b. which path does the kernel say this descriptor is? On Linux the answer is exact and
+    // catches a directory swapped after the walk even when the new file is a hard link to ours.
+    // Elsewhere, refuse when a directory above the file can be renamed under us by another user.
+    const platform = hooks.platform ?? process.platform;
+    const via = await descriptorPath(fh.fd, platform);
+    if (via !== undefined) {
+      if (via !== cur) {
+        return fail("image/unsafe-path", `${parts.join("/")} changed while it was being opened`);
+      }
+    } else if (platform !== "win32") {
+      const bad = dirModes.some((d) => foreignWritableDir(d.mode, d.uid, process.getuid?.()));
+      if (bad) {
+        return fail(
+          "image/unsafe-path",
+          `a directory above ${parts.join("/")} is writable by other users, so it cannot be read safely`,
+          "make the directories private (chmod go-w), or use a directory you own",
+        );
+      }
     }
     // 5. bounded read: the buffer is sized by the (already capped) fstat size, plus one byte to
     //    notice a file that grew.
@@ -205,8 +288,9 @@ export async function readFileSafe(
       if (r.bytesRead === 0) break;
       n += r.bytesRead;
     }
-    if (n > maxBytes) {
-      return fail("image/too-large", `${parts.join("/")} is larger than ${maxBytes} bytes`);
+    // A file that is not exactly as long as fstat said was written to while we read it.
+    if (n !== st.size) {
+      return fail("image/unsafe-path", `${parts.join("/")} changed while it was being read`);
     }
     return { ok: true, bytes: new Uint8Array(buf.buffer, buf.byteOffset, n) };
   } finally {
@@ -230,6 +314,40 @@ export function readExplicitFile(
   }
   const abs = resolve(cwd, path);
   return readFileSafe(dirname(abs), basename(abs), maxBytes, hooks);
+}
+
+/** `realpath` of the deepest existing ancestor of `abs`, with the missing rest appended. */
+export async function realResolve(abs: string): Promise<string | undefined> {
+  const rest: string[] = [];
+  let cur = resolve(abs);
+  for (let i = 0; i < 4096; i++) {
+    try {
+      return join(await realpath(cur), ...rest.reverse());
+    } catch (e) {
+      if (errno(e) !== "ENOENT") return undefined;
+      const up = dirname(cur);
+      if (up === cur) return undefined;
+      rest.push(basename(cur));
+      cur = up;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * `PCOSMO_ASSETS_ROOT`: when set, a path (after resolving every symlink of the part that exists)
+ * must lie inside that directory. Unset means no confinement.
+ */
+export async function insideAssetsRoot(root: string | undefined, abs: string): Promise<boolean> {
+  if (root === undefined || root === "") return true;
+  let rootReal: string;
+  try {
+    rootReal = await realpath(root);
+  } catch {
+    return false;
+  }
+  const p = await realResolve(abs);
+  return p !== undefined && (p === rootReal || p.startsWith(rootReal + sep));
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -280,17 +398,33 @@ export async function loadSpecImages(
     const img = list[i];
     if (!isObj(img) || typeof img.id !== "string" || typeof img.src !== "string") continue;
     if (assets.has(img.id)) continue; // duplicate ids are core's to report
-    const path = `/images/${i}/src`;
     let bytes: Uint8Array = new Uint8Array(0);
     if (!img.src.startsWith("data:")) {
-      if (exhausted) continue;
+      const path = `/images/${i}/src`;
+      const totalDiag = (): void => {
+        diagnostics.push({
+          severity: "error",
+          code: "image/too-large",
+          path,
+          message: `Image "${img.id}" was not read: the images together exceed the total limit of ${limits.maxTotalBytes * 2} bytes`,
+          suggestion: "Shrink the images (pcosmo assets shrink) or use fewer of them",
+          params: { id: img.id, reason: "total", limit: limits.maxTotalBytes * 2 },
+        });
+      };
+      if (exhausted) {
+        totalDiag();
+        continue;
+      }
       let r = files.get(img.src);
       if (r === undefined) {
-        r = await readFileSafe(specDir, img.src, Math.min(fileCap(limits, img.src), budget));
+        const cap = fileCap(limits, img.src);
+        r = await readFileSafe(specDir, img.src, Math.min(cap, budget));
         files.set(img.src, r);
         if (r.ok) budget -= r.bytes.length;
-        else if (r.code === "image/too-large" && budget < fileCap(limits, img.src)) {
+        else if (r.code === "image/too-large" && budget < cap) {
           exhausted = true;
+          totalDiag();
+          continue;
         }
       }
       if (!r.ok) {

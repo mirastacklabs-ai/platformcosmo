@@ -1,11 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { encodePng } from "@platformcosmo/assets";
 import { DEFAULT_IMAGE_LIMITS } from "@platformcosmo/core";
 import { describe, expect, test } from "vitest";
 import { run } from "../src/index.js";
-import { HAS_NOFOLLOW, loadSpecImages, readExplicitFile, readFileSafe } from "../src/images.js";
+import {
+  HAS_NOFOLLOW,
+  foreignWritableDir,
+  insideAssetsRoot,
+  loadSpecImages,
+  readExplicitFile,
+  readFileSafe,
+} from "../src/images.js";
 import { type Calls, makeCore, makeDeps, tmp } from "./helpers.js";
 
 const png = (w = 4, h = 3): Uint8Array => {
@@ -69,6 +76,13 @@ describe("readFileSafe: traversal is refused with image/unsafe-path", () => {
     [""],
     ["."],
     ["x/".repeat(300) + "a.png"],
+    ["CON"],
+    ["sub/nul.png"],
+    ["COM1.txt"],
+    ["lpt9"],
+    ["a.png."],
+    ["a.png "],
+    ["sub /b.png"],
   ])("%j", async (rel) => {
     const { dir, outside } = await setup();
     refused(await readFileSafe(dir, rel, 1 << 20), "image/unsafe-path");
@@ -173,14 +187,61 @@ describe("readFileSafe: a path swapped between the checks and the open", () => {
     });
     refused(r, "image/not-found");
   });
-  test("file grown past the cap after the checks is bounded (cap + 1 bytes at most)", async () => {
+  test("file grown after fstat is refused as changed, never read past cap + 1 bytes", async () => {
     const { dir } = await setup();
     await writeFile(join(dir, "g.bin"), new Uint8Array(8));
-    // the file is 8 bytes at fstat time; whatever happens after, never more than cap + 1 bytes
     const r = await readFileSafe(dir, "g.bin", 16, {
-      afterChecks: () => writeFile(join(dir, "g.bin"), new Uint8Array(1 << 20)),
+      afterStat: () => writeFile(join(dir, "g.bin"), new Uint8Array(1 << 20)),
     });
-    refused(r, "image/too-large");
+    refused(r, "image/unsafe-path");
+    if (!r.ok) expect(r.message).toContain("changed while it was being read");
+  });
+  test("file truncated after fstat is refused as changed", async () => {
+    const { dir } = await setup();
+    await writeFile(join(dir, "g.bin"), new Uint8Array(8));
+    const r = await readFileSafe(dir, "g.bin", 16, {
+      afterStat: () => writeFile(join(dir, "g.bin"), new Uint8Array(3)),
+    });
+    refused(r, "image/unsafe-path");
+  });
+  // O_NOFOLLOW itself: on Linux, the identity checks (lstat dev/ino, realpath, /proc/self/fd)
+  // refuse every case O_NOFOLLOW would, so no input exists that only the flag catches there; the
+  // flag is what makes the open itself refuse (ELOOP) instead of reading and discarding. The test
+  // above ("file replaced by a symlink to a secret") passes through ELOOP when the flag exists.
+  test.runIf(process.platform === "linux")(
+    "a parent swapped after the open, with a hard link inside, is caught by /proc/self/fd only",
+    async () => {
+      const { dir } = await setup();
+      await mkdir(join(dir, "other"));
+      await writeFile(join(dir, "sub", "c.png"), "SAME-INODE");
+      const r = await readFileSafe(dir, "sub/c.png", 1 << 20, {
+        afterOpen: async () => {
+          // other/c.png is a hard link to the file we hold: dev/ino and realpath still agree
+          await link(join(dir, "sub", "c.png"), join(dir, "other", "c.png"));
+          await rename(join(dir, "sub"), join(dir, "sub-moved"));
+          await rename(join(dir, "other"), join(dir, "sub"));
+        },
+      });
+      refused(r, "image/unsafe-path");
+    },
+  );
+  test("without /proc the read is refused under a directory others can rename in", async () => {
+    const { dir } = await setup();
+    await chmod(dir, 0o777); // world-writable, not sticky
+    refused(await readFileSafe(dir, "a.png", 1 << 20, { platform: "darwin" }), "image/unsafe-path");
+    await chmod(dir, 0o755);
+    const ok = await readFileSafe(dir, "a.png", 1 << 20, { platform: "darwin" });
+    expect(ok.ok).toBe(true);
+    await chmod(dir, 0o1777); // sticky: others cannot rename our entries
+    expect((await readFileSafe(dir, "a.png", 1 << 20, { platform: "darwin" })).ok).toBe(true);
+  });
+  test("foreignWritableDir", () => {
+    expect(foreignWritableDir(0o40755, 1000, 1000)).toBe(false);
+    expect(foreignWritableDir(0o40775, 1000, 1000)).toBe(true);
+    expect(foreignWritableDir(0o41777, 0, 1000)).toBe(false);
+    expect(foreignWritableDir(0o40755, 0, 1000)).toBe(false);
+    expect(foreignWritableDir(0o40755, 2000, 1000)).toBe(true);
+    expect(foreignWritableDir(0o40700, 1000, undefined)).toBe(false);
   });
 });
 
@@ -194,6 +255,19 @@ describe("readExplicitFile (a path typed on the command line)", () => {
     refused(await readExplicitFile(base, "spec/", 1 << 20), "image/unsafe-path");
     refused(await readExplicitFile(base, "spec/a\0.png", 1 << 20), "image/unsafe-path");
   });
+});
+
+test("insideAssetsRoot resolves symlinks and missing tails", async () => {
+  const { base, dir, outside } = await setup();
+  await symlink(outside, join(dir, "out-link"));
+  expect(await insideAssetsRoot(undefined, "/anywhere")).toBe(true);
+  expect(await insideAssetsRoot(dir, join(dir, "sub", "b.png"))).toBe(true);
+  expect(await insideAssetsRoot(dir, join(dir, "new", "deeper", "x.png"))).toBe(true);
+  expect(await insideAssetsRoot(dir, dir)).toBe(true);
+  expect(await insideAssetsRoot(dir, join(base, "spec-evil"))).toBe(false);
+  expect(await insideAssetsRoot(dir, join(outside, "secret.png"))).toBe(false);
+  expect(await insideAssetsRoot(dir, join(dir, "out-link", "x.png"))).toBe(false);
+  expect(await insideAssetsRoot(join(base, "missing"), dir)).toBe(false);
 });
 
 test("the platform reports whether O_NOFOLLOW exists", () => {
@@ -282,10 +356,14 @@ describe("loadSpecImages", () => {
       dir,
       limits,
     );
-    // 2000 bytes of budget: four 500-byte files fit, then reading stops with image/too-large
-    expect(r.diagnostics.filter((d) => d.code === "image/too-large").length).toBeGreaterThanOrEqual(
-      1,
-    );
+    // 2000 bytes of budget: four 500-byte files fit (not images: image/format each), the fifth
+    // exceeds what is left and the sixth is skipped; both are a "total" too-large, none other is
+    const total = r.diagnostics.filter((d) => d.code === "image/too-large");
+    expect(total.map((d) => d.path)).toEqual(["/images/4/src", "/images/5/src"]);
+    expect(total.every((d) => (d.params as { reason?: string }).reason === "total")).toBe(true);
+    expect(total.every((d) => d.message.includes("total limit"))).toBe(true);
+    expect(r.diagnostics.filter((d) => d.code === "image/format")).toHaveLength(4);
+    expect(r.diagnostics).toHaveLength(6);
   });
 });
 
