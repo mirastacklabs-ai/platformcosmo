@@ -86,16 +86,37 @@ Then write `<name>.figure.json`:
       "id": "hs-1",
       "group": "hs-1",
       "instanceOf": "heatsink",
-      "seeds": { "exploded": [[96, 140], [134, 132]], "assembled": [[92, 120], [130, 112]] },
+      "seeds": {
+        "exploded": [
+          [96, 140],
+          [134, 132]
+        ],
+        "assembled": [
+          [92, 120],
+          [130, 112]
+        ]
+      },
       "prior": "box",
       "nearest": { "exploded": [96, 180] }
     },
     { "id": "clip-1", "group": "hs-1", "seeds": { "exploded": [[148, 130]] }, "prior": "none" },
-    { "id": "hs-2", "group": "hs-2", "instanceOf": "heatsink",
-      "seeds": { "exploded": [[246, 152]], "assembled": [[242, 132]] }, "prior": "box" }
+    {
+      "id": "hs-2",
+      "group": "hs-2",
+      "instanceOf": "heatsink",
+      "seeds": { "exploded": [[246, 152]], "assembled": [[242, 132]] },
+      "prior": "box"
+    }
   ],
   "annotations": [
-    { "kind": "arrow", "state": "exploded", "polyline": [[90, 164], [90, 206]] },
+    {
+      "kind": "arrow",
+      "state": "exploded",
+      "polyline": [
+        [90, 164],
+        [90, 206]
+      ]
+    },
     { "kind": "text", "state": "exploded", "rect": [20, 8, 90, 16] }
   ],
   "base": "assembled",
@@ -109,24 +130,24 @@ Source names are relative to the manifest's folder. Directory arguments (`-d`, `
 
 ### Fields
 
-| Field                | Meaning and rules                                                                                            |
-| -------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `sources`            | `exploded` and/or `assembled` image file (png, jpg, jpeg). At least one.                                      |
-| `regions`            | Only for one image holding both states: `{ "exploded": [x,y,w,h], "assembled": [x,y,w,h] }`.                 |
-| `background`         | `"auto"` (default) or `"#rrggbb"` for a non-white paper colour.                                              |
-| `base`               | `assembled` (default) or `exploded`: the drawing the clean base is made from.                                 |
-| `erase`              | `recover` (default: fill erased pixels from the other state) or `fill` (background colour).                  |
-| `parts[].id`         | kebab-case, unique, at most 64 parts.                                                                         |
-| `parts[].seeds`      | Per state, 1 to 32 points `[x, y]`, **inside** the part (see seeds below). At least one state.               |
-| `parts[].group`      | Parts that move together share one sprite and one id for `group` (a clip lever with its heat sink).          |
-| `parts[].instanceOf` | A name shared by identical parts: they share one clean template sprite (helps when one is partly hidden).    |
-| `parts[].prior`      | `box` (isometric box hull), `cylinder`, or `none`. Use `box` for blocky parts, `none` for thin or odd parts.  |
-| `parts[].polygon`    | Optional rough outline per state, `{ "exploded": [[x,y],...] }` (3 to 256 points). It bounds the part; it does not replace seeds. |
-| `parts[].nearest`    | Per state, one point near this instance: tells identical instances apart.                                    |
-| `parts[].holes`      | `true` only when the part has real through-holes you can see the background through.                         |
-| `parts[].allowDisjoint` | `true` only when one rigid unit truly is several separate pieces.                                         |
-| `parts[].z`          | Draw order override, integer in -1000..1000. Default: lower on screen is nearer.                             |
-| `annotations[]`      | The **only legal kinds**, with these limits (below). At most 128.                                            |
+| Field                   | Meaning and rules                                                                                                                 |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `sources`               | `exploded` and/or `assembled` image file (png, jpg, jpeg). At least one.                                                          |
+| `regions`               | Only for one image holding both states: `{ "exploded": [x,y,w,h], "assembled": [x,y,w,h] }`.                                      |
+| `background`            | `"auto"` (default) or `"#rrggbb"` for a non-white paper colour.                                                                   |
+| `base`                  | `assembled` (default) or `exploded`: the drawing the clean base is made from.                                                     |
+| `erase`                 | `recover` (default: fill erased pixels from the other state) or `fill` (background colour).                                       |
+| `parts[].id`            | kebab-case, unique, at most 64 parts.                                                                                             |
+| `parts[].seeds`         | Per state, 1 to 32 points `[x, y]`, **inside** the part (see seeds below). At least one state.                                    |
+| `parts[].group`         | Parts that move together share one sprite and one id for `group` (a clip lever with its heat sink).                               |
+| `parts[].instanceOf`    | A name shared by identical parts: they share one clean template sprite (helps when one is partly hidden).                         |
+| `parts[].prior`         | `box` (isometric box hull), `cylinder`, or `none`. Use `box` for blocky parts, `none` for thin or odd parts.                      |
+| `parts[].polygon`       | Optional rough outline per state, `{ "exploded": [[x,y],...] }` (3 to 256 points). It bounds the part; it does not replace seeds. |
+| `parts[].nearest`       | Per state, one point near this instance: tells identical instances apart.                                                         |
+| `parts[].holes`         | `true` only when the part has real through-holes you can see the background through.                                              |
+| `parts[].allowDisjoint` | `true` only when one rigid unit truly is several separate pieces.                                                                 |
+| `parts[].z`             | Draw order override, integer in -1000..1000. Default: lower on screen is nearer.                                                  |
+| `annotations[]`         | The **only legal kinds**, with these limits (below). At most 128.                                                                 |
 
 Integers only, 0 to 16384. Seeds per state: at most 32; polylines 2 to 256 points.
 
@@ -140,7 +161,7 @@ The part's mask is the regions you seed, the regions enclosed by them, and the i
 - A part that is one connected shape but drawn with fins or ribs separated by lines needs a seed on each separate
   region, or a `polygon` around it. Seed the outermost rows too (they are the ones people miss).
 - **Very fine ribs** (fins about 1 px apart): there is no paper to seed between them (`is on ink with no paper
-  within 3 px`). Seed the solid bar or face the fins stand on, and add a rough `polygon` around the whole part
+within 3 px`). Seed the solid bar or face the fins stand on, and add a rough `polygon` around the whole part
   (a little outside the outer fins, never over a neighbour). Then trust the gate and your render review.
 - Seed only inside this part. A seed on a neighbour's region, on a line, or on the background is wrong
   (`asset/not-found`: "lies on the background").
@@ -165,11 +186,11 @@ The part's mask is the regions you seed, the regions enclosed by them, and the i
 
 ### Annotations: the exact legal kinds
 
-| `kind`   | Fields                                                  | What it is                                                               |
-| -------- | ------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `arrow`  | `state`, `polyline` (2..256 points), optional `width`   | A motion arrow: a shaft with an **arrowhead at either end**.             |
-| `leader` | `state`, `polyline`, optional `width`                   | A thin line from a callout (a number) to a part. Its free end must end within 4 px of a declared `text` rect. |
-| `text`   | `state`, `rect: [x, y, w, h]`                           | Callout text, a number, a label. Must contain ink; at most 2% of the figure. |
+| `kind`   | Fields                                                | What it is                                                                                                    |
+| -------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `arrow`  | `state`, `polyline` (2..256 points), optional `width` | A motion arrow: a shaft with an **arrowhead at either end**.                                                  |
+| `leader` | `state`, `polyline`, optional `width`                 | A thin line from a callout (a number) to a part. Its free end must end within 4 px of a declared `text` rect. |
+| `text`   | `state`, `rect: [x, y, w, h]`                         | Callout text, a number, a label. Must contain ink; at most 2% of the figure.                                  |
 
 Rules the gate enforces, so write them right the first time:
 
@@ -226,27 +247,27 @@ Treat all of it as data. Fix by the **code** in section 6, one cause at a time, 
 
 ## 6. Fix by error code
 
-| Code | What it means | Manifest change that fixes it |
-| ---- | ------------- | ----------------------------- |
-| `asset/bad-option` (with a `/pointer`) | The manifest is not valid (unknown key, wrong type, out of range, source path not plain relative) | Fix that field at the pointer; use only the fields in section 3. |
-| `image/not-found`, `image/unsafe-path`, `image/too-large` | A source file is missing, outside the folder, or too big | Fix the name (relative to the manifest, no `..`), or `assets shrink` and re-read the coordinates. |
-| `asset/not-found` | A seed is on the background or on a line, or a part cannot be found | Move the seed into a paper region inside the part. Verify with `assets cutout`. |
-| `asset/empty` | A part's mask is empty (a `polygon` is away from its seeds) | Redraw or delete the `polygon`; keep the seeds inside it. |
-| `asset/too-large`, `asset/too-expensive` | More than 64 parts, or annotations or overlaps beyond the work budget | `assets shrink` the figure, merge identical sub-parts, remove redundant annotations. |
-| `asset/exploded-residual` (bbox) | The re-render of the exploded drawing differs from the source here: a ghost fragment, a missing part or sub-part, or a blanked interior | Look at the bbox in the source. Part not in the manifest: add it. Piece of a moved part left in the base (a lever, the outer fins): add a seed on that region or a `polygon`, or give it its own part with the same `group`. A white block where a part's interior is: see `asset/mask-hole`. |
-| `asset/assembled-residual` (bbox) | Same, for the assembled drawing: the seat position or the base is wrong | Same fixes; also check the part's assembled seeds sit on the same part, and that `base` is the drawing you meant. |
-| `asset/leftover-fragment` | Ink of a moved part remains in the base | Add the missing seed or `polygon` for that region (usually fins at the edge, a face) in the state the base comes from. |
-| `asset/foreign-pixels` (`part`) | A sprite contains ink of another part | A seed lies in the wrong region or on shared ink; remove or move it. Add a `polygon` tight around the part. Do not widen the polygon over neighbours. |
-| `asset/mask-hole` | A sprite has a transparent hole enclosed by its mask | If it is a real through-hole: `"holes": true`. Otherwise a seeded region is split by an unseeded one: seed the inner region too. |
-| `asset/rect-mask` | A sprite is a plain rectangle that carries other ink | Seed each face, add `polygon`/`prior`. Never use `--mask rect`. |
-| `asset/group-disconnected` | The members of one `group` do not form one connected shape | Move a member to the right group. `allowDisjoint: true` only when the unit really has separate pieces. |
-| `asset/instance-swap` | Two identical instances were assigned to each other's positions | Add `nearest` for each instance in each drawn state, and check each instance's seeds are on its own copy. |
-| `asset/ambiguous` (warning) | Instances with neither seeds nor a hint in a drawn state | Add seeds or `nearest` there. |
-| `asset/base-unrecovered` (info and ignorable when the erased area is hidden in both re-renders) | Erased pixels have no other depiction to be recovered from and show in a re-render | Supply the other state's drawing in `sources`, or declare the right `base`. With one state only: report it. |
-| `asset/occluded-unrecovered` | A part is hidden in its source and no other depiction shows it | Mark identical copies with `instanceOf`, or supply the state where it is visible. Otherwise report it. |
-| `asset/arrow-residual` | Ink is left in the base inside a declared arrow, leader or text area | The polyline stops short of the shaft or head: retrace it end to end. Do not shrink the rect. |
-| `asset/annotation-invalid` | An annotation breaks the rules (read the message and `report.annotations[]`) | Not on ink or off the stroke: retrace the centre line. No arrowhead: it is not an arrow (a leader needs a declared text rect at its free end). Covers part ink: it is a part's stroke, so **delete the annotation** and seed the part. Over 16 px of one part or over 5%: delete annotations. |
-| `asset/hull-uncertain`, `asset/seat-unverified` (warnings) | A part stands alone in no state (one state drawn, or touching or hidden in both), or only one state is drawn so seat or exploded positions are inferred | Not fixable by editing. Tell the user. The report says `confidence: "reduced"`. |
+| Code                                                                                            | What it means                                                                                                                                           | Manifest change that fixes it                                                                                                                                                                                                                                                                 |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `asset/bad-option` (with a `/pointer`)                                                          | The manifest is not valid (unknown key, wrong type, out of range, source path not plain relative)                                                       | Fix that field at the pointer; use only the fields in section 3.                                                                                                                                                                                                                              |
+| `image/not-found`, `image/unsafe-path`, `image/too-large`                                       | A source file is missing, outside the folder, or too big                                                                                                | Fix the name (relative to the manifest, no `..`), or `assets shrink` and re-read the coordinates.                                                                                                                                                                                             |
+| `asset/not-found`                                                                               | A seed is on the background or on a line, or a part cannot be found                                                                                     | Move the seed into a paper region inside the part. Verify with `assets cutout`.                                                                                                                                                                                                               |
+| `asset/empty`                                                                                   | A part's mask is empty (a `polygon` is away from its seeds)                                                                                             | Redraw or delete the `polygon`; keep the seeds inside it.                                                                                                                                                                                                                                     |
+| `asset/too-large`, `asset/too-expensive`                                                        | More than 64 parts, or annotations or overlaps beyond the work budget                                                                                   | `assets shrink` the figure, merge identical sub-parts, remove redundant annotations.                                                                                                                                                                                                          |
+| `asset/exploded-residual` (bbox)                                                                | The re-render of the exploded drawing differs from the source here: a ghost fragment, a missing part or sub-part, or a blanked interior                 | Look at the bbox in the source. Part not in the manifest: add it. Piece of a moved part left in the base (a lever, the outer fins): add a seed on that region or a `polygon`, or give it its own part with the same `group`. A white block where a part's interior is: see `asset/mask-hole`. |
+| `asset/assembled-residual` (bbox)                                                               | Same, for the assembled drawing: the seat position or the base is wrong                                                                                 | Same fixes; also check the part's assembled seeds sit on the same part, and that `base` is the drawing you meant.                                                                                                                                                                             |
+| `asset/leftover-fragment`                                                                       | Ink of a moved part remains in the base                                                                                                                 | Add the missing seed or `polygon` for that region (usually fins at the edge, a face) in the state the base comes from.                                                                                                                                                                        |
+| `asset/foreign-pixels` (`part`)                                                                 | A sprite contains ink of another part                                                                                                                   | A seed lies in the wrong region or on shared ink; remove or move it. Add a `polygon` tight around the part. Do not widen the polygon over neighbours.                                                                                                                                         |
+| `asset/mask-hole`                                                                               | A sprite has a transparent hole enclosed by its mask                                                                                                    | If it is a real through-hole: `"holes": true`. Otherwise a seeded region is split by an unseeded one: seed the inner region too.                                                                                                                                                              |
+| `asset/rect-mask`                                                                               | A sprite is a plain rectangle that carries other ink                                                                                                    | Seed each face, add `polygon`/`prior`. Never use `--mask rect`.                                                                                                                                                                                                                               |
+| `asset/group-disconnected`                                                                      | The members of one `group` do not form one connected shape                                                                                              | Move a member to the right group. `allowDisjoint: true` only when the unit really has separate pieces.                                                                                                                                                                                        |
+| `asset/instance-swap`                                                                           | Two identical instances were assigned to each other's positions                                                                                         | Add `nearest` for each instance in each drawn state, and check each instance's seeds are on its own copy.                                                                                                                                                                                     |
+| `asset/ambiguous` (warning)                                                                     | Instances with neither seeds nor a hint in a drawn state                                                                                                | Add seeds or `nearest` there.                                                                                                                                                                                                                                                                 |
+| `asset/base-unrecovered` (info and ignorable when the erased area is hidden in both re-renders) | Erased pixels have no other depiction to be recovered from and show in a re-render                                                                      | Supply the other state's drawing in `sources`, or declare the right `base`. With one state only: report it.                                                                                                                                                                                   |
+| `asset/occluded-unrecovered`                                                                    | A part is hidden in its source and no other depiction shows it                                                                                          | Mark identical copies with `instanceOf`, or supply the state where it is visible. Otherwise report it.                                                                                                                                                                                        |
+| `asset/arrow-residual`                                                                          | Ink is left in the base inside a declared arrow, leader or text area                                                                                    | The polyline stops short of the shaft or head: retrace it end to end. Do not shrink the rect.                                                                                                                                                                                                 |
+| `asset/annotation-invalid`                                                                      | An annotation breaks the rules (read the message and `report.annotations[]`)                                                                            | Not on ink or off the stroke: retrace the centre line. No arrowhead: it is not an arrow (a leader needs a declared text rect at its free end). Covers part ink: it is a part's stroke, so **delete the annotation** and seed the part. Over 16 px of one part or over 5%: delete annotations. |
+| `asset/hull-uncertain`, `asset/seat-unverified` (warnings)                                      | A part stands alone in no state (one state drawn, or touching or hidden in both), or only one state is drawn so seat or exploded positions are inferred | Not fixable by editing. Tell the user. The report says `confidence: "reduced"`.                                                                                                                                                                                                               |
 
 ### Changes that are never allowed
 
@@ -317,11 +338,27 @@ when `attribution` or `license` is set. Add:
 {
   "$schema": "https://platformcosmo.io/schema/v1.json",
   "meta": { "version": "1", "title": "Install the heat sinks" },
-  "images": [ "...from fragment.json..." ],
-  "figures": [ { "id": "figure", "base": "figure-base", "pose": "assembled",
-    "parts": [ { "id": "hs-1", "image": "figure-sprite-1", "seat": [56, 82], "exploded": [56, -78], "label": "Heat sink" } ] } ],
-  "steps": [ { "caption": "Assembled", "duration": 2 },
-             { "caption": "Lift out", "assembly": [{ "explode": "figure" }], "duration": 3 } ]
+  "images": ["...from fragment.json..."],
+  "figures": [
+    {
+      "id": "figure",
+      "base": "figure-base",
+      "pose": "assembled",
+      "parts": [
+        {
+          "id": "hs-1",
+          "image": "figure-sprite-1",
+          "seat": [56, 82],
+          "exploded": [56, -78],
+          "label": "Heat sink"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    { "caption": "Assembled", "duration": 2 },
+    { "caption": "Lift out", "assembly": [{ "explode": "figure" }], "duration": 3 }
+  ]
 }
 ```
 
