@@ -1,5 +1,4 @@
 import type { Axis, PartPrimitiveKind, PartShapeDef, PartTone } from "@platformcosmo/core";
-import type { Diagnostic } from "@platformcosmo/core";
 import { round2 } from "@platformcosmo/core";
 import { defineShape, type Draft, type ParamSpec } from "./define.js";
 
