@@ -3,6 +3,7 @@
  * names the public API calls that exercise it; `crafted.test.ts` asserts time and memory
  * bounds for every case.
  */
+import { zlibSync } from "fflate";
 import { bytes, cat, flate, PdfWriter, imageDict } from "./gen.js";
 
 const MiB = 1024 * 1024;
@@ -92,7 +93,7 @@ export const objStmUnclosedString = (entries = 1000, len = 800_000): Uint8Array 
   objStmSameOffset(entries, 0, cat(bytes("("), fill(len, 0x61)));
 
 /** S-Q02: K plain `N 0 obj (` headers and no xref (repair parses each one). */
-export function plainUnclosed(k = 2000, filler = 1000): Uint8Array {
+export function plainUnclosed(k = 20_000, filler = 1000): Uint8Array {
   const parts: Uint8Array[] = [
     bytes(
       "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\n",
@@ -199,6 +200,80 @@ export const tjHuge = (len = 60_000_000): Uint8Array =>
 export const tjMany = (n = 5_000_000): Uint8Array =>
   onePageRaw(repeat("BT /F1 1 Tf ", "(a) Tj ", n, "ET"), FONT, [FONT_OBJ]);
 
+/**
+ * R-N1: `stms` object streams, each holding `perStm` arrays of `names` names, every array a
+ * /Kids entry (a non-dictionary page-tree node): about 25 M parsed values in total.
+ */
+export function namesInKids(stms = 4, perStm = 16, names = 400_000): Uint8Array {
+  const w = new PdfWriter(null, "%PDF-1.5\n");
+  w.obj(1, "<< /Type /Catalog /Pages 2 0 R >>");
+  const kids: string[] = [];
+  const arr = repeat("[", "/a ", names, "]\n");
+  let num = 100;
+  for (let s = 0; s < stms; s++) {
+    const stmNum = 10 + s;
+    let head = "";
+    const members: number[] = [];
+    for (let k = 0; k < perStm; k++) {
+      head += `${num} ${k * arr.length} `;
+      w.inStm.set(num, [stmNum, k]);
+      kids.push(`${num} 0 R`);
+      members.push(num++);
+    }
+    const body = new Uint8Array(arr.length * perStm);
+    for (let k = 0; k < perStm; k++) body.set(arr, k * arr.length);
+    const data = cat(bytes(head), body);
+    w.obj(
+      stmNum,
+      `<< /Type /ObjStm /N ${perStm} /First ${head.length} /Filter /FlateDecode >>`,
+      zlibSync(data, { level: 1 }),
+    );
+  }
+  w.obj(2, `<< /Type /Pages /Kids [${kids.join(" ")}] /Count ${kids.length} >>`);
+  w.xrefStream(3, "/Root 1 0 R");
+  return w.bytes();
+}
+
+/** N01: `<01>` maps to 256 characters; a 256-code string shown `runs` times. */
+export function toUnicodeExpansion(runs = 200_000): Uint8Array {
+  const dst = "0041".repeat(256);
+  const cmap = `1 begincodespacerange <00> <FF> endcodespacerange\n1 beginbfchar <01> <${dst}> endbfchar`;
+  const show = cat(bytes("("), new Uint8Array(256).fill(1), bytes(") Tj "));
+  const content = cat(bytes("BT /F1 1 Tf "), repeatBytes(show, runs), bytes("ET"));
+  return onePageRaw(content, "/Font << /F1 9 0 R >>", [
+    [9, "<< /Type /Font /Subtype /Type1 /ToUnicode 8 0 R >>"],
+    [8, "<< >>", bytes(cmap)],
+  ]);
+}
+
+/** R-N3: `tables` classic tables of `entries` free entries, chained through /XRefStm. */
+export function chainedTables(tables = 60, entries = 40_000): Uint8Array {
+  const w = new PdfWriter();
+  w.obj(1, "<< /Type /Catalog /Pages 2 0 R >>");
+  w.obj(2, "<< /Type /Pages /Kids [] /Count 0 >>");
+  const rows = "0000000000 65535 f \n".repeat(entries);
+  let next = -1;
+  for (let i = 0; i < tables; i++) {
+    const at = w.length;
+    w.raw(
+      `xref\n3 ${entries}\n${rows}trailer\n<< /Size ${entries + 3}${next >= 0 ? ` /XRefStm ${next}` : ""} >>\n`,
+    );
+    next = at;
+  }
+  const top = w.length;
+  w.raw(
+    `xref\n1 2\n${String(w.offsets.get(1)).padStart(10, "0")} 00000 n \n${String(w.offsets.get(2)).padStart(10, "0")} 00000 n \n`,
+  );
+  w.raw(`trailer\n<< /Size 3 /Root 1 0 R /XRefStm ${next} >>\nstartxref\n${top}\n%%EOF\n`);
+  return w.bytes();
+}
+
+function repeatBytes(unit: Uint8Array, n: number): Uint8Array {
+  const out = new Uint8Array(unit.length * n);
+  for (let i = 0; i < n; i++) out.set(unit, i * unit.length);
+  return out;
+}
+
 export interface CraftedCase {
   readonly name: string;
   readonly review: string;
@@ -223,7 +298,7 @@ export const CASES: CraftedCase[] = [
     walk: "open",
   },
   {
-    name: "plain-2000-unclosed-strings",
+    name: "plain-20000-unclosed-strings",
     review: "S-Q02",
     build: () => plainUnclosed(),
     walk: "open",
@@ -256,4 +331,12 @@ export const CASES: CraftedCase[] = [
   },
   { name: "tj-60MB", review: "C-Q02", build: () => tjHuge(), walk: "text" },
   { name: "tj-5M", review: "C-Q02", build: () => tjMany(), walk: "text" },
+  { name: "names-25M-in-kids", review: "R-N1", build: () => namesInKids(), walk: "open" },
+  {
+    name: "tounicode-256x-200k-runs",
+    review: "N01",
+    build: () => toUnicodeExpansion(),
+    walk: "text",
+  },
+  { name: "xrefstm-60-tables-x40k", review: "R-N3", build: () => chainedTables(), walk: "open" },
 ];

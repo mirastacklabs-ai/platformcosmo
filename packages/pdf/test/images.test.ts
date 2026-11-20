@@ -252,7 +252,8 @@ describe("masks", () => {
     expect(gray(m).slice(0, 16)).toEqual([...new Array(8).fill(0), ...new Array(8).fill(255)]);
     const none = raster.extractImage(1, 1, { mask: true });
     expect(none.ok).toBe(false);
-    findDiag(none.diagnostics, "pdf/malformed", "info"); // C-Q13: not a bad page
+    // C-Q13: not a bad page; N03: the requested output was not produced, so an error
+    findDiag(none.diagnostics, "pdf/malformed", "error");
   });
 });
 

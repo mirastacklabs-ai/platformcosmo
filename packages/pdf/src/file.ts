@@ -286,10 +286,15 @@ export class PdfFile {
     return s.dict;
   }
 
+  /**
+   * A classic table. Pass 1 only validates the subsections and finds the trailer; a hybrid
+   * file's /XRefStm is then read (its entries must win); pass 2 re-lexes the entries straight
+   * into the table. Nothing is held per entry while /XRefStm sections recurse (R-N3).
+   */
   private readTable(lx: Lexer): PdfDict | null {
-    // pending entries of this section; the XRefStm of a hybrid file must win over them
-    const pending: [number, Entry][] = [];
     const max = this.limits.maxObjects;
+    const body = lx.pos;
+    let total = 0;
     for (;;) {
       const save = lx.pos;
       const t = lx.next();
@@ -303,29 +308,36 @@ export class PdfFile {
       const count = lx.num;
       if (count < 0 || start < 0) return null;
       // a count above the cap or the bytes left is damage (or a lie): repair instead
-      if (count > max || pending.length + count > max) return null;
+      total += count;
+      if (count > max || total > max) return null;
       if (count * 18 > this.buf.length - lx.pos + 18) return null;
       for (let i = 0; i < count; i++) {
-        if (lx.next() !== T_NUM) return null;
-        const offset = lx.num;
-        if (lx.next() !== T_NUM) return null;
-        const gen = lx.num;
-        if (lx.next() !== T_KW) return null;
-        const kind = lx.word;
-        const num = start + i;
-        if (kind === "n") pending.push([num, { type: 1, offset, gen, stream: 0, index: 0 }]);
-        else if (kind === "f") pending.push([num, FREE]);
-        else return null;
+        if (lx.next() !== T_NUM || lx.next() !== T_NUM || lx.next() !== T_KW) return null;
+        if (lx.word !== "n" && lx.word !== "f") return null;
       }
     }
     const trailer = parseValue(lx, this.limits);
     if (!(trailer instanceof PdfDict)) return null;
     const xs = intOf(trailer.get("XRefStm"));
     if (xs !== null && this.enterSection(xs)) this.readSection(xs);
-    for (const [num, e] of pending) {
-      // object 0 is always free; an offset-0 "in use" entry is a known writer bug
-      if (num === 0 || (e.type === 1 && e.offset <= 0)) this.setEntry(num, FREE);
-      else this.setEntry(num, e);
+    // pass 2: the entries, validated above
+    const ex = new Lexer(this.buf, body);
+    for (;;) {
+      if (ex.next() !== T_NUM) break; // `trailer`
+      const start = ex.num;
+      ex.next();
+      const count = ex.num;
+      for (let i = 0; i < count; i++) {
+        ex.next();
+        const offset = ex.num;
+        ex.next();
+        const gen = ex.num;
+        ex.next();
+        const num = start + i;
+        // object 0 is always free; an offset-0 "in use" entry is a known writer bug
+        if (ex.word === "f" || num === 0 || offset <= 0) this.setEntry(num, FREE);
+        else this.setEntry(num, { type: 1, offset, gen, stream: 0, index: 0 });
+      }
     }
     return trailer;
   }
@@ -400,6 +412,8 @@ export class PdfFile {
     const n = b.length;
     const bound = (c: number | undefined): boolean => c === undefined || isWs(c) || isDelimByte(c);
     let lastDictHeader = -1;
+    /** [data start, object number of its /Length] for streams with an indirect length. */
+    const pendingLens: [number, number][] = [];
     for (let i = 0; i + 3 <= n; i++) {
       const c = b[i] as number;
       if (c === 111 /* o */) {
@@ -469,28 +483,112 @@ export class PdfFile {
         let start = i + 6;
         if (b[start] === 13 && b[start + 1] === 10) start += 2;
         else start += 1;
-        // the stream's own /Length, when it is direct and lands on `endstream`
+        // the stream's own /Length, when it lands on `endstream`
         const last = objs[objs.length - 1];
-        let skipTo = -1;
+        let lenV: PdfValue | undefined;
         if (last && last[2] > lastDictHeader) {
           lastDictHeader = last[2];
-          const len = intOf(this.headerDict(last[2], i)?.get("Length"));
-          if (len !== null && len >= 0 && start + len <= n) {
-            const e = this.endstreamNear(start + len);
-            if (e >= 0) skipTo = e;
-          }
+          lenV = this.headerDict(last[2], i)?.get("Length");
         }
-        if (skipTo < 0) {
-          const e = indexOf(b, "endstream", start);
-          skipTo = e < 0 ? n : e;
+        if (lenV instanceof PdfRef) {
+          // indirect: resolved after the pass (R-N4); meanwhile the data is scanned as usual
+          pendingLens.push([start, lenV.num]);
+          continue;
         }
-        if (skipTo < n) ends.push(skipTo);
-        i = Math.max(i, skipTo + 8);
+        let skipTo = -1;
+        const len = intOf(lenV);
+        if (len !== null && len >= 0 && start + len <= n) skipTo = this.endstreamNear(start + len);
+        if (skipTo < 0) skipTo = this.nextEndstreamFrom(start);
+        if (skipTo < 0) continue; // no endstream after it: scanning resumes at the data (R-N7)
+        ends.push(skipTo);
+        i = skipTo + 8;
       }
     }
+    if (pendingLens.length > 0) this.dropStreamData(pendingLens, objs, trailers, ends);
     this.endstreams = ends;
     this.scanResult = { objs, trailers };
     return this.scanResult;
+  }
+
+  private esFrom = -1;
+  private esAt = -1;
+
+  /** The first `endstream` at or after `p` (-1: none); repeated forward queries are O(1). */
+  private nextEndstreamFrom(p: number): number {
+    if (this.esFrom >= 0 && this.esFrom <= p && (this.esAt < 0 || this.esAt >= p)) return this.esAt;
+    this.esFrom = p;
+    this.esAt = indexOf(this.buf, "endstream", p);
+    return this.esAt;
+  }
+
+  /**
+   * Second step of the scan for streams whose /Length is indirect: the length object is looked
+   * up among the headers found (at most 8 candidates each), and when the length lands on
+   * `endstream` everything recorded inside the data (an embedded file's objects, trailers and
+   * `endstream`s) is dropped. Linear: positions are sorted, intervals merged.
+   */
+  private dropStreamData(
+    pending: [number, number][],
+    objs: [number, number, number][],
+    trailers: number[],
+    ends: number[],
+  ): void {
+    const b = this.buf;
+    const byNum = new Map<number, number[]>();
+    for (const [num, , off] of objs) {
+      let a = byNum.get(num);
+      if (!a) byNum.set(num, (a = []));
+      a.push(off);
+    }
+    const spans: [number, number][] = [];
+    for (const [start, num] of pending) {
+      const offs = byNum.get(num);
+      if (!offs) continue;
+      // candidates: headers after the data start first (the usual layout), then before it
+      let lo = 0;
+      let hi = offs.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if ((offs[mid] as number) <= start) lo = mid + 1;
+        else hi = mid;
+      }
+      const after = offs.slice(lo, lo + 8);
+      const before = offs.slice(Math.max(0, lo - 8), lo).reverse();
+      for (const h of [...after, ...before]) {
+        const lx = new Lexer(b, h, Math.min(b.length, h + 64));
+        if (lx.next() !== T_NUM || lx.next() !== T_NUM || lx.next() !== T_KW || lx.word !== "obj")
+          continue;
+        if (lx.next() !== T_NUM || !lx.isInt) continue;
+        const len = lx.num;
+        if (len < 0 || start + len > b.length) continue;
+        const e = this.endstreamNear(start + len);
+        if (e < 0) continue;
+        spans.push([start, e]);
+        break;
+      }
+    }
+    if (spans.length === 0) return;
+    spans.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+    const merged: [number, number][] = [];
+    for (const sp of spans) {
+      const top = merged[merged.length - 1];
+      if (top && sp[0] <= top[1]) top[1] = Math.max(top[1], sp[1]);
+      else merged.push([sp[0], sp[1]]);
+    }
+    const inside = (pos: number, k: { i: number }): boolean => {
+      while (k.i < merged.length && (merged[k.i] as [number, number])[1] <= pos) k.i++;
+      const m = merged[k.i];
+      return m !== undefined && pos > m[0] && pos < m[1];
+    };
+    const keep = <T>(arr: T[], pos: (x: T) => number): void => {
+      const k = { i: 0 };
+      let w = 0;
+      for (const x of arr) if (!inside(pos(x), k)) arr[w++] = x;
+      arr.length = w;
+    };
+    keep(objs, (o) => o[2]);
+    keep(trailers, (t) => t);
+    keep(ends, (e) => e);
   }
 
   /** `endstream` within `MAX_GAP` whitespace bytes of `p`, or -1. */
@@ -614,26 +712,28 @@ export class PdfFile {
     if (this.budget.lexed >= this.limits.maxLexedBytes) this.budget.chargeLex(1);
     const end = Math.min(this.nextEndobj(off), this.nextHeader(off));
     const lx = new Lexer(b, off, end);
-    if (lx.next() !== T_NUM || !lx.isInt) return null;
-    const num = lx.num;
-    if (lx.next() !== T_NUM || !lx.isInt) return null;
-    const gen = lx.num;
-    if (lx.next() !== T_KW || lx.word !== "obj") return null;
-    if (expect >= 0 && num !== expect) return null;
-    let value: PdfValue | undefined;
+    // every return path pays for what it lexed (R-N2)
     try {
-      value = parseValue(lx, this.limits);
+      if (lx.next() !== T_NUM || !lx.isInt) return null;
+      const num = lx.num;
+      if (lx.next() !== T_NUM || !lx.isInt) return null;
+      const gen = lx.num;
+      if (lx.next() !== T_KW || lx.word !== "obj") return null;
+      if (expect >= 0 && num !== expect) return null;
+      const value = parseValue(lx, this.limits, true, this.countValue);
+      if (value === undefined) return { num, value: null };
+      const save = lx.pos;
+      if (value instanceof PdfDict && lx.next() === T_KW && (lx.word as string) === "stream") {
+        return { num, value: this.readStream(value, lx.pos, num, gen) };
+      }
+      lx.pos = save;
+      return { num, value };
     } finally {
       this.budget.chargeLex(lx.pos - off); // lexed bytes, strings included
     }
-    if (value === undefined) return { num, value: null };
-    const save = lx.pos;
-    if (value instanceof PdfDict && lx.next() === T_KW && (lx.word as string) === "stream") {
-      return { num, value: this.readStream(value, lx.pos, num, gen) };
-    }
-    lx.pos = save;
-    return { num, value };
   }
+
+  private readonly countValue = (): void => this.budget.value();
 
   private readStream(dict: PdfDict, after: number, num: number, gen: number): PdfStream {
     const b = this.buf;
@@ -751,7 +851,7 @@ export class PdfFile {
       const lx = new Lexer(os.data, start, end);
       let v: PdfValue | undefined;
       try {
-        v = parseValue(lx, this.limits);
+        v = parseValue(lx, this.limits, true, this.countValue);
       } finally {
         this.budget.chargeLex(lx.pos - start);
       }
@@ -802,6 +902,20 @@ export class PdfFile {
     return v instanceof PdfRef ? null : v;
   }
 
+  /**
+   * Resolves to a dictionary without keeping anything else in the cache: a page-tree /Kids
+   * entry that is an array or a string must not stay resident (R-N1).
+   */
+  resolveDictTransient(v: PdfValue | undefined): PdfDict | null {
+    if (v instanceof PdfRef && !this.cache.has(v.num)) {
+      const r = this.loadObject(v.num);
+      if (r instanceof PdfDict) return r;
+      this.cache.delete(v.num);
+      return null;
+    }
+    return this.resolveDict(v);
+  }
+
   resolveDict(v: PdfValue | undefined): PdfDict | null {
     const r = this.resolve(v);
     return r instanceof PdfDict ? r : null;
@@ -824,7 +938,10 @@ export class PdfFile {
     const failed = this.failures.get(s)?.get(key);
     if (failed) throw failed;
     if (this.decodeDepth >= MAX_DECODE_DEPTH) {
-      throw new PdfError("pdf/too-complex", "stream decodes nest too deeply", o.where ?? {});
+      throw new PdfError("pdf/too-complex", "stream decodes nest too deeply", {
+        ...(o.where ?? {}),
+        scope: "depth",
+      });
     }
     this.decodeDepth++;
     try {
@@ -870,7 +987,15 @@ export class PdfFile {
         where: o.where ?? {},
       });
     } catch (e) {
-      if (e instanceof PdfError && e.where.scope !== "total") {
+      // depth and per-command budget failures depend on the path, not the stream: not cached
+      const scope = e instanceof PdfError ? e.where.scope : undefined;
+      if (
+        e instanceof PdfError &&
+        scope !== "total" &&
+        scope !== "depth" &&
+        scope !== "values" &&
+        scope !== "lexed"
+      ) {
         let m = this.failures.get(s);
         if (!m) this.failures.set(s, (m = new Map()));
         m.set(key, e);
@@ -909,6 +1034,9 @@ export function isControl(c: number): boolean {
     c < 32 ||
     (c >= 0x7f && c < 0xa0) ||
     c === 0x061c ||
+    c === 0x2028 ||
+    c === 0x2029 ||
+    c === 0xfeff ||
     c === 0x200e ||
     c === 0x200f ||
     (c >= 0x202a && c <= 0x202e) ||

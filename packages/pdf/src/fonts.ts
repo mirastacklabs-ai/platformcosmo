@@ -160,9 +160,12 @@ const codeOf = (b: Uint8Array): number => {
   return v;
 };
 
+/** Characters one ToUnicode mapping may produce (one code → at most 32 UTF-16 units). */
+export const MAX_MAPPING_CHARS = 32;
+
 function utf16be(b: Uint8Array): string {
   let s = "";
-  for (let i = 0; i + 1 < b.length && i < 512; i += 2) {
+  for (let i = 0; i + 1 < b.length && i < MAX_MAPPING_CHARS * 2; i += 2) {
     s += String.fromCharCode(((b[i] as number) << 8) | (b[i + 1] as number));
   }
   if (b.length === 1) s = String.fromCharCode(b[0] as number);

@@ -416,20 +416,27 @@ export function decodeImage(
     if (!isJpeg(b)) {
       throw new PdfError("pdf/malformed", "a DCTDecode stream is not a JPEG file", where);
     }
-    const notes = [
-      g("SMask") instanceof PdfStream ? "/SMask" : "",
-      g("Decode") !== undefined ? "/Decode" : "",
-    ].filter(Boolean);
-    if (notes.length) {
+    // passthrough keeps the JPEG's own pixels (N07: two different notes, two codes)
+    if (g("Decode") !== undefined) {
       diags.push(
         diag(
           "info",
           "pdf/colour-approx",
-          `the JPEG is passed through unchanged: its ${notes.join(" and ")} is not applied`,
+          "the JPEG is passed through unchanged: its /Decode is not applied, so colours may be inverted",
           {
             ...where,
-            ignored: notes,
+            ignored: ["/Decode"],
           },
+        ),
+      );
+    }
+    if (g("SMask") instanceof PdfStream) {
+      diags.push(
+        diag(
+          "info",
+          "pdf/malformed",
+          "the JPEG is passed through without its soft mask; extract the mask separately (mask: true)",
+          { ...where, ignored: ["/SMask"] },
         ),
       );
     }

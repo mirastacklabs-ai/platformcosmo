@@ -193,19 +193,28 @@ describe("C-Q04 security handler consistency", () => {
     return d;
   };
   const filt = { StmF: new PdfName("StdCF"), StrF: new PdfName("StdCF") };
+  // the reason is asserted: these inputs would also fail the /U check without the fix (N02)
   it.each([
-    ["AESV3 under V4", { V: 4, R: 4, CF: cf("AESV3"), ...filt }],
-    ["AESV2 under V5", { V: 5, R: 6, CF: cf("AESV2"), ...filt }],
-    ["RC4 under V5", { V: 5, R: 6, CF: cf("V2"), ...filt }],
-    ["a /Length of 129 bits", { V: 2, R: 3, Length: 129 }],
-    ["a /Length of 300 bits", { V: 2, R: 3, Length: 300 }],
-  ])("refuses %s", (_, extra) => {
+    ["AESV3 under V4", { V: 4, R: 4, CF: cf("AESV3"), ...filt }, /not allowed with V4/],
+    ["AESV2 under V5", { V: 5, R: 6, CF: cf("AESV2"), ...filt }, /not allowed with V5/],
+    ["RC4 under V5", { V: 5, R: 6, CF: cf("V2"), ...filt }, /not allowed with V5/],
+    ["a /Length of 129 bits", { V: 2, R: 3, Length: 129 }, /multiple of 8/],
+    ["a /Length of 300 bits", { V: 2, R: 3, Length: 300 }, /multiple of 8/],
+    ["a 256-bit RC4 key", { V: 2, R: 3, Length: 256 }, /longer than 128/],
+  ])("refuses %s", (_, extra, reason) => {
     const s = setupSecurity(enc(extra as Record<string, PdfValue>), new Uint8Array(16), (v) => v);
     expect(s.ok).toBe(false);
+    expect((s as { reason: string }).reason).toMatch(reason as RegExp);
   });
 });
 
-/** qpdf known-answer vectors (filled in from the container run; see the PR). */
+/**
+ * qpdf 11.3.0 known-answer vectors (Debian bookworm package), each from
+ * `qpdf --allow-weak-crypto --object-streams=disable --compress-streams=n --encrypt "" ownerpw
+ * <256 [--force-R5] | 128 --use-aes=y|n> -- in.pdf out.pdf` on a file whose /Info (object 2 0)
+ * holds `/Producer (qpdf known-answer vector)`; the key is `qpdf --show-encryption-key`. The R2
+ * vector came from `qpdf --empty --allow-weak-crypto --encrypt "" ownerpw 40 -- out.pdf`.
+ */
 interface Kat {
   readonly name: string;
   readonly V: number;
@@ -218,6 +227,8 @@ interface Kat {
   readonly ID: string;
   readonly cfm?: string;
   readonly key: string;
+  /** The encrypted `/Producer` string of object 2 0 in the same qpdf file. */
+  readonly str?: string;
 }
 const KAT: Kat[] = [
   {
@@ -227,23 +238,39 @@ const KAT: Kat[] = [
     length: 256,
     P: -4,
     cfm: "AESV3",
-    ID: "75fc08ee4d188129f7088293a8b12268",
-    O: "224b981108b6f0792fe2e064b31eace5b490165741ed42f4021e41618496e0164c30bdd08be68bbed1469c59e9db9e2e",
-    U: "051c270aaddad3bc2011a3320f740bef08f88c9a78cfc5326663d43577a099f29a4f05feecd216e006b17fc1a7253c3f",
-    UE: "256462829e6505bdcf60563665740eed495d21b4338edefc693df6ff2fc7b38e",
-    key: "007440df6f90d427eb9b0315aae0205fcace5872d4dd5e140a9c6fd3c2cec13b",
+    ID: "c856c3c2c831142abda7ed4d7cd4901e",
+    O: "7ef96f9022a184dca42a784889886307c9c0376c0e81832706c998b98549f10093067cbbbbbe526a075aa75b40bdfc98",
+    U: "607a0a19bd3bb77096c5543876f86bcf53dd1626981af595225343860cc8d8f01d97f01bb2f9c387472b71ae77516a7a",
+    UE: "9ba67d334f1818a5a3d5d8b96b625f384d931e4a3978fced5afa37c364f908fb",
+    key: "ab266526fcf13f5f512f1811435ce5bff178d7808d807c2179ba50a1c79e26ca",
+    str: "05386472bcb997a5b4d03fdd1ff62a5951beb21c80a7f15426e1b240ce2f96096d679f50a7fb1b690df2758c69a8b695",
   },
   {
-    name: "R4 AES-128",
+    name: "R5 AES-256 (--force-R5)",
+    V: 5,
+    R: 5,
+    length: 256,
+    P: -4,
+    cfm: "AESV3",
+    ID: "3329bf9074610096dfaf07d04ad5a85b",
+    O: "45a42f3f1e56161c08a2f1b9e771c46fc19fc3a0e4e9e1e9abd80c48450c7c75781771528363e3444f27ca4953e8c768",
+    U: "0ce8e2d7edf10029ec9275e9a92144703da3a1620b4fc373245928b9701cde65c2aa6b8758c94e70cd384fd670d66fce",
+    UE: "b2b04b752bd75aa7d8bfa0dac1052d606b651dc4473b7f34a6f814b050aaa32a",
+    key: "ff62315eb36f2e3011b8eba88ebd73a64a991eb806425316665afcf12b0700a4",
+    str: "3a03dc384a96169d978ad8bced20e2ffabea4c8f71709b004bf23b3a2e5b268950e371fd7ef913633b5d959630a8a894",
+  },
+  {
+    name: "R4 AES-128 (AESV2, sAlT)",
     V: 4,
     R: 4,
     length: 128,
     P: -4,
     cfm: "AESV2",
-    ID: "4c646a9aedc45aad78482e1c32adac17",
+    ID: "733ed59fa5295590dfa57f233e9a4a61",
     O: "5a0c0b55deda723d6a1a77ca020e0bf91273d02733c4748c700d9eb9a6d68a09",
-    U: "f449d79f29479c88ac829486cf0fa1160122456a91bae5134273a6db134c87c4",
-    key: "892e6c893d45c3fa5bfd315536c9f436",
+    U: "ce79ecf7304e5d5d696395f3f97c75510122456a91bae5134273a6db134c87c4",
+    key: "1d70281ffe9270928d70fec8afe7c805",
+    str: "1516a1e747ebaa4869e532b97c3f96abb0d062c5db1dc31378ed3a296f7659119c8c57d138e40805c93f7fa37f83e6a1",
   },
   {
     name: "R3 RC4-128",
@@ -251,10 +278,11 @@ const KAT: Kat[] = [
     R: 3,
     length: 128,
     P: -4,
-    ID: "fc1612db9667d72254ce9990a01d3a63",
+    ID: "f8cb9c455d5a2028d6bc64981f84585a",
     O: "5a0c0b55deda723d6a1a77ca020e0bf91273d02733c4748c700d9eb9a6d68a09",
-    U: "127622720f220839de93bb2e75769da70122456a91bae5134273a6db134c87c4",
-    key: "9a5bbe4733a70feea09cd43fe2501b74",
+    U: "9fadb28349e18669ee8b1dfaba7420b30122456a91bae5134273a6db134c87c4",
+    key: "40b28c0cf19ae428f800fcb5f9c70813",
+    str: "339a1b79ea67e356e9b6518b30bf8f20206472a560c92052",
   },
   {
     name: "R2 RC4-40",
@@ -301,7 +329,36 @@ describe("C-Q07 external known-answer vectors (written by qpdf 11, not by us)", 
     });
     const s = setupSecurity(e, hexb(v.ID), (x) => x);
     expect(s.ok).toBe(true);
-    expect(g.hex((s as { decryptor: Decryptor }).decryptor.key)).toBe(v.key);
+    const dec = (s as { decryptor: Decryptor }).decryptor;
+    expect(g.hex(dec.key)).toBe(v.key);
+    if (v.str) {
+      // our per-object key (RC4, or AES with sAlT / the IV prefix) on qpdf's ciphertext
+      const plain = dec.decrypt(hexb(v.str), 2, 0, "string");
+      expect(String.fromCharCode(...plain)).toBe("qpdf known-answer vector");
+    }
+  });
+
+  it("refuses a real R4 vector whose crypt filter is swapped to AESV3 (N02)", () => {
+    const v = KAT[2] as Kat;
+    const std = new PdfDict();
+    std.map.set("CFM", new PdfName("AESV3"));
+    const cfd = new PdfDict();
+    cfd.map.set("StdCF", std);
+    const e = dict({
+      Filter: new PdfName("Standard"),
+      V: 4,
+      R: 4,
+      Length: 128,
+      P: v.P,
+      O: str(v.O),
+      U: str(v.U),
+      CF: cfd,
+      StmF: new PdfName("StdCF"),
+      StrF: new PdfName("StdCF"),
+    });
+    const s = setupSecurity(e, hexb(v.ID), (x) => x);
+    expect(s.ok).toBe(false);
+    expect((s as { reason: string }).reason).toMatch(/not allowed with V4/);
   });
 });
 
@@ -362,26 +419,39 @@ describe("C-Q07 malformed AES payloads and Identity crypt filters", () => {
 });
 
 describe("C-Q03 decryption is charged to the budget", () => {
-  it("decrypting past the total is pdf/too-large", () => {
-    const doc = mustOpen(g.encryptedPdf({ kind: "aes-256-r6" }), {
-      limits: { maxTotalDecoded: 1500 },
+  it("the same walk costs more decoded bytes encrypted than plain, by the decrypted bytes", () => {
+    const plain = mustOpen(g.rasterPdf());
+    const enc = mustOpen(g.encryptedPdf({ kind: "rc4-128" }));
+    for (const d of [plain, enc]) d.listImages(1, { hash: false });
+    const extra = enc.file.budget.decoded - plain.file.budget.decoded;
+    // RC4 keeps lengths: the content stream (and the forms it draws) decrypted once each
+    expect(extra).toBeGreaterThan(0);
+    expect(extra).toBeLessThan(g.encryptedPdf({ kind: "rc4-128" }).length);
+    // and it is enforced: a total below the plain walk plus the decryption fails
+    const tight = mustOpen(g.encryptedPdf({ kind: "rc4-128" }), {
+      limits: { maxTotalDecoded: plain.file.budget.decoded },
     });
-    const list = doc.listImages(1);
-    expect(codes(list.diagnostics)).toContain("pdf/too-large");
+    expect(codes(tight.listImages(1, { hash: false }).diagnostics)).toContain("pdf/too-large");
   });
 });
 
 describe("C-Q05 text runs hold no control or bidi characters", () => {
-  it("replaces C0, C1 and bidi controls with U+FFFD", () => {
-    const pdf = g.onePage("BT /F 10 Tf <0001000200030004> Tj ET", "/Font << /F 10 0 R >>", [
+  const page = (codes: string): Uint8Array =>
+    g.onePage(`BT /F 10 Tf <${codes}> Tj ET`, "/Font << /F 10 0 R >>", [
       [10, "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /ToUnicode 11 0 R >>"],
       [
         11,
         "<< >>",
-        g.bytes("1 beginbfchar <0001> <0007> <0002> <202E> <0003> <0085> <0004> <0041> endbfchar"),
+        g.bytes(
+          "1 beginbfchar <0001> <0007> <0002> <202E> <0003> <0085> <0004> <0041> <0005> <2028> <0006> <2029> <0007> <FEFF> endbfchar",
+        ),
       ],
     ]);
-    expect(mustOpen(pdf).text(1).runs[0]?.text).toBe("���A");
+  it("replaces C0, C1 and bidi controls with U+FFFD", () => {
+    expect(mustOpen(page("0001000200030004")).text(1).runs[0]?.text).toBe("\uFFFD\uFFFD\uFFFDA");
+  });
+  it("replaces U+2028, U+2029 and U+FEFF too (N06)", () => {
+    expect(mustOpen(page("0005000600070004")).text(1).runs[0]?.text).toBe("\uFFFD\uFFFD\uFFFDA");
   });
 });
 
@@ -427,6 +497,15 @@ describe("C-Q08 JPEG checks", () => {
     );
     const d = findDiag(doc.extractImage(1, 0).diagnostics, "pdf/colour-approx", "info");
     expect(d.params.ignored).toEqual(["/Decode"]);
+    // an ignored soft mask is not a colour approximation (N07)
+    const withMask = mustOpen(
+      g.onePage("/Im1 Do", IMG, [
+        [10, g.imageDict(16, 8, "/DeviceRGB", 8, "/Filter /DCTDecode /SMask 11 0 R"), g.JPEG_16x8],
+        [11, g.imageDict(1, 1, "/DeviceGray", 8), Uint8Array.from([1])],
+      ]),
+    ).extractImage(1, 0).diagnostics;
+    expect(codes(withMask)).not.toContain("pdf/colour-approx");
+    expect(findDiag(withMask, "pdf/malformed", "info").params.ignored).toEqual(["/SMask"]);
   });
 });
 

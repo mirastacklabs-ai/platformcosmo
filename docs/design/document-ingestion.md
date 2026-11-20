@@ -107,7 +107,9 @@ follows only what extraction needs.
   streams with an Identity `/Crypt` filter never) are decrypted with the per-object key. The
   file key is derived per the PDF spec (`/EncryptMetadata false` changes only the R4 key
   derivation: `/Metadata` streams are never read) and checked against `/U` before any object is
-  decrypted; decrypted bytes count against the same decode caps. The handler must be
+  decrypted; decrypted bytes count against the same decode caps, and a decrypted stream is
+  kept for the document handle's lifetime (so it is decrypted once; bounded by the file
+  size). The handler must be
   consistent: AESV3 only with V5, V5 only with AESV3 (or no encryption), and a `/Length` that
   is a whole number of bytes. Any other handler, a
   non-empty user password, or a failed `/U` check is refused with `pdf/encrypted`. Permission
@@ -185,12 +187,17 @@ How C-2 applies the table:
 - `/Prev` targets and a hybrid file's `/XRefStm` count as sections; one already read is not read
   again (`pdf/malformed` warning), and past 64 a `pdf/too-complex` warning precedes the
   one-pass repair scan. Repair skips stream data (by a valid `/Length`, else to the next
-  `endstream`), so an embedded file's objects are never adopted, and reads at most the newest
-  64 trailers.
+  `endstream`; with an indirect `/Length`, the length object is looked up among the headers
+  found and whatever the scan recorded inside the data is dropped afterwards), so an embedded
+  file's objects are never adopted; a `stream` with no `endstream` after it does not end the
+  scan. Repair reads at most the newest 64 trailers.
 - Every object is parsed only up to the next `endobj` (or, after repair, the next object
   header); an object-stream member only within its own slice, and an object stream whose member
   offsets repeat or decrease is ignored (`pdf/malformed`). Lexed bytes count against
-  `maxLexedBytes` (1 GiB per command).
+  `maxLexedBytes` (1 GiB per command) and parsed values (numbers, names, strings, containers)
+  against `maxParsedValues` (20 M per command, checked before each value is built, so the heap
+  held by parsed objects stays bounded); `/Kids` entries that are not dictionaries are not kept
+  in the object cache.
 - At most 8 whitespace bytes may separate data from `endstream` or `EI`; otherwise the
   stream's end is found by the scan.
 - The decoded total counts every byte handed out: filter output, unfiltered and passed-through
@@ -201,7 +208,9 @@ How C-2 applies the table:
   operands too), 256 MiB of page content scanned (many pages on one large stream), 256 MiB of
   image data hashed per `list` call (beyond: `sha256: null` and one warning; the same when the
   decoded total runs out while hashing), 100 000 image placements per page, and 200 000 text
-  runs of at most 65 536 characters per page (`pdf/too-complex`, truncated).
+  runs of at most 65 536 characters per page, 4 M characters of text per page in total (past
+  it the text matrix still advances), each ToUnicode mapping at most 32 characters
+  (`pdf/too-complex`, truncated).
 - The 16 MP cap is 16 777 216 px, as for image assets.
 - Limits can only be lowered per call (`openPdf(bytes, { limits })`, `min(default, value)`),
   never raised, and never by the file.
@@ -1249,7 +1258,9 @@ assumption, and anything that needs a screenshot.
 `pdf/no-images` (vector-only page; suggests `render` or a screenshot), `pdf/bad-page` (a page
 or image index that does not exist), `pdf/malformed` (not a PDF or no catalog even after
 repair, an image without usable dimensions or colour space, a DCT stream that is not a JPEG;
-a warning when image data is shorter than declared and was padded), plus the
+a warning when image data is shorter than declared and was padded; info when a
+passed-through JPEG's `/SMask` is not applied; an error when a requested mask does not exist),
+plus the
 `asset/*` gate codes of §6.5 and `asset/too-expensive`, `asset/unsafe-path`. All carry page,
 image index and bbox in `params`.
 

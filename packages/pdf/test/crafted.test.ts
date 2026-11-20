@@ -271,3 +271,53 @@ describe("crafted inputs: C-Q02 text", () => {
     T,
   );
 });
+
+describe("crafted inputs: second review round", () => {
+  it(
+    "R-N1: 25M names in /Kids arrays stop at the parsed-value cap with bounded heap",
+    () => {
+      const pdf = c.namesInKids();
+      const r = bounded(
+        measure(() => openPdf(pdf)),
+        15_000,
+        512,
+        1536,
+      );
+      expect(r.ok).toBe(false);
+      expect(findDiag(r.diagnostics, "pdf/too-complex", "error").params.scope).toBe("values");
+    },
+    T,
+  );
+
+  it(
+    "N01: a 256-character ToUnicode mapping shown 51M times keeps at most 4M characters",
+    () => {
+      const doc = mustOpen(c.toUnicodeExpansion());
+      const t = bounded(
+        measure(() => doc.text(1)),
+        15_000,
+        512,
+      );
+      const chars = t.runs.reduce((n, r) => n + r.text.length, 0);
+      expect(chars).toBeLessThanOrEqual(4_000_000);
+      expect(t.runs[0]?.text.length).toBe(256 * 32); // each mapping capped at 32 characters
+      expect(t.diagnostics.filter((d) => /4000000 characters/.test(d.message))).toHaveLength(1);
+    },
+    T,
+  );
+
+  it(
+    "R-N3: 60 tables of 40k entries chained by /XRefStm hold nothing per entry",
+    () => {
+      const pdf = c.chainedTables();
+      const r = bounded(
+        measure(() => openPdf(pdf)),
+        10_000,
+        128,
+      );
+      expect(r.ok).toBe(true);
+      expect(r.ok && r.doc.pageCount).toBe(0);
+    },
+    T,
+  );
+});

@@ -85,6 +85,10 @@ export interface PdfLimits {
   readonly maxHashBytes: number;
   /** Bytes lexed while parsing objects per document handle, strings included (1 GiB). */
   readonly maxLexedBytes: number;
+  /** Values (numbers, names, strings, containers…) parsed from objects per document handle (20 M). */
+  readonly maxParsedValues: number;
+  /** Characters of text kept per page across all runs (4 M). */
+  readonly maxPageChars: number;
 }
 
 const MiB = 1024 * 1024;
@@ -112,6 +116,8 @@ export const DEFAULT_LIMITS: PdfLimits = Object.freeze({
   maxRuns: 200_000,
   maxHashBytes: 256 * MiB,
   maxLexedBytes: 1024 * MiB,
+  maxParsedValues: 20_000_000,
+  maxPageChars: 4_000_000,
 });
 
 /**
@@ -194,7 +200,23 @@ export class Budget {
   lexed = 0;
   ops = 0;
   content = 0;
+  values = 0;
   constructor(readonly limits: PdfLimits) {}
+  /**
+   * One parsed value: checked before the value is allocated, so heap held by parsed (and
+   * cached) objects stays below `maxParsedValues` × a few dozen bytes.
+   */
+  value(): void {
+    if (++this.values > this.limits.maxParsedValues) {
+      throw new PdfError(
+        "pdf/too-complex",
+        `more than ${this.limits.maxParsedValues} values parsed in this command`,
+        {
+          scope: "values",
+        },
+      );
+    }
+  }
   private total(where: Where): never {
     throw new PdfError(
       "pdf/too-large",

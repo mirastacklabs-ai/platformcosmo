@@ -120,7 +120,7 @@ export function walkPages(file: PdfFile, diags: PdfDiagnostic[]): PageRec[] {
     if (++visits > limits.maxObjects) {
       throw new PdfError("pdf/too-complex", "the page tree has too many nodes");
     }
-    const node = file.resolveDict(v);
+    const node = file.resolveDictTransient(v);
     if (!node || seen.has(node)) continue; // cycle or shared node
     seen.add(node);
     const here: Inherited = {

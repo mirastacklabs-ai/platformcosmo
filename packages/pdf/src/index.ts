@@ -218,7 +218,7 @@ export class PdfDocument {
           const out = this.extract(pl, where, diags, opts.mask === true);
           if (!out) {
             diags.push(
-              diag("info", "pdf/malformed", `image ${index} on page ${page} has no mask`, where),
+              diag("error", "pdf/malformed", `image ${index} on page ${page} has no mask`, where),
             );
             return { ok: false, image: null, diagnostics: diags };
           }

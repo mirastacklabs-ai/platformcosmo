@@ -170,6 +170,8 @@ describe("limits", () => {
       maxRuns: 200_000,
       maxHashBytes: 256 * 1024 * 1024,
       maxLexedBytes: 1024 * 1024 * 1024,
+      maxParsedValues: 20_000_000,
+      maxPageChars: 4_000_000,
     });
   });
 });

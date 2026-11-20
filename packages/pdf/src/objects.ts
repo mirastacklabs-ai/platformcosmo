@@ -373,7 +373,13 @@ function toDict(items: PdfValue[]): PdfDict {
  * Parses one value at the lexer position. Returns `undefined` at EOF or on a structural
  * keyword (the lexer is left before it). `allowRefs` turns `N G R` into references.
  */
-export function parseValue(lx: Lexer, limits: PdfLimits, allowRefs = true): PdfValue | undefined {
+export function parseValue(
+  lx: Lexer,
+  limits: PdfLimits,
+  allowRefs = true,
+  /** Called once per value before it is built (the per-document value budget). */
+  count?: () => void,
+): PdfValue | undefined {
   const stack: Frame[] = [];
   const close = (): PdfValue => {
     const f = stack.pop() as Frame;
@@ -382,6 +388,7 @@ export function parseValue(lx: Lexer, limits: PdfLimits, allowRefs = true): PdfV
   for (;;) {
     const save = lx.pos;
     const t = lx.next();
+    if (count && t !== T_EOF && t !== T_ARR_CLOSE && t !== T_DICT_CLOSE && t !== T_OTHER) count();
     let v: PdfValue | undefined;
     switch (t) {
       case T_EOF:

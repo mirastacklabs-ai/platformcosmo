@@ -230,6 +230,8 @@ export function scanPage(
   const diagnostics: PdfDiagnostic[] = [];
   const placements: Placement[] = [];
   const runs: TextRun[] = [];
+  /** Characters kept on this page so far (`maxPageChars`, N01). */
+  let pageChars = 0;
   const where = { page: page.page };
   const fonts = new Map<PdfDict, Font | null>();
   let gs: GState = {
@@ -349,9 +351,13 @@ export function scanPage(
     let truncated = false;
     let adv = 0;
     const add = (t: string, width: number, space: boolean): boolean => {
-      if (!truncated) {
+      // past either cap no text is kept, but the pen still advances (positions stay right)
+      if (!truncated && pageChars < limits.maxPageChars) {
         if (text.length + t.length > cap) truncated = true;
-        else text += clean(t);
+        else {
+          text += clean(t);
+          pageChars += t.length;
+        }
       }
       adv += (width * size + gs.tc + (space ? gs.tw : 0)) * gs.th;
       return true;
@@ -365,6 +371,17 @@ export function scanPage(
       if (!(it instanceof PdfString)) continue;
       if (font) font.each(it.bytes, add);
       else for (let i = 0; i < it.bytes.length; i++) add(REPLACEMENT, 0.5, false);
+    }
+    if (pageChars >= limits.maxPageChars) {
+      warnOnce(
+        "page-chars",
+        diag(
+          "warning",
+          "pdf/too-complex",
+          `the page has more than ${limits.maxPageChars} characters of text; the rest is skipped`,
+          where,
+        ),
+      );
     }
     if (truncated) {
       warnOnce(
