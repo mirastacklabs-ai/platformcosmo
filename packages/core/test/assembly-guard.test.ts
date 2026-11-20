@@ -110,8 +110,15 @@ describe("schema 1.2.0 guard", () => {
     // semantic check reports it, so a Phase 1a build never resolves it. The figure action passes.
     const r = validate(everything);
     const unknown = r.diagnostics.filter((d) => d.code === "assembly/unknown-target");
-    expect(unknown.map((d) => d.path)).toEqual(["/steps/1/assembly/1/build"]);
-    expect(unknown[0]?.message).toBe('Cannot build "a": it is an assembly, not a figure');
+    // A2-1 reports its own unknown references (sub-build, slot assembly); the action rule adds
+    // exactly one path, the non-figure target, never a duplicate at the same path
+    expect(unknown.map((d) => d.path)).toEqual([
+      "/assemblies/0/programs/1/steps/0/subBuild",
+      "/racks/0/slots/0/assembly",
+      "/steps/1/assembly/1/build",
+    ]);
+    expect(new Set(unknown.map((d) => d.path)).size).toBe(unknown.length);
+    expect(unknown[2]?.message).toBe('Cannot build "a": it is an assembly, not a figure');
     expect(r.diagnostics.some((d) => d.path === "/steps/1/assembly/0/explode")).toBe(false);
   });
 

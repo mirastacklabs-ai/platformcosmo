@@ -7,6 +7,7 @@
  * The contract has no slot for figure sprites and moves (`SceneFlatBoard` carries ids only), so
  * `resolveFigure` is exported for R-1: it is cheap and gives the same answer as the scene.
  */
+import { globMatch } from "../schema/glob.js";
 import type {
   AssemblyStepPlan,
   AssetSource,
@@ -153,13 +154,10 @@ interface Selectable {
   readonly tags?: readonly string[];
 }
 
-const globRe = (glob: string): RegExp =>
-  new RegExp(
-    `^${glob
-      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-      .replace(/\*+/g, "[a-z0-9-]*")
-      .replace(/\?/g, "[a-z0-9-]")}$`,
-  );
+// Linear wildcard matcher (no regular expression: adversarial globs cannot backtrack).
+const globRe = (glob: string): { test(text: string): boolean } => ({
+  test: (text) => globMatch(glob, text),
+});
 
 /**
  * Ids matched by one selector, in the order of `parts`. Terms: an id glob, `tag:`/`type:` globs,

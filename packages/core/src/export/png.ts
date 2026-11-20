@@ -24,8 +24,20 @@ export function pngSize(png: Uint8Array): { readonly width: number; readonly hei
   return { width: u32(png, 16), height: u32(png, 20) };
 }
 
+/** Largest frame `decodePng` allocates: 256 MiB of RGBA (64 Mpx), the exporters' frame cap. */
+const MAX_DECODE_BYTES = 256 * 1024 ** 2;
+
+/**
+ * Decodes an 8-bit RGBA non-interlaced PNG. Trusted input only (resvg output, our own encoders):
+ * it reads just the chunks it needs and does not validate CRCs or ancillary data, but it does
+ * check the declared size against a cap (256 MiB of RGBA) before allocating, and bounds the
+ * inflated size. Throws on anything else.
+ */
 export function decodePng(png: Uint8Array): DecodedPng {
   const { width, height } = pngSize(png);
+  if (!(width > 0 && height > 0) || width * height * 4 > MAX_DECODE_BYTES) {
+    throw new Error(`PNG size ${width}x${height} is outside the supported range`);
+  }
   if (png[24] !== 8 || png[25] !== 6 || png[28] !== 0) {
     throw new Error("unsupported PNG: only 8-bit RGBA non-interlaced is supported");
   }
