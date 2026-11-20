@@ -405,6 +405,8 @@ interface Ctx {
   readonly removed: Set<string>;
   readonly rules: RuleIndex;
   readonly monochrome: boolean;
+  /** Element names removed outright (opt-in, image assets only); empty for icons. */
+  readonly drop: ReadonlySet<string>;
   uses: number;
   readonly seenIds: Set<string>;
 }
@@ -498,6 +500,10 @@ function keepAttrs(
 
 function sanitizeNode(node: XNode, ctx: Ctx): KNode | undefined {
   if (!ELEMENTS.has(node.name)) {
+    ctx.removed.add(label("element", node.name));
+    return undefined;
+  }
+  if (ctx.drop.has(node.name)) {
     ctx.removed.add(label("element", node.name));
     return undefined;
   }
@@ -734,7 +740,22 @@ function viewBoxOf(root: Map<string, string>): string | undefined {
   return undefined;
 }
 
-export const sanitizeSvg: SvgSanitizer = (input, options): SanitizeResult => {
+export const sanitizeSvg: SvgSanitizer = (input, options): SanitizeResult =>
+  sanitizeSvgWith(input, options);
+
+/**
+ * `sanitizeSvg` plus the opt-in `dropElements` (element names removed with their subtree and
+ * reported as `element:<name>`). With it unset the output is identical to `sanitizeSvg`. Used for
+ * image assets, which must not embed other images.
+ */
+export function sanitizeSvgWith(
+  input: string,
+  options?: {
+    readonly maxBytes?: number;
+    readonly monochrome?: boolean;
+    readonly dropElements?: readonly string[];
+  },
+): SanitizeResult {
   const maxBytes = options?.maxBytes ?? DEFAULT_MAX_BYTES;
   if (typeof input !== "string") return { ok: false, reason: "input is not a string" };
   if (input.length > maxBytes || new TextEncoder().encode(input).length > maxBytes) {
@@ -751,6 +772,7 @@ export const sanitizeSvg: SvgSanitizer = (input, options): SanitizeResult => {
       removed,
       rules: indexRules(rules),
       monochrome: options?.monochrome === true,
+      drop: new Set(options?.dropElements ?? []),
       uses: 0,
       seenIds: new Set(),
     };
@@ -789,4 +811,4 @@ export const sanitizeSvg: SvgSanitizer = (input, options): SanitizeResult => {
     if (e instanceof Reject) return { ok: false, reason: e.message };
     return { ok: false, reason: "unparseable SVG" };
   }
-};
+}

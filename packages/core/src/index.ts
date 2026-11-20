@@ -75,3 +75,6 @@ export {
   defaultIdPrefix,
 } from "./render/index.js";
 export type { ModelInputs, RenderDeps } from "./render/index.js";
+
+// Image assets (Track C-1): validate and clean image bytes, no I/O.
+export { prepareImage, decodeImageDataUri, DEFAULT_IMAGE_LIMITS } from "./assets/prepare.js";
