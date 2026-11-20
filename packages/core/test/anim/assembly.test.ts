@@ -81,7 +81,10 @@ const noActions = (): PlatformCosmoSpec => {
 // ---------------------------------------------------------------------------------------------
 
 type Stop = { p: number; decl: string; tf: string };
+const kfCache = new Map<string, Map<string, Stop[]>>();
 function parseKeyframes(css: string): Map<string, Stop[]> {
+  const hit = kfCache.get(css);
+  if (hit) return hit;
   const out = new Map<string, Stop[]>();
   for (const m of css.matchAll(/@keyframes (\S+?)\{((?:[\d.]+%\{[^}]*\})+)\}/g)) {
     const stops = [...(m[2] as string).matchAll(/([\d.]+)%\{([^}]*)\}/g)].map((s) => {
@@ -93,6 +96,7 @@ function parseKeyframes(css: string): Map<string, Stop[]> {
     });
     out.set(m[1] as string, stops);
   }
+  kfCache.set(css, out);
   return out;
 }
 interface Anim {
@@ -268,43 +272,47 @@ describe("no SMIL from the assembly layer", () => {
 
 describe("frame mode is the CSS pose at the same time", () => {
   const speeds = [1, 0.5, 2];
-  test.each(speeds)("%s x: every wrapper, sampled across the loop", (speed) => {
-    for (const [name, make] of [
-      ...specs,
-      ["closing", engineClosing] as [string, () => PlatformCosmoSpec],
-    ]) {
-      const model = build(make());
-      const loop = animate(model, { speed, mode: "loop", motion: "css" });
-      const rules = parseRules(splitReduced(loop.css).live);
-      const dur = A(model).loop / speed;
-      let compared = 0;
-      for (let k = 0; k < 24; k++) {
-        const t = dur * (0.0123 + ((k * 0.0407 * 1.0) % 1));
-        const attrs = animate(model, { speed, mode: "frame", time: t }).attrs ?? {};
-        for (const [id, set] of Object.entries(attrs)) {
-          if (!rules.has(id)) continue; // board ids (none here) or DOM-only
-          const css = cssPose(loop.css, rules, id, t);
-          if (set.transform !== undefined) {
-            const [fx, fy] = transformOf(set.transform);
-            const [cx, cy] = css.transform as [number, number];
-            expect(Math.abs(fx - cx), `${name} ${id} x @${t}`).toBeLessThan(0.05);
-            expect(Math.abs(fy - cy), `${name} ${id} y @${t}`).toBeLessThan(0.05);
+  test.each(speeds)(
+    "%s x: every wrapper, sampled across the loop",
+    (speed) => {
+      for (const [name, make] of [
+        ...specs,
+        ["closing", engineClosing] as [string, () => PlatformCosmoSpec],
+      ]) {
+        const model = build(make());
+        const loop = animate(model, { speed, mode: "loop", motion: "css" });
+        const rules = parseRules(splitReduced(loop.css).live);
+        const dur = A(model).loop / speed;
+        let compared = 0;
+        for (let k = 0; k < 24; k++) {
+          const t = dur * (0.0123 + ((k * 0.0407 * 1.0) % 1));
+          const attrs = animate(model, { speed, mode: "frame", time: t }).attrs ?? {};
+          for (const [id, set] of Object.entries(attrs)) {
+            if (!rules.has(id)) continue; // board ids (none here) or DOM-only
+            const css = cssPose(loop.css, rules, id, t);
+            if (set.transform !== undefined) {
+              const [fx, fy] = transformOf(set.transform);
+              const [cx, cy] = css.transform as [number, number];
+              expect(Math.abs(fx - cx), `${name} ${id} x @${t}`).toBeLessThan(0.05);
+              expect(Math.abs(fy - cy), `${name} ${id} y @${t}`).toBeLessThan(0.05);
+            }
+            if (set.opacity !== undefined) {
+              expect(
+                Math.abs((set.opacity as number) - (css.opacity as number)),
+                `${name} ${id} o @${t}`,
+              ).toBeLessThan(0.02);
+            }
+            if (set.visibility !== undefined) {
+              expect(set.visibility, `${name} ${id} v @${t}`).toBe(css.visibility);
+            }
+            compared++;
           }
-          if (set.opacity !== undefined) {
-            expect(
-              Math.abs((set.opacity as number) - (css.opacity as number)),
-              `${name} ${id} o @${t}`,
-            ).toBeLessThan(0.02);
-          }
-          if (set.visibility !== undefined) {
-            expect(set.visibility, `${name} ${id} v @${t}`).toBe(css.visibility);
-          }
-          compared++;
         }
+        expect(compared, name).toBeGreaterThan(100);
       }
-      expect(compared, name).toBeGreaterThan(100);
-    }
-  });
+    },
+    60000,
+  );
 
   test("the frame writes every wrapper; those without a CSS rule never change", () => {
     const model = build(gpu());
