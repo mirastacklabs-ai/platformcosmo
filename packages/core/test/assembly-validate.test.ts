@@ -2,6 +2,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import type { Diagnostic, PartShapeRegistry } from "../src/index.js";
 import { validate } from "../src/index.js";
+import { matchFigureSelector } from "../src/scene/boards.js";
+import { globMatch } from "../src/schema/glob.js";
 import { assemblyDiagnostics, hasAssemblyContent } from "../src/schema/assembly-semantic.js";
 import { AssemblyModel } from "../src/schema/assembly-tree.js";
 import type { GuardGroup } from "../src/schema/unsupported.js";
@@ -722,13 +724,16 @@ describe("budgets and bounded work", () => {
     expect(code(d, "assembly/template-cycle").length).toBe(2);
   });
   test("a thousand selectors on a large assembly stay bounded and deterministic", () => {
-    const selectors = Array.from({ length: 64 }, (_, i) => `zz-${i}-*`);
-    const stages = Array.from({ length: 32 }, () => ({ parts: selectors }));
+    const stages = Array.from({ length: 32 }, (_, k) => ({
+      parts: Array.from({ length: 64 }, (_, i) => `zz-${k * 64 + i}-*`),
+    }));
     const programs = Array.from({ length: 16 }, (_, i) => ({ id: `p${i}`, stages }));
     const s = spec({ assemblies: [{ id: "a", parts: leaves(1500), programs }] });
     const first = assemblyDiagnostics(s, LIFT);
-    expect(first.length).toBeGreaterThan(100);
-    expect(code(first, "budget/time")).toHaveLength(1); // the work cap kicked in, once
+    // warnings stop at 50 per program (one summary each); the work cap kicks in once
+    expect(code(first, "assembly/diagnostics-capped").length).toBeGreaterThan(0);
+    expect(code(first, "budget/time")).toHaveLength(1);
+    expect(code(first, "budget/time")[0]?.path).toBe("/assemblies");
     expect(assemblyDiagnostics(s, LIFT)).toEqual(first);
   });
 });
@@ -1538,5 +1543,347 @@ describe("determinism and byte identity", () => {
       steps: [{ focus: "r1/closeup" }],
     };
     expect(assemblyDiagnostics(s as unknown as PlatformCosmoSpec, LIFT)).toEqual([]);
+  });
+});
+
+// ----------------------------------------------------------------------------- review hardening
+
+/** Wall time of `fn` in ms; used only as a hang detector with generous ceilings. */
+const timed = <T>(fn: () => T): { ms: number; value: T } => {
+  const t = performance.now();
+  const value = fn();
+  return { ms: performance.now() - t, value };
+};
+
+describe("linear glob matching (ReDoS)", () => {
+  test("globMatch: * and ? semantics", () => {
+    const m = (g: string, t: string) => globMatch(g, t);
+    expect(m("*", "")).toBe(true);
+    expect(m("*", "abc")).toBe(true);
+    expect(m("cyl-*", "cyl-")).toBe(true);
+    expect(m("cyl-*", "cyl")).toBe(false);
+    expect(m("a?c", "abc")).toBe(true);
+    expect(m("a?c", "ac")).toBe(false);
+    expect(m("*b*", "abc")).toBe(true);
+    expect(m("a*b*c", "axxbyyc")).toBe(true);
+    expect(m("a*b*c", "axxbyy")).toBe(false);
+    expect(m("**", "x")).toBe(true);
+    expect(m("a", "a")).toBe(true);
+    expect(m("a", "ab")).toBe(false);
+    expect(m("", "")).toBe(true);
+    expect(m("?*", "")).toBe(false);
+  });
+  const evil = `${"*a".repeat(15)}*b`;
+  const id = "a".repeat(40);
+  test("an adversarial glob finishes at once (hang detector)", () => {
+    const r = timed(() => globMatch(evil, id));
+    expect(r.value).toBe(false);
+    expect(r.ms).toBeLessThan(50);
+  });
+  test("call site 1: assembly selectors (id, scope and type terms)", () => {
+    const d = timed(() =>
+      run({
+        assemblies: [
+          {
+            id: "a",
+            parts: [{ id, type: id, parts: [{ id }] }],
+            programs: [
+              {
+                id: "p",
+                stages: [{ parts: [evil, `${evil}/${id}`, `type:${evil}`, `**/${evil}`] }],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(d.ms).toBeLessThan(500);
+    expect(code(d.value, "assembly/selector-empty")).toHaveLength(4);
+  });
+  test("call site 2: the figure selector matcher in scene/boards.ts", () => {
+    const r = timed(() => matchFigureSelector(evil, [{ id }, { id: "b" }]));
+    expect(r.value).toEqual([]);
+    expect(r.ms).toBeLessThan(50);
+    expect(matchFigureSelector("p-*", [{ id: "p-1" }, { id: "q-1" }])).toEqual(["p-1"]);
+    expect(matchFigureSelector("**/type:d?mm", [{ id: "x", type: "dimm" }])).toEqual(["x"]);
+  });
+});
+
+describe("selector matching is memoised over scope x segment", () => {
+  /** A tree with the given branching per level; the first child of every group is called q. */
+  const tree = (branching: number[], depth = 0): Obj[] =>
+    Array.from({ length: branching[depth] ?? 1 }, (_, i) => {
+      const id = i === 0 ? "q" : depth === branching.length - 1 ? `z${i}` : `g${i}`;
+      return depth === branching.length - 1
+        ? { id, size: [1, 1, 1] }
+        : { id, parts: tree(branching, depth + 1) };
+    });
+  test("six ** scopes over a depth-7 tree and 1000 selectors finish in bounded time", () => {
+    const sel = "**/**/**/**/**/**/q/*";
+    const stages = Array.from({ length: 16 }, (_, k) => ({
+      parts: Array.from({ length: 63 }, (_, i) => `${sel.slice(0, -1)}*${k * 63 + i}*`),
+    }));
+    const s = spec({
+      assemblies: [
+        { id: "a", parts: tree([3, 3, 2, 2, 2, 2, 12]), programs: [{ id: "p", stages }] },
+      ],
+    });
+    const r = timed(() => assemblyDiagnostics(s, LIFT));
+    expect(r.ms).toBeLessThan(4000);
+    // the same program again: identical result
+    expect(JSON.stringify(assemblyDiagnostics(s, LIFT))).toBe(JSON.stringify(r.value));
+    expect(code(r.value, "budget/assembly-parts").map((x) => x.severity)).toEqual(["warning"]);
+  });
+  test("exact semantics survive the memoisation: ** consumes zero or more scopes", () => {
+    const d = run({
+      assemblies: [
+        {
+          id: "a",
+          parts: [
+            { id: "x", parts: [{ id: "y", parts: [{ id: "q", type: "t" }] }] },
+            { id: "q", type: "t" },
+          ],
+          programs: [
+            {
+              id: "p",
+              stages: [
+                { parts: ["**/**/**/q"] }, // q at depth 1 and 3
+                { parts: ["x/**/q/**"], except: [] }, // nothing below q: empty
+                { parts: ["x/**/**/y"] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(code(d, "assembly/selector-empty").map((x) => x.path)).toEqual([
+      "/assemblies/0/programs/0/stages/1/parts/0",
+    ]);
+    expect(code(d, "assembly/moved-twice").map((x) => x.path)).toEqual([]);
+  });
+});
+
+describe("bounded work: many owners, long programs, spent budgets", () => {
+  test("500-step build programs over many owners: warnings capped per program", () => {
+    const steps = Array.from({ length: 500 }, (_, i) => ({ add: [`zz-${i % 9}-*`] }));
+    const assemblies = Array.from({ length: 50 }, (_, i) => ({
+      id: `a${i}`,
+      parts: leaves(40),
+      programs: [{ id: "b", kind: "build", steps }],
+    }));
+    const r = timed(() => run({ assemblies }));
+    expect(r.ms).toBeLessThan(4000);
+    expect(code(r.value, "assembly/selector-empty")).toHaveLength(50 * 50);
+    expect(code(r.value, "assembly/diagnostics-capped")).toHaveLength(50);
+    expect(code(r.value, "assembly/diagnostics-capped")[0]).toMatchObject({
+      severity: "info",
+      path: "/assemblies/0/programs/0",
+      params: { dropped: 450, limit: 50 },
+    });
+  });
+  test("the cap keeps errors: a moved-twice after 50 warnings is still reported", () => {
+    const parts = [...Array.from({ length: 60 }, (_, i) => `nope-${i}`), "block"];
+    const d = run(
+      engine({}, [{ id: "p", stages: [{ parts: ["block"] }, { parts: parts.slice(0, 63) }] }]),
+    );
+    expect(code(d, "assembly/moved-twice")).toHaveLength(1);
+    expect(code(d, "assembly/selector-empty")).toHaveLength(50);
+    expect(code(d, "assembly/diagnostics-capped")).toHaveLength(1);
+  });
+  test("running out of node budget leaves no partial tree: no false empties", () => {
+    // 50 assemblies x 1900 leaves = 95,000 nodes, past the 80,000-node budget of one run
+    const assemblies = Array.from({ length: 50 }, (_, i) => ({
+      id: `a${i}`,
+      parts: leaves(1900),
+      programs: [{ id: "p", stages: [{ parts: ["p29-*"] }, { parts: ["nowhere-*"] }] }],
+    }));
+    const r = timed(() => run({ assemblies, steps: [{ focus: "a49/p29-1" }] }));
+    expect(r.ms).toBeLessThan(8000);
+    const empties = code(r.value, "assembly/selector-empty");
+    // only the genuine miss is reported, and only for assemblies that were fully expanded
+    expect(empties.every((x) => x.path.endsWith("/stages/1/parts/0"))).toBe(true);
+    expect(empties.length).toBeGreaterThan(0);
+    expect(empties.length).toBeLessThan(50);
+    const t = code(r.value, "budget/time");
+    expect(t).toHaveLength(1);
+    expect(t[0]?.path).toBe("/assemblies");
+    expect(t[0]?.message).toContain("selector-empty, moved-twice");
+  });
+  test("thousands of bad set paths stay bounded (walks and hints are charged)", () => {
+    const set = Object.fromEntries(
+      Array.from({ length: 3000 }, (_, i) => [`engine/zz${i}/p`, "down"]),
+    );
+    const r = timed(() => run({ ...engine(), steps: [{ set }] }));
+    expect(r.ms).toBeLessThan(4000);
+    expect(code(r.value, "assembly/unknown-target").length).toBeGreaterThan(100);
+  });
+});
+
+describe("review decisions", () => {
+  test("endpoints: an assembly id is accepted; a figure or storyboard id stays an error (validate)", () => {
+    const d = val({
+      nodes: [{ id: "n", type: "server" }],
+      images: [{ id: "im", src: "a.png" }],
+      figures: [{ id: "fig", base: "im", parts: [{ id: "p", image: "im", seat: [0, 0] }] }],
+      storyboards: [{ id: "sb", frames: [{ model: "im" }] }],
+      assemblies: [{ id: "asm", parts: [{ id: "p" }] }],
+      edges: [
+        { from: "n", to: "asm" },
+        { from: "n", to: "fig" },
+        { from: "n", to: "sb" },
+        { from: "n", to: "fig/p" },
+      ],
+    });
+    const u = code(d, "semantic/unknown-node");
+    expect(u.map((x) => [x.path, x.message])).toEqual([
+      ["/edges/1/to", 'Node "fig" is a figure and is not allowed here'],
+      ["/edges/2/to", 'Node "sb" is a storyboard and is not allowed here'],
+      ["/edges/3/to", 'Node "fig/p": "fig" is not a rack'],
+    ]);
+    expect(code(d, "assembly/edge-to-part")).toEqual([]);
+    expect(d.filter((x) => x.path === "/edges/0/to")).toEqual([]);
+  });
+  test("an id in two lists resolves as the guard does (assembly over node)", () => {
+    const d = run({
+      nodes: [{ id: "engine", type: "server" }],
+      ...engine(),
+      steps: [{ assembly: [{ explode: "engine/hed" }] }],
+    });
+    expect(one(d, "assembly/unknown-target").suggestion).toBe('Did you mean "engine/head"?');
+  });
+  test("default build program: the assembly's program when it is a build program, else the first", () => {
+    const programs = [
+      { id: "b1", kind: "build", steps: [{ add: ["block"] }] },
+      { id: "b2", kind: "build", steps: [{ add: ["head"] }, { add: ["cover"] }] },
+    ];
+    const steps = [{ assembly: [{ build: "engine", to: 2 }] }];
+    expect(
+      code(run({ ...engine({}, programs), steps }), "assembly/stage-out-of-range"),
+    ).toHaveLength(1);
+    expect(
+      code(run({ ...engine({ program: "b2" }, programs), steps }), "assembly/stage-out-of-range"),
+    ).toEqual([]);
+    // a default `program` of the wrong kind is skipped
+    const mixed = [
+      { id: "e", stages: [{ parts: ["head"] }] },
+      { id: "b1", kind: "build", steps: [{ add: ["block"] }] },
+    ];
+    expect(
+      code(
+        run({
+          ...engine({ program: "e" }, mixed),
+          steps: [{ assembly: [{ build: "engine", to: 1 }] }],
+        }),
+        "assembly/unknown-program",
+      ),
+    ).toEqual([]);
+  });
+  test("a first build starts at level k - advance (to and advance together)", () => {
+    const programs = [
+      {
+        id: "b",
+        kind: "build",
+        steps: [{ add: ["block"] }, { add: ["head"] }, { add: ["cover"] }, { add: ["cyl-*"] }],
+      },
+    ];
+    const at = (actions: unknown[]) =>
+      run({ ...engine({}, programs), steps: [{ assembly: actions }] });
+    // starts at 3 - 2 = 1, reaches 3; a later build to 2 is backwards
+    const d = at([
+      { build: "engine", to: 3, advance: 2 },
+      { build: "engine", to: 2 },
+    ]);
+    expect(code(d, "assembly/build-backwards").map((x) => x.path)).toEqual([
+      "/steps/0/assembly/1/to",
+    ]);
+    // advance larger than to: the timeline would start below step 0
+    const e = one(at([{ build: "engine", to: 1, advance: 2 }]), "assembly/stage-out-of-range");
+    expect(e.path).toBe("/steps/0/assembly/0/advance");
+    // advance alone starts at 0
+    expect(
+      at([
+        { build: "engine", advance: 2 },
+        { build: "engine", advance: 2 },
+      ]),
+    ).toEqual([]);
+  });
+  test("slot internals: 1 + the template's default program (stages, or steps for a build program)", () => {
+    const racks = [{ id: "r1", slots: [{ id: "srv", at: 1, type: "server-2u", assembly: "t" }] }];
+    const t = (extra: Obj) => ({ id: "t", template: true, parts: [{ id: "x" }], ...extra });
+    const stages = [{ parts: ["x"] }];
+    const range = (template: Obj, to: number) =>
+      code(
+        run({ assemblies: [template], racks, steps: [{ assembly: [{ explode: "r1/srv", to }] }] }),
+        "assembly/stage-out-of-range",
+      ).length;
+    const build = {
+      id: "b",
+      kind: "build",
+      steps: [{ add: ["x"] }, { add: ["x"] }, { add: ["x"] }],
+    };
+    // default explode program: 2 stages => internals 3
+    expect(range(t({ programs: [{ id: "e", stages: [...stages, ...stages] }] }), 3)).toBe(0);
+    expect(range(t({ programs: [{ id: "e", stages: [...stages, ...stages] }] }), 4)).toBe(1);
+    // `program` naming a build program: 1 + 3 steps
+    expect(range(t({ program: "b", programs: [{ id: "e", stages }, build] }), 4)).toBe(0);
+    expect(range(t({ program: "b", programs: [{ id: "e", stages }, build] }), 5)).toBe(1);
+  });
+  test("use together with parts warns and still checks the reference", () => {
+    const d = run({
+      assemblies: [
+        { id: "tmpl", template: true, parts: [{ id: "p" }] },
+        {
+          id: "a",
+          parts: [
+            { id: "x", parts: [{ id: "y" }], use: "tmpl" },
+            { id: "z", parts: [{ id: "y" }], use: "tmp" },
+          ],
+        },
+      ],
+    });
+    expect(code(d, "assembly/use-ignored").map((x) => [x.path, x.severity])).toEqual([
+      ["/assemblies/1/parts/0/use", "warning"],
+      ["/assemblies/1/parts/1/use", "warning"],
+    ]);
+    expect(code(d, "assembly/unknown-target").map((x) => [x.path, x.suggestion])).toEqual([
+      ["/assemblies/1/parts/1/use", 'Did you mean "tmpl"?'],
+    ]);
+  });
+  test("a template used only as a close-up counts toward the leaf budget", () => {
+    const d = run({
+      assemblies: [
+        { id: "t", template: true, parts: leaves(501) },
+        { id: "a", parts: [{ id: "x", closeup: "t" }] },
+      ],
+    });
+    expect(one(d, "budget/assembly-parts").params).toMatchObject({ leaves: 502 });
+    // referenced twice: counted once; a template nobody uses does not count
+    const twice = run({
+      assemblies: [
+        { id: "t", template: true, parts: leaves(300) },
+        { id: "u", template: true, parts: leaves(900) },
+        { id: "a", closeup: "t", parts: [{ id: "x", closeup: "t" }] },
+      ],
+    });
+    expect(code(twice, "budget/assembly-parts")).toEqual([]);
+  });
+  test("type: selectors skip only when the nodes they can reach have unknown pack types", () => {
+    const parts = [
+      { id: "a", parts: [{ id: "n" }] },
+      { id: "b", parts: [{ id: "m", shape: "hw:fan" }] },
+    ];
+    const d = run({
+      assemblies: [
+        {
+          id: "x",
+          parts,
+          programs: [{ id: "p", stages: [{ parts: ["a/type:zz", "b/type:zz", "**/type:zz"] }] }],
+        },
+      ],
+    });
+    // a/ reaches only a plain node (reported); b/ and **/ can reach the pack shape (skipped)
+    expect(code(d, "assembly/selector-empty").map((x) => x.path)).toEqual([
+      "/assemblies/0/programs/0/stages/0/parts/0",
+    ]);
   });
 });
