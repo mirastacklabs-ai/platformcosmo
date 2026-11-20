@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import { decodePng, rasterize, validateSpec } from "@platformcosmo/core";
 import { describe, expect, it } from "vitest";
-import { PRESET_NAMES, figure } from "../../../tests/fixtures/figures/gen.mjs";
+import { PRESET_NAMES, STROKE2_ONLY, figure } from "../../../tests/fixtures/figures/gen.mjs";
 import { analyzeFigure } from "../src/figure/analyze.js";
 import { rerender } from "../src/figure/gate.js";
 import {
@@ -20,8 +20,18 @@ import {
 } from "../src/index.js";
 import { check, clone, eachInMask, errorCodes, maskHas, run, sourcesOf } from "./figure-helpers.js";
 
-const DUAL = ["main", "arrows", "leaders", "callout-text", "busy-callout", "twins"];
-const SINGLE = ["exploded-only", "assembled-only"];
+const HS_DUAL = ["main", "arrows", "leaders", "callout-text", "busy-callout"];
+const DUAL = [...HS_DUAL, "twins", "occluded", "cage", "screw", "dense"];
+const SINGLE = ["exploded-only", "assembled-only", "dense-exploded", "dense-assembled"];
+/** Every preset at stroke 2; every preset but the 1 px comb at stroke 5; main anti-aliased. */
+const VARIANTS: [string, string][] = [
+  ...[...DUAL, ...SINGLE].map((n) => [n, ""] as [string, string]),
+  ...[...DUAL, ...SINGLE]
+    .filter((n) => !STROKE2_ONLY.includes(n))
+    .map((n) => [n, "s5"] as [string, string]),
+  ["main", "aa"],
+];
+const label = (n: string, t: string): string => (t ? `${n}@${t}` : n);
 const sha = (b: Uint8Array | string): string => createHash("sha256").update(b).digest("hex");
 
 const statusOf = (r: FigureReport, check: string): string | undefined =>
@@ -32,18 +42,31 @@ describe("trap figures pass the gate", () => {
     expect([...DUAL, ...SINGLE].sort()).toEqual([...PRESET_NAMES].sort());
   });
 
-  it.each([...DUAL, ...SINGLE])("%s: zero errors", (name) => {
-    const { result } = run(name);
-    const errors = result.report.diagnostics.filter((d) => d.severity === "error");
-    expect(errors, JSON.stringify(errors, null, 1)).toEqual([]);
-    expect(result.report.ok).toBe(true);
-    for (const c of result.report.checks) expect(["pass", "warn", "not-run"]).toContain(c.status);
-  });
+  it.each(VARIANTS.map(([n, t]) => [label(n, t), n, t] as const))(
+    "%s: zero errors",
+    { timeout: 60_000 },
+    (_l, name, tag) => {
+      const { result } = run(name, 0, tag);
+      const errors = result.report.diagnostics.filter((d) => d.severity === "error");
+      expect(errors, JSON.stringify(errors, null, 1)).toEqual([]);
+      expect(result.report.ok).toBe(true);
+      for (const c of result.report.checks) expect(["pass", "warn", "not-run"]).toContain(c.status);
+    },
+  );
 
-  it.each(DUAL.filter((n) => n !== "twins"))(
-    "%s: full confidence, both residuals run, alignment found",
-    (name) => {
-      const { f, result } = run(name);
+  it.each(
+    HS_DUAL.flatMap(
+      (n) =>
+        [
+          [n, ""],
+          [n, "s5"],
+        ] as [string, string][],
+    ),
+  )(
+    "%s %s: full confidence, both residuals run, alignment found",
+    { timeout: 60_000 },
+    (name, tag) => {
+      const { f, result } = run(name, 0, tag);
       const r = result.report;
       expect(r.confidence).toBe("full");
       expect(r.notRun).toEqual([]);
@@ -72,9 +95,9 @@ describe("trap figures pass the gate", () => {
     expect(
       ann.filter((a) => a.kind === "arrow").every((a) => a.arrowhead && a.medianRun === 2),
     ).toBe(true);
-    // 1 px leaders; the diagonal callout leader crosses traces and steps diagonally (runs of 1-3).
+    // 1 px leaders: the stroke run (lower quartile) ignores the traces the callout leader crosses.
     expect(
-      ann.filter((a) => a.kind === "leader").every((a) => a.medianRun >= 1 && a.medianRun <= 3),
+      ann.filter((a) => a.kind === "leader").every((a) => a.medianRun >= 1 && a.medianRun <= 2),
     ).toBe(true);
   });
 
@@ -85,7 +108,6 @@ describe("trap figures pass the gate", () => {
     expect(r.confidence).toBe("reduced");
     expect(statusOf(r, "hull-uncertain")).toBe("warn");
     expect(statusOf(r, "exploded-residual")).toBe("pass");
-    // tw-2 is drawn in front in both states; the default order (seat bottom edge) agrees, so no z.
     expect(r.parts.map((p) => p.z)).toEqual([undefined, undefined]);
     expect(r.parts.map((p) => p.exploded)).toEqual(
       ["tw-1", "tw-2"].map((id) => {
@@ -94,12 +116,60 @@ describe("trap figures pass the gate", () => {
       }),
     );
   });
+
+  it("cage, screw: a part next to static ink its size is not alone there, and the template never swallows it", () => {
+    for (const name of ["cage", "screw"]) {
+      const { f, result } = run(name);
+      expect(result.report.parts[0]!.standalone).toBe("exploded");
+      const sp = result.outputs.sprites[0]!;
+      const gt = f.sprites[f.units[0]!]!.raster;
+      expect([sp.width, sp.height]).toEqual([gt.width, gt.height]);
+      expect(Buffer.from(sp.data).equals(Buffer.from(gt.data))).toBe(true);
+    }
+  });
+
+  it("occluded: a part hidden differently in each drawing is recovered whole from both", () => {
+    const { f, result } = run("occluded");
+    const sp = result.outputs.sprites[result.outputs.parts[0]!.sprite]!;
+    const gt = f.sprites["tw-1"]!.raster;
+    expect([sp.width, sp.height]).toEqual([gt.width, gt.height]);
+    expect(Buffer.from(sp.data).equals(Buffer.from(gt.data))).toBe(true);
+    // Neither depiction alone holds the whole silhouette.
+    for (const s of ["exploded", "assembled"] as const) {
+      const t = f.states[s]!.truth.units["tw-1"]!;
+      let hidden = 0;
+      eachInMask(t.full, (x, y) => {
+        if (!maskHas(t.visible, x, y)) hidden++;
+      });
+      expect(hidden).toBeGreaterThan(100);
+    }
+  });
+
+  it("dense comb fins: no seeds between the fins; the gaps stay transparent and show the board", () => {
+    for (const name of ["dense", "dense-exploded", "dense-assembled"]) {
+      const { f, result } = run(name);
+      const sp = result.outputs.sprites[0]!;
+      const gt = f.sprites["sink-1"]!.raster;
+      expect([sp.width, sp.height], name).toEqual([gt.width, gt.height]);
+      expect(Buffer.from(sp.data).equals(Buffer.from(gt.data)), name).toBe(true);
+      // One seed only: the plate.
+      expect(
+        Object.values(f.manifest.parts[0].seeds).every((v) => (v as unknown[]).length === 1),
+      ).toBe(true);
+    }
+    // Seated, the board's traces run behind the comb: the clean base keeps them all.
+    const { f, result } = run("dense");
+    const board = f.states.assembled!.board;
+    expect(Buffer.from(result.outputs.base.data).equals(Buffer.from(board.data))).toBe(true);
+  });
 });
 
 describe("single-state figures", () => {
   it.each([
     ["exploded-only", "assembled-residual", "seat"],
     ["assembled-only", "exploded-residual", "exploded"],
+    ["dense-exploded", "assembled-residual", "seat"],
+    ["dense-assembled", "exploded-residual", "exploded"],
   ] as const)("%s: %s is not-run and confidence is reduced", (name, missing, inferred) => {
     const { result } = run(name);
     const r = result.report;
@@ -115,7 +185,6 @@ describe("single-state figures", () => {
     const off = figure("main").offset;
     for (const p of result.report.parts) {
       const t = truthA[p.id]!.full;
-      // Main's assembled seat, moved into the exploded drawing's frame.
       expect(p.seat).toEqual([t.x + off[0], t.y + off[1]]);
     }
     expect(statusOf(result.report, "seat-unverified")).toBe("pass");
@@ -140,18 +209,20 @@ describe("single-state figures", () => {
 });
 
 describe("ground truth", () => {
-  it.each([...DUAL, ...SINGLE])(
+  it.each(VARIANTS.filter(([, t]) => t !== "aa").map(([n, t]) => [label(n, t), n, t] as const))(
     "%s: sprites hold the whole silhouette and never another part's pixels",
-    (name) => {
-      const { f, result } = run(name);
+    { timeout: 60_000 },
+    (_l, name, tag) => {
+      const { f, result } = run(name, 0, tag);
       const o = result.outputs;
       expect(o.parts.map((p) => p.id)).toEqual(f.units);
-      const template = result.report.parts.find((p) => p.template)!;
-      // Where the template depiction stands alone the sprite is exact; where it never does
-      // (single-state assembled), a stroke touching the outline can leave a stub of board ink of
-      // up to 3 px (in a concave notch of the silhouette), never another part's pixels.
-      const exact = template.standalone !== null;
       for (const p of o.parts) {
+        const rp = result.report.parts.find((q) => q.id === p.id)!;
+        const tplUnit = result.report.parts.find((q) => q.template && q.sprite === p.sprite)!;
+        // Exact where the template stands alone. Where it never does (one drawing, or touching
+        // parts in both), segmentation is by distance: a stroke touching the outline can leave a
+        // stub (foreign < 4 px, ingestion §6.5) and a corner tip may be lost (at most 2%).
+        const exact = tplUnit.standalone !== null;
         const sp = o.sprites[p.sprite]!;
         if (exact) {
           const gt = f.sprites[p.id]!.raster;
@@ -164,7 +235,7 @@ describe("ground truth", () => {
           const truth = st!.truth.units;
           const own = truth[p.id]!.full;
           let inside = 0;
-          let stray = 0;
+          const stray: [number, number][] = [];
           for (let j = 0; j < sp.height; j++) {
             for (let i = 0; i < sp.width; i++) {
               if (!sp.data[(j * sp.width + i) * 4 + 3]) continue;
@@ -174,26 +245,52 @@ describe("ground truth", () => {
                 inside++;
                 continue;
               }
-              stray++;
-              // Never a pixel of another part.
-              for (const [id, t] of Object.entries(truth))
-                if (id !== p.id) expect(maskHas(t.full, x, y), `${id} at ${x},${y}`).toBe(false);
-              let near = false;
-              for (let b = -3; b <= 3; b++)
-                for (let a = -3; a <= 3; a++) if (maskHas(own, x + a, y + b)) near = true;
-              expect(near).toBe(true);
+              stray.push([x, y]);
+              // Never a pixel of another part, in the drawing the sprite was cut from (a stub
+              // of board ink placed elsewhere may land on anything).
+              if (s === tplUnit.source)
+                for (const [id, t] of Object.entries(truth))
+                  if (id !== p.id) expect(maskHas(t.full, x, y), `${id} at ${x},${y}`).toBe(false);
             }
           }
           let n = 0;
           eachInMask(own, () => n++);
-          expect(inside).toBe(n);
-          expect(stray).toBeLessThanOrEqual(exact ? 0 : 8);
+          if (exact) {
+            expect(inside).toBe(n);
+            expect(stray).toEqual([]);
+          } else {
+            expect(n - inside).toBeLessThanOrEqual(Math.ceil(0.02 * n));
+            // Stub bound: every 8-connected piece of stray pixels is under 4 px.
+            const set = new Set(stray.map(([x, y]) => `${x},${y}`));
+            const seen = new Set<string>();
+            for (const [x, y] of stray) {
+              const k0 = `${x},${y}`;
+              if (seen.has(k0)) continue;
+              let size = 0;
+              const stack = [[x, y]];
+              seen.add(k0);
+              while (stack.length) {
+                const [a, b] = stack.pop()!;
+                size++;
+                for (let dy2 = -1; dy2 <= 1; dy2++)
+                  for (let dx2 = -1; dx2 <= 1; dx2++) {
+                    const k = `${a! + dx2},${b! + dy2}`;
+                    if (set.has(k) && !seen.has(k)) {
+                      seen.add(k);
+                      stack.push([a! + dx2, b! + dy2]);
+                    }
+                  }
+              }
+              expect(size, `stub at ${x},${y} in ${s}`).toBeLessThan(4);
+            }
+          }
+          void rp;
         }
       }
     },
   );
 
-  it.each([...DUAL, "exploded-only"])(
+  it.each([...HS_DUAL, "twins", "cage", "screw", "dense", "exploded-only"])(
     "%s: the clean base is the board without parts and annotations",
     (name) => {
       const { f, result } = run(name);
@@ -201,6 +298,22 @@ describe("ground truth", () => {
       expect(Buffer.from(result.outputs.base.data).equals(Buffer.from(board.data))).toBe(true);
     },
   );
+
+  it("main anti-aliased: the clean base matches the board, fringes and all (within a grey step)", () => {
+    const { f, result } = run("main", 0, "aa");
+    const board = f.states.assembled!.board;
+    const b = result.outputs.base;
+    let worst = 0;
+    for (let i = 0; i < b.width * b.height; i++) {
+      const l1 = 0.299 * b.data[i * 4]! + 0.587 * b.data[i * 4 + 1]! + 0.114 * b.data[i * 4 + 2]!;
+      const l2 =
+        0.299 * board.data[i * 4]! +
+        0.587 * board.data[i * 4 + 1]! +
+        0.114 * board.data[i * 4 + 2]!;
+      worst = Math.max(worst, Math.abs(l1 - l2));
+    }
+    expect(worst).toBeLessThanOrEqual(48);
+  });
 
   it("assembled-only: the base equals the board outside the seats and annotations (nothing to recover from)", () => {
     const { f, result } = run("assembled-only");
@@ -219,9 +332,8 @@ describe("ground truth", () => {
         );
       }) ||
       Object.values(st.truth.units).some((t) => {
-        // Stubs of up to 3 px, erased with a 1 px margin.
-        for (let dy = -4; dy <= 4; dy++)
-          for (let dx = -4; dx <= 4; dx++) if (maskHas(t.full, x + dx, y + dy)) return true;
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++) if (maskHas(t.full, x + dx, y + dy)) return true;
         return false;
       });
     let diff = 0;
@@ -264,6 +376,7 @@ describe("spec fragment", () => {
         "base.png",
         "sprite-1.png",
         "report.json",
+        "fragment.json",
       ]);
     },
   );
@@ -342,13 +455,13 @@ describe("local metrics", () => {
 });
 
 describe("re-render", () => {
-  it(
-    "the gate's composite equals resvg's rendering of the same base and sprites",
+  it.each(["main", "twins"])(
+    "%s: the gate's composite equals resvg's rendering of the same base and sprites (twins overlap)",
     { timeout: 60_000 },
-    async () => {
-      const f = figure("main");
+    async (name) => {
+      const f = figure(name);
       const an = analyzeFigure(f.manifest, sourcesOf(f)).value!;
-      const { result } = run("main");
+      const { result } = run(name);
       const o = result.outputs;
       for (const s of ["assembled", "exploded"] as const) {
         const mine = rerender(an, o, s).image;
@@ -505,18 +618,20 @@ describe("error codes", () => {
 
 // Golden hashes: update only when an intended change alters the outputs, and review the diff.
 const GOLDEN_MAIN = {
-  report: "7595fe53b9a4c8c0dc36008d16b1b0170d47ef7025bbe67a1672d8ea5e66cea7",
+  report: "e77f8d704fd2c77534aa9d53ea4861d2ffff212ac255c21306d0cdb4d61abc35",
   files: [
     "base.png:07ae16ca138387cb",
     "sprite-1.png:ed91d850d0dd47f7",
-    "report.json:7595fe53b9a4c8c0",
+    "report.json:e77f8d704fd2c775",
+    "fragment.json:3c56bbeb00811bae",
   ],
 };
 const GOLDEN_TWINS = {
-  report: "97b17425eda6cd1be83dedccf7e66d012a18a3db9300546d07843d6e78a782de",
+  report: "da51ba6f8f372d102b61d791f0c77a97d8933802167b557bc55b0a23efb1eece",
   files: [
-    "base.png:e6b114549e337db9",
+    "base.png:6125ab9b234e6a93",
     "sprite-1.png:984b868295e185aa",
-    "report.json:97b17425eda6cd1b",
+    "report.json:da51ba6f8f372d10",
+    "fragment.json:c97f7f273f455d2a",
   ],
 };

@@ -321,24 +321,24 @@ describe("broken variants fail with their codes (tracks C-4, normative)", () => 
       const [px, py] = pos(c, "hs-1", "assembled");
       const [dx, dy] = c.f.offset;
       // A real 2 px arrow drawn across the ghost clip's place, declared 20 px wide to cover it.
-      const x = px + 89 + dx;
+      const x = px + 98 + dx;
       const E = clone(c.f.states.exploded!.image);
-      drawArrow(E, x, py + 50 + dy, py + 4 + dy);
+      drawArrow(E, x, py + 6 + dy, py + 60 + dy);
       const arrow = {
         kind: "arrow",
         state: "exploded",
         polyline: [
-          [x, py + 50 + dy],
-          [x, py + 4 + dy],
+          [x, py + 6 + dy],
+          [x, py + 60 + dy],
         ],
         width: 20,
       };
       const manifest = { ...c.f.manifest, annotations: [...c.f.manifest.annotations, arrow] };
       const sources = { ...sourcesOf(c.f), "exploded.png": E };
       const r = check(manifest, sources, { ...c.o, base });
-      // The declared width is refused (the band is measured, never the declared width); the
-      // ghost clip itself is also found in the base.
-      expectCodes(r, ["asset/annotation-invalid", "asset/leftover-fragment"]);
+      // The declared width is refused: the band is measured, never the declared width (the
+      // ghost clip here coincides with the board footprint, so only the annotation is wrong).
+      expectCodes(r, ["asset/annotation-invalid"]);
       expect(r.diagnostics.some((d) => /declared width 20/.test(d.message))).toBe(true);
       expect(r.diagnostics.some((d) => /no arrowhead|not on ink/.test(d.message))).toBe(false);
     });

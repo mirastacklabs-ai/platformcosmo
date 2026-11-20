@@ -549,3 +549,138 @@ export function capsules(
   }
   return out;
 }
+
+/** Square erosion by `r` (outside the mask's box counts as unset). */
+export function erode(m: Mask, r: number): Mask {
+  if (r <= 0 || m.w === 0) return m;
+  const pad = blank(m.x - r - 1, m.y - r - 1, m.w + 2 * r + 2, m.h + 2 * r + 2);
+  for (let j = 0; j < pad.h; j++)
+    for (let i = 0; i < pad.w; i++) pad.data[j * pad.w + i] = has(m, i + pad.x, j + pad.y) ? 0 : 1;
+  // Dilate the complement inside the padded box (local coordinates, so image edges don't clip).
+  const local = dilate({ ...pad, x: 0, y: 0 }, r, pad.w, pad.h);
+  const comp = { ...local, x: local.x + pad.x, y: local.y + pad.y };
+  const data = new Uint8Array(m.w * m.h);
+  for (let j = 0; j < m.h; j++)
+    for (let i = 0; i < m.w; i++)
+      if (m.data[j * m.w + i] && !has(comp, i + m.x, j + m.y)) data[j * m.w + i] = 1;
+  return { ...m, data };
+}
+
+/** 8-connected labels of a local mask (1..count, raster order of first pixel). */
+export function labelMask(m: Mask): { labels: Int32Array; count: number } {
+  const labels = new Int32Array(m.w * m.h);
+  let n = 0;
+  const stack: number[] = [];
+  for (let p0 = 0; p0 < m.w * m.h; p0++) {
+    if (!m.data[p0] || labels[p0]) continue;
+    n++;
+    labels[p0] = n;
+    stack.push(p0);
+    while (stack.length > 0) {
+      const p = stack.pop()!;
+      const i = p % m.w;
+      const j = (p - i) / m.w;
+      for (let dj = -1; dj <= 1; dj++) {
+        for (let di = -1; di <= 1; di++) {
+          const a = i + di;
+          const b = j + dj;
+          if (a < 0 || b < 0 || a >= m.w || b >= m.h) continue;
+          const q = b * m.w + a;
+          if (!m.data[q] || labels[q]) continue;
+          labels[q] = n;
+          stack.push(q);
+        }
+      }
+    }
+  }
+  return { labels, count: n };
+}
+
+/** Set pixels with a 4-neighbour outside the mask (the boundary length in pixels). */
+export function perimeter(m: Mask): number {
+  let n = 0;
+  for (let j = 0; j < m.h; j++) {
+    for (let i = 0; i < m.w; i++) {
+      if (!m.data[j * m.w + i]) continue;
+      if (
+        i === 0 ||
+        j === 0 ||
+        i === m.w - 1 ||
+        j === m.h - 1 ||
+        !m.data[j * m.w + i - 1] ||
+        !m.data[j * m.w + i + 1] ||
+        !m.data[(j - 1) * m.w + i] ||
+        !m.data[(j + 1) * m.w + i]
+      )
+        n++;
+    }
+  }
+  return n;
+}
+
+/**
+ * Nearest set pixel of `m` to (x, y) within Chebyshev radius `r` (window scan; ties by raster
+ * order), or undefined.
+ */
+export function nearest(
+  m: Mask,
+  x: number,
+  y: number,
+  r: number,
+): { x: number; y: number; d2: number } | undefined {
+  let best: { x: number; y: number; d2: number } | undefined;
+  const x0 = Math.max(m.x, x - r);
+  const x1 = Math.min(m.x + m.w - 1, x + r);
+  const y0 = Math.max(m.y, y - r);
+  const y1 = Math.min(m.y + m.h - 1, y + r);
+  for (let yy = y0; yy <= y1; yy++) {
+    for (let xx = x0; xx <= x1; xx++) {
+      if (!m.data[(yy - m.y) * m.w + xx - m.x]) continue;
+      const d2 = (xx - x) * (xx - x) + (yy - y) * (yy - y);
+      if (!best || d2 < best.d2) best = { x: xx, y: yy, d2 };
+    }
+  }
+  return best;
+}
+
+/**
+ * Removes every pixel of `m` reachable from outside its box through pixels that are not
+ * (in `m` and `keep`): the unbounded peel of closing-only ink and the paper behind it (comb fin
+ * gaps open to the exterior), while seeded faces and raw ink (`keep`) stay. Explicit stack.
+ */
+export function peelExterior(m: Mask, keep: (gx: number, gy: number) => boolean): Mask {
+  if (m.w === 0) return m;
+  const w = m.w + 2;
+  const h = m.h + 2;
+  const solid = (i: number, j: number): boolean =>
+    i > 0 &&
+    j > 0 &&
+    i <= m.w &&
+    j <= m.h &&
+    m.data[(j - 1) * m.w + i - 1] !== 0 &&
+    keep(i - 1 + m.x, j - 1 + m.y);
+  const seen = new Uint8Array(w * h);
+  const stack: number[] = [0];
+  seen[0] = 1;
+  while (stack.length > 0) {
+    const p = stack.pop()!;
+    const i = p % w;
+    const j = (p - i) / w;
+    for (const [a, b] of [
+      [i - 1, j],
+      [i + 1, j],
+      [i, j - 1],
+      [i, j + 1],
+    ] as const) {
+      if (a < 0 || b < 0 || a >= w || b >= h) continue;
+      const q = b * w + a;
+      if (seen[q] || solid(a, b)) continue;
+      seen[q] = 1;
+      stack.push(q);
+    }
+  }
+  const data = new Uint8Array(m.data);
+  for (let j = 0; j < m.h; j++)
+    for (let i = 0; i < m.w; i++) if (seen[(j + 1) * w + i + 1]) data[j * m.w + i] = 0;
+  return { ...m, data };
+}

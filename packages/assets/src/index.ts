@@ -20,6 +20,8 @@ export {
   checkFigure,
   cutout,
   fragmentOf,
+  outputsFromFragment,
+  exclusionOverlay,
   stableStringify,
   validateManifest,
   MANIFEST_LIMITS,

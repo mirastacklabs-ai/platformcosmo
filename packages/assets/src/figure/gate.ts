@@ -9,7 +9,7 @@ import type { Diagnostic } from "@platformcosmo/core";
 import { crop } from "../ops.js";
 import { nccAt, luminancePlane } from "../locate.js";
 import { checkRaster, err, luminanceOverWhite, type Raster } from "../raster.js";
-import { thresholds, type Analysis, type Unit } from "./analyze.js";
+import { clipMask, spriteLum, thresholds, type Analysis, type Unit } from "./analyze.js";
 import { baseModel, renderOrder, ringScore, ringTemplate, type FigureOutputs } from "./build.js";
 import type { FigureState } from "./manifest.js";
 import {
@@ -21,6 +21,7 @@ import {
   components,
   count,
   dilate,
+  filter,
   has,
   holes,
   overlapCount,
@@ -91,6 +92,8 @@ export interface FigureReport {
     readonly inferred?: string;
     readonly standalone: FigureState | null;
     readonly template: boolean;
+    /** The drawing the sprite was cut from (the template depiction's state). */
+    readonly source: FigureState;
   }[];
   readonly residualRisk: string;
   readonly diagnostics: readonly Diagnostic[];
@@ -249,16 +252,23 @@ function validOutputs(a: Analysis, out: unknown): Diagnostic | undefined {
     if (s.width > maxW || s.height > maxH) {
       return bad(`a sprite of ${s.width}x${s.height} is larger than the drawings`);
     }
+    for (let i = 3; i < s.data.length; i += 4) {
+      if (s.data[i] !== 0 && s.data[i] !== 255) return bad("sprite alpha must be 0 or 255");
+    }
     total += s.width * s.height;
+  }
+  for (let i = 3; i < out.base.data.length; i += 4) {
+    if (out.base.data[i] !== 255) return bad("the base must be opaque");
   }
   if (total > 8 * area) return bad("the sprites together are larger than eight drawings");
   const parts = out.parts;
   if (!Array.isArray(parts) || parts.length !== a.units.length)
     return bad(`there must be one output part per group (${a.units.length})`);
+  // Integer positions and binary alpha: the composite equals resvg's rendering only then.
   const pos = (v: unknown): boolean =>
     Array.isArray(v) &&
     v.length === 2 &&
-    v.every((n) => typeof n === "number" && Number.isFinite(n) && Math.abs(n) <= 100000);
+    v.every((n) => typeof n === "number" && Number.isInteger(n) && Math.abs(n) <= 100000);
   for (let i = 0; i < parts.length; i++) {
     const p: unknown = parts[i];
     if (!isObj(p)) return bad(`output part ${i} is not an object`);
@@ -484,18 +494,81 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
     entry("leftover-fragment", "asset/leftover-fragment", items, T.leftover, "error");
   }
 
-  // ---- foreign pixels, rect masks, holes, connectivity
+  // ---- foreign pixels (against each state's OWN segmentation, never the template), rect
+  // masks, holes, connectivity. A sprite ink pixel that is visible on top in a re-render is
+  // foreign unless it lies on the unit's own regions there (seeded regions, enclosed regions and
+  // bounding ink; the whole silhouette where the unit stands alone), or continues them on ink
+  // that the drawing itself shows at that place (strokes segmentation missed).
   const foreignAny = new Set<number>();
   {
     const items: CheckItem[] = [];
     if (usable) {
+      const order = renderOrder(out.parts, out.sprites);
       for (let k = 0; k < a.units.length; k++) {
         const u = unitOf(k);
+        const sp = out.sprites[out.parts[k]!.sprite]!;
+        const rank = order.indexOf(k) + 1;
         for (const s of states) {
+          const dp = u.dep[s];
+          const r = renders[s];
+          if (!dp || !r) continue;
           const st = a.img[s]!;
-          const own = dilate(u.place[s]!.E, 1, st.W, st.H);
+          const [px, py] = posIn(k, s);
           const inkM = spriteInk(k, s);
-          const f = (x: number, y: number): boolean => has(inkM, x, y) && !has(own, x, y);
+          const top = (x: number, y: number): boolean =>
+            x >= 0 && y >= 0 && x < st.W && y < st.H && r.top[y * st.W + x] === rank;
+          const agrees = (x: number, y: number): boolean => {
+            const v = spriteLum(sp, x - px, y - py);
+            for (let dy = -1; dy <= 1; dy++) {
+              for (let dx = -1; dx <= 1; dx++) {
+                const qx = x + dx;
+                const qy = y + dy;
+                if (qx < 0 || qy < 0 || qx >= st.W || qy >= st.H) continue;
+                if (Math.abs(st.lum[qy * st.W + qx]! - v) <= T.luminance) return true;
+              }
+            }
+            return false;
+          };
+          const own0 = dilate(dp.V, 1, st.W, st.H);
+          const ext = filter(
+            inkM,
+            (x, y) => !has(own0, x, y) && st.ink[y * st.W + x] !== 0 && agrees(x, y),
+          );
+          // Continuations: consistent ink 8-connected to the own regions.
+          const reach = blank(ext.x, ext.y, ext.w, ext.h);
+          const stack: number[] = [];
+          for (let j = 0; j < ext.h; j++) {
+            for (let i = 0; i < ext.w; i++) {
+              if (!ext.data[j * ext.w + i]) continue;
+              const x = i + ext.x;
+              const y = j + ext.y;
+              let adj = false;
+              for (let dy = -1; dy <= 1 && !adj; dy++)
+                for (let dx = -1; dx <= 1; dx++) if (has(own0, x + dx, y + dy)) adj = true;
+              if (adj) {
+                reach.data[j * ext.w + i] = 1;
+                stack.push(j * ext.w + i);
+              }
+            }
+          }
+          while (stack.length > 0) {
+            const q = stack.pop()!;
+            const i = q % ext.w;
+            const j = (q - i) / ext.w;
+            for (let dj = -1; dj <= 1; dj++) {
+              for (let di = -1; di <= 1; di++) {
+                const a2 = i + di;
+                const b2 = j + dj;
+                if (a2 < 0 || b2 < 0 || a2 >= ext.w || b2 >= ext.h) continue;
+                const q2 = b2 * ext.w + a2;
+                if (reach.data[q2] || !ext.data[q2]) continue;
+                reach.data[q2] = 1;
+                stack.push(q2);
+              }
+            }
+          }
+          const f = (x: number, y: number): boolean =>
+            has(inkM, x, y) && top(x, y) && !has(own0, x, y) && !has(reach, x, y);
           const comps = components(inkM, f, 8);
           if (comps.some((c) => c.pixels > 0)) foreignAny.add(k);
           for (const c of comps.filter((c) => c.pixels >= T.foreign).sort(byPixels))
@@ -512,7 +585,6 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
     if (usable) {
       for (let k = 0; k < a.units.length; k++) {
         const u = unitOf(k);
-        const sp = out.sprites[out.parts[k]!.sprite]!;
         const m = opaque(k, b);
         const local = shifted(m, -m.x, -m.y);
         if (!u.holes) {
@@ -521,11 +593,12 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
           if (n > 0)
             holeItems.push({ part: u.id, pixels: n, ...(bounds(hm) ? { bbox: bounds(hm)! } : {}) });
         }
-        if (count(local) === sp.width * sp.height && foreignAny.has(k)) {
+        const bb = bounds(local);
+        if (bb && count(local) === bb.w * bb.h && foreignAny.has(k)) {
           rectItems.push({
             part: u.id,
-            pixels: sp.width * sp.height,
-            bbox: { x: m.x, y: m.y, w: m.w, h: m.h },
+            pixels: bb.w * bb.h,
+            bbox: { x: m.x + bb.x, y: m.y + bb.y, w: bb.w, h: bb.h },
             reason: `${u.id}'s sprite is a full rectangle that carries ink not its own`,
           });
         }
@@ -691,6 +764,28 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
               bbox: c.box,
             });
           }
+          // The analysis's record: template pixels hidden in its drawing that no other
+          // depiction showed, placed with this unit's sprite.
+          const cls = a.classes[u.cls]!;
+          const [px, py] = posIn(k, s);
+          const lost = shifted(cls.unrecovered, px - cls.mask.x, py - cls.mask.y);
+          const seen = (x: number, y: number): boolean =>
+            x >= 0 &&
+            y >= 0 &&
+            x < st.W &&
+            y < st.H &&
+            has(lost, x, y) &&
+            top[y * st.W + x]! < rank &&
+            !has(a.excluded[s]!, x, y);
+          for (const c of components(lost, seen, 8).sort(byPixels)) {
+            (c.pixels > T.occluded ? items : warnItems).push({
+              state: s,
+              part: u.id,
+              pixels: c.pixels,
+              bbox: c.box,
+              reason: `${c.pixels} px of ${u.id} were hidden in every depiction`,
+            });
+          }
         }
       }
     }
@@ -721,6 +816,33 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
           if (!has(model.erase, x, y) || !has(m, x, y) || outLum[y * sb.W + x]! >= t) return false;
           const rec = model.recover(x, y);
           return !(rec && lumOf(rec) < t);
+        };
+        for (const c of components(m, f, 8)
+          .filter((c) => c.pixels >= T.annotationResidual)
+          .sort(byPixels)) {
+          items.push({ state: b, annotation: g.index, pixels: c.pixels, bbox: c.box });
+        }
+      }
+      // Annotations of the other drawing, mapped into the base: there the base may hold no ink
+      // that the base drawing does not have (recovery never copies an annotation).
+      for (const g of a.annotations) {
+        if (g.state === b) continue;
+        const m = clipMask(
+          shifted(g.mask, a.d[b]![0] - a.d[g.state]![0], a.d[b]![1] - a.d[g.state]![1]),
+          sb.W,
+          sb.H,
+        );
+        const f = (x: number, y: number): boolean => {
+          if (!has(m, x, y) || outLum[y * sb.W + x]! >= t) return false;
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const qx = x + dx;
+              const qy = y + dy;
+              if (qx >= 0 && qy >= 0 && qx < sb.W && qy < sb.H && sb.lum[qy * sb.W + qx]! < t)
+                return false;
+            }
+          }
+          return true;
         };
         for (const c of components(m, f, 8)
           .filter((c) => c.pixels >= T.annotationResidual)
@@ -833,6 +955,7 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
           ...(p.inferred ? { inferred: p.inferred } : {}),
           standalone: a.units[k]!.standaloneState ?? null,
           template: a.classes[a.units[k]!.cls]!.unit === k,
+          source: a.classes[a.units[k]!.cls]!.state,
         }))
       : [],
     residualRisk: RESIDUAL_RISK,

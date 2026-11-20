@@ -1,10 +1,10 @@
 /**
  * Figure analysis (ingestion §6.2-6.3): the reference model that both the pipeline and the gate
  * use. From the manifest and the source drawings it derives, per moving unit (a group of parts
- * that move together) and state: seeded regions, bounding ink, whole ink where the unit stands
- * alone, the expected silhouette (one template per instance class, placed by `locate`), the
- * visible part of it, the hull, and the geodesic part ink; plus the alignment between the
- * states and every annotation's measured band, mask and allowances.
+ * that move together) and state: seeded regions, bounding ink, the shape prior, whole ink where
+ * the unit stands alone, the expected silhouette (one template per instance class, placed by
+ * `locate`), the visible part of it, the hull and the geodesic part ink; plus the alignment
+ * between the states, the static drawing, and every annotation's band, mask and allowances.
  *
  * The gate never trusts the outputs it checks: it recomputes this analysis and compares.
  */
@@ -15,14 +15,18 @@ import { crop } from "../ops.js";
 import {
   MAX_MULTIPLY_ADDS,
   MAX_PIXELS,
+  badOption,
   checkRaster,
   err,
   warning,
   type Raster,
 } from "../raster.js";
 import {
-  annotationGeometry,
+  STEP,
   boxDistance,
+  detectHead,
+  inBox,
+  measureAnnotation,
   polylineLength,
   type AnnotationGeometry,
 } from "./annotations.js";
@@ -41,15 +45,20 @@ import {
   convexHull,
   count,
   dilate,
-  erode1,
+  erode,
   fillHoles,
   filter,
   has,
+  capsules,
+  hullOfPoints,
   intersect,
   isEmpty,
+  labelMask,
   minus,
+  nearest,
   overlapCount,
   overlaps,
+  peelExterior,
   rasterPolygon,
   shifted,
   tight,
@@ -62,7 +71,7 @@ import { analyzeState, type StateImage } from "./state.js";
 export interface FigureLimits {
   /** Pixels per source image (default 16 MP). */
   readonly maxPixels?: number;
-  /** Multiply-adds per matcher run (default 2·10⁹). */
+  /** Multiply-adds for all matcher runs of one figure together (default 2·10⁹). */
   readonly maxMultiplyAdds?: number;
 }
 
@@ -82,12 +91,16 @@ export interface Depiction {
   readonly R: Mask;
   /** Bounding ink of R. */
   readonly B: Mask;
-  /** Preliminary mask: R, B and what they enclose. */
+  /** Preliminary mask: R, B and what they enclose (peeled; bounded by polygon and prior). */
   readonly P: Mask;
+  /** Shape prior fitted to the seeded mask (EMPTY for `none`). */
+  readonly prior: Mask;
+  /** The unit's ink without any annotation band (for contacts); bounded flood. */
+  readonly contact: Mask;
   /** Whole ink (8-connected to B, after the allowance cut) when the unit stands alone here. */
   readonly W?: Mask;
   readonly standalone: boolean;
-  /** First visible estimate (whole silhouette where standalone, else P). */
+  /** The unit's own segmentation here: whole silhouette where standalone, else P. */
   readonly V: Mask;
 }
 
@@ -112,6 +125,7 @@ export interface Unit {
   readonly cls: number;
   readonly holes: boolean;
   readonly allowDisjoint: boolean;
+  readonly prior: "box" | "cylinder" | "none";
   readonly z?: number;
   readonly nearest: Partial<Record<FigureState, Point>>;
   readonly polygons: Partial<Record<FigureState, readonly (readonly Point[])[]>>;
@@ -134,6 +148,12 @@ export interface TemplateClass {
   mask: Mask;
   /** Template sprite colours (RGBA, the mask's box; alpha 255 inside). */
   sprite: Raster;
+  /**
+   * Template pixels that were hidden (covered by another unit, or under an annotation) and that no
+   * other depiction showed: expected from the shape prior (or the mask's hull) but not in the
+   * sprite. Template-state coordinates, like `mask`.
+   */
+  unrecovered: Mask;
 }
 
 export interface Analysis {
@@ -153,14 +173,16 @@ export interface Analysis {
   readonly units: readonly Unit[];
   readonly classes: readonly TemplateClass[];
   readonly annotations: readonly AnnotationGeometry[];
-  /** Ink with every polyline's allowance squares cut out. */
+  /** Exempt allowance squares per annotation and unit ("g:u"). */
+  readonly exempt: ReadonlyMap<string, readonly Box[]>;
+  /** Raw ink with every qualifying allowance square cut out (part ink runs on it). */
   readonly cutInk: Partial<Record<FigureState, Uint8Array>>;
-  /** Union of every annotation mask mapped into the state. */
+  /** Union of the annotation masks mapped into the state (mapped ones minus part pixels). */
   readonly excluded: Partial<Record<FigureState, Mask>>;
   /** Front relations: front[state] has "u>v" when unit u is in front of v there. */
   readonly front: Partial<Record<FigureState, ReadonlySet<string>>>;
   readonly diagnostics: Diagnostic[];
-  /** Matcher budget (multiply-adds) for later searches (the exploded-only seat search). */
+  /** Matcher budget (multiply-adds) left for later searches (the exploded-only seat search). */
   readonly maxMultiplyAdds: number;
   /** Per annotation: invalidity reasons (rules 2-5) with their bbox. */
   readonly invalid: {
@@ -191,6 +213,10 @@ export function thresholds(strict: boolean) {
     luminance: 48,
   } as const;
 }
+
+/** Stand-alone test: at most this fraction of the whole ink beyond the seeded mask is static. */
+const STANDALONE_STATIC = 0.25;
+const TAN30 = Math.tan(Math.PI / 6);
 
 function regionMask(st: StateImage, id: number): Mask {
   const o = (id - 1) * 4;
@@ -227,31 +253,37 @@ function snapSeed(st: StateImage, x: number, y: number): [number, number] | unde
 }
 
 /**
- * Whole ink: ink 8-connected to `start` through `cut`, giving up (undefined) beyond `budget`
- * pixels. `scratch` is a W*H buffer that is left cleared.
+ * Ink 8-connected to `start` through `pass` (and not `block`), giving up (undefined) beyond
+ * `budget` pixels. `scratch` is a W*H buffer that is left cleared.
  */
-function wholeInk(
-  cut: Uint8Array,
+function flood(
+  pass: Uint8Array,
   W: number,
   H: number,
   start: Mask,
   budget: number,
   scratch: Uint8Array,
+  block?: (x: number, y: number) => boolean,
 ): Mask | undefined {
   const touched: number[] = [];
   const stack: number[] = [];
+  const ok = (p: number): boolean =>
+    pass[p] !== 0 && !scratch[p] && !(block && block(p % W, (p - (p % W)) / W));
   for (let j = 0; j < start.h; j++) {
     for (let i = 0; i < start.w; i++) {
       if (!start.data[j * start.w + i]) continue;
-      const p = (j + start.y) * W + i + start.x;
-      if (cut[p] && !scratch[p]) {
+      const x = i + start.x;
+      const y = j + start.y;
+      if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      const p = y * W + x;
+      if (ok(p)) {
         scratch[p] = 1;
         touched.push(p);
         stack.push(p);
       }
     }
   }
-  let over = false;
+  let over = touched.length > budget;
   while (stack.length > 0 && !over) {
     const p = stack.pop()!;
     const x = p % W;
@@ -262,7 +294,7 @@ function wholeInk(
         const b = y + dy;
         if (a < 0 || b < 0 || a >= W || b >= H) continue;
         const q = b * W + a;
-        if (scratch[q] || !cut[q]) continue;
+        if (!ok(q)) continue;
         scratch[q] = 1;
         touched.push(q);
         stack.push(q);
@@ -350,53 +382,85 @@ function polygonBound(
 ): Mask | undefined {
   if (!polys || polys.length === 0) return undefined;
   // A rough outline: its convex hull, dilated by 3 px (outlines from a viewed image are approximate).
-  return dilate(union(...polys.map((p) => rasterPolygon(convexOrder(p)))), 3, W, H);
+  return dilate(union(...polys.map((p) => rasterPolygon(hullOfPolygon(p)))), 3, W, H);
 }
 
-/** The polygon's points as a convex outline (its hull), so rasterization is well defined. */
-function convexOrder(pts: readonly Point[]): (readonly [number, number])[] {
-  const m = convexHull(
-    union(...pts.map(([x, y]) => ({ x, y, w: 1, h: 1, data: new Uint8Array([1]) }))),
-  );
-  const out: [number, number][] = [];
-  const b = bounds(m);
-  if (!b) return pts.map(([x, y]) => [x, y]);
-  for (let j = 0; j < m.h; j++) {
-    let lo = -1;
-    let hi = -1;
-    for (let i = 0; i < m.w; i++) {
-      if (m.data[j * m.w + i]) {
-        if (lo < 0) lo = i;
-        hi = i;
-      }
-    }
-    if (lo >= 0) {
-      out.push([lo + m.x, j + m.y]);
-      out.push([hi + m.x, j + m.y]);
-    }
-  }
-  return hullPoints(out);
-}
-
-function hullPoints(input: readonly (readonly [number, number])[]): (readonly [number, number])[] {
-  const pts = [...input].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+function hullOfPolygon(pts: readonly Point[]): (readonly [number, number])[] {
+  const sorted = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const cross = (o: readonly number[], a: readonly number[], b: readonly number[]): number =>
     (a[0]! - o[0]!) * (b[1]! - o[1]!) - (a[1]! - o[1]!) * (b[0]! - o[0]!);
   const lower: (readonly [number, number])[] = [];
-  for (const p of pts) {
+  for (const p of sorted) {
     while (lower.length >= 2 && cross(lower[lower.length - 2]!, lower[lower.length - 1]!, p) <= 0)
       lower.pop();
     lower.push(p);
   }
   const upper: (readonly [number, number])[] = [];
-  for (let k = pts.length - 1; k >= 0; k--) {
-    const p = pts[k]!;
+  for (let k = sorted.length - 1; k >= 0; k--) {
+    const p = sorted[k]!;
     while (upper.length >= 2 && cross(upper[upper.length - 2]!, upper[upper.length - 1]!, p) <= 0)
       upper.pop();
     upper.push(p);
   }
   const poly = [...lower.slice(0, -1), ...upper.slice(0, -1)];
-  return poly.length > 0 ? poly : pts.slice(0, 1);
+  return poly.length > 0 ? poly : sorted.slice(0, 1);
+}
+
+/**
+ * The shape prior of §6.2 fitted to a seeded mask. `box`: the isometric box hull, the smallest
+ * hexagon with vertical sides and ±30° edges containing the mask (an isometric box's
+ * silhouette). `cylinder`: the convex hull of the mask and its mirror image about its vertical
+ * axis (an upright cylinder is symmetric). `none`: no prior.
+ */
+export function fitPrior(m: Mask, kind: "box" | "cylinder" | "none"): Mask {
+  if (kind === "none" || m.w === 0) return EMPTY;
+  if (kind === "cylinder") {
+    const b = bounds(m);
+    if (!b) return EMPTY;
+    const pts: [number, number][] = [];
+    for (let j = 0; j < m.h; j++) {
+      for (let i = 0; i < m.w; i++) {
+        if (!m.data[j * m.w + i]) continue;
+        const x = i + m.x;
+        const y = j + m.y;
+        pts.push([x, y], [2 * b.x + b.w - 1 - x, y]);
+      }
+    }
+    return hullOfPoints(pts);
+  }
+  let x0 = Infinity;
+  let x1 = -Infinity;
+  let u0 = Infinity;
+  let u1 = -Infinity;
+  let v0 = Infinity;
+  let v1 = -Infinity;
+  let y0 = Infinity;
+  let y1 = -Infinity;
+  for (let j = 0; j < m.h; j++) {
+    for (let i = 0; i < m.w; i++) {
+      if (!m.data[j * m.w + i]) continue;
+      const x = i + m.x;
+      const y = j + m.y;
+      x0 = Math.min(x0, x);
+      x1 = Math.max(x1, x);
+      y0 = Math.min(y0, y);
+      y1 = Math.max(y1, y);
+      u0 = Math.min(u0, y + TAN30 * x);
+      u1 = Math.max(u1, y + TAN30 * x);
+      v0 = Math.min(v0, y - TAN30 * x);
+      v1 = Math.max(v1, y - TAN30 * x);
+    }
+  }
+  const out = blank(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const u = y + TAN30 * x;
+      const v = y - TAN30 * x;
+      if (u >= u0 - 1e-9 && u <= u1 + 1e-9 && v >= v0 - 1e-9 && v <= v1 + 1e-9)
+        out.data[(y - y0) * out.w + x - x0] = 1;
+    }
+  }
+  return out;
 }
 
 /** Mask of `sprite` alpha placed with its top-left at (x, y). */
@@ -406,9 +470,16 @@ export function spriteMask(sprite: Raster, x: number, y: number): Mask {
   return m;
 }
 
+const tooExpensive = (what: string, n: number, limit: number, suggestion: string): Diagnostic =>
+  err("asset/too-expensive", `${what} (about ${Math.round(n)}, above ${Math.round(limit)})`, {
+    suggestion,
+    params: { estimate: Math.round(n), limit: Math.round(limit) },
+  });
+
 /**
  * Runs the analysis. Returns undefined (with error diagnostics) when the inputs cannot be
- * analysed at all: invalid manifest, missing or oversized images, or no alignment.
+ * analysed at all: invalid manifest or limits, missing or oversized images, no alignment, or a
+ * budget exceeded.
  */
 export function analyzeFigure(
   input: unknown,
@@ -416,12 +487,21 @@ export function analyzeFigure(
   options: FigureOptions = {},
 ): { value?: Analysis; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = [];
-  const v = validateManifest(input);
-  if (!v.value) return { diagnostics: v.diagnostics };
-  const manifest = v.value;
+  for (const k of ["maxPixels", "maxMultiplyAdds"] as const) {
+    const v = options[k];
+    if (v !== undefined && !(typeof v === "number" && Number.isFinite(v) && v > 0)) {
+      return { diagnostics: [badOption(k, `${k} must be a positive finite number`)] };
+    }
+  }
+  const val = validateManifest(input);
+  if (!val.value) return { diagnostics: val.diagnostics };
+  const manifest = val.value;
   const strict = options.strict === true;
   const maxPixels = Math.min(options.maxPixels ?? MAX_PIXELS, MAX_PIXELS);
-  const maxMacs = Math.min(options.maxMultiplyAdds ?? MAX_MULTIPLY_ADDS, MAX_MULTIPLY_ADDS);
+  // One matcher budget for the whole figure: alignment, every locate and the seat search.
+  const budget = {
+    left: Math.min(options.maxMultiplyAdds ?? MAX_MULTIPLY_ADDS, MAX_MULTIPLY_ADDS),
+  };
 
   // ---- states and images
   const files = STATES.filter((s) => manifest.sources[s] !== undefined);
@@ -481,6 +561,12 @@ export function analyzeFigure(
   }
   if (diagnostics.some((d) => d.severity === "error")) return { diagnostics };
   const base: FigureState = states.length === 1 ? states[0]! : (manifest.base ?? "assembled");
+  let stateArea = 0;
+  let maxSide = 0;
+  for (const s of states) {
+    stateArea += img[s]!.W * img[s]!.H;
+    maxSide = Math.max(maxSide, img[s]!.W + img[s]!.H);
+  }
 
   // Coordinates: manifest -> state image.
   const toLocal = (s: FigureState, p: Point, path: string): [number, number] | undefined => {
@@ -492,9 +578,7 @@ export function analyzeFigure(
         ...err(
           "asset/bad-option",
           `point [${p[0]}, ${p[1]}] lies outside the ${s} drawing (${st.W}x${st.H})`,
-          {
-            params: { option: "manifest", state: s },
-          },
+          { params: { option: "manifest", state: s } },
         ),
         path,
       });
@@ -526,28 +610,28 @@ export function analyzeFigure(
       classOf.set(key, classIds.length);
       classIds.push(inst ?? g);
     }
-    const nearest: Partial<Record<FigureState, Point>> = {};
+    const nearestHint: Partial<Record<FigureState, Point>> = {};
     const polygons: Partial<Record<FigureState, Point[][]>> = {};
     const seeds: Partial<Record<FigureState, Point[]>> = {};
     for (const s of states) {
       for (const i of idx) {
         const p = manifest.parts[i]!;
-        for (const [k, pt] of (p.seeds[s] ?? []).entries()) {
-          const l = toLocal(s, pt, `/parts/${i}/seeds/${s}/${k}`);
+        for (const [k, q] of (p.seeds[s] ?? []).entries()) {
+          const l = toLocal(s, q, `/parts/${i}/seeds/${s}/${k}`);
           if (l) (seeds[s] ??= []).push(l);
         }
         const n = p.nearest?.[s];
-        if (n && nearest[s] === undefined) {
+        if (n && nearestHint[s] === undefined) {
           const l = toLocal(s, n, `/parts/${i}/nearest/${s}`);
-          if (l) nearest[s] = l;
+          if (l) nearestHint[s] = l;
         }
       }
       if (idx.every((i) => manifest.parts[i]!.polygon?.[s] !== undefined)) {
         const polys: Point[][] = [];
         for (const i of idx) {
           const pts: Point[] = [];
-          for (const [k, pt] of manifest.parts[i]!.polygon![s]!.entries()) {
-            const l = toLocal(s, pt, `/parts/${i}/polygon/${s}/${k}`);
+          for (const [k, q] of manifest.parts[i]!.polygon![s]!.entries()) {
+            const l = toLocal(s, q, `/parts/${i}/polygon/${s}/${k}`);
             if (l) pts.push(l);
           }
           polys.push(pts);
@@ -556,34 +640,30 @@ export function analyzeFigure(
       }
     }
     const z = parts.find((p) => p.z !== undefined)?.z;
-    const unit: Unit = {
+    // The group's prior: the first part's that names one (the group moves as one shape).
+    const prior = parts.find((p) => p.prior !== undefined)?.prior ?? "none";
+    units.push({
       index: units.length,
       id: g,
       partIds: parts.map((p) => p.id),
       cls: classOf.get(key)!,
       holes: parts.some((p) => p.holes === true),
       allowDisjoint: parts.some((p) => p.allowDisjoint === true),
+      prior,
       ...(z !== undefined ? { z } : {}),
-      nearest,
+      nearest: nearestHint,
       polygons,
       seeds,
       dep: {},
       place: {},
-    };
-    units.push(unit);
+    });
   }
   const seedsOf = (u: Unit, s: FigureState): readonly Point[] => u.seeds[s] ?? [];
 
-  // ---- annotations: translate, budget, geometry
+  // ---- annotations: translate, budgets, first pass
   const annInputs: { index: number; points?: [number, number][]; rect?: Box }[] = [];
   let totalLength = 0;
-  let maxSide = 0;
   let maskArea = 0;
-  let stateArea = 0;
-  for (const s of states) {
-    maxSide = Math.max(maxSide, img[s]!.W + img[s]!.H);
-    stateArea += img[s]!.W * img[s]!.H;
-  }
   (manifest.annotations ?? []).forEach((a, i) => {
     if (a.kind === "text") {
       const p = toLocal(a.state, [a.rect[0], a.rect[1]], `/annotations/${i}/rect`);
@@ -594,9 +674,7 @@ export function analyzeFigure(
           ...err(
             "asset/bad-option",
             `text rectangle ${i} must have a positive size inside the ${a.state} drawing`,
-            {
-              params: { option: "manifest", state: a.state },
-            },
+            { params: { option: "manifest", state: a.state } },
           ),
           path: `/annotations/${i}/rect`,
         });
@@ -606,53 +684,50 @@ export function analyzeFigure(
       annInputs.push({ index: i, rect: { x: p[0], y: p[1], w: a.rect[2], h: a.rect[3] } });
     } else {
       const pts: [number, number][] = [];
-      a.polyline.forEach((pt, k) => {
-        const l = toLocal(a.state, pt, `/annotations/${i}/polyline/${k}`);
+      a.polyline.forEach((q, k) => {
+        const l = toLocal(a.state, q, `/annotations/${i}/polyline/${k}`);
         if (l) pts.push(l);
       });
       if (pts.length !== a.polyline.length) return;
       totalLength += polylineLength(pts);
+      let mnx = Infinity;
+      let mxx = -Infinity;
+      let mny = Infinity;
+      let mxy = -Infinity;
+      for (const q of pts) {
+        mnx = Math.min(mnx, q[0]);
+        mxx = Math.max(mxx, q[0]);
+        mny = Math.min(mny, q[1]);
+        mxy = Math.max(mxy, q[1]);
+      }
       // Each mask is allocated over the polyline's bbox plus the widest possible band.
-      const xw =
-        pts.reduce((m, q) => Math.max(m, q[0]), 0) -
-        pts.reduce((m, q) => Math.min(m, q[0]), Infinity);
-      const yh =
-        pts.reduce((m, q) => Math.max(m, q[1]), 0) -
-        pts.reduce((m, q) => Math.min(m, q[1]), Infinity);
-      maskArea += (xw + 80) * (yh + 80);
+      maskArea += (mxx - mnx + 80) * (mxy - mny + 80);
       annInputs.push({ index: i, points: pts });
     }
   });
   if (diagnostics.some((d) => d.severity === "error")) return { diagnostics };
-  // Bounded measuring and rasterization: about 70 probes and (2r+1) band pixels per px of length.
   if (totalLength > 32 * maxSide) {
     return {
       diagnostics: [
         ...diagnostics,
-        err(
-          "asset/too-expensive",
-          `the annotation polylines are ${Math.round(totalLength)} px long in total, above ${32 * maxSide}`,
-          {
-            suggestion: "declare each arrow or leader by its ends and corners only",
-            params: { length: Math.round(totalLength), limit: 32 * maxSide },
-          },
+        tooExpensive(
+          "the annotation polylines are too long in total",
+          totalLength,
+          32 * maxSide,
+          "declare each arrow or leader by its ends and corners only",
         ),
       ],
     };
   }
-  // Bounded memory: the annotation masks together may cover each drawing about four times.
   if (maskArea > 4 * stateArea + 1_000_000) {
     return {
       diagnostics: [
         ...diagnostics,
-        err(
-          "asset/too-expensive",
-          `the annotations cover about ${maskArea} px of masks, above ${4 * stateArea + 1_000_000}`,
-          {
-            suggestion:
-              "declare arrows and leaders by their ends, and text rectangles around the text only",
-            params: { pixels: maskArea, limit: 4 * stateArea + 1_000_000 },
-          },
+        tooExpensive(
+          "the annotation masks would cover the drawings too many times",
+          maskArea,
+          4 * stateArea + 1_000_000,
+          "declare arrows and leaders by their ends, and text rectangles around the text only",
         ),
       ],
     };
@@ -660,20 +735,21 @@ export function analyzeFigure(
   const annotations: AnnotationGeometry[] = annInputs.map((ai) => {
     const a = manifest.annotations![ai.index]!;
     const st = img[a.state]!;
-    return annotationGeometry(
+    return measureAnnotation(
       {
         index: ai.index,
         annotation: a,
         ...(ai.points ? { points: ai.points } : {}),
         ...(ai.rect ? { rect: ai.rect } : {}),
       },
-      st.ink,
+      st.rawInk,
       st.W,
       st.H,
+      st.ink,
     );
   });
 
-  // ---- preliminary depictions (seeded regions)
+  // ---- seeded regions
   const seededR = new Map<string, Mask>();
   for (const u of units) {
     for (const s of states) {
@@ -688,9 +764,7 @@ export function analyzeFigure(
             err(
               "asset/not-found",
               `a seed of ${u.id} at [${x}, ${y}] is on ink with no paper within 3 px`,
-              {
-                params: { part: u.id, state: s, seed: [x, y] },
-              },
+              { params: { part: u.id, state: s, seed: [x, y] } },
             ),
           );
           continue;
@@ -706,9 +780,7 @@ export function analyzeFigure(
             err(
               "asset/not-found",
               `a seed of ${u.id} at [${x}, ${y}] lies on the background, not inside a part`,
-              {
-                params: { part: u.id, state: s, seed: [x, y] },
-              },
+              { params: { part: u.id, state: s, seed: [x, y] } },
             ),
           );
           continue;
@@ -738,6 +810,35 @@ export function analyzeFigure(
     }
   }
   if (diagnostics.some((d) => d.severity === "error")) return { diagnostics };
+
+  // Up-front cost check: per-unit window work around the seeded regions, times the annotations.
+  {
+    let cost = 0;
+    for (const [key, R] of seededR) {
+      const s = key.split(":")[1] as FigureState;
+      const st = img[s]!;
+      const D = Math.max(6, 4 * st.stroke);
+      const r = Math.ceil(1.5 * st.stroke) + 2;
+      const nAnn = annotations.filter((g) => g.state === s).length;
+      cost += (R.w + 2 * D) * (R.h + 2 * D) * (1 + nAnn) + count(R) * (2 * r + 1) ** 2;
+    }
+    const limit = 128 * stateArea + 8_000_000;
+    if (cost > limit) {
+      return {
+        diagnostics: [
+          ...diagnostics,
+          tooExpensive(
+            "the parts and annotations need too much work",
+            cost,
+            limit,
+            "crop the figure (regions), or declare fewer parts or annotations",
+          ),
+        ],
+      };
+    }
+  }
+
+  // ---- bounding ink, preliminary masks and shape priors
   for (const u of units) {
     for (const s of states) {
       const R = seededR.get(`${u.index}:${s}`);
@@ -745,24 +846,35 @@ export function analyzeFigure(
       const st = img[s]!;
       const rivals = units
         .filter((w) => w !== u && seededR.has(`${w.index}:${s}`))
-        .map((w) => seededR.get(`${w.index}:${s}`)!);
+        .map((w) => ({ R: seededR.get(`${w.index}:${s}`)! }));
       const B = boundingInk(st, R, rivals);
+      const M0 = u.holes ? union(R, B) : fillHoles(union(R, B));
+      // Stub bound: bounding ink that an opening of half a stroke removes is a protrusion
+      // narrower than a stroke (a touching trace's end), not the part's outline.
+      const rad = Math.max(1, Math.ceil(st.stroke / 2));
+      const opened = dilate(erode(M0, rad), rad, st.W, st.H);
+      const M1 = filter(M0, (x, y) => has(opened, x, y) || has(R, x, y) || !has(B, x, y));
+      const P0 = peel(st, M1, R);
+      const prior = fitPrior(P0, u.prior);
+      let P = P0;
       const bound = polygonBound(u.polygons[s], st.W, st.H);
-      let P = peelClosing(st, u.holes ? union(R, B) : fillHoles(union(R, B)));
       if (bound) P = intersect(P, bound);
+      if (prior !== EMPTY) P = intersect(P, dilate(prior, st.stroke + 1, st.W, st.H));
       (u.dep as Record<FigureState, Depiction>)[s] = {
         state: s,
         seeds: seedsOf(u, s),
         R,
         B,
         P,
+        prior,
+        contact: EMPTY,
         standalone: false,
         V: P,
       };
     }
   }
 
-  // ---- alignment between the states
+  // ---- alignment between the states (shared budget)
   const d: Partial<Record<FigureState, readonly [number, number]>> = { [base]: [0, 0] as const };
   let alignment: Analysis["alignment"];
   if (states.length === 2) {
@@ -801,11 +913,34 @@ export function analyzeFigure(
         h,
       };
       if (w >= 8 && h >= 8) {
-        const tryPatch = align(a.image, b.image, { exclude: ex, patch, maxMultiplyAdds: maxMacs });
+        const tryPatch = align(a.image, b.image, {
+          exclude: ex,
+          patch,
+          maxMultiplyAdds: budget.left,
+        });
+        if (tryPatch.value) budget.left -= tryPatch.value.multiplyAdds;
         if (tryPatch.value && tryPatch.value.score >= 0.9) al = tryPatch;
       }
     }
-    al ??= align(a.image, b.image, { exclude: ex, maxMultiplyAdds: maxMacs });
+    if (!al) {
+      if (budget.left <= 0) {
+        return {
+          diagnostics: [
+            ...diagnostics,
+            err(
+              "asset/too-expensive",
+              "the matcher budget was used up before the drawings were aligned",
+              {
+                suggestion: "crop the figure (regions) or raise maxMultiplyAdds",
+                params: { limit: options.maxMultiplyAdds ?? MAX_MULTIPLY_ADDS },
+              },
+            ),
+          ],
+        };
+      }
+      al = align(a.image, b.image, { exclude: ex, maxMultiplyAdds: budget.left });
+      if (al.value) budget.left -= al.value.multiplyAdds;
+    }
     diagnostics.push(...al.diagnostics);
     if (!al.value) return { diagnostics };
     alignment = {
@@ -816,87 +951,293 @@ export function analyzeFigure(
     };
     d[other(base)] = [al.value.dx, al.value.dy];
   }
+  const shiftTo = (from: FigureState, to: FigureState): [number, number] => [
+    d[to]![0] - d[from]![0],
+    d[to]![1] - d[from]![1],
+  ];
 
-  // ---- allowance cut, standalone, whole ink
+  // ---- the static drawing: ink also present, at the aligned place, in the other drawing, away
+  // from every seeded part in both (boards, sockets, traces). Used to measure arrowheads.
+  const near: Partial<Record<FigureState, Mask>> = {};
+  for (const s of states) {
+    const st = img[s]!;
+    const ms = units.filter((u) => u.dep[s]).map((u) => dilate(u.dep[s]!.P, 1, st.W, st.H));
+    near[s] = ms.length > 0 ? union(...ms) : EMPTY;
+  }
+  const isStatic: Partial<Record<FigureState, (x: number, y: number) => boolean>> = {};
+  if (states.length === 2) {
+    for (const s of states) {
+      const o = other(s);
+      const st = img[s]!;
+      const so = img[o]!;
+      const [dx, dy] = shiftTo(s, o);
+      const nearO = units.filter((u) => u.dep[o]).map((u) => dilate(u.dep[o]!.P, 2, so.W, so.H));
+      isStatic[s] = (x, y) => {
+        const qx = x + dx;
+        const qy = y + dy;
+        if (qx < 0 || qy < 0 || qx >= so.W || qy >= so.H) return false;
+        if (!st.rawInk[y * st.W + x] || !so.rawInk[qy * so.W + qx]) return false;
+        return !nearO.some((m) => has(m, qx, qy));
+      };
+    }
+  }
+
+  // ---- the units' own ink without annotation bands (contacts are found against it)
+  for (const s of states) {
+    const st = img[s]!;
+    const scratch = new Uint8Array(st.W * st.H);
+    // Bands are barriers, except within a band width of the polyline's ends (where it meets
+    // the part, the part's outline runs through the band).
+    const polys = annotations.filter((g) => g.state === s && g.kind !== "text");
+    const endDisks = polys
+      .map((g) => capsules([g.points[0]!], g.halfWidth + 2, st.W, st.H))
+      .concat(
+        polys.map((g) => capsules([g.points[g.points.length - 1]!], g.halfWidth + 2, st.W, st.H)),
+      );
+    const inBand = (x: number, y: number): boolean =>
+      polys.some((g) => has(g.band, x, y)) && !endDisks.some((m) => has(m, x, y));
+    for (const u of units) {
+      const dp = u.dep[s];
+      if (!dp) continue;
+      const hullP = count(convexHull(dp.P));
+      const c = flood(st.rawInk, st.W, st.H, dp.B, 4 * hullP + 64, scratch, inBand);
+      (u.dep as Record<FigureState, Depiction>)[s] = {
+        ...dp,
+        contact: c ?? inkMask(st.ink, st.W, dp.P),
+      };
+    }
+  }
+
+  // ---- contact allowances (rule 2): a w x w square (plus the closing's 1 px) centred where an
+  // end or a crossing meets a part, at most 2 per polyline and 8 per part and state; these are
+  // the only squares cut from the ink and the only exemptions.
+  const exempt = new Map<string, Box[]>();
+  const quota = new Map<string, number>();
+  const contactEnds = new Map<number, [boolean, boolean]>();
+  for (const g of annotations) {
+    if (g.kind === "text") continue;
+    const ink = (u: Unit): Mask => u.dep[g.state]?.contact ?? EMPTY;
+    const owners = (x: number, y: number): Unit[] =>
+      units.filter((u) => {
+        const c = ink(u);
+        return c.w > 0 && nearest(c, x, y, 1) !== undefined;
+      });
+    const r = Math.ceil(g.halfWidth) + 1;
+    const found: { x: number; y: number; end?: 0 | 1 }[] = [];
+    const ends = [g.points[0]!, g.points[g.points.length - 1]!] as const;
+    const endsTouch: [boolean, boolean] = [false, false];
+    ends.forEach(([ex, ey], e) => {
+      let best: { x: number; y: number; d2: number } | undefined;
+      for (const u of units) {
+        const c = ink(u);
+        if (c.w === 0) continue;
+        const n = nearest(c, Math.round(ex), Math.round(ey), r);
+        if (
+          n &&
+          (!best ||
+            n.d2 < best.d2 ||
+            (n.d2 === best.d2 && (n.y < best.y || (n.y === best.y && n.x < best.x))))
+        )
+          best = n;
+      }
+      if (best) {
+        found.push({ x: best.x, y: best.y, end: e as 0 | 1 });
+        endsTouch[e] = true;
+      }
+    });
+    contactEnds.set(g.index, endsTouch);
+    // Crossings: the centre line entering a part's ink away from the ends.
+    const total = g.samples[g.samples.length - 1]?.s ?? 0;
+    let prev = false;
+    for (const smp of g.samples) {
+      const x = Math.round(smp.x);
+      const y = Math.round(smp.y);
+      const on = smp.s > g.width && total - smp.s > g.width && units.some((u) => has(ink(u), x, y));
+      if (on && !prev) found.push({ x, y });
+      prev = on;
+    }
+    const side = g.width + 2;
+    const half = Math.floor(side / 2);
+    for (const c of found.slice(0, 2)) {
+      const box: Box = { x: c.x - half, y: c.y - half, w: side, h: side };
+      let cut = false;
+      for (const u of owners(c.x, c.y)) {
+        const key = `${u.index}:${g.state}`;
+        const n = quota.get(key) ?? 0;
+        if (n >= 8) continue;
+        quota.set(key, n + 1);
+        const k = `${g.index}:${u.index}`;
+        exempt.set(k, [...(exempt.get(k) ?? []), box]);
+        cut = true;
+      }
+      if (cut) g.allowances.push(box);
+    }
+  }
+
+  // ---- arrowheads: the wedge's own ink (part outlines and the static drawing excluded)
+  for (const g of annotations) {
+    if (g.kind !== "arrow") continue;
+    const st = img[g.state]!;
+    const nearS = near[g.state]!;
+    const stat = isStatic[g.state];
+    detectHead(g, st.rawInk, st.W, st.H, (x, y) => has(nearS, x, y) || (stat ? stat(x, y) : false));
+  }
+
+  // ---- allowance cut (part ink runs on raw ink with the squares cut), stand-alone test and
+  // whole ink. Whole ink is never cut: it floods raw ink with every polyline band as a barrier
+  // except inside the allowance squares, so a square at a fin's root cannot sever the fin.
   const cutInk: Partial<Record<FigureState, Uint8Array>> = {};
   for (const s of states) {
     const st = img[s]!;
-    const cut = new Uint8Array(st.ink);
+    const raw = new Uint8Array(st.rawInk);
     for (const g of annotations) {
       if (g.state !== s) continue;
       for (const b of g.allowances) {
         const c = clipBox(b, st.W, st.H);
         for (let y = c.y; y < c.y + c.h; y++)
-          for (let x = c.x; x < c.x + c.w; x++) cut[y * st.W + x] = 0;
+          for (let x = c.x; x < c.x + c.w; x++) raw[y * st.W + x] = 0;
       }
     }
-    cutInk[s] = cut;
+    cutInk[s] = raw;
   }
   for (const s of states) {
     const st = img[s]!;
-    const cut = cutInk[s]!;
     const scratch = new Uint8Array(st.W * st.H);
     const squares = annotations.filter((g) => g.state === s).flatMap((g) => g.allowances);
+    const polys = annotations.filter((g) => g.state === s && g.kind !== "text");
+    const barrier = (x: number, y: number): boolean =>
+      polys.some((g) => has(g.band, x, y)) && !squares.some((b) => inBox(b, x, y));
+    // Per square: the opening radius that removes the polyline's own stub (half its stroke).
+    const squareR = annotations
+      .filter((g) => g.state === s)
+      .flatMap((g) =>
+        g.allowances.map((b) => ({ b, g, r: Math.max(1, Math.ceil(g.medianRun / 2)) })),
+      );
+    const D = Math.max(6, 4 * st.stroke);
     for (const u of units) {
       const dp = u.dep[s];
       if (!dp) continue;
-      const near = dilate(dp.P, 4, st.W, st.H);
       const others = units.filter((w) => w !== u && w.dep[s]).map((w) => w.dep[s]!.P);
-      if (others.some((p) => overlaps(near, p))) continue;
-      const hullP = count(convexHull(dp.P));
-      const W0 = wholeInk(cut, st.W, st.H, dp.B, 4 * hullP + 64, scratch);
-      if (!W0) continue;
-      if (others.some((p) => overlaps(dilate(W0, 4, st.W, st.H), p))) continue;
-      if (count(convexHull(union(dp.P, W0))) > 4 * hullP) continue;
-      // Close the outline across the allowance squares: cut ink inside a square that touches the
-      // whole ink, then remove what a radius-1 opening removes inside the squares (the 1-2 px
-      // stub of the polyline itself).
-      let inSq: Mask = EMPTY;
-      const wd = dilate(W0, 1, st.W, st.H);
-      for (const b of squares) {
-        const sq = boxMask(b, st.W, st.H);
-        if (!overlaps(sq, wd)) continue;
-        const inkSq = inkMask(st.ink, st.W, sq);
-        inSq = union(inSq, geodesic(st.ink, st.W, intersect(inkSq, wd), sq));
-      }
-      let M = union(dp.R, dp.B, W0, inSq);
-      M = u.holes
-        ? union(M, intersect(fillHoles(M), inkMask(st.ink, st.W, fillHoles(M))))
-        : fillHoles(M);
-      if (!isEmpty(inSq)) {
-        const opened = dilate(erode1(within1(M)), 1, st.W, st.H);
-        M = filter(
-          M,
-          (x, y) =>
-            has(opened, x, y) ||
-            !squares.some((b) => x >= b.x && y >= b.y && x < b.x + b.w && y < b.y + b.h),
-        );
-      }
-      M = peelClosing(st, M);
       const bound = polygonBound(u.polygons[s], st.W, st.H);
-      if (bound) M = intersect(M, bound);
-      (u.dep as Record<FigureState, Depiction>)[s] = {
-        ...dp,
-        W: W0,
-        standalone: true,
-        V: tight(M),
+      const finish = (M0: Mask): Mask => {
+        let M = u.holes
+          ? union(M0, intersect(fillHoles(M0), inkMask(st.ink, st.W, fillHoles(M0))))
+          : fillHoles(M0);
+        // Inside each allowance square the polyline's own stub joined the part: an opening of
+        // half its stroke removes it there, but only on the polyline's own band (a thin part
+        // feature at the contact, a fin's root, stays).
+        for (const { b, g, r: rad } of squareR) {
+          if (!overlaps(boxMask(b, st.W, st.H), M)) continue;
+          const opened = dilate(erode(M, rad), rad, st.W, st.H);
+          M = filter(M, (x, y) => has(opened, x, y) || !inBox(b, x, y) || !has(g.band, x, y));
+        }
+        M = peel(st, M, dp.R);
+        if (bound) M = intersect(M, bound);
+        return tight(M);
       };
+      const nearP = dilate(dp.P, 4, st.W, st.H);
+      const alone = !others.some((p) => overlaps(nearP, p));
+      const hullP = count(convexHull(dp.P));
+      const W0 = alone
+        ? flood(st.rawInk, st.W, st.H, dp.B, 4 * hullP + 64, scratch, barrier)
+        : undefined;
+      // Stand-alone: the whole ink reaches no other part and stays inside the polygon when one
+      // is given, and it is not the static drawing. With two drawings, ink of the whole ink
+      // beyond the seeded mask that the other drawing also shows at the aligned place (a cage, a
+      // bracket, a board) is static: more than a quarter of it (beyond D) means the part touches
+      // static ink and is not alone. With one drawing there is no such evidence; the whole ink's
+      // hull may then be at most 4x the seeded mask's.
+      let standalone = false;
+      if (W0 && !others.some((p) => overlaps(dilate(W0, 4, st.W, st.H), p))) {
+        const extra = minus(W0, dilate(dp.P, D, st.W, st.H));
+        const stat = isStatic[s];
+        if (stat) {
+          const n = count(extra);
+          let k = 0;
+          for (let j = 0; j < extra.h; j++)
+            for (let i = 0; i < extra.w; i++)
+              if (extra.data[j * extra.w + i] && stat(i + extra.x, j + extra.y)) k++;
+          standalone = k <= STANDALONE_STATIC * n + 4 * st.stroke;
+        } else {
+          standalone = count(convexHull(union(dp.P, W0))) <= 4 * hullP;
+        }
+        if (bound && !isEmpty(minus(W0, bound))) standalone = false;
+      }
+      if (standalone) {
+        (u.dep as Record<FigureState, Depiction>)[s] = {
+          ...dp,
+          W: W0!,
+          standalone: true,
+          V: finish(union(dp.R, dp.B, W0!)),
+        };
+      } else if (bound) {
+        // Not alone, but a rough polygon bounds it: its ink inside the polygon is its own,
+        // except strokes that run on through the polygon's border (a trace passing by).
+        const Wp = boundedInk(st, dp.B, bound);
+        (u.dep as Record<FigureState, Depiction>)[s] = { ...dp, V: finish(union(dp.R, dp.B, Wp)) };
+      }
     }
   }
 
-  // ---- templates and placements
-  const classes: TemplateClass[] = classIds.map((id, ci) => {
-    const members = units.filter((u) => u.cls === ci);
-    let best: { u: Unit; s: FigureState; n: number } | undefined;
-    for (const u of members) {
-      for (const s of STATES) {
-        const dp = u.dep[s];
-        if (!dp) continue;
-        const n = count(dp.V);
-        if (!best || n > best.n) best = { u, s, n };
+  // ---- templates (§6.3): fewest occluded pixels, then stand-alone, then consistency across
+  // the depictions (mean IoU, centres aligned), then exploded first, then manifest order.
+  const occludedOf = (u: Unit, s: FigureState): number => {
+    const dp = u.dep[s]!;
+    const st = img[s]!;
+    const shape = dp.prior !== EMPTY ? dp.prior : convexHull(dp.V);
+    const others = units
+      .filter((w) => w !== u && w.dep[s])
+      .map((w) => dilate(w.dep[s]!.V, 1, st.W, st.H));
+    let n = 0;
+    for (let j = 0; j < shape.h; j++) {
+      for (let i = 0; i < shape.w; i++) {
+        if (!shape.data[j * shape.w + i]) continue;
+        const x = i + shape.x;
+        const y = j + shape.y;
+        if (!has(dp.V, x, y) && others.some((m) => has(m, x, y))) n++;
       }
     }
-    const t = best!;
+    return n;
+  };
+  const iouCentred = (a: Mask, b: Mask): number => {
+    const ba = bounds(a);
+    const bb = bounds(b);
+    if (!ba || !bb) return 0;
+    const dx = Math.round(ba.x + ba.w / 2 - (bb.x + bb.w / 2));
+    const dy = Math.round(ba.y + ba.h / 2 - (bb.y + bb.h / 2));
+    const m = shifted(b, dx, dy);
+    const ov = overlapCount(a, m);
+    return ov / (count(a) + count(m) - ov || 1);
+  };
+  const classes: TemplateClass[] = classIds.map((id, ci) => {
+    const members = units.filter((u) => u.cls === ci);
+    const cands: { u: Unit; s: FigureState; occ: number; alone: number; cons: number }[] = [];
+    for (const u of members) {
+      for (const s of STATES) {
+        if (!u.dep[s]) continue;
+        cands.push({ u, s, occ: occludedOf(u, s), alone: u.dep[s]!.standalone ? 0 : 1, cons: 0 });
+      }
+    }
+    for (const c of cands) {
+      const others = cands.filter((o) => o !== c);
+      c.cons =
+        others.length > 0
+          ? Math.round(
+              (others.reduce((t, o) => t + iouCentred(c.u.dep[c.s]!.V, o.u.dep[o.s]!.V), 0) /
+                others.length) *
+                1000,
+            )
+          : 1000;
+    }
+    cands.sort(
+      (a, b) =>
+        a.occ - b.occ ||
+        a.alone - b.alone ||
+        b.cons - a.cons ||
+        STATES.indexOf(a.s) - STATES.indexOf(b.s) ||
+        a.u.index - b.u.index,
+    );
+    const t = cands[0]!;
     const mask = tight(t.u.dep[t.s]!.V);
     if (mask.w === 0) {
       diagnostics.push(
@@ -913,18 +1254,19 @@ export function analyzeFigure(
       state: t.s,
       mask,
       sprite: colours(img[t.s]!.image, mask),
+      unrecovered: EMPTY,
     };
   });
   if (diagnostics.some((x) => x.severity === "error")) return { diagnostics };
+
+  // ---- placements (locate, one luminance plane per state, the shared budget)
   for (const c of classes) {
     for (const s of states) {
       const st = img[s]!;
       const members = c.units.map((i) => units[i]!);
       const need = members.filter((u) => !(u.index === c.unit && s === c.state));
-      if (need.length === 0) {
-        place(units[c.unit]!, s, c.mask.x, c.mask.y, 1, c.mask);
-        continue;
-      }
+      if (s === c.state) place(units[c.unit]!, s, c.mask.x, c.mask.y, 1, c.mask);
+      if (need.length === 0) continue;
       let region: Box = { x: 0, y: 0, w: 0, h: 0 };
       for (const u of members) {
         const dp = u.dep[s];
@@ -943,14 +1285,31 @@ export function analyzeFigure(
               st.W,
               st.H,
             );
+      if (budget.left <= 0) {
+        return {
+          diagnostics: [
+            ...diagnostics,
+            err(
+              "asset/too-expensive",
+              "the matcher budget was used up before every part was located",
+              {
+                suggestion: "crop the figure (regions) or raise maxMultiplyAdds",
+                params: { limit: options.maxMultiplyAdds ?? MAX_MULTIPLY_ADDS },
+              },
+            ),
+          ],
+        };
+      }
       const found = locate(st.image, c.sprite, {
         region,
         top: Math.min(64, 2 * members.length + 2),
         scales: [1],
         nmsIoU: 0.8,
         minScore: 0.5,
-        maxMultiplyAdds: maxMacs,
+        maxMultiplyAdds: budget.left,
+        plane: st.plane,
       });
+      if (found.value) budget.left -= found.value.multiplyAdds;
       diagnostics.push(
         ...found.diagnostics.filter((x) => x.severity === "error" && x.code !== "asset/not-found"),
       );
@@ -958,7 +1317,6 @@ export function analyzeFigure(
       const peaks = (found.value?.matches ?? []).filter(
         (m) => !(s === c.state && Math.abs(m.x - c.mask.x) <= 2 && Math.abs(m.y - c.mask.y) <= 2),
       );
-      if (s === c.state) place(units[c.unit]!, s, c.mask.x, c.mask.y, 1, c.mask);
       // Assignment: seeds inside the placed silhouette first, then overlap with the seeded
       // mask, then the nearest hint, then the score.
       const pairs: { u: Unit; k: number; cost: number[] }[] = [];
@@ -966,9 +1324,8 @@ export function analyzeFigure(
         const dp = u.dep[s];
         peaks.forEach((m, k) => {
           const E = shifted(c.mask, m.x - c.mask.x, m.y - c.mask.y);
-          const miss = dp
-            ? dp.seeds.filter(([x, y]) => !has(dilate(E, 1, st.W, st.H), x, y)).length
-            : 0;
+          const Ed = dilate(E, 1, st.W, st.H);
+          const miss = dp ? dp.seeds.filter(([x, y]) => !has(Ed, x, y)).length : 0;
           const ov = dp ? overlapCount(E, dp.P) : 0;
           const n = u.nearest[s];
           const dist = n ? Math.hypot(m.x + c.mask.w / 2 - n[0], m.y + c.mask.h / 2 - n[1]) : 0;
@@ -1007,8 +1364,7 @@ export function analyzeFigure(
   }
   if (diagnostics.some((x) => x.severity === "error")) return { diagnostics };
 
-  // ---- front relations and visible masks
-  // Bounded work: the pairwise overlap tests and subtractions are paid for up front.
+  // ---- front relations and visible masks (bounded work, paid for up front)
   {
     let cost = 0;
     for (const s of states) {
@@ -1028,13 +1384,11 @@ export function analyzeFigure(
       return {
         diagnostics: [
           ...diagnostics,
-          err(
-            "asset/too-expensive",
-            `the parts overlap too much to separate (about ${cost} px of work, above ${limit})`,
-            {
-              suggestion: "crop the figure (regions) or split it into fewer, smaller parts",
-              params: { pixels: cost, limit },
-            },
+          tooExpensive(
+            "the parts overlap too much to separate",
+            cost,
+            limit,
+            "crop the figure (regions) or split it into fewer, smaller parts",
           ),
         ],
       };
@@ -1062,10 +1416,8 @@ export function analyzeFigure(
               const x = i + ov.x;
               const y = j + ov.y;
               const src = st.lum[y * st.W + x]!;
-              const lu = spriteLum(su.sprite, x - pu.x, y - pu.y);
-              const lw = spriteLum(sw.sprite, x - pw.x, y - pw.y);
-              const mu = Math.abs(src - lu) <= 48;
-              const mw = Math.abs(src - lw) <= 48;
+              const mu = Math.abs(src - spriteLum(su.sprite, x - pu.x, y - pu.y)) <= 48;
+              const mw = Math.abs(src - spriteLum(sw.sprite, x - pw.x, y - pw.y)) <= 48;
               if (mu && !mw) cu++;
               if (mw && !mu) cw++;
             }
@@ -1092,51 +1444,69 @@ export function analyzeFigure(
   };
   computeVisible();
 
-  // ---- occlusion recovery into the template (one pass over all classes, then one recompute)
-  const coverCount: Partial<Record<FigureState, Uint16Array>> = {};
-  for (const s of states) {
-    const st = img[s]!;
-    const cc = new Uint16Array(st.W * st.H);
-    for (const u of units) {
-      const m = u.place[s]!.E;
-      for (let j = 0; j < m.h; j++) {
-        for (let i = 0; i < m.w; i++) {
-          const x = i + m.x;
-          const y = j + m.y;
-          if (m.data[j * m.w + i] && x >= 0 && y >= 0 && x < st.W && y < st.H) cc[y * st.W + x]!++;
-        }
-      }
-    }
-    coverCount[s] = cc;
-  }
+  // ---- occlusion recovery (§6.3): template pixels hidden by a unit in front are taken from
+  // another depiction's OWN segmentation (its V, mapped by its placement) where that depiction
+  // shows them. What no depiction shows is recorded as unrecovered (expected from the prior).
   let recovered = false;
   for (const c of classes) {
     const tu = units[c.unit]!;
     const tp = tu.place[c.state]!;
     const st = img[c.state]!;
-    const cc = coverCount[c.state]!;
-    const ownE = tp.E;
-    // Covered in the template's drawing by another unit's expected silhouette.
+    const fronts = units.filter((w) => w !== tu && front[c.state]!.has(`${w.index}>${tu.index}`));
     const covered = (x: number, y: number): boolean =>
-      x >= 0 && y >= 0 && x < st.W && y < st.H && cc[y * st.W + x]! - (has(ownE, x, y) ? 1 : 0) > 0;
+      fronts.some((w) => has(w.place[c.state]!.E, x, y));
+    // The template's own pixels under a unit in front belong to that unit (its outline drawn
+    // over this one): they leave the template and are recovered like any hidden pixel.
+    const kept = filter(c.mask, (x, y) => !covered(x, y));
+    const claimed = (x: number, y: number): boolean =>
+      units.some((w) => w !== tu && w.dep[c.state] !== undefined && has(w.dep[c.state]!.V, x, y));
+    const agrees = (x: number, y: number, im: Raster, sx: number, sy: number): boolean => {
+      if (sx < 0 || sy < 0 || sx >= im.width || sy >= im.height) return false;
+      const a1 = st.lum[y * st.W + x]!;
+      const q = (sy * im.width + sx) * 4;
+      const a2 = Math.round(
+        0.299 * im.data[q]! + 0.587 * im.data[q + 1]! + 0.114 * im.data[q + 2]!,
+      );
+      return Math.abs(a1 - a2) <= 48;
+    };
     let add: Mask = EMPTY;
     const sources: { m: Mask; s: FigureState; dx: number; dy: number }[] = [];
     for (const ui of c.units) {
       const u = units[ui]!;
       for (const s of states) {
-        if (u === tu && s === c.state) continue;
+        const dp = u.dep[s];
+        if (!dp || (u === tu && s === c.state)) continue;
         const p = u.place[s]!;
-        // Pixels this depiction shows that the template lacks and that are covered in the template.
-        const back = shifted(p.visible, tp.x - p.x, tp.y - p.y);
-        const cand = filter(minus(back, c.mask), covered);
-        if (isEmpty(cand)) continue;
+        // Pixels this depiction's own segmentation shows, that the template lacks, and that a
+        // unit in front covers in the template's drawing.
+        const fronts2 = units.filter((w) => w !== u && front[s]!.has(`${w.index}>${u.index}`));
+        const own = filter(dp.V, (x, y) => !fronts2.some((w) => has(w.place[s]!.E, x, y)));
+        const back = shifted(own, tp.x - p.x, tp.y - p.y);
+        // Hidden in the template's drawing (covered in front), or shown there too (the drawings
+        // agree) and claimed by no other unit: what segmentation dropped in one drawing (a corner
+        // tip running into another part's outline) comes back from the other.
+        const im = img[s]!.image;
+        const cand = filter(
+          minus(back, kept),
+          (x, y) =>
+            covered(x, y) || (!claimed(x, y) && agrees(x, y, im, x + p.x - tp.x, y + p.y - tp.y)),
+        );
         const fresh = minus(cand, add);
+        if (isEmpty(fresh)) continue;
         add = union(add, fresh);
         sources.push({ m: fresh, s, dx: p.x - tp.x, dy: p.y - tp.y });
       }
     }
-    if (isEmpty(add)) continue;
-    const mask = tight(union(c.mask, add));
+    // Hidden and shown nowhere: the prior (or the hull) of the template, covered in front.
+    const shape = tu.dep[c.state]!.prior !== EMPTY ? tu.dep[c.state]!.prior : convexHull(c.mask);
+    // Pixels enclosed by the recovered silhouette that no depiction showed (a shared outline
+    // that is behind a part in both drawings) are filled, and recorded as unrecovered.
+    const joined = union(kept, add);
+    const full = u0holes(units, c) ? joined : fillHoles(joined);
+    const filledIn = minus(full, joined);
+    c.unrecovered = tight(union(filter(minus(shape, full), covered), filledIn));
+    if (isEmpty(add) && count(kept) === count(c.mask)) continue;
+    const mask = tight(full);
     const sprite = colours(st.image, mask);
     for (const src of sources) {
       const im = img[src.s]!.image;
@@ -1148,6 +1518,7 @@ export function analyzeFigure(
           const sx = x + src.dx;
           const sy = y + src.dy;
           if (sx < 0 || sy < 0 || sx >= im.width || sy >= im.height) continue;
+          if (x < mask.x || y < mask.y || x >= mask.x + mask.w || y >= mask.y + mask.h) continue;
           const o = ((y - mask.y) * mask.w + x - mask.x) * 4;
           const q = (sy * im.width + sx) * 4;
           sprite.data[o] = im.data[q]!;
@@ -1179,7 +1550,7 @@ export function analyzeFigure(
   }
   if (recovered) computeVisible();
 
-  // ---- hulls and part ink
+  // ---- hulls (whole ink where alone, mapped; plus the shape prior) and geodesic part ink
   for (const u of units) {
     const S0 = (["exploded", "assembled"] as const).find((s) => u.dep[s]?.standalone);
     u.standaloneState = S0;
@@ -1189,13 +1560,13 @@ export function analyzeFigure(
       diagnostics.push(
         warning(
           "asset/hull-uncertain",
-          `${u.id} stands alone in no state, so its hull comes from its mask only`,
-          {
-            part: u.id,
-          },
+          `${u.id} stands alone in no state, so its hull comes from its mask and prior only`,
+          { part: u.id },
         ),
       );
     }
+    const tpl = classes[u.cls]!;
+    const tplPrior = units[tpl.unit]!.dep[tpl.state]!.prior;
     for (const s of states) {
       const st = img[s]!;
       const p = u.place[s]!;
@@ -1203,7 +1574,13 @@ export function analyzeFigure(
         H0 && S0
           ? clipMask(shifted(H0, p.x - u.place[S0]!.x, p.y - u.place[S0]!.y), st.W, st.H)
           : EMPTY;
-      p.hull = dilate(convexHull(union(mapped, p.E)), 2, st.W, st.H);
+      const tp = units[tpl.unit]!.place[tpl.state]!;
+      const prior =
+        u.dep[s]?.prior ??
+        (tplPrior !== EMPTY
+          ? clipMask(shifted(tplPrior, p.x - tp.x, p.y - tp.y), st.W, st.H)
+          : EMPTY);
+      p.hull = dilate(convexHull(union(mapped, p.E, prior)), 2, st.W, st.H);
       p.partInk = geodesic(
         cutInk[s]!,
         st.W,
@@ -1213,55 +1590,108 @@ export function analyzeFigure(
     }
   }
 
+  // ---- template sprites: non-part annotation ink inside a template (§6.4 applied to sprites) is
+  // replaced from another depiction's own segmentation where it is not annotated; what no other
+  // depiction shows becomes background and is recorded as unrecovered.
+  for (const c of classes) {
+    const tu = units[c.unit]!;
+    const s = c.state;
+    const st = img[s]!;
+    const tp = tu.place[s]!;
+    const ann = annotations.filter((g) => g.state === s);
+    if (ann.length === 0) continue;
+    const allow = ann.flatMap((g) => g.allowances);
+    const masks = union(...ann.map((g) => g.mask));
+    const out = new Uint8Array(c.sprite.data);
+    const lost = blank(c.mask.x, c.mask.y, c.mask.w, c.mask.h);
+    let anyLost = false;
+    for (let j = 0; j < c.mask.h; j++) {
+      for (let i = 0; i < c.mask.w; i++) {
+        if (!c.mask.data[j * c.mask.w + i]) continue;
+        const x = i + tp.x;
+        const y = j + tp.y;
+        if (
+          !has(masks, x, y) ||
+          !st.rawInk[y * st.W + x] ||
+          has(tp.partInk, x, y) ||
+          allow.some((q) => inBox(q, x, y))
+        )
+          continue;
+        let col: readonly [number, number, number] | undefined;
+        for (const ui of c.units) {
+          const u = units[ui]!;
+          for (const s2 of states) {
+            const dp = u.dep[s2];
+            if (!dp || (u === tu && s2 === s)) continue;
+            const p = u.place[s2]!;
+            const qx = x - tp.x + p.x;
+            const qy = y - tp.y + p.y;
+            if (!has(dp.V, qx, qy)) continue;
+            if (annotations.some((g) => g.state === s2 && has(g.mask, qx, qy))) continue;
+            const st2 = img[s2]!;
+            const q = (qy * st2.W + qx) * 4;
+            col = [st2.image.data[q]!, st2.image.data[q + 1]!, st2.image.data[q + 2]!];
+            break;
+          }
+          if (col) break;
+        }
+        if (!col) {
+          col = st.background;
+          lost.data[j * lost.w + i] = 1;
+          anyLost = true;
+        }
+        const o = (j * c.mask.w + i) * 4;
+        out[o] = col[0];
+        out[o + 1] = col[1];
+        out[o + 2] = col[2];
+      }
+    }
+    c.sprite = { width: c.sprite.width, height: c.sprite.height, data: out };
+    if (anyLost) c.unrecovered = tight(union(c.unrecovered, lost));
+  }
+
   // ---- annotation validity (rules 2-5)
   const T = thresholds(strict);
   const invalid: Analysis["invalid"] = [];
-  const shiftTo = (from: FigureState, to: FigureState): [number, number] => [
-    d[to]![0] - d[from]![0],
-    d[to]![1] - d[from]![1],
-  ];
-  // Leaders: the free end (the one without a part contact) must end at a text rectangle of the
-  // same state. When both or neither end touch a part, either end may.
+  const inExempt = (g: AnnotationGeometry, u: Unit, x: number, y: number): boolean =>
+    (exempt.get(`${g.index}:${u.index}`) ?? []).some((b) => inBox(b, x, y));
+  // One mask per state of every unit's expected silhouette and part ink (hoisted lookups).
+  const partMask: Partial<Record<FigureState, Mask>> = {};
+  for (const s of states) {
+    const ms = units.flatMap((u) => [u.place[s]!.E, u.place[s]!.partInk]);
+    partMask[s] = clipMask(union(...ms), img[s]!.W, img[s]!.H);
+  }
+  const partAt = (s: FigureState, x: number, y: number): boolean => has(partMask[s]!, x, y);
+  // Leaders: the free end (the one without a part contact) must end at a text rectangle.
   for (const g of annotations) {
     if (g.kind !== "leader") continue;
-    const st = img[g.state]!;
     const ends = [g.points[0]!, g.points[g.points.length - 1]!];
-    const contact = g.allowances.map((b) => {
-      const sq = boxMask(b, st.W, st.H);
-      return units.some((u) => overlaps(sq, dilate(u.place[g.state]!.E, 1, st.W, st.H)));
-    });
-    const free = contact[0] !== contact[1] ? [ends[contact[0] ? 1 : 0]!] : ends;
+    const touch = contactEnds.get(g.index) ?? [false, false];
+    const free = touch[0] !== touch[1] ? [ends[touch[0] ? 1 : 0]!] : ends;
     const texts = annotations.filter((t) => t.kind === "text" && t.state === g.state);
     if (!free.some(([x, y]) => texts.some((t) => boxDistance(x, y, t.rect!) <= 4))) {
       g.problems.push("the leader's free end is not within 4 px of a text rectangle of its state");
     }
   }
-  // Exemptions: an annotation's allowance square exempts that annotation's own band and mask
-  // where it touches a unit, at most 8 squares per unit and state (in annotation order).
-  const exempt = new Map<string, Box[]>();
-  const exemptCount = new Map<string, number>();
   for (const g of annotations) {
     const st = img[g.state]!;
-    for (const b of g.allowances) {
-      const sq = boxMask(b, st.W, st.H);
-      for (const u of units) {
-        const p = u.place[g.state]!;
-        if (!overlaps(sq, dilate(p.E, 1, st.W, st.H)) && !overlaps(sq, p.partInk)) continue;
-        const key = `${u.index}:${g.state}`;
-        const n = exemptCount.get(key) ?? 0;
-        if (n >= 8) continue;
-        exemptCount.set(key, n + 1);
-        const k = `${g.index}:${u.index}`;
-        exempt.set(k, [...(exempt.get(k) ?? []), b]);
+    if (g.kind !== "text") {
+      // A polyline must lie, for at least w px outside its allowances, on ink that is not part ink.
+      let own = 0;
+      for (const smp of g.samples) {
+        if (
+          smp.run === 0 ||
+          g.allowances.some((b) => inBox(b, Math.round(smp.x), Math.round(smp.y)))
+        )
+          continue;
+        if (!partAt(g.state, Math.round(smp.x), Math.round(smp.y))) own += STEP;
+      }
+      if (own < g.width) {
+        g.problems.push(
+          `the polyline lies on only ${own} px of its own (non-part) ink outside its allowances (at least ${g.width})`,
+        );
       }
     }
-  }
-  const inExempt = (g: AnnotationGeometry, u: Unit, x: number, y: number): boolean =>
-    (exempt.get(`${g.index}:${u.index}`) ?? []).some(
-      (b) => x >= b.x && y >= b.y && x < b.x + b.w && y < b.y + b.h,
-    );
-  for (const g of annotations) {
-    const st = img[g.state]!;
     for (const reason of g.problems)
       invalid.push({
         annotation: g.index,
@@ -1321,9 +1751,12 @@ export function analyzeFigure(
         });
         continue;
       }
+      // Ink under the band inside the hull, other than the polyline's own stroke (the runs
+      // through its samples): a stroke inside the hull that is not part ink.
+      const own = ownStroke(g, st.W, st.H);
       const covered = filter(
-        intersect(inkMask(st.ink, st.W, g.band), p.hull),
-        (x, y) => !inExempt(g, u, x, y),
+        intersect(inkMask(st.rawInk, st.W, g.band), p.hull),
+        (x, y) => !inExempt(g, u, x, y) && !has(own, x, y),
       );
       if (!isEmpty(covered)) {
         invalid.push({
@@ -1335,17 +1768,38 @@ export function analyzeFigure(
       }
     }
   }
-  // Rule 4: pixels of each unit (mask and part ink, inside its hull) inside any annotation mask
-  // outside that annotation's own exempt allowances, counted once, per unit and state.
+  // Rule 4: per unit and state, the pixels of its seated and exploded masks (the other one
+  // mapped into this drawing) and of its part ink inside any annotation mask of this state,
+  // outside that annotation's own exempt allowances, counted once.
   for (const s of states) {
     const inState = annotations.filter((g) => g.state === s);
     if (inState.length === 0) continue;
+    const st = img[s]!;
     for (const u of units) {
       const p = u.place[s]!;
-      const own = intersect(union(p.E, p.partInk), p.hull);
-      const hit = filter(own, (x, y) =>
-        inState.some((g) => has(g.mask, x, y) && !inExempt(g, u, x, y)),
+      const parts: Mask[] = [intersect(union(p.E, p.partInk), p.hull)];
+      for (const o of states) {
+        if (o === s) continue;
+        const [dx, dy] = shiftTo(o, s);
+        parts.push(clipMask(shifted(u.place[o]!.E, dx, dy), st.W, st.H));
+      }
+      const own = union(...parts);
+      // The annotation masks of this state minus this unit's exempt squares, as one mask (a
+      // mask is its band dilated by 2, so its exempt square is the allowance dilated by 2 too).
+      const live = union(
+        ...inState.map((g) => {
+          const boxes = (exempt.get(`${g.index}:${u.index}`) ?? []).map((b) => ({
+            x: b.x - 2,
+            y: b.y - 2,
+            w: b.w + 4,
+            h: b.h + 4,
+          }));
+          return boxes.length === 0
+            ? g.mask
+            : filter(g.mask, (x, y) => !boxes.some((b) => inBox(b, x, y)));
+        }),
       );
+      const hit = intersect(own, live);
       const n = count(hit);
       if (n > T.cumulative) {
         invalid.push({
@@ -1364,15 +1818,10 @@ export function analyzeFigure(
     // An annotation mapped in from the other drawing is not drawn here: it excludes only
     // non-part pixels (the base areas recovered from or for it), never a part's silhouette or
     // part ink, so it cannot hide a defect of a part in this state.
-    const partPx = (x: number, y: number): boolean =>
-      units.some((u) => {
-        const pl = u.place[s]!;
-        return has(pl.E, x, y) || has(pl.partInk, x, y);
-      });
     const parts = annotations.map((g) => {
       const [dx, dy] = shiftTo(g.state, s);
       const m = clipMask(shifted(g.mask, dx, dy), st.W, st.H);
-      return g.state === s ? m : filter(m, (x, y) => !partPx(x, y));
+      return g.state === s ? m : filter(m, (x, y) => !partAt(s, x, y));
     });
     const X = parts.length > 0 ? union(...parts) : EMPTY;
     excluded[s] = X;
@@ -1399,11 +1848,12 @@ export function analyzeFigure(
       units,
       classes,
       annotations,
+      exempt,
       cutInk,
       excluded,
       front,
       diagnostics,
-      maxMultiplyAdds: maxMacs,
+      maxMultiplyAdds: Math.max(0, budget.left),
       invalid,
     },
     diagnostics,
@@ -1423,40 +1873,56 @@ export function analyzeFigure(
 }
 
 /**
- * Bounding ink of seeded regions: ink within the stroke width of R, plus every ink protrusion
- * attached to it that ends within 4 stroke widths (an acute isometric corner tip is thicker than
- * a stroke), but not a stroke that runs on beyond that (a trace or another part's outline).
+ * The unbounded peel (§6.2): every pixel of the mask that the exterior reaches through closing-
+ * only ink or paper goes (comb fin gaps open to the outside, notches between stair steps); raw
+ * ink and the seeded faces stay.
  */
-function boundingInk(st: StateImage, R: Mask, rivals: readonly Mask[] = []): Mask {
-  // Ink nearer (Euclidean) to another unit's seeded regions belongs to that unit: on a diagonal
-  // edge the Chebyshev band reaches a rear part's stroke touching the outline from outside.
-  const near = (m: Mask, x: number, y: number, r: number): number => {
-    let best = Infinity;
-    for (let dy = -r; dy <= r; dy++)
-      for (let dx = -r; dx <= r; dx++)
-        if (has(m, x + dx, y + dy)) best = Math.min(best, dx * dx + dy * dy);
-    return best;
+function peel(st: StateImage, m: Mask, R: Mask): Mask {
+  return peelExterior(m, (x, y) => st.rawInk[y * st.W + x] !== 0 || has(R, x, y));
+}
+
+/**
+ * Bounding ink of seeded regions: ink whose distance to R is within the local stroke thickness
+ * (the stroke along the direction to R: s·max(1, |cos θ| + |sin θ|) for a square brush), plus
+ * every ink protrusion attached to it that ends within D = 4 strokes (an acute isometric corner
+ * tip) without running on (a trace or another part's outline runs on, and is dropped whole, so a
+ * stroke entering a concave notch leaves no stub). Ink nearer to another unit's seeded regions
+ * is that unit's; ink equally near (a shared outline, within 1 px) is resolved later by the
+ * measured front relation.
+ */
+function boundingInk(st: StateImage, R: Mask, rivals: readonly { R: Mask }[]): Mask {
+  const s = st.stroke;
+  const r = Math.ceil(1.5 * s) + 2;
+  const D = Math.max(6, 4 * s);
+  const close = rivals.filter((v) =>
+    overlaps(dilate(v.R, r, st.W, st.H), dilate(R, r, st.W, st.H)),
+  );
+  const within = (x: number, y: number, m: Mask): number | undefined => {
+    const n = nearest(m, x, y, r);
+    if (!n) return undefined;
+    const dx = Math.abs(x - n.x);
+    const dy = Math.abs(y - n.y);
+    const d = Math.sqrt(n.d2);
+    const thick = d > 0 ? s * Math.max(1, (dx + dy) / d) : s;
+    return d <= thick + 0.25 ? d : undefined;
   };
-  const reach = st.stroke + 1;
-  const D = Math.max(6, 4 * st.stroke);
+  const B0 = filter(inkMask(st.ink, st.W, dilate(R, r, st.W, st.H)), (x, y) => {
+    const mine = within(x, y, R);
+    if (mine === undefined) return false;
+    for (const v of close) {
+      const n = nearest(v.R, x, y, r);
+      if (!n) continue;
+      const dv = Math.sqrt(n.d2);
+      // Nearer to the other unit: its ink. Equally near (a shared outline): both keep it here;
+      // the drawing's measured front relation gives it to the unit in front when the template is
+      // built (template pixels under a unit in front leave it), so no sprite carries it twice.
+      if (dv < mine - 1) return false;
+    }
+    return true;
+  });
   const far = dilate(R, D, st.W, st.H);
-  const close = rivals.filter((v) => overlaps(dilate(v, 2 * reach, st.W, st.H), far));
-  // One union of the nearby rivals: each pixel costs at most two (4 reach + 1)^2 window scans.
-  const rival = close.length > 0 ? union(...close) : undefined;
-  const mineFirst = (x: number, y: number, r: number): boolean =>
-    !rival || near(rival, x, y, r) >= near(R, x, y, r);
-  const B00 = filter(inkMask(st.ink, st.W, dilate(R, st.stroke, st.W, st.H)), (x, y) =>
-    mineFirst(x, y, reach),
-  );
-  // The rest of the outline: ink connected to it inside the convex hull of the seeded regions and
-  // their outline, within D of the regions (where a face tapers into a corner its stroke is
-  // farther than one stroke width).
-  const hull = intersect(convexHull(union(R, B00)), far);
-  const B0 = filter(
-    union(B00, geodesic(st.ink, st.W, B00, hull)),
-    (x, y) => has(B00, x, y) || mineFirst(x, y, 2 * reach),
-  );
   const nearRim = dilate(R, D - 1, st.W, st.H);
+  const hull = dilate(convexHull(union(R, B0)), D, st.W, st.H);
   const band = filter(inkMask(st.ink, st.W, far), (x, y) => !has(B0, x, y));
   const touch = dilate(B0, 1, st.W, st.H);
   const lab = labelMask(band);
@@ -1468,8 +1934,9 @@ function boundingInk(st: StateImage, R: Mask, rivals: readonly Mask[] = []): Mas
       if (l === 0) continue;
       const x = i + band.x;
       const y = j + band.y;
-      if (!has(nearRim, x, y)) keep[l] = 0;
+      if (!has(nearRim, x, y) || !has(hull, x, y)) keep[l] = 0;
       if (has(touch, x, y)) attached[l] = 1;
+      if (keep[l] && close.some((v) => nearest(v.R, x, y, 1) !== undefined)) keep[l] = 0;
     }
   }
   const add = filter(band, (x, y) => {
@@ -1480,66 +1947,80 @@ function boundingInk(st: StateImage, R: Mask, rivals: readonly Mask[] = []): Mas
 }
 
 /**
- * Removes, from the outer boundary of a mask, pixels that are ink only because of the radius-1
- * closing (notches between a stroke's stair steps): they are paper in the drawing.
+ * Ink attached to `B` inside a polygon bound: components of the polygon's ink (minus B) that
+ * touch B and do not reach the bound's border.
  */
-function peelClosing(st: StateImage, m: Mask): Mask {
-  let cur = m;
-  for (let k = 0; k < 3; k++) {
-    const pad = within1(cur);
-    const out = filter(cur, (x, y) => {
-      const p = y * st.W + x;
-      if (!(st.ink[p] && !st.rawInk[p])) return true;
-      return has(pad, x - 1, y) && has(pad, x + 1, y) && has(pad, x, y - 1) && has(pad, x, y + 1);
-    });
-    if (count(out) === count(cur)) return cur;
-    cur = out;
-  }
-  return cur;
-}
-
-/** 8-connected labels of a local mask (1..count, raster order). */
-function labelMask(m: Mask): { labels: Int32Array; count: number } {
-  const labels = new Int32Array(m.w * m.h);
-  let n = 0;
-  const stack: number[] = [];
-  for (let p0 = 0; p0 < m.w * m.h; p0++) {
-    if (!m.data[p0] || labels[p0]) continue;
-    n++;
-    labels[p0] = n;
-    stack.push(p0);
-    while (stack.length > 0) {
-      const p = stack.pop()!;
-      const i = p % m.w;
-      const j = (p - i) / m.w;
-      for (let dj = -1; dj <= 1; dj++) {
-        for (let di = -1; di <= 1; di++) {
-          const a = i + di;
-          const b = j + dj;
-          if (a < 0 || b < 0 || a >= m.w || b >= m.h) continue;
-          const q = b * m.w + a;
-          if (!m.data[q] || labels[q]) continue;
-          labels[q] = n;
-          stack.push(q);
-        }
+function boundedInk(st: StateImage, B: Mask, bound: Mask): Mask {
+  const cand = filter(inkMask(st.ink, st.W, bound), (x, y) => !has(B, x, y));
+  const lab = labelMask(cand);
+  const keep = new Uint8Array(lab.count + 1).fill(1);
+  const attached = new Uint8Array(lab.count + 1);
+  const touch = dilate(B, 1, st.W, st.H);
+  for (let j = 0; j < cand.h; j++) {
+    for (let i = 0; i < cand.w; i++) {
+      const l = lab.labels[j * cand.w + i]!;
+      if (l === 0) continue;
+      const x = i + cand.x;
+      const y = j + cand.y;
+      if (has(touch, x, y)) attached[l] = 1;
+      for (const [dx, dy] of [
+        [-1, 0],
+        [1, 0],
+        [0, -1],
+        [0, 1],
+      ] as const) {
+        if (!has(bound, x + dx, y + dy)) keep[l] = 0;
       }
     }
   }
-  return { labels, count: n };
+  return union(
+    B,
+    filter(cand, (x, y) => {
+      const l = lab.labels[(y - cand.y) * cand.w + x - cand.x]!;
+      return keep[l] === 1 && attached[l] === 1;
+    }),
+  );
+}
+
+/** The polyline's own stroke: the ink runs through its samples, half a step along each side. */
+function ownStroke(g: AnnotationGeometry, W: number, H: number): Mask {
+  const pts: [number, number][] = [];
+  for (const s of g.samples) {
+    if (s.run === 0) continue;
+    for (let k = s.lo; k <= s.hi; k++) {
+      for (let t = -1; t <= 1; t++) {
+        pts.push([Math.round(s.x + k * s.nx + t * s.ux), Math.round(s.y + k * s.ny + t * s.uy)]);
+      }
+    }
+  }
+  if (pts.length === 0) return EMPTY;
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const [x, y] of pts) {
+    x0 = Math.min(x0, x);
+    y0 = Math.min(y0, y);
+    x1 = Math.max(x1, x);
+    y1 = Math.max(y1, y);
+  }
+  const b = clipBox({ x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }, W, H);
+  const m = blank(b.x, b.y, b.w, b.h);
+  for (const [x, y] of pts)
+    if (x >= b.x && y >= b.y && x < b.x + b.w && y < b.y + b.h)
+      m.data[(y - b.y) * b.w + x - b.x] = 1;
+  return m;
+}
+
+/** True when a class's units declare real through-holes (its enclosed paper stays transparent). */
+function u0holes(units: readonly Unit[], c: TemplateClass): boolean {
+  return c.units.some((i) => units[i]!.holes);
 }
 
 function boxUnion(a: Box, b: Box): Box {
   const x = Math.min(a.x, b.x);
   const y = Math.min(a.y, b.y);
   return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
-}
-
-/** A mask padded by one empty pixel on each side (so erosion treats the outside as unset). */
-function within1(m: Mask): Mask {
-  const out = blank(m.x - 1, m.y - 1, m.w + 2, m.h + 2);
-  for (let j = 0; j < m.h; j++)
-    for (let i = 0; i < m.w; i++) out.data[(j + 1) * out.w + i + 1] = m.data[j * m.w + i]!;
-  return out;
 }
 
 export function clipMask(m: Mask, W: number, H: number): Mask {

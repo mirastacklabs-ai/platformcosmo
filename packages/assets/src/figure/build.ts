@@ -8,7 +8,7 @@ import type { Raster } from "../raster.js";
 import type { Analysis, Unit } from "./analyze.js";
 import { inBox } from "./annotations.js";
 import type { FigureState } from "./manifest.js";
-import { blank, dilate, erode1, has, union, type Mask } from "./mask.js";
+import { blank, dilate, erode1, filter, has, union, type Mask } from "./mask.js";
 
 export interface FigureOutputPart {
   /** The unit's group id: the figure part id of the spec. */
@@ -42,7 +42,19 @@ export interface BaseModel {
 export function baseModel(a: Analysis): BaseModel {
   const b = a.base;
   const st = a.img[b]!;
-  const parts: Mask[] = a.units.map((u) => dilate(u.place[b]!.E, 1, st.W, st.H));
+  // Each moved part's expected silhouette and its part ink in the hull, dilated by 1 (the
+  // anti-aliased fringe goes with the part), where another drawing can restore what lies under
+  // it. With one drawing nothing can: the silhouette goes, and of the 1 px ring only fringe
+  // (pixels that are not raw ink), so touching strokes of the board stay.
+  const twoStates = a.states.length === 2;
+  const parts: Mask[] = a.units.map((u) => {
+    const p = u.place[b]!;
+    if (twoStates) return dilate(union(p.E, p.partInk), 1, st.W, st.H);
+    return union(
+      p.E,
+      filter(dilate(p.E, 1, st.W, st.H), (x, y) => !st.rawInk[y * st.W + x]),
+    );
+  });
   const allowB = a.annotations.filter((g) => g.state === b).flatMap((g) => g.allowances);
   const partInk = union(...a.units.map((u) => u.place[b]!.partInk));
   const annErase: Mask[] = a.annotations
@@ -65,8 +77,9 @@ export function baseModel(a: Analysis): BaseModel {
   if (!o) return { erase, recover: () => undefined };
   const so = a.img[o]!;
   const [dx, dy] = a.d[o]!;
+  // Recovery never copies a part (its silhouette or part ink, with its fringe) or an annotation.
   const blocked = union(
-    ...a.units.map((u) => u.place[o]!.E),
+    ...a.units.map((u) => dilate(union(u.place[o]!.E, u.place[o]!.partInk), 1, so.W, so.H)),
     ...a.annotations.filter((g) => g.state === o).map((g) => g.mask),
   );
   return {
@@ -90,7 +103,7 @@ export function buildOutputs(
   a: Analysis,
   options: BuildOptions = {},
 ): { outputs: FigureOutputs; filled: number } {
-  const sprites = a.classes.map((c) => cleanSprite(a, c.index));
+  const sprites = a.classes.map((c) => c.sprite);
   const b = a.base;
   const st = a.img[b]!;
   const model = baseModel(a);
@@ -121,59 +134,6 @@ export function buildOutputs(
   return { outputs: { base, sprites, parts: drawOrder(a, parts, sprites) }, filled };
 }
 
-/** The template sprite with non-part annotation ink inside it replaced (§6.4 rule applied to sprites). */
-function cleanSprite(a: Analysis, ci: number): Raster {
-  const c = a.classes[ci]!;
-  const tu = a.units[c.unit]!;
-  const s = c.state;
-  const st = a.img[s]!;
-  const tp = tu.place[s]!;
-  const ann = a.annotations.filter((g) => g.state === s);
-  if (ann.length === 0) return c.sprite;
-  const allow = ann.flatMap((g) => g.allowances);
-  const masks = union(...ann.map((g) => g.mask));
-  const out = new Uint8Array(c.sprite.data);
-  for (let j = 0; j < c.mask.h; j++) {
-    for (let i = 0; i < c.mask.w; i++) {
-      if (!c.mask.data[j * c.mask.w + i]) continue;
-      const x = i + tp.x;
-      const y = j + tp.y;
-      if (
-        !has(masks, x, y) ||
-        !st.rawInk[y * st.W + x] ||
-        has(tp.partInk, x, y) ||
-        allow.some((q) => inBox(q, x, y))
-      )
-        continue;
-      // Recover from another depiction of the class where that pixel is visible and not annotated.
-      let col: readonly [number, number, number] | undefined;
-      for (const ui of c.units) {
-        const u = a.units[ui]!;
-        for (const s2 of a.states) {
-          if (u === tu && s2 === s) continue;
-          const p = u.place[s2]!;
-          const qx = i + p.x;
-          const qy = j + p.y;
-          const st2 = a.img[s2]!;
-          if (!has(p.visible, qx, qy)) continue;
-          if (a.annotations.some((g) => g.state === s2 && has(g.mask, qx, qy))) continue;
-          const q = (qy * st2.W + qx) * 4;
-          col = [st2.image.data[q]!, st2.image.data[q + 1]!, st2.image.data[q + 2]!];
-          break;
-        }
-        if (col) break;
-      }
-      col ??= st.background;
-      const o = (j * c.mask.w + i) * 4;
-      out[o] = col[0];
-      out[o + 1] = col[1];
-      out[o + 2] = col[2];
-    }
-  }
-  return { width: c.sprite.width, height: c.sprite.height, data: out };
-}
-
-/** Silhouette ring template of a sprite: 2 px inside (dark) and 2 px outside (light). */
 export interface RingTemplate {
   /** Offsets from the sprite's top-left (the ring reaches 2 px outside it). */
   readonly dx: Int32Array;

@@ -42,7 +42,22 @@ export interface GenFigure {
   readonly offset: readonly [number, number];
   readonly base: GenState;
   readonly units: readonly string[];
+  readonly scale: number;
+  readonly stroke: number;
+  readonly aa?: boolean;
 }
 export declare const PRESET_NAMES: readonly string[];
-export declare function figure(name: string, options?: { pad?: number }): GenFigure;
+/** Presets drawn at stroke 2 only (1 px comb fins). */
+export declare const STROKE2_ONLY: readonly string[];
+export interface GenOptions {
+  /** Integer geometry scale (default 1). */
+  scale?: number;
+  /** Outline brush in px (default 2). */
+  stroke?: number;
+  /** Draw at twice the size and box-downsample (anti-aliased edges). */
+  aa?: boolean;
+  /** Blank margin in px on every side. */
+  pad?: number;
+}
+export declare function figure(name: string, options?: GenOptions): GenFigure;
 export declare function png(r: GenRaster): Uint8Array;

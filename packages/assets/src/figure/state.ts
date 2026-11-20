@@ -4,6 +4,7 @@
  * and the typical stroke width.
  */
 import { label, type Labels } from "../cc.js";
+import type { LuminancePlane } from "../locate.js";
 import { luminanceOverWhite, type Raster } from "../raster.js";
 import type { FigureState } from "./manifest.js";
 
@@ -14,6 +15,8 @@ export interface StateImage {
   readonly H: number;
   /** Luminance over white, 0..255. */
   readonly lum: Uint8Array;
+  /** The same luminance as a float plane, computed once and passed to every `locate`. */
+  readonly plane: LuminancePlane;
   /** Ink threshold: ink is luminance below it. */
   readonly threshold: number;
   /** Raw ink (before closing). */
@@ -177,6 +180,7 @@ export function analyzeState(
     W,
     H,
     lum,
+    plane: { width: W, height: H, data: Float32Array.from(lum) },
     threshold,
     rawInk,
     ink,

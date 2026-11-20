@@ -1,20 +1,20 @@
 /**
  * Annotation geometry (ingestion §6.5 rule 3): measured band of each arrow and leader polyline,
- * arrowhead detection, contact allowances, and the annotation masks that are erased from the
- * base and excluded from the gate's comparisons.
+ * arrowhead detection, and the annotation masks that are erased from the base and excluded from
+ * the gate's comparisons. Contact allowances are placed by the analysis (they need the parts).
  */
 import type { Annotation, FigureState } from "./manifest.js";
 import { blank, capsules, dilate, rectMask, union, type Box, type Mask } from "./mask.js";
 
 /** Samples every 2 px along a polyline. */
-const STEP = 2;
+export const STEP = 2;
 /** Longest perpendicular walk on each side of a sample. */
 const MAX_WALK = 32;
 
 export interface Sample {
   readonly x: number;
   readonly y: number;
-  /** Unit normal. */
+  /** Unit normal and tangent. */
   readonly nx: number;
   readonly ny: number;
   readonly ux: number;
@@ -38,16 +38,18 @@ export interface AnnotationGeometry {
   readonly samples: readonly Sample[];
   readonly medianRun: number;
   readonly onInk: number;
-  /** Measured band half-width, (median run + 2) / 2. */
+  /** Measured band half-width, (stroke run + 2) / 2 (the stroke run: lower quartile of the runs). */
   readonly halfWidth: number;
+  /** Measured band width w = median run + 2 (the side of a contact allowance). */
+  readonly width: number;
   /** End index (0 = first point, 1 = last) of the detected arrowhead. */
-  readonly head?: 0 | 1;
-  /** The measured band (polylines) or the rectangle (text). */
-  readonly band: Mask;
+  head?: 0 | 1;
+  /** The measured band (polylines; around a head, the wedge's own ink) or the rectangle (text). */
+  band: Mask;
   /** The annotation mask: band (or rect) dilated by 2 px. */
-  readonly mask: Mask;
-  /** Contact allowance squares (at most 2: the polyline's ends). */
-  readonly allowances: readonly Box[];
+  mask: Mask;
+  /** Contact allowances: w x w squares where an end or crossing meets a part (at most 2). */
+  allowances: Box[];
   /** Geometry-level problems (each becomes an `asset/annotation-invalid`). */
   readonly problems: string[];
 }
@@ -94,13 +96,14 @@ function measure(
   W: number,
   H: number,
   p: { x: number; y: number; ux: number; uy: number; s: number },
+  closed?: Uint8Array,
 ): Sample {
   const nx = -p.uy;
   const ny = p.ux;
-  const at = (k: number): boolean => {
+  const at = (k: number, m: Uint8Array = ink): boolean => {
     const x = Math.round(p.x + k * nx);
     const y = Math.round(p.y + k * ny);
-    return x >= 0 && y >= 0 && x < W && y < H && ink[y * W + x] !== 0;
+    return x >= 0 && y >= 0 && x < W && y < H && m[y * W + x] !== 0;
   };
   let k0: number | undefined;
   for (const k of [0, 1, -1, 2, -2]) {
@@ -109,7 +112,13 @@ function measure(
       break;
     }
   }
-  if (k0 === undefined) return { ...p, nx, ny, run: 0, lo: 0, hi: 0 };
+  if (k0 === undefined) {
+    // On ink only after the closing (a light anti-aliased pixel): on the stroke, 1 px.
+    if (closed) {
+      for (const k of [0, 1, -1]) if (at(k, closed)) return { ...p, nx, ny, run: 1, lo: k, hi: k };
+    }
+    return { ...p, nx, ny, run: 0, lo: 0, hi: 0 };
+  }
   let hi = k0;
   while (hi - k0 < MAX_WALK && at(hi + 1)) hi++;
   let lo = k0;
@@ -117,39 +126,14 @@ function measure(
   return { ...p, nx, ny, run: hi - lo + 1, lo, hi };
 }
 
-function median(v: readonly number[]): number {
+/**
+ * The stroke's own width: the lower quartile of the runs. A leader that crosses busy drawing
+ * meets wide runs at every crossing; at least a quarter of its samples lie on its own stroke.
+ */
+function strokeRun(v: readonly number[]): number {
   if (v.length === 0) return 0;
   const s = [...v].sort((a, b) => a - b);
-  return s[(s.length - 1) >> 1]!;
-}
-
-/**
- * Arrowhead at one end: within the last 3w px the run widens to at least 2x the median run and
- * narrows again toward the tip (a filled wedge; an open wedge closes into one under the radius-1
- * closing when its arms are at most 2 px apart near the tip, and otherwise is measured by its
- * span: the outermost ink along the normal within 3w).
- */
-function hasHead(
-  samples: readonly Sample[],
-  end: 0 | 1,
-  med: number,
-  w: number,
-  span: (s: Sample, lim: number) => number,
-): boolean {
-  if (med <= 0) return false;
-  const total = samples[samples.length - 1]?.s ?? 0;
-  const win = samples
-    .filter((s) => (end === 0 ? s.s : total - s.s) <= 3 * w + 1e-9)
-    .sort((a, b) => (end === 0 ? a.s - b.s : b.s - a.s));
-  for (const profile of [(s: Sample) => s.run, (s: Sample) => span(s, Math.ceil(3 * w))]) {
-    const p = win.map(profile);
-    let imax = -1;
-    for (let i = 0; i < p.length; i++) if (imax < 0 || p[i]! > p[imax]!) imax = i;
-    if (imax <= 0 || p[imax]! < 2 * med) continue;
-    const narrow = Math.max(med, p[imax]! / 2);
-    for (let j = 0; j < imax; j++) if (p[j]! <= narrow) return true;
-  }
-  return false;
+  return s[(s.length - 1) >> 2]!;
 }
 
 export interface AnnotationInput {
@@ -160,12 +144,17 @@ export interface AnnotationInput {
   readonly rect?: Box;
 }
 
-/** Geometry of one annotation in its declared state (`ink` = that state's closed ink). */
-export function annotationGeometry(
+/**
+ * First pass: samples, measured band and mask (no head, no allowances yet). Runs are measured on
+ * the raw ink `ink` (the closing would merge a stroke with an outline 2 px away); `closed` decides
+ * only whether a sample is on ink at all.
+ */
+export function measureAnnotation(
   input: AnnotationInput,
   ink: Uint8Array,
   W: number,
   H: number,
+  closed?: Uint8Array,
 ): AnnotationGeometry {
   const a = input.annotation;
   const problems: string[] = [];
@@ -182,6 +171,7 @@ export function annotationGeometry(
       medianRun: 0,
       onInk: 0,
       halfWidth: 0,
+      width: 0,
       band,
       mask: dilate(band, 2, W, H),
       allowances: [],
@@ -189,13 +179,11 @@ export function annotationGeometry(
     };
   }
   const pts = input.points!;
-  const raw = samplePolyline(pts);
-  const samples = raw.map((p) => measure(ink, W, H, p));
+  const samples = samplePolyline(pts).map((p) => measure(ink, W, H, p, closed));
   const runs = samples.filter((s) => s.run > 0).map((s) => s.run);
-  const med = median(runs);
+  const med = strokeRun(runs);
   const onInk = samples.length > 0 ? runs.length / samples.length : 0;
   const hw = (med + 2) / 2;
-  const w = 2 * hw;
   if (onInk < 0.8)
     problems.push(
       `the polyline is not on ink (${Math.round(onInk * 100)}% of samples, 80% needed)`,
@@ -205,101 +193,44 @@ export function annotationGeometry(
   if (a.width !== undefined && med > 0 && (a.width > 2 * med || 2 * a.width < med)) {
     problems.push(`the declared width ${a.width} is not within 2x of the measured ${med} px`);
   }
-  const span = (s: Sample, lim: number): number => {
-    let mn = Infinity;
-    let mx = -Infinity;
-    for (let k = -lim; k <= lim; k++) {
-      const x = Math.round(s.x + k * s.nx);
-      const y = Math.round(s.y + k * s.ny);
-      if (x >= 0 && y >= 0 && x < W && y < H && ink[y * W + x]) {
-        if (k < mn) mn = k;
-        if (k > mx) mx = k;
+  // The band follows the stroke as drawn: the capsule around the declared line plus the
+  // measured runs (within hw + 2 of it, and only where the run is the stroke's, not a crossing).
+  const runs2: [number, number][] = [];
+  for (const smp of samples) {
+    if (smp.run === 0 || smp.run > med + 1) continue;
+    const lim = hw + 2;
+    for (let k = Math.max(smp.lo, -lim); k <= Math.min(smp.hi, lim); k++) {
+      for (let t = -1; t <= 1; t++) {
+        runs2.push([
+          Math.round(smp.x + k * smp.nx + t * smp.ux),
+          Math.round(smp.y + k * smp.ny + t * smp.uy),
+        ]);
       }
     }
-    return mx >= mn ? mx - mn + 1 : 0;
-  };
-  let head: 0 | 1 | undefined;
-  if (a.kind === "arrow") {
-    if (hasHead(samples, 1, med, w, span)) head = 1;
-    else if (hasHead(samples, 0, med, w, span)) head = 0;
-    else problems.push("no arrowhead was detected at either end");
   }
   let band = capsules(pts, hw, W, H);
-  let headStamp: Mask | undefined;
-  // A head on a stroke wider than 12 px is already invalid; it is not stamped (bounded work).
-  if (head !== undefined && med <= 12) {
-    // The band follows the measured wedge: each head sample's run (or span), thickened by 1 px.
-    const total = samples[samples.length - 1]?.s ?? 0;
-    const win = samples.filter((s) => (head === 0 ? s.s : total - s.s) <= 3 * w + 1e-9);
-    const stampPts: [number, number][] = [];
-    for (const s of win) {
-      const lim = Math.ceil(3 * w);
-      let lo = s.lo;
-      let hi = s.hi;
-      if (s.run < 2 * med) {
-        // Open wedge: use the span.
-        let mn = Infinity;
-        let mx = -Infinity;
-        for (let k = -lim; k <= lim; k++) {
-          const x = Math.round(s.x + k * s.nx);
-          const y = Math.round(s.y + k * s.ny);
-          if (x >= 0 && y >= 0 && x < W && y < H && ink[y * W + x]) {
-            mn = Math.min(mn, k);
-            mx = Math.max(mx, k);
-          }
-        }
-        if (mx >= mn && mx - mn + 1 >= 2 * med) {
-          lo = mn;
-          hi = mx;
-        }
-      }
-      for (let k = lo - 1; k <= hi + 1; k++) {
-        for (let t = -1; t <= 1; t++) {
-          stampPts.push([
-            Math.round(s.x + k * s.nx + t * s.ux),
-            Math.round(s.y + k * s.ny + t * s.uy),
-          ]);
-        }
-      }
+  if (runs2.length > 0) {
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const [x, y] of runs2) {
+      x0 = Math.min(x0, x);
+      y0 = Math.min(y0, y);
+      x1 = Math.max(x1, x);
+      y1 = Math.max(y1, y);
     }
-    if (stampPts.length > 0) {
-      let x0 = Infinity;
-      let y0 = Infinity;
-      let x1 = -Infinity;
-      let y1 = -Infinity;
-      for (const [x, y] of stampPts) {
-        if (x < x0) x0 = x;
-        if (y < y0) y0 = y;
-        if (x > x1) x1 = x;
-        if (y > y1) y1 = y;
-      }
-      x0 = Math.max(0, x0);
-      y0 = Math.max(0, y0);
-      x1 = Math.min(W - 1, x1);
-      y1 = Math.min(H - 1, y1);
-      if (x1 >= x0 && y1 >= y0) {
-        const m = blank(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
-        for (const [x, y] of stampPts) {
-          if (x >= x0 && y >= y0 && x <= x1 && y <= y1) m.data[(y - y0) * m.w + x - x0] = 1;
-        }
-        headStamp = m;
-        band = union(band, m);
-      }
+    x0 = Math.max(0, x0);
+    y0 = Math.max(0, y0);
+    x1 = Math.min(W - 1, x1);
+    y1 = Math.min(H - 1, y1);
+    if (x1 >= x0 && y1 >= y0) {
+      const m = blank(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+      for (const [x, y] of runs2)
+        if (x >= x0 && y >= y0 && x <= x1 && y <= y1) m.data[(y - y0) * m.w + x - x0] = 1;
+      band = union(band, m);
     }
   }
-  const mask = headStamp
-    ? union(capsules(pts, hw + 2, W, H), dilate(headStamp, 2, W, H))
-    : capsules(pts, hw + 2, W, H);
-  // A w x w square around each end, plus a 2 px margin: rasterized ends and the closing's
-  // bridges between a polyline and the outline it meets stay inside it.
-  const half = Math.ceil(hw) + 2;
-  const ends = [pts[0]!, pts[pts.length - 1]!];
-  const allowances: Box[] = ends.map(([x, y]) => ({
-    x: Math.round(x) - half,
-    y: Math.round(y) - half,
-    w: 2 * half + 1,
-    h: 2 * half + 1,
-  }));
   return {
     index: input.index,
     kind: a.kind,
@@ -309,12 +240,150 @@ export function annotationGeometry(
     medianRun: med,
     onInk,
     halfWidth: hw,
-    ...(head !== undefined ? { head } : {}),
+    width: Math.ceil(2 * hw),
     band,
-    mask,
-    allowances,
+    mask: union(capsules(pts, hw + 2, W, H), dilate(band, 2, W, H)),
+    allowances: [],
     problems,
   };
+}
+
+/**
+ * Arrowhead at one end (rule 3): the ink 8-connected to the shaft's run within the last 3w px,
+ * excluding `skip` pixels (part outlines and static drawing), measured across the polyline at
+ * each sample. A head widens to at least 2x the median run and narrows (never widening again)
+ * toward the tip; filled and open wedges alike, because the arms of an open wedge are connected
+ * to the shaft. A component that runs out of the window sideways is a crossing stroke, not a
+ * head. Returns the wedge's pixels, or undefined.
+ */
+function wedgeAt(
+  g: AnnotationGeometry,
+  end: 0 | 1,
+  raw: Uint8Array,
+  W: number,
+  H: number,
+  skip: (x: number, y: number) => boolean,
+): Mask | undefined {
+  const med = g.medianRun;
+  if (med <= 0) return undefined;
+  const w = g.width;
+  const total = g.samples[g.samples.length - 1]?.s ?? 0;
+  const win = g.samples
+    .filter((s) => (end === 0 ? s.s : total - s.s) <= 3 * w + 1e-9)
+    .sort((a, b) => (end === 0 ? a.s - b.s : b.s - a.s));
+  if (win.length < 3) return undefined;
+  const L = Math.ceil(3 * w);
+  // The window: every pixel across each sample (and half a step along it), lateral |k| <= L.
+  const inWin = new Map<number, number>();
+  const lateral: { idx: number; k: number }[][] = win.map(() => []);
+  win.forEach((s, i) => {
+    for (let t = -1; t <= 1; t++) {
+      for (let k = -L; k <= L; k++) {
+        const x = Math.round(s.x + k * s.nx + t * s.ux);
+        const y = Math.round(s.y + k * s.ny + t * s.uy);
+        if (x < 0 || y < 0 || x >= W || y >= H) continue;
+        const idx = y * W + x;
+        const prev = inWin.get(idx);
+        if (prev === undefined || Math.abs(k) < prev) inWin.set(idx, Math.abs(k));
+        if (t === 0) lateral[i]!.push({ idx, k });
+      }
+    }
+  });
+  const ok = (idx: number): boolean =>
+    inWin.has(idx) && raw[idx] !== 0 && !skip(idx % W, (idx - (idx % W)) / W);
+  // Seed: the shaft run at the innermost window sample.
+  const inner = win[win.length - 1]!;
+  const comp = new Set<number>();
+  const stack: number[] = [];
+  for (let k = inner.lo; k <= inner.hi; k++) {
+    const idx = Math.round(inner.y + k * inner.ny) * W + Math.round(inner.x + k * inner.nx);
+    if (ok(idx) && !comp.has(idx)) {
+      comp.add(idx);
+      stack.push(idx);
+    }
+  }
+  while (stack.length > 0) {
+    const p = stack.pop()!;
+    const x = p % W;
+    const y = (p - x) / W;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const a = x + dx;
+        const b = y + dy;
+        if (a < 0 || b < 0 || a >= W || b >= H) continue;
+        const q = b * W + a;
+        if (comp.has(q) || !ok(q)) continue;
+        comp.add(q);
+        stack.push(q);
+      }
+    }
+  }
+  if (comp.size === 0) return undefined;
+  for (const idx of comp) if ((inWin.get(idx) ?? 0) >= L - 1) return undefined;
+  const widths = lateral.map((row) => {
+    let mn = Infinity;
+    let mx = -Infinity;
+    for (const { idx, k } of row) {
+      if (!comp.has(idx)) continue;
+      if (k < mn) mn = k;
+      if (k > mx) mx = k;
+    }
+    return mx >= mn ? mx - mn + 1 : 0;
+  });
+  let imax = 0;
+  for (let i = 1; i < widths.length; i++) if (widths[i]! > widths[imax]!) imax = i;
+  if (imax === 0 || widths[imax]! < 2 * med) return undefined;
+  for (let j = 1; j <= imax; j++) if (widths[j - 1]! > widths[j]! + 1) return undefined;
+  const narrow = Math.max(med, widths[imax]! / 2);
+  if (!widths.slice(0, imax).some((v) => v <= narrow)) return undefined;
+  let x0 = W;
+  let y0 = H;
+  let x1 = -1;
+  let y1 = -1;
+  for (const idx of comp) {
+    const x = idx % W;
+    const y = (idx - x) / W;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  const m = blank(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+  for (const idx of comp) {
+    const x = idx % W;
+    const y = (idx - x) / W;
+    m.data[(y - y0) * m.w + x - x0] = 1;
+  }
+  return m;
+}
+
+/**
+ * Second pass for arrows: finds the arrowhead (either end; the spec's "free end" contradicts
+ * "an arrow from the background to a part's edge passes", so the head may touch a part) and lets
+ * the band and mask follow the wedge's own ink.
+ */
+export function detectHead(
+  g: AnnotationGeometry,
+  raw: Uint8Array,
+  W: number,
+  H: number,
+  skip: (x: number, y: number) => boolean,
+): void {
+  if (g.kind !== "arrow" || g.medianRun > 12) {
+    if (g.kind === "arrow" && g.medianRun > 12)
+      g.problems.push("no arrowhead was detected at either end");
+    return;
+  }
+  for (const end of [1, 0] as const) {
+    const wedge = wedgeAt(g, end, raw, W, H, skip);
+    if (!wedge) continue;
+    g.head = end;
+    const stamp = dilate(wedge, 1, W, H);
+    g.band = union(g.band, stamp);
+    g.mask = union(g.mask, dilate(stamp, 2, W, H));
+    return;
+  }
+  g.problems.push("no arrowhead was detected at either end");
 }
 
 /** Chebyshev distance from a point to a box (0 inside). */

@@ -7,10 +7,16 @@
 import type { Diagnostic } from "@platformcosmo/core";
 import { encodePng } from "../png.js";
 import { err, type OpResult, type Raster } from "../raster.js";
-import { analyzeFigure, type FigureOptions, type FigureSources } from "./analyze.js";
+import {
+  analyzeFigure,
+  type FigureLimits,
+  type FigureOptions,
+  type FigureSources,
+} from "./analyze.js";
 import { buildOutputs, type FigureOutputs } from "./build.js";
 import { runGate, type FigureReport } from "./gate.js";
-import { tight } from "./mask.js";
+import type { FigureState } from "./manifest.js";
+import { tight, type Mask } from "./mask.js";
 
 export { validateManifest, MANIFEST_LIMITS, STATES } from "./manifest.js";
 export type {
@@ -77,7 +83,7 @@ export interface FigureResult {
   readonly outputs: FigureOutputs;
   readonly report: FigureReport;
   readonly fragment: FigureFragment;
-  /** base.png, sprite-1.png, ... and report.json (sorted keys). */
+  /** base.png, sprite-1.png, ..., report.json and fragment.json (sorted keys). */
   readonly files: readonly FigureFile[];
 }
 
@@ -195,6 +201,7 @@ export function runFigure(
       { name: "base.png", bytes: encodePng(outputs.base) },
       ...outputs.sprites.map((s, i) => ({ name: `sprite-${i + 1}.png`, bytes: encodePng(s) })),
       { name: "report.json", bytes: new TextEncoder().encode(stableStringify(report)) },
+      { name: "fragment.json", bytes: new TextEncoder().encode(stableStringify(fragment)) },
     ];
     return { value: { outputs, report, fragment, files }, diagnostics: [...report.diagnostics] };
   } catch (e) {
@@ -245,7 +252,11 @@ export interface CutoutResult {
 }
 
 /** `assets cutout`: silhouette segmentation of one part in one image (§6.2). */
-export function cutout(image: Raster, options: CutoutOptions): OpResult<CutoutResult> {
+export function cutout(
+  image: Raster,
+  options: CutoutOptions,
+  limits: FigureLimits = {},
+): OpResult<CutoutResult> {
   try {
     const manifest = {
       sources: { exploded: "image.png" },
@@ -261,7 +272,7 @@ export function cutout(image: Raster, options: CutoutOptions): OpResult<CutoutRe
         },
       ],
     };
-    const an = analyzeFigure(manifest, { "image.png": image });
+    const an = analyzeFigure(manifest, { "image.png": image }, limits);
     if (!an.value) return { diagnostics: an.diagnostics };
     const c = an.value.classes[0]!;
     const m = tight(c.mask);
@@ -281,6 +292,104 @@ export function cutout(image: Raster, options: CutoutOptions): OpResult<CutoutRe
       value: { sprite, x: m.x, y: m.y },
       diagnostics: an.diagnostics.filter((d) => d.code !== "asset/hull-uncertain"),
     };
+  } catch (e) {
+    return { diagnostics: [internal(e)] };
+  }
+}
+
+/**
+ * The outputs a spec fragment describes (`assets check` reads report.json or fragment.json and
+ * the PNGs): `images` maps each image `src` of the fragment to its decoded raster.
+ */
+export function outputsFromFragment(
+  fragment: unknown,
+  images: Readonly<Record<string, Raster>>,
+): OpResult<FigureOutputs> {
+  const bad = (msg: string): OpResult<FigureOutputs> => ({
+    diagnostics: [err("asset/bad-option", msg, { params: { option: "outputs" } })],
+  });
+  try {
+    const f = fragment as FigureFragment;
+    if (!f || !Array.isArray(f.images) || !Array.isArray(f.figures) || f.figures.length !== 1)
+      return bad("the fragment must have images and exactly one figure");
+    const fig = f.figures[0]!;
+    if (!fig || typeof fig.base !== "string" || !Array.isArray(fig.parts))
+      return bad("the figure needs a base and parts");
+    if (f.images.length > 65 || fig.parts.length > 64)
+      return bad("the fragment has too many images or parts");
+    const srcOf = new Map<string, string>();
+    for (const im of f.images) {
+      if (!im || typeof im.id !== "string" || typeof im.src !== "string")
+        return bad("every image needs an id and a src");
+      srcOf.set(im.id, im.src);
+    }
+    const raster = (id: string): Raster | undefined => {
+      const src = srcOf.get(id);
+      return src !== undefined && Object.prototype.hasOwnProperty.call(images, src)
+        ? images[src]
+        : undefined;
+    };
+    const base = raster(fig.base);
+    if (!base) return bad(`no image for the base "${String(fig.base).slice(0, 64)}"`);
+    const spriteIds: string[] = [];
+    const sprites: Raster[] = [];
+    const parts = [];
+    for (const p of fig.parts) {
+      if (!p || typeof p.id !== "string" || typeof p.image !== "string")
+        return bad("every part needs an id and an image");
+      let k = spriteIds.indexOf(p.image);
+      if (k < 0) {
+        const r = raster(p.image);
+        if (!r) return bad(`no image for "${p.image.slice(0, 64)}"`);
+        k = sprites.length;
+        spriteIds.push(p.image);
+        sprites.push(r);
+      }
+      parts.push({
+        id: p.id,
+        sprite: k,
+        seat: p.seat,
+        exploded: p.exploded,
+        ...(p.z !== undefined ? { z: p.z } : {}),
+      });
+    }
+    return { value: { base, sprites, parts }, diagnostics: [] };
+  } catch (e) {
+    return { diagnostics: [internal(e)] };
+  }
+}
+
+/**
+ * `--show-exclusions` (§6.5 rule 5): each drawing with every excluded pixel (the annotation
+ * masks of both states, mapped) tinted red, for the user to see what the gate did not compare.
+ */
+export function exclusionOverlay(
+  manifest: unknown,
+  sources: FigureSources,
+  options: FigureOptions = {},
+): OpResult<Partial<Record<FigureState, Raster>>> {
+  try {
+    const an = analyzeFigure(manifest, sources, options);
+    if (!an.value) return { diagnostics: an.diagnostics };
+    const out: Partial<Record<FigureState, Raster>> = {};
+    const value = an.value;
+    for (const s of value.states) {
+      const st = value.img[s]!;
+      const data = new Uint8Array(st.image.data);
+      const X: Mask = value.excluded[s]!;
+      for (let j = 0; j < X.h; j++) {
+        for (let i = 0; i < X.w; i++) {
+          if (!X.data[j * X.w + i]) continue;
+          const o = ((j + X.y) * st.W + i + X.x) * 4;
+          data[o] = Math.round((data[o]! + 255) / 2);
+          data[o + 1] = Math.round(data[o + 1]! / 2);
+          data[o + 2] = Math.round(data[o + 2]! / 2);
+          data[o + 3] = 255;
+        }
+      }
+      out[s] = { width: st.W, height: st.H, data };
+    }
+    return { value: out, diagnostics: an.diagnostics };
   } catch (e) {
     return { diagnostics: [internal(e)] };
   }

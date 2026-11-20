@@ -427,6 +427,13 @@ declared away (§6.5 rules 2–4), and anything not declared is drawing and must
    regions (the part's enclosed whites: opaque, unless `holes`), plus the ink bounding them;
    regions containing another part's seeds are excluded; the rough polygon and the shape prior
    (the isometric box or cylinder hull fitted to the seeded regions) bound the result.
+   **Shape prior.** `box` is the isometric box hull of the seeded mask: the smallest hexagon with
+   vertical sides and ±30° edges that contains it. `cylinder` is the convex hull of the seeded
+   mask and its mirror image about its vertical axis. `none` adds nothing. The prior bounds the
+   mask where the part stands alone in no state, and it is part of every hull (step 6), so a
+   stroke that segmentation missed inside the part's box still counts as the part's for the
+   annotation rules (§6.5 rule 2) even for a part that never stands alone. It also estimates
+   what a hidden part should cover when no depiction shows it (§6.3, `asset/occluded-unrecovered`).
 4. Ink shared by two parts (a common outline) goes to the part in front in that state (lower
    on screen, or the manifest order when equal).
 5. `--mask rect` exists only for diagnostics; the gate rejects rectangle masks that include
@@ -519,15 +526,21 @@ until the gate passes:
    part's hull over its length and fails rule 2.
    **Shape of annotations.** Every **leader** must end (at its free end, the end without a part
    contact) within 4 px of a declared `text` rectangle of the same state (a callout number,
-   label or bubble). Every **arrow** must have a detected **arrowhead** at its free end: within
-   the last `3w` px the ink run perpendicular to the polyline widens to at least 2× the median
-   run and narrows again toward the tip (filled or open wedge), deterministically measured on
-   the same samples. A stroke that is neither (a fin, an edge, a crease) cannot be declared at
+   label or bubble). Every **arrow** must have a detected **arrowhead** at **either** end (the
+   tip may touch a part: an arrow from the background to a part's edge has its head at the part,
+   so the "free end" of arrows is not required): within the last `3w` px the arrow's own ink,
+   8-connected to the shaft's run and excluding part outlines and the static drawing, widens
+   across the polyline to at least 2× the stroke run and narrows again toward the tip without
+   widening (filled or open wedge), deterministically measured on the same samples; ink that
+   runs out of that window sideways is a crossing stroke, not a head. The band around a head is
+   the wedge's own ink. A stroke that is neither (a fin, an edge, a crease) cannot be declared at
    all.
-4. **Cumulative caps per part.** For each part and state, the pixels of its seated and exploded
-   masks and of its part ink (rule 2) that lie inside the part's hull and inside
-   any annotation, counted once over the union of all annotations and excluding the contact
-   allowances, must be ≤ 16 px. Many small annotations cannot add up to a hidden part. Text
+4. **Cumulative caps per part.** For each part and state, the pixels of **both** its masks in
+   that state's frame (the mask placed there, and the other state's mask mapped into this frame by
+   the alignment: in the exploded drawing that is the seat location) and of its part ink (rule 2,
+   inside the part's hull), inside any annotation mask of that state, counted once over the
+   union of all annotations and excluding each annotation's own contact allowances (dilated like
+   the mask), must be ≤ 16 px. Many small annotations cannot add up to a hidden part. Text
    rectangles must also contain ink and be ≤ 2% of the figure each.
    Residual risk, stated in the report: only for a part that stands alone in no state (its hull
    then comes from mask and prior only, `asset/hull-uncertain`) could a missed stroke outside
@@ -557,7 +570,7 @@ still reported.
 | transparency holes    | a transparent region of a sprite fully enclosed by its opaque mask, unless `holes`                                                                                                                                                                                                                                                                                                                                                                                                                     | `asset/mask-hole` (error)                                       |
 | rectangle masks       | a mask equal to its bbox while the bbox contains ink of another part's regions                                                                                                                                                                                                                                                                                                                                                                                                                         | `asset/rect-mask` (error)                                       |
 | group connectivity    | a group's mask is not one connected component (unless `allowDisjoint`)                                                                                                                                                                                                                                                                                                                                                                                                                                 | `asset/group-disconnected` (error)                              |
-| instance assignment   | two instances assigned to the same `locate` peak, or a swap that lowers the residual                                                                                                                                                                                                                                                                                                                                                                                                                   | `asset/instance-swap` (error)                                   |
+| instance assignment   | two instances assigned to the same `locate` peak, or a swap that fits the seeds and `nearest` hints better (identical sprites render the same, so the residual cannot decide); `asset/ambiguous` (warning) where neither instance has seeds or a hint in a drawn state                                                                                                                                                                                                                                 | `asset/instance-swap` (error)                                   |
 | unrecovered base      | erased pixels filled with background (no other depiction) that are **visible in either re-render**, i.e. not covered by a sprite in that state, with a component > 24 px                                                                                                                                                                                                                                                                                                                               | `asset/base-unrecovered` (error); invisible fills are info      |
 | unrecovered occlusion | pixels of a part hidden in its source depiction and not recovered (§6.3), visible in the exploded re-render                                                                                                                                                                                                                                                                                                                                                                                            | `asset/occluded-unrecovered` (error when > 24 px, else warning) |
 | annotation residual   | ink left in the base inside a declared annotation mask (arrow or leader polyline, callout text rectangle)                                                                                                                                                                                                                                                                                                                                                                                              | `asset/arrow-residual` (error)                                  |

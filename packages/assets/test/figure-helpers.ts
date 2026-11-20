@@ -1,6 +1,11 @@
 /** Shared helpers for the figure pipeline tests (fixtures come from tests/fixtures/figures/gen.mjs). */
 import { expect } from "vitest";
-import { figure, type GenFigure, type GenMask } from "../../../tests/fixtures/figures/gen.mjs";
+import {
+  figure,
+  type GenFigure,
+  type GenMask,
+  type GenOptions,
+} from "../../../tests/fixtures/figures/gen.mjs";
 import {
   checkFigure,
   runFigure,
@@ -20,12 +25,17 @@ export function sourcesOf(f: GenFigure): Record<string, Raster> {
 
 const cache = new Map<string, { f: GenFigure; result: FigureResult }>();
 
+/** Generator options of a variant tag: "" (stroke 2), "s5" (scale 2, stroke 5), "aa". */
+export function variant(tag: string): GenOptions {
+  return tag === "s5" ? { scale: 2, stroke: 5 } : tag === "aa" ? { aa: true } : {};
+}
+
 /** Runs the correct pipeline on a preset once (cached); asserts the analysis succeeded. */
-export function run(name: string, pad = 0): { f: GenFigure; result: FigureResult } {
-  const key = `${name}:${pad}`;
+export function run(name: string, pad = 0, tag = ""): { f: GenFigure; result: FigureResult } {
+  const key = `${name}:${pad}:${tag}`;
   const hit = cache.get(key);
   if (hit) return hit;
-  const f = figure(name, { pad });
+  const f = figure(name, { ...variant(tag), ...(pad ? { pad } : {}) });
   const r = runFigure(f.manifest, sourcesOf(f));
   expect(r.value, JSON.stringify(r.diagnostics)).toBeDefined();
   const v = { f, result: r.value! };
