@@ -22,8 +22,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    # Docs-only PRs skip the engine jobs (skipped jobs satisfy required checks; a workflow-level
+    # paths filter would not). Push, dispatch and every non-PR event always run everything.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      engine: ${{ steps.diff.outputs.engine }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          engine=true
+          if [ "$EVENT" = "pull_request" ]; then
+            files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+            engine=false
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              case "$f" in
+                plugin/*|packages/*|schema/*|examples/*|tests/*|docs/design/*) echo "engine file: $f"; engine=true ;;
+                docs/*|*.md|LICENSE*|NOTICE|scripts/deploy-docs.sh|.github/ISSUE_TEMPLATE/*) ;;
+                *) echo "engine file: $f"; engine=true ;;
+              esac
+            done <<< "$files"
+          fi
+          echo "engine=$engine" >> "$GITHUB_OUTPUT"
+          echo "engine=$engine"
+
   browser-check:
-    if: ${{ !inputs.safari_only }}
+    needs: changes
+    if: ${{ needs.changes.outputs.engine == 'true' && !inputs.safari_only }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -57,10 +94,10 @@ jobs:
             tests/browser/real/
 
   safari-check:
-    needs: browser-check
+    needs: [changes, browser-check]
     # macOS minutes are scarce: run on main, manual dispatch, or PRs labelled "browser"; keep
     # going when the Playwright job failed so Safari evidence is still collected.
-    if: ${{ !cancelled() && needs.browser-check.result != 'cancelled' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'browser')) }}
+    if: ${{ !cancelled() && needs.changes.outputs.engine == 'true' && needs.browser-check.result != 'cancelled' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'browser')) }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
