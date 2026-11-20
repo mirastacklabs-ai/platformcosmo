@@ -64,3 +64,38 @@ const total = readdirSync(target).filter(
   (f) => f.endsWith(".svg") && !f.endsWith(".static.svg"),
 ).length;
 console.log(`gallery: ${total} previews (${total - fallback} committed, ${fallback} rendered now)`);
+
+// Home-page hero diagram: one example rendered in both built-in themes (the docs theme shows the one that
+// matches the active appearance). Needs the built CLI, like the gallery fallback above.
+const heroDir = `${docs}public/hero`;
+rmSync(heroDir, { recursive: true, force: true });
+mkdirSync(heroDir, { recursive: true });
+if (existsSync(bin)) {
+  for (const theme of ["light", "dark"]) {
+    const r = spawnSync(
+      process.execPath,
+      [
+        bin,
+        "build",
+        `${root}examples/gpu-inference-cluster.cosmo.json`,
+        "--theme",
+        theme,
+        "-o",
+        heroDir,
+        "--name",
+        `hero-${theme}`,
+      ],
+      { encoding: "utf8" },
+    );
+    if (r.status !== 0) {
+      throw new Error(
+        `hero (${theme}) could not be rendered (exit ${r.status})\n${(r.stderr || "").trim()}`,
+      );
+    }
+  }
+  console.log("hero: rendered light and dark");
+} else {
+  console.warn(
+    "hero: packages/cli/dist/bin.js not built; the home page hero diagram will be missing",
+  );
+}

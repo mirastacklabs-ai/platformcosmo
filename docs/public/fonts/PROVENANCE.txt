@@ -1,0 +1,31 @@
+Web fonts for the docs site (platformcosmo.io), self-hosted: no Google Fonts or other third-party font
+CDN is used at runtime. Both families are SIL Open Font License 1.1; the upstream license texts are
+alongside (Oswald-OFL-1.1.txt, JetBrainsMono-OFL-1.1.txt, unmodified copies of LICENSES/). Upstream outlines
+are unmodified apart from subsetting and WOFF2 compression; family and style names are unchanged.
+
+The sources are the SAME upstream files as the diagram engine's fonts, with the same upstream hashes (see
+packages/core/assets/fonts/PROVENANCE.txt):
+
+  Oswald, https://github.com/googlefonts/OswaldFont commit 89795261ac9eeb9aa8cd99f43982c4e4b0e53261,
+  fonts/ttf/*.ttf
+    0d9980da817ee71ad9c34bb46950fcf15dd53e928031f39d2e11ae19178ab826  Oswald-Regular.ttf
+    d8b3ac8668c6ddbcecd299567e2130e2b933ad8b6c98b5b8ac6ff2bee9c0848a  Oswald-Medium.ttf
+    8c5e61737c100d0a1ca87a9a1608afc53246b8a77f8d73c56b03406adc2d9282  Oswald-SemiBold.ttf
+
+  JetBrains Mono, https://github.com/JetBrains/JetBrainsMono release v2.304 (JetBrainsMono-2.304.zip,
+  sha256 6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf), fonts/ttf/*.ttf
+    a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f  JetBrainsMono-Regular.ttf
+    5590990c82e097397517f275f430af4546e1c45cff408bde4255dad142479dcb  JetBrainsMono-Bold.ttf
+
+Build: scripts/subset-docs-fonts.sh (fonttools 4.55.3 pyftsubset with brotli 1.1.0, both installed with
+`pip --require-hashes` from scripts/docs-fonts-requirements.txt, in the container image
+python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b). Keeps U+0020-007E,
+U+00A0-00FF, U+0100-017F, U+2013-2014, U+2018-2019, U+201C-201D, U+2022, U+2026, U+20AC, U+2190-2193,
+U+2212, U+2248, U+2260, U+2264-2265; kerning kept, hinting dropped.
+
+SHA-256 of the committed WOFF2 files:
+  34b7c6cd2d162d6126284adcfe3ebfc3d7a0be62daf0808a28af90ab483e1928  oswald-400.woff2
+  53fa63149ecc622622d9e79997fe2e4f5da2b81c860a6ea27f9c35c61a83a41c  oswald-500.woff2
+  9cc842ef8abda918b8dddb5e1e32f93e65d6a5384d43152f686bccce9a25c6b9  oswald-600.woff2
+  48ba8ee2e87653c3c1beee7d4ec9ceed1f4db250e7851c9b7a29e80e3ac499fb  jetbrains-mono-400.woff2
+  ddfc7f9a9cae8c4eb87ed12b9c1e2b7af11e98dbff8f36717b024d7c8d4571c6  jetbrains-mono-700.woff2
