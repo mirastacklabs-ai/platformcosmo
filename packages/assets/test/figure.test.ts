@@ -315,6 +315,41 @@ describe("ground truth", () => {
     expect(worst).toBeLessThanOrEqual(48);
   });
 
+  it("ink the mask misses (a polygon clips the fins) is erased from the base with the part", () => {
+    const f = figure("main");
+    const parts = f.manifest.parts.map((p: Record<string, unknown>, i: number) => {
+      if (i > 1) return p;
+      const poly: Record<string, number[][]> = {};
+      for (const s of ["exploded", "assembled"] as const) {
+        const t = f.states[s]!.truth.units[i === 0 ? "hs-1" : "hs-2"]!.full;
+        poly[s] = [
+          [t.x - 1, t.y + 13],
+          [t.x + t.w, t.y + 13],
+          [t.x + t.w, t.y + t.h],
+          [t.x - 1, t.y + t.h],
+        ];
+      }
+      return { ...p, polygon: poly };
+    });
+    const out = runFigure({ ...f.manifest, parts }, sourcesOf(f)).value!.outputs;
+    const board = f.states.assembled!.board;
+    const b = out.base;
+    const lum = (r: Raster, i: number): number =>
+      0.299 * r.data[i * 4]! + 0.587 * r.data[i * 4 + 1]! + 0.114 * r.data[i * 4 + 2]!;
+    let left = 0;
+    for (const id of ["hs-1", "hs-2"]) {
+      const t = f.states.assembled!.truth.units[id]!.full;
+      for (let y = t.y; y < t.y + 13; y++)
+        for (let x = t.x; x < t.x + t.w; x++)
+          if (
+            maskHas(t, x, y) &&
+            Math.abs(lum(b, y * b.width + x) - lum(board, y * b.width + x)) > 48
+          )
+            left++;
+    }
+    expect(left).toBe(0);
+  });
+
   it("assembled-only: the base equals the board outside the seats and annotations (nothing to recover from)", () => {
     const { f, result } = run("assembled-only");
     const st = f.states.assembled!;

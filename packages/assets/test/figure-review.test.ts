@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { figure } from "../../../tests/fixtures/figures/gen.mjs";
-import { analyzeFigure } from "../src/figure/analyze.js";
+import { analyzeFigure, compareTemplates } from "../src/figure/analyze.js";
 import { runGate } from "../src/figure/gate.js";
 import { locate, luminancePlane } from "../src/locate.js";
 import { crop } from "../src/ops.js";
@@ -92,7 +92,15 @@ describe("gate (G-Q01): foreign pixels and unrecovered occlusion are not tautolo
         i === 1 ? { ...p, seat: [p.seat[0] + 120, p.seat[1]] as const } : p,
       ),
     };
-    expect(errorCodes(runGate(an, moved))).toContain("asset/occluded-unrecovered");
+    const rm = runGate(an, moved);
+    expect(errorCodes(rm)).toContain("asset/occluded-unrecovered");
+    // The record itself drives a diagnostic (not only the expected-silhouette check).
+    expect(
+      rm.diagnostics.some(
+        (d) =>
+          d.code === "asset/occluded-unrecovered" && /hidden in every depiction/.test(d.message),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -228,6 +236,72 @@ describe("gate (G-Q04): arrowheads are the wedge's own ink", () => {
           /no arrowhead/.test(d.message),
       ),
     ).toBe(true);
+  });
+
+  it("a stroke crossing near the end (drawn in one state only) is not an arrowhead", () => {
+    const f = figure("main");
+    const E = clone(f.states.exploded!.image);
+    const bg = E.data.slice(0, 4);
+    // A quiet 80x60 patch of the exploded drawing.
+    let spot: [number, number] | undefined;
+    for (let y0 = 0; y0 + 60 < E.height && !spot; y0 += 4) {
+      for (let x0 = 0; x0 + 80 < E.width && !spot; x0 += 4) {
+        let clean = true;
+        for (let y = y0; y < y0 + 60 && clean; y++)
+          for (let x = x0; x < x0 + 80 && clean; x++)
+            for (let c = 0; c < 3; c++)
+              if (E.data[(y * E.width + x) * 4 + c] !== bg[c]) clean = false;
+        if (clean) spot = [x0, y0];
+      }
+    }
+    expect(spot).toBeDefined();
+    const [x0, y0] = spot!;
+    const x = x0 + 40;
+    // A vertical stroke and a 3 px bar across it 5 px before its end, running far to both sides:
+    // the widths widen and narrow like a head, but the ink runs out of the window sideways.
+    line1(E, x, y0 + 10, x, y0 + 50);
+    line1(E, x + 1, y0 + 10, x + 1, y0 + 50);
+    for (let k = 0; k < 3; k++) line1(E, x0 + 2, y0 + 44 + k, x0 + 78, y0 + 44 + k);
+    const arrow = {
+      kind: "arrow",
+      state: "exploded",
+      polyline: [
+        [x, y0 + 10],
+        [x, y0 + 50],
+      ],
+    };
+    const an = analyzeFigure(
+      { ...f.manifest, annotations: [...f.manifest.annotations, arrow] },
+      { ...sourcesOf(f), "exploded.png": E },
+    ).value!;
+    const g = an.annotations[an.annotations.length - 1]!;
+    expect(g.problems.some((p) => /no arrowhead/.test(p))).toBe(true);
+  });
+
+  it("S-Q03: the template is the least occluded depiction, never the largest", () => {
+    const V = (n: number) => ({ x: 0, y: 0, w: n, h: 1, data: new Uint8Array(n).fill(1) });
+    // The exploded depiction is larger (it swallowed neighbouring ink) but 40 px of the prior
+    // are hidden there; the assembled one shows everything.
+    const big = {
+      u: { index: 0, dep: { exploded: { V: V(900) } } },
+      s: "exploded" as const,
+      occ: 40,
+      alone: 0,
+      cons: 900,
+    };
+    const small = {
+      u: { index: 0, dep: { assembled: { V: V(700) } } },
+      s: "assembled" as const,
+      occ: 0,
+      alone: 0,
+      cons: 900,
+    };
+    expect([big, small].sort(compareTemplates)[0]).toBe(small);
+    // Equal occlusion: the depiction that stands alone, then the more consistent one.
+    const alone = { ...small, occ: 40 };
+    expect([{ ...big, alone: 1 }, alone].sort(compareTemplates)[0]).toBe(alone);
+    const consistent = { ...small, occ: 40, cons: 950 };
+    expect([big, consistent].sort(compareTemplates)[0]).toBe(consistent);
   });
 
   it("a ghost next to an open arrowhead over a busy board still fails exploded-residual", () => {
@@ -413,6 +487,26 @@ describe("gate: stronger variants (G-Q07, G-Q08, G-Q09, G-Q10, G-Q11, G-Q12)", (
     expect(
       messages(r, "asset/annotation-invalid").some((m) => /part ink of hs-1|hull of hs-1/.test(m)),
     ).toBe(true);
+  });
+
+  it("comb fins every depiction misses (a polygon clips them) fail as one residual, not 32 small ones", () => {
+    const f = figure("dense");
+    const parts = f.manifest.parts.map((p: Record<string, unknown>) => {
+      const poly: Record<string, number[][]> = {};
+      for (const s of ["exploded", "assembled"] as const) {
+        const t = f.states[s]!.truth.units["sink-1"]!.full;
+        poly[s] = [
+          [t.x - 1, t.y + 20],
+          [t.x + t.w, t.y + 20],
+          [t.x + t.w, t.y + t.h + 1],
+          [t.x - 1, t.y + t.h + 1],
+        ];
+      }
+      return { ...p, polygon: poly };
+    });
+    // Each 1 px fin's clipped top is about 20 px, under the 24 px threshold on its own.
+    const r = runFigure({ ...f.manifest, parts }, sourcesOf(f)).value!;
+    expect(errorCodes(r.report)).toContain("asset/exploded-residual");
   });
 
   it("G-Q10: a rectangle sprite with transparent padding is still a rectangle mask", () => {

@@ -195,6 +195,36 @@ export interface Analysis {
 
 const other = (s: FigureState): FigureState => (s === "exploded" ? "assembled" : "exploded");
 
+/** A depiction considered as a class's template (§6.3). */
+export interface TemplateCandidate {
+  readonly u: {
+    readonly index: number;
+    readonly dep: Partial<Record<FigureState, { readonly V: Mask }>>;
+  };
+  readonly s: FigureState;
+  /** Prior or hull pixels hidden under other units and not shown by this depiction. */
+  readonly occ: number;
+  /** 0 where the depiction stands alone. */
+  readonly alone: number;
+  /** Mean centred IoU with the other candidates, × 1000. */
+  readonly cons: number;
+}
+
+/**
+ * Template order (§6.3): fewest occluded pixels, then standing alone, then consistency with the
+ * other depictions, then the exploded drawing, then unit order. Never the largest area: a
+ * depiction that swallowed neighbouring ink is the largest.
+ */
+export function compareTemplates(a: TemplateCandidate, b: TemplateCandidate): number {
+  return (
+    a.occ - b.occ ||
+    a.alone - b.alone ||
+    b.cons - a.cons ||
+    STATES.indexOf(a.s) - STATES.indexOf(b.s) ||
+    a.u.index - b.u.index
+  );
+}
+
 /** Pixel thresholds (ingestion §6.5); `strict` halves them. */
 export function thresholds(strict: boolean) {
   const k = strict ? 0.5 : 1;
@@ -1229,14 +1259,7 @@ export function analyzeFigure(
             )
           : 1000;
     }
-    cands.sort(
-      (a, b) =>
-        a.occ - b.occ ||
-        a.alone - b.alone ||
-        b.cons - a.cons ||
-        STATES.indexOf(a.s) - STATES.indexOf(b.s) ||
-        a.u.index - b.u.index,
-    );
+    cands.sort(compareTemplates);
     const t = cands[0]!;
     const mask = tight(t.u.dep[t.s]!.V);
     if (mask.w === 0) {

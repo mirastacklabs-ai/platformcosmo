@@ -2,8 +2,9 @@
  * The quality gate (ingestion §6.5). Re-renders every drawn state from the outputs (base plus
  * each sprite at its seat or exploded position, no redrawn hints), compares it with the source
  * drawing after alignment, and runs every check of the §6.5 table against the reference
- * analysis. All residual metrics are local: the largest connected component (8-connectivity),
- * in pixels, with declared annotations excluded but connective.
+ * analysis. All residual metrics are local: per connected component (8-connectivity, joined
+ * across 1 px gaps so a comb of thin strokes counts as one), in pixels, with declared
+ * annotations excluded but connective.
  */
 import type { Diagnostic } from "@platformcosmo/core";
 import { crop } from "../ops.js";
@@ -383,9 +384,11 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
     const res = residualMap(st.lum, L, st.W, st.H, T.luminance);
     const X = a.excluded[s]!;
     const isRes = (x: number, y: number): boolean => res[y * st.W + x] === 1 && !has(X, x, y);
+    // Residual pixels 1 px apart are one defect (fins at a 2 px pitch the sprite lacks).
+    const joined = dilate({ x: 0, y: 0, w: st.W, h: st.H, data: res }, 1, st.W, st.H);
     const comps = components(
       { x: 0, y: 0, w: st.W, h: st.H },
-      (x, y) => res[y * st.W + x] === 1 || has(X, x, y),
+      (x, y) => has(joined, x, y) || has(X, x, y),
       8,
       isRes,
     );

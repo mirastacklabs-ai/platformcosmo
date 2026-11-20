@@ -476,9 +476,10 @@ the background colour and flagged. Arrows are redrawn by the renderer as fading 
 The gate checks what a viewer actually sees: it re-renders **both** states from our outputs
 (base + every sprite at its seat; base + every sprite at its exploded position, through the
 same resvg path as `pcosmo build`) and compares each with its source drawing, after alignment.
-All metrics are **local**: the unit is the largest connected component (8-connectivity) of
-residual pixels, in pixels, never a fraction of the image, so a 40-pixel ghost fin cannot hide
-in a large figure. A residual pixel is one whose luminance differs by more than 48 (0–255)
+All metrics are **local**: the unit is the largest connected component (8-connectivity, joined
+across 1-pixel gaps so a comb of thin fins is one defect, not many small ones) of residual
+pixels, in pixels, never a fraction of the image, so a 40-pixel ghost fin cannot hide in a
+large figure. A residual pixel is one whose luminance differs by more than 48 (0–255)
 after a 1-pixel tolerance for anti-aliasing (a pixel matches if any pixel in its 3 × 3
 neighbourhood of the other image matches).
 
