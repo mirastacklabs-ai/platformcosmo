@@ -35,7 +35,7 @@ function segment(moves: PartMove[], at: number, back: number, length: number): L
 export function rackItems(withServerTray = false): DepthItemInput[] {
   const items: DepthItemInput[] = [];
   const add = (key: string, b: Box3, extra: Partial<DepthItemInput> = {}): void => {
-    items.push({ key, path: key, box: b, solid: true, ...extra });
+    items.push({ key, path: key, box: b, solid: true, fills: true, ...extra });
   };
   add("rack/post-fl", box(0, 1.1, 0.1, 0.08, 0.1, 2.8));
   add("rack/post-fr", box(0.92, 1.1, 0.1, 0.08, 0.1, 2.8));
@@ -161,24 +161,33 @@ function up(dz: number): Vec3 {
 export function engine(): Scene {
   const items: DepthItemInput[] = [];
   const add = (path: string, b: Box3, extra: Partial<DepthItemInput> = {}): void => {
-    items.push({ key: `engine/${path}`, path: `engine/${path}`, box: b, solid: true, ...extra });
+    items.push({
+      key: `engine/${path}`,
+      path: `engine/${path}`,
+      box: b,
+      solid: true,
+      fills: true,
+      ...extra,
+    });
   };
   add("oil-pan", mm(20, 20, 0, 440, 180, 80));
   add("block", mm(0, 0, 80, 480, 220, 260));
-  add("crankshaft", mm(10, 85, 100, 460, 50, 50));
+  const round = { fills: false }; // shafts and cylinders do not fill their depthBox
+  add("crankshaft", mm(10, 85, 100, 460, 50, 50), round);
   for (let k = 1; k <= 4; k++) {
     const dx = 110 * (k - 1);
-    add(`pr-${k}/piston`, mm(45 + dx, 70, 250, 80, 80, 70));
-    add(`pr-${k}/rod`, mm(75 + dx, 100, 140, 20, 20, 110));
+    add(`pr-${k}/piston`, mm(45 + dx, 70, 250, 80, 80, 70), round);
+    add(`pr-${k}/rod`, mm(75 + dx, 100, 140, 20, 20, 110), round);
   }
   add("head/casting", mm(0, 0, 340, 480, 220, 90));
   for (let k = 1; k <= 8; k++) {
     add(`head/valve-${k}`, mm(50 + 55 * (k - 1), 95, 380, 12, 12, 70), {
+      ...round,
       inserts: "engine/head/casting",
     });
   }
-  add("cam-intake", mm(10, 60, 450, 460, 30, 30));
-  add("cam-exhaust", mm(10, 130, 450, 460, 30, 30));
+  add("cam-intake", mm(10, 60, 450, 460, 30, 30), round);
+  add("cam-exhaust", mm(10, 130, 450, 460, 30, 30), round);
   add("valve-cover", mm(10, 10, 430, 460, 200, 90));
   add("intake", mm(40, 220, 300, 400, 80, 100));
   add("exhaust", mm(40, -70, 300, 400, 70, 80));
@@ -222,12 +231,19 @@ export function buildDrop(): Scene {
     toLoopMoves([pm(path, v(0, 0, -2), 0, 1, "ease-in")], { at, kind: "build" });
   return {
     items: [
-      { key: "kit/plate", path: "kit/plate", box: box(0, 0, 0, 3, 2, 0.2), solid: true },
+      {
+        key: "kit/plate",
+        path: "kit/plate",
+        box: box(0, 0, 0, 3, 2, 0.2),
+        solid: true,
+        fills: true,
+      },
       {
         key: "kit/a",
         path: "kit/a",
         box: box(0.2, 0.2, 0.2, 1, 1, 0.5),
         solid: true,
+        fills: true,
         present: [[1, 4]],
       },
       {
@@ -235,6 +251,7 @@ export function buildDrop(): Scene {
         path: "kit/b",
         box: box(0.2, 0.2, 0.7, 1, 1, 0.5),
         solid: true,
+        fills: true,
         present: [[2, 4]],
       },
       {
@@ -242,6 +259,7 @@ export function buildDrop(): Scene {
         path: "kit/c",
         box: box(1.6, 0.4, 0.2, 1, 1, 0.8),
         solid: true,
+        fills: true,
         present: [[3, 4]],
       },
     ],

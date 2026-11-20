@@ -13,10 +13,10 @@ import type { SpecEasing } from "../schema/types.gen.js";
 import {
   EPS,
   MAX_UNION_BOXES,
+  ZERO,
   behindAxis,
   blocksOf,
   containsClosed,
-  core,
   enclosedThroughout,
   footprintInside,
   frontAxis,
@@ -26,7 +26,6 @@ import {
   interpenetratesThroughout,
   mayInterpenetrate,
   mayInterpenetrateNeg,
-  neverHide,
   seatedOrEnclosed,
   shift,
   sweep,
@@ -43,15 +42,25 @@ import type { Bounds, Vec } from "./enclosure.js";
  * moves. Output: certified epochs, one DOM order valid for all of them, face-exit clips and
  * diagnostics. Pure, deterministic, never throws on bad input.
  *
+ * Occluders. Only solids that FILL their `depthBox` (`solid && fills`: one box/plate/card
+ * primitive) enclose, hide, clip, join blocks and order by weak-behind: every §9.5 rule reasons
+ * about the box's faces, and a cylinder's or wedge's empty box corners would break it. Other
+ * solids are ordered by separation or bisection only.
+ *
  * Algorithm
- * 0. Clips (loop-wide, §9.5 validity): an item gets a static clip at a solid when its motion
- *    relative to the solid over the whole loop is along one axis `u`, its footprint ⊥ u lies in
- *    the solid's face, it never reaches past the hidden `-u` face and at some time it crosses the
- *    visible `+u` face. `inserts` is preferred; at most one clip per item.
- * 1. Phases: the loop is split at every move start and end, every presence change, and every
- *    instant a clipped item's `+u` face passes its clip face (located by root finding): fully
- *    below that face the item is hidden (a top face below the deck would project INTO the clip,
- *    §9.5's proof only covers side faces), at or beyond it the clip is exact.
+ * 0. Clips (loop-wide, §9.5 validity, block level): a BLOCK is a set of touching occluders that
+ *    never move relative to each other in the loop (one occluder is a block of one). An item gets
+ *    a static clip at a block when its motion relative to the block over the whole loop is along
+ *    one axis `u` (or none), its part below one exterior `+u` face plane F at its lowest position
+ *    lies inside the union of the members, its part above F at its highest position meets no
+ *    member, and at some time it crosses F. The clip solid is the member that carries F; the
+ *    item is drawn after every member it meets (forced). `inserts` is preferred; at most one
+ *    clip per item.
+ * 1. Phases: the loop is split at every move start and end, every instant move, every presence
+ *    change, and every instant a clipped item's `+u` face passes F (root finding): at or below F
+ *    the item is inside the block and hidden (a `+u` face below F would project INTO the clip;
+ *    §9.5's proof only covers side faces), beyond it the clip is exact. Over the phase-work
+ *    budget, move start/end cuts are thinned (sound: a move partly inside a phase is active).
  * 2. Swept boxes: over `[ta, tb]` a move's offset stays on the segment between its values at `ta`
  *    and `tb` (monotonic easing), whose AABB is `I_m`. A leaf's swept box is its rest box at its
  *    pose at `ta` ⊕ the Minkowski sum of the ACTIVE moves' `I_m` (§9.3, sound for concurrent
@@ -62,39 +71,48 @@ import type { Bounds, Vec } from "./enclosure.js";
  *    sum. Every test is monotone in the offset, so checking the interval box certifies every
  *    time inside it.
  * 3. Certification per pair whose swept screen rects overlap (sweep over screen x):
- *    clip relation (forced) → ring halves (forced: back < contents < front) → separating axis
- *    per sub-box (certified) → weak-behind of a solid box (forced: never past a visible face of
- *    the solid, which covers enclosure in one solid and hidden-face exits) → behind a clipped
- *    item's clip solid (certified) → if the pair does not move relative to itself, the static
- *    rule (§9.2, exact for the pose; containment and centre depth are heuristic edges; cached by
- *    relative offset) → else uncertain.
- *    Visibility per item: enclosed by a solid or by a rigid union of touching solids → hidden;
- *    crossing a visible face of a solid without a valid clip → hidden until clear
- *    (`assembly/clip-fallback`); else visible; else uncertain.
+ *    clip relation (forced, every block member) → ring halves (forced: back < contents < front)
+ *    → separating axis per sub-box (certified) → weak-behind of an occluder (forced: never past a
+ *    visible face of the box, which covers enclosure in one solid and hidden-face exits) →
+ *    at or below a clipped item's face plane F (certified) → if the pair does not move relative
+ *    to itself, the static rule (§9.2, exact for the pose; containment and centre depth are
+ *    heuristic edges; cached by relative offset) → else uncertain.
+ *    Visibility per item: enclosed by an occluder or by a rigid union of touching occluders →
+ *    hidden; crossing one visible face of an occluder or one exterior face of a rigid block
+ *    without a valid clip there → hidden until clear (`assembly/clip-fallback`, never the
+ *    static heuristic); else visible; else uncertain.
  * 4. Uncertain pairs or items bisect the interval (explicit stack, ≤ `maxBisectionDepth` levels,
  *    halves ≥ `minInterval`); only the uncertain pairs and items are re-tested in the halves. At
- *    the limit the static rule at the midpoint decides and the interval is approximate
+ *    the limit the pose at the midpoint time decides and the interval is approximate
  *    (`assembly/depth-approx`, naming the pair).
  * 5. One DOM order (Phase 1b has no copies): the union of every interval's edges. A pair whose
- *    two directions both occur would need a copy: the weaker (then shorter, then later) direction
- *    is dropped and its intervals are approximate (`assembly/depth-approx`). Remaining cycles are
- *    broken by §9.3: heuristic edges first, then certified, then forced (never while another
- *    candidate exists), each time the edge with the smallest centre-depth difference (ties by
- *    item keys); a dropped certified or forced edge is `assembly/depth-cycle` and makes its
- *    intervals approximate. A Kahn sort (lowest centre depth at t = 0, then key) emits the order.
+ *    two directions both occur would need a copy: a heuristic direction yields to a certified or
+ *    forced one, else the shorter (then later) direction is dropped; its intervals are
+ *    approximate (`assembly/depth-approx`, `copy: true`). Remaining cycles are broken by §9.3:
+ *    heuristic edges first, then certified, then forced (only when a cycle has nothing else),
+ *    each time the edge with the smallest centre-depth difference (ties by item keys); a dropped
+ *    certified or forced edge is `assembly/depth-cycle` and makes its intervals approximate. A
+ *    Kahn sort (lowest centre depth at t = 0, then key) emits the order.
  * 6. Epochs: adjacent intervals with the same visible set (hence the same order) merge. More than
  *    `maxEpochsPerTransition` epochs in one transition (a maximal run of moving phases): epochs are
  *    merged evenly and marked approximate.
  * `transit-collision`: sampled at interior times of every moving phase for pairs whose relative
- * sweep interpenetrates; an overlap that is neither an enclosure nor a one-face crossing warns.
+ * sweep interpenetrates; an overlap that is neither an enclosure nor a one-face crossing (nor a
+ * clip-block member) warns.
  *
  * Determinism: items are sorted by key and moves by (t0, t1, path, …) first; all iteration is by
- * index; every comparator is total (keys break ties). Tolerances: `EPS = 1e-6` world units for
- * every geometric comparison (closed: flush counts as inside / separated) and `TIME_EPS = 1e-9` s
- * for times. Cost is bounded by `DepthBudgets` (checked before the work they bound).
+ * index; every comparator compares raw values, then keys (strict weak orders). Tolerances:
+ * `EPS = 1e-6` world units for every geometric comparison (closed: flush counts as inside /
+ * separated) and `TIME_EPS = 1e-9` s for times. The static 1.1 path (`depth/index.ts`) keeps its
+ * own 1e-9; here §9.5's 1e-6 is used throughout, so a pair two items apart by less than 1e-6 is
+ * "touching" in epochs and "overlapping" in the 1.1 sort (it never matters for drawn boxes). Cost
+ * is bounded by `DepthBudgets` (checked before the work they bound).
  */
 
 export const TIME_EPS = 1e-9;
+
+/** How often each phase is built (two clip passes, clip events, solving); see `spans`. */
+const PHASE_PASSES = 4;
 
 // ---------------------------------------------------------------------------------------------
 // Public types
@@ -118,8 +136,16 @@ export interface DepthItemInput {
    * ordinary box (A1-1 header). Default `[box]`.
    */
   readonly boxes?: readonly Box3[];
-  /** `PartGeometry.solid` of an unsplit leaf: encloses, hides and clips other items. */
+  /** `PartGeometry.solid` of an unsplit leaf (closed and opaque). */
   readonly solid?: boolean;
+  /**
+   * The solid FILLS its `depthBox`: its geometry is one `box`, `plate` or `card` primitive
+   * whose box is the `depthBox` (default false). Only such solids enclose, hide, clip and order
+   * by weak-behind (§9.5); every rule there reasons about the box's faces. A cylinder, shaft,
+   * wedge, prism or multi-primitive solid leaves its box corners empty, so it is ordered by
+   * separation or bisection only (and approximate where those cannot decide).
+   */
+  readonly fills?: boolean;
   /** Half of a `ring`: no box to certify, so halves get forced edges back < contents < front. */
   readonly ring?: "back" | "front";
   /** Spec `inserts` (`SceneAssemblyNode.inserts`): key of the solid item it is inserted into. */
@@ -163,7 +189,10 @@ export interface DepthBudgets {
   readonly minInterval: number;
   /** §13: epochs per transition (64). */
   readonly maxEpochsPerTransition: number;
-  /** Pair tests over the whole loop (`budget/time` warning beyond; the rest is approximate). */
+  /**
+   * Pair tests over the whole loop (`budget/time` warning beyond; the rest is approximate). The
+   * default is for 300 items and scales with the item count, up to 5× at 2000 (§13).
+   */
   readonly maxPairChecks: number;
   /** Intervals evaluated over the whole loop (same handling). */
   readonly maxIntervals: number;
@@ -175,16 +204,22 @@ export interface DepthBudgets {
   readonly maxDiagnosticsPerCode: number;
 }
 
+/**
+ * Derived from §9.8 / §13 (300 leaves × 20 transitions in 2 s; 10 s at 2000 leaves). Measured
+ * costs on the reference container: a pair test ≈ 0.5–0.7 µs all-in, a phase-build unit ≈ 5 ns,
+ * an interval's fixed overhead ≈ 30 µs at 300 items, a collision pose test ≈ 1 µs. The §9.8 case
+ * itself uses ≈ 0.2M pair checks and 40 intervals; a per-part staggered stress run ≈ 2.8M and 800.
+ */
 export const DEFAULT_DEPTH_BUDGETS: DepthBudgets = {
   maxItems: 6000,
   maxMoves: 50_000,
-  maxPhaseWork: 50_000_000,
+  maxPhaseWork: 20_000_000,
   maxBisectionDepth: 6,
   minInterval: 1 / 120,
   maxEpochsPerTransition: 64,
-  maxPairChecks: 20_000_000,
-  maxIntervals: 200_000,
-  maxCollisionSamples: 2_000_000,
+  maxPairChecks: 4_000_000,
+  maxIntervals: 20_000,
+  maxCollisionSamples: 1_000_000,
   maxCycleDrops: 10_000,
   maxDiagnosticsPerCode: 50,
 };
@@ -427,7 +462,10 @@ interface NItem {
   readonly path: string | undefined;
   readonly bbox: Bounds;
   readonly boxes: readonly Bounds[];
+  /** Occluder: a solid that fills its depthBox (`solid && fills`); only these take part in §9.5. */
   readonly solid: boolean;
+  /** A closed solid of any shape (spec `solid`), for the collision yield rule. */
+  readonly closed: boolean;
   /** 0 none, 1 back, 2 front. */
   readonly ring: 0 | 1 | 2;
   readonly insertsKey: string | undefined;
@@ -571,6 +609,10 @@ interface Phase {
   readonly moving: boolean;
   /** Per item: union block id among rigidly connected touching solids (-1: not a solid). */
   block?: Int32Array;
+  /** Members per block id (blocks of ≥ 2 only). */
+  blockMembers?: Map<number, number[]>;
+  /** Per block id: does the union fill its bounding box (one box occluder)? */
+  blockFills?: Map<number, boolean>;
 }
 
 interface Pose {
@@ -597,7 +639,6 @@ interface Task {
 const NO_CLIP = -1;
 
 class EpochSolver {
-  private readonly budgets: DepthBudgets;
   private readonly diags: Diags;
   private readonly hw: number;
   private readonly hh: number;
@@ -615,6 +656,8 @@ class EpochSolver {
   private clipSolid = new Int32Array(0);
   /** Clip axis per item (0..2), -1 without a clip. */
   private clipAxis = new Int8Array(0);
+  /** Per clipped item: the block members it meets (forced: drawn after each of them). */
+  private clipMembers: number[][] = [];
   private clips: DepthClip[] = [];
   private depth0 = new Float64Array(0);
 
@@ -630,18 +673,29 @@ class EpochSolver {
   private collisionSamples = 0;
   private cycleDrops = 0;
   private copyConflicts = 0;
+  private readonly inputNotArray: boolean;
   private degraded = false;
   private collided = new Set<number>();
   /** Rigid pair → [rx, ry, rz, code, from, to, strength] of its last static relation. */
   private rigidCache = new Map<number, number[]>();
 
+  private readonly rawItems: readonly DepthItemInput[];
+  private readonly rawMoves: readonly LoopMove[];
+  private budgets: DepthBudgets;
+  private readonly pairBudgetGiven: boolean;
+
   constructor(
-    private readonly rawItems: readonly DepthItemInput[],
-    private readonly rawMoves: readonly LoopMove[],
+    items: readonly DepthItemInput[],
+    moves: readonly LoopMove[],
     private readonly rawLoop: number,
     options: DepthEpochOptions,
   ) {
+    options = typeof options === "object" && options !== null ? options : {};
     this.budgets = { ...DEFAULT_DEPTH_BUDGETS, ...(options.budgets ?? {}) };
+    this.pairBudgetGiven = options.budgets?.maxPairChecks !== undefined;
+    this.rawItems = Array.isArray(items) ? items : [];
+    this.rawMoves = Array.isArray(moves) ? moves : [];
+    this.inputNotArray = !Array.isArray(items) || !Array.isArray(moves);
     this.diags = new Diags(this.budgets.maxDiagnosticsPerCode);
     const tw = options.projection?.tileWidth ?? 64;
     const zs = options.projection?.zScale ?? tw / 2;
@@ -732,11 +786,19 @@ class EpochSolver {
     if (!(Number.isFinite(this.rawLoop) && this.rawLoop >= 0)) {
       this.bad(`loop length ${String(this.rawLoop)} is not a finite number ≥ 0; 0 is used.`);
     }
+    if (this.inputNotArray) this.bad("depth items or moves are not arrays; they are ignored.");
     this.normalize();
     const n = this.it.length;
+    if (!this.pairBudgetGiven) {
+      // §13: 2 s at 300 leaves, 10 s at 2000. The default budget (4M pair checks at ~0.5 µs)
+      // scales with the item count from 300 up to 5× at 2000 items.
+      const f = Math.min(5, Math.max(1, n / 300));
+      this.budgets = { ...this.budgets, maxPairChecks: Math.ceil(this.budgets.maxPairChecks * f) };
+    }
     this.hidden = Array.from({ length: n }, () => []);
     this.clipSolid = new Int32Array(n).fill(NO_CLIP);
     this.clipAxis = new Int8Array(n).fill(-1);
+    this.clipMembers = Array.from({ length: n }, () => []);
     this.depth0 = new Float64Array(n);
     for (let i = 0; i < n; i++) {
       const d = this.dispAtTime(i, 0);
@@ -777,8 +839,14 @@ class EpochSolver {
   private normalize(): void {
     const seen = new Set<string>();
     const items: NItem[] = [];
-    for (const raw of this.rawItems) {
-      const key = raw?.key;
+    const optString = (v: unknown): boolean => v === undefined || typeof v === "string";
+    for (const raw of this.rawItems as readonly unknown[]) {
+      if (typeof raw !== "object" || raw === null) {
+        this.bad("a depth item is not an object; it is ignored.");
+        continue;
+      }
+      const it = raw as DepthItemInput;
+      const key = it.key;
       if (typeof key !== "string" || key.length === 0) {
         this.bad("a depth item has no key; it is ignored.");
         continue;
@@ -787,20 +855,33 @@ class EpochSolver {
         this.bad(`duplicate depth item "${key}"; the later one is ignored.`, key);
         continue;
       }
-      if (!validBox(raw.box) || (raw.boxes !== undefined && !raw.boxes.every(validBox))) {
+      if (
+        !optString(it.path) ||
+        !optString(it.leaf) ||
+        !optString(it.inserts) ||
+        (it.ring !== undefined && it.ring !== "back" && it.ring !== "front") ||
+        (it.boxes !== undefined && !Array.isArray(it.boxes)) ||
+        (it.present !== undefined &&
+          (!Array.isArray(it.present) ||
+            !it.present.every((w) => Array.isArray(w) && w.length === 2)))
+      ) {
+        this.bad(`depth item "${key}" has a field of the wrong type; it is ignored.`, key);
+        continue;
+      }
+      if (!validBox(it.box) || (it.boxes !== undefined && !it.boxes.every(validBox))) {
         this.bad(`depth item "${key}" has a non-finite or negative box; it is ignored.`, key);
         continue;
       }
       seen.add(key);
-      const boxes = (raw.boxes && raw.boxes.length > 0 ? raw.boxes : [raw.box]).map(toBounds);
-      const ring = raw.ring === "back" ? 1 : raw.ring === "front" ? 2 : 0;
+      const boxes = (it.boxes && it.boxes.length > 0 ? it.boxes : [it.box]).map(toBounds);
+      const ring = it.ring === "back" ? 1 : it.ring === "front" ? 2 : 0;
       let present: [number, number][] | undefined;
-      if (raw.present !== undefined) {
-        const ws = raw.present
+      if (it.present !== undefined) {
+        const ws = it.present
           .filter((w) => Number.isFinite(w[0]) && Number.isFinite(w[1]) && w[1] >= w[0])
           .map((w) => [w[0], w[1]] as [number, number])
           .sort((p, q) => p[0] - q[0] || p[1] - q[1]);
-        if (ws.length !== raw.present.length) {
+        if (ws.length !== it.present.length) {
           this.bad(`depth item "${key}" has an invalid presence window; it is ignored.`, key);
         }
         present = [];
@@ -812,16 +893,18 @@ class EpochSolver {
       }
       items.push({
         key,
-        leaf: raw.leaf ?? raw.path ?? key,
-        path: raw.path,
+        leaf: it.leaf ?? it.path ?? key,
+        path: it.path,
         bbox:
           ring === 0 && boxes.length > 1
-            ? unionBounds([toBounds(raw.box), ...boxes])
-            : toBounds(raw.box),
+            ? unionBounds([toBounds(it.box), ...boxes])
+            : toBounds(it.box),
         boxes,
-        solid: raw.solid === true && ring === 0 && boxes.length === 1,
+        // Occluder: only a solid that fills its box takes part in §9.5 (E-Q02).
+        solid: it.solid === true && it.fills === true && ring === 0 && boxes.length === 1,
+        closed: it.solid === true && ring === 0 && boxes.length === 1,
         ring,
-        insertsKey: raw.inserts,
+        insertsKey: it.inserts,
         present,
       });
     }
@@ -829,7 +912,7 @@ class EpochSolver {
     this.it = items;
 
     const mv: NMove[] = [];
-    for (const m of this.rawMoves) {
+    for (const m of this.rawMoves as readonly (LoopMove | null | undefined)[]) {
       if (
         !m ||
         typeof m.path !== "string" ||
@@ -933,7 +1016,15 @@ class EpochSolver {
     for (const item of this.it)
       for (const w of item.present ?? []) for (const t of w) if (inside(t)) must.push(t);
     const opt: number[] = [];
-    for (const m of this.mv) for (const t of [m.t0, m.t1]) if (inside(t)) opt.push(t);
+    for (const m of this.mv) {
+      // An instant move (loop closure, base pose) jumps: a phase must never contain its time,
+      // since the phase model needs every move constant or monotone across a phase (E-Q01).
+      if (m.t1 - m.t0 <= TIME_EPS) {
+        if (inside(m.t0)) must.push(m.t0);
+        continue;
+      }
+      for (const t of [m.t0, m.t1]) if (inside(t)) opt.push(t);
+    }
     const uniq = (list: number[]): number[] => {
       list.sort((a, b) => a - b);
       const out: number[] = [];
@@ -943,7 +1034,9 @@ class EpochSolver {
     };
     const mustU = uniq(must);
     let optU = uniq(opt);
-    const cap = Math.max(1, Math.floor(this.budgets.maxPhaseWork / Math.max(1, this.phaseCost)));
+    // Every phase is built PHASE_PASSES times (two clip passes, clip events, solving).
+    const cost = Math.max(1, this.phaseCost) * PHASE_PASSES;
+    const cap = Math.max(1, Math.floor(this.budgets.maxPhaseWork / cost));
     if (mustU.length + optU.length - 1 > cap) {
       const keep = Math.max(0, cap - mustU.length + 1);
       const thinned: number[] = [];
@@ -1191,13 +1284,15 @@ class EpochSolver {
   }
 
   // -------------------------------------------------------------------------------------------
-  // Clips (loop-wide, §9.5 validity rule)
+  // Clips (loop-wide, §9.5 validity rule, block level)
   // -------------------------------------------------------------------------------------------
 
   /**
-   * Assigns at most one static clip per item. Candidates are (item, solid) pairs whose loop-wide
-   * swept bounds overlap on screen and interpenetrate; their loop-wide relative ranges are
-   * accumulated with ONE pose per phase (cost: phases × (items + candidates)).
+   * Assigns at most one static clip per item, at the exit face of a BLOCK: touching solids that
+   * never move relative to each other in the loop (one solid is a block of one). Candidates are
+   * (item, solid) pairs whose loop-wide swept bounds overlap on screen and interpenetrate; their
+   * loop-wide relative ranges are accumulated with ONE pose per phase (cost: phases × (items +
+   * candidates), charged to the pair budget).
    */
   private assignClips(spans: readonly Span[]): void {
     const n = this.it.length;
@@ -1237,6 +1332,36 @@ class EpochSolver {
       this.overBudget();
       return;
     }
+    const disp0 = this.it.map((_, i) => this.dispAtTime(i, 0));
+    const at0 = (i: number): Bounds => shift(this.it[i]!.bbox, disp0[i]!);
+    // Loop blocks: solids touching at t = 0 and rigid with each other over the whole loop.
+    const solidPairs: [number, number][] = [];
+    for (let q = 0; q < pairs.length; q += 2) {
+      const i = pairs[q]!;
+      const j = pairs[q + 1]!;
+      const I = this.it[i]!;
+      const J = this.it[j]!;
+      if (I.solid && J.solid && I.leaf !== J.leaf && this.motionAxes(i, j) === 0) {
+        solidPairs.push([i, j]);
+      }
+    }
+    const blockOf = blocksOf(
+      n,
+      solidPairs,
+      this.it.map((_, i) => at0(i)),
+    );
+    const blockBox = new Map<number, number[]>();
+    for (let i = 0; i < n; i++) {
+      if (!this.it[i]!.solid) continue;
+      const b = at0(i);
+      const cur = blockBox.get(blockOf[i]!);
+      if (!cur) blockBox.set(blockOf[i]!, [...b]);
+      else
+        for (let k = 0; k < 3; k++) {
+          cur[k] = Math.min(cur[k]!, b[k]!);
+          cur[k + 3] = Math.max(cur[k + 3]!, b[k + 3]!);
+        }
+    }
     interface Cand {
       readonly p: number;
       readonly s: number;
@@ -1245,12 +1370,6 @@ class EpochSolver {
       meets: boolean;
     }
     const cands: Cand[] = [];
-    const disp0 = this.it.map((_, i) => this.dispAtTime(i, 0));
-    const r0Of = (p: number, s: number): Vec => [
-      disp0[p]![0] - disp0[s]![0],
-      disp0[p]![1] - disp0[s]![1],
-      disp0[p]![2] - disp0[s]![2],
-    ];
     for (let q = 0; q < pairs.length; q += 2) {
       for (const [p, s] of [
         [pairs[q]!, pairs[q + 1]!],
@@ -1260,10 +1379,20 @@ class EpochSolver {
         const S = this.it[s]!;
         if (!S.solid || P.ring !== 0 || P.boxes.length !== 1 || P.leaf === S.leaf) continue;
         if (!interpenetrates(loopBounds[p]!, loopBounds[s]!)) continue;
-        // Cheap pair-only tests first (axis of relative motion, footprint inside the face), so
-        // the per-phase pass below only sees real candidates.
-        // (An explicit `inserts` target stays, so an invalid insert clip is reported.)
-        if (P.insertsKey !== S.key && this.clipAxisOf(p, s, r0Of(p, s)) < 0) continue;
+        // Cheap pair-only filters first: at most one axis of relative motion, and the item's
+        // footprint ⊥ that axis inside the block's bounding box (an explicit `inserts` target
+        // always stays, so an invalid insert is reported).
+        const axes = this.motionAxes(p, s);
+        if (P.insertsKey !== S.key) {
+          if (axes < 0) continue;
+          // Rigid with each other over the loop: only a seated (interpenetrating) pair matters.
+          if (axes === 0 && !interpenetrates(at0(p), at0(s))) continue;
+          if (axes > 0) {
+            const u = axes - 1;
+            const bb = blockBox.get(blockOf[s]!)!;
+            if (!footprintInside(at0(p), bb as unknown as Bounds, u)) continue;
+          }
+        }
         cands.push({
           p,
           s,
@@ -1314,28 +1443,49 @@ class EpochSolver {
           severity: "info",
           code: "assembly/clip-fallback",
           path: this.pointer(P.key),
-          message: `"${P.key}" inserts "${P.insertsKey}", which is not a solid depth item; it is not clipped.`,
+          message: `"${P.key}" inserts "${P.insertsKey}", which is not a solid depth item that fills its box; it is not clipped.`,
           params: { item: P.key, solid: P.insertsKey },
         });
       }
-      const list = [...(byItem.get(p) ?? [])].sort(
-        (a, b) => (a.s === insertsIdx ? 0 : 1) - (b.s === insertsIdx ? 0 : 1) || a.s - b.s,
+      // Group the solids this item meets by loop block; the inserts block goes first.
+      const groups = new Map<number, Cand[]>();
+      for (const c of byItem.get(p) ?? []) {
+        if (!c.meets) continue;
+        const g = groups.get(blockOf[c.s]!);
+        if (g) g.push(c);
+        else groups.set(blockOf[c.s]!, [c]);
+      }
+      const insertsBlock = insertsIdx !== undefined ? blockOf[insertsIdx] : undefined;
+      const order = [...groups.keys()].sort(
+        (a, b) => (a === insertsBlock ? 0 : 1) - (b === insertsBlock ? 0 : 1) || a - b,
       );
-      for (const c of list) {
-        const clip = c.meets ? this.clipFor(c.p, c.s, c.lo, c.hi, r0Of(c.p, c.s)) : undefined;
+      let done = false;
+      for (const g of order) {
+        const members = groups.get(g)!;
+        const clip = this.blockClip(p, members, disp0);
         if (clip) {
-          this.clipSolid[p] = c.s;
-          this.clipAxis[p] = ["x", "y", "z"].indexOf(clip.axis);
-          this.clips.push(clip);
+          this.clips.push(clip.clip);
+          this.clipSolid[p] = clip.solid;
+          this.clipAxis[p] = clip.u;
+          this.clipMembers[p] = members.map((c) => c.s);
+          done = true;
           break;
         }
-        if (c.s === insertsIdx) {
+      }
+      if (!done && insertsIdx !== undefined && this.it[insertsIdx]!.solid) {
+        // Report an invalid insert only if it ever reaches past a VISIBLE face of its solid:
+        // hidden-face entries need no clip (weak-behind orders them exactly).
+        const c = (byItem.get(p) ?? []).find((x) => x.s === insertsIdx);
+        const S = this.it[insertsIdx]!.bbox;
+        const visible =
+          c !== undefined && [0, 1, 2].some((k) => P.bbox[k + 3]! + c.hi[k]! > S[k + 3]! + EPS);
+        if (visible) {
           this.diags.add({
             severity: "info",
             code: "assembly/clip-fallback",
             path: this.pointer(P.key),
-            message: `"${P.key}" is inserted in "${this.it[c.s]!.key}" but no static clip at its entry face is valid (motion across the face's axis, or no visible entry face); it is hidden while it crosses a visible face.`,
-            params: { item: P.key, solid: this.it[c.s]!.key },
+            message: `"${P.key}" is inserted in "${this.it[insertsIdx]!.key}" but no static clip at one exterior face of its block is valid (motion across the face's axis, or several faces crossed); it is hidden while it crosses a visible face.`,
+            params: { item: P.key, solid: this.it[insertsIdx]!.key },
           });
         }
       }
@@ -1343,74 +1493,10 @@ class EpochSolver {
   }
 
   /**
-   * Times at which a clipped leaf's `+u` face passes its clip face (`p.max_u(t) = s.max_u(t)`):
-   * there it switches between enclosed (hidden) and crossing (clipped, visible). Each phase in
-   * which the pair moves relative to each other is sampled (17 points); every sign change is
-   * refined by 60 bisection steps on time. These are only extra phase breakpoints: every interval
-   * is still certified, so a missed root costs bisection, never soundness. Bounded by
-   * `maxCollisionSamples` evaluations.
+   * Axes of p's motion relative to s over the whole loop (moves of only one of them with a
+   * non-zero offset): 0 none (rigid), 1..3 one axis (x, y, z), -1 several.
    */
-  private clipEvents(spans: readonly Span[]): number[] {
-    const out: number[] = [];
-    if (this.clips.length === 0) return out;
-    let evals = 0;
-    const cap = this.budgets.maxCollisionSamples;
-    const keyIndex = new Map(this.it.map((x, i) => [x.key, i] as const));
-    const clipped = this.clips.map((c) => {
-      const p = keyIndex.get(c.item)!;
-      return { p, s: this.clipSolid[p]!, u: this.clipAxis[p]! };
-    });
-    for (const span of spans) {
-      const ph = this.phase(span);
-      for (const { p, s, u } of clipped) {
-        if (evals > cap) return out;
-        const A = ph.act[p]!;
-        const B = ph.act[s]!;
-        if (A.length === B.length && A.every((m, k) => m === B[k])) continue; // no relative motion
-        const P = this.it[p]!.bbox;
-        const S = this.it[s]!.bbox;
-        const f = (t: number): number => {
-          evals++;
-          return P[u + 3]! + this.dispAtTime(p, t)[u]! - (S[u + 3]! + this.dispAtTime(s, t)[u]!);
-        };
-        const N = 16;
-        let t0 = ph.a;
-        let f0 = f(t0);
-        for (let k = 1; k <= N; k++) {
-          const t1 = ph.a + ((ph.b - ph.a) * k) / N;
-          const f1 = f(t1);
-          if (f0 < 0 !== f1 < 0) {
-            let lo = t0;
-            let hi = t1;
-            const flo = f0 < 0;
-            for (let q = 0; q < 60; q++) {
-              const mid = (lo + hi) / 2;
-              if (f(mid) < 0 === flo) lo = mid;
-              else hi = mid;
-            }
-            out.push((lo + hi) / 2);
-          }
-          t0 = t1;
-          f0 = f1;
-        }
-      }
-    }
-    return out;
-  }
-
-  /**
-   * A valid static clip of item p at solid s (§9.5): the motion of p relative to s over the whole
-   * loop is along one axis `u` only (or none: then `u` is the one visible face p reaches past at
-   * rest), p's footprint ⊥ u lies inside s's face, p never reaches past s's hidden `-u` face, and
-   * at some time p overlaps s's inside and reaches past its VISIBLE `+u` face. Hidden-face exits
-   * need no clip (weak-behind orders them exactly).
-   */
-  /**
-   * Pair-only part of the clip test: the axis `u` of p's motion relative to s over the loop
-   * (every move of only one of them is along `u`; none: the one axis p reaches past s's visible
-   * face at rest), with p's footprint ⊥ u inside s's face. -1 when there is none.
-   */
-  private clipAxisOf(p: number, s: number, r0: Vec): number {
+  private motionAxes(p: number, s: number): number {
     const A = this.chain[p]!;
     const B = this.chain[s]!;
     const axes = [false, false, false];
@@ -1429,46 +1515,187 @@ class EpochSolver {
       else b++;
       for (let k = 0; k < 3; k++) if (Math.abs(m.to[k]! - m.from[k]!) > EPS) axes[k] = true;
     }
-    if (axes.filter(Boolean).length > 1) return -1;
-    const S = this.it[s]!.bbox;
-    const at0 = shift(this.it[p]!.bbox, r0);
-    let u = axes.indexOf(true);
-    if (u < 0) {
-      const out: number[] = [];
-      for (let k = 0; k < 3; k++) if (at0[k + 3]! > S[k + 3]! + EPS) out.push(k);
-      if (out.length !== 1) return -1;
-      u = out[0]!;
-    }
-    return footprintInside(at0, S, u) ? u : -1;
+    const count = axes.filter(Boolean).length;
+    return count === 0 ? 0 : count > 1 ? -1 : axes.indexOf(true) + 1;
   }
 
-  private clipFor(
+  /**
+   * A valid static clip of item p at a loop-rigid block (§9.5, block level). In the frame of the
+   * block (members at their constant relative offsets), with p's loop-wide relative range along
+   * `u` being [uLo, uHi]: p moves relative to the block along `u` only (or not at all), and for
+   * one exterior `+u` face plane F of the block
+   *   - the part of p below F at its lowest position lies inside the union of the members (so p
+   *     never reaches past a hidden face or out of the side, and its footprint is inside F),
+   *   - the part of p above F at its highest position meets no member (F is exterior there),
+   *   - p reaches past F at some time and is inside below F at some time.
+   * Then the prism over p's footprint from F outward is exact while p's `+u` face is at or beyond
+   * F (§9.5's side-face proof only uses the plane), and p is enclosed by the block while below.
+   * The clip solid is the member that carries F over p's footprint (its track is the block's).
+   */
+  private blockClip(
     p: number,
-    s: number,
-    lo: readonly number[],
-    hi: readonly number[],
-    r0: Vec,
-  ): DepthClip | undefined {
-    const u = this.clipAxisOf(p, s, r0);
-    if (u < 0) return undefined;
+    members: readonly { readonly s: number; readonly lo: number[]; readonly hi: number[] }[],
+    disp0: readonly Vec[],
+  ): { clip: DepthClip; solid: number; u: number } | undefined {
+    if (members.length === 0 || members.length > MAX_UNION_BOXES) return undefined;
+    const s0 = members[0]!.s;
+    const axes = this.motionAxes(p, s0);
+    if (axes < 0) return undefined;
+    const lo = members[0]!.lo;
+    const hi = members[0]!.hi;
+    const r0: Vec = [
+      disp0[p]![0] - disp0[s0]![0],
+      disp0[p]![1] - disp0[s0]![1],
+      disp0[p]![2] - disp0[s0]![2],
+    ];
     const P = this.it[p]!.bbox;
-    const S = this.it[s]!.bbox;
-    const at0 = shift(P, r0);
-    if (P[u]! + lo[u]! < S[u]! - EPS) return undefined; // reaches past the hidden -u face
-    if (!(P[u + 3]! + hi[u]! > S[u + 3]! + EPS)) return undefined; // never past the visible +u face
-    if (!(P[u]! + lo[u]! < S[u + 3]! - EPS)) return undefined; // never inside
-    const top = Math.max(P[u + 3]! + hi[u]!, S[u + 3]!);
-    const prism = [...at0];
-    prism[u] = S[u + 3]!;
-    prism[u + 3] = top + Math.max(1, top - S[u + 3]!);
-    const item = this.it[p]!.key;
-    return {
-      item,
-      solid: this.it[s]!.key,
-      axis: (["x", "y", "z"] as const)[u]!,
-      prism: fromBounds(prism as unknown as Bounds),
-      clip: this.clipId(item, 0),
+    const P0 = shift(P, r0);
+    const frame: Bounds[] = members.map((m) =>
+      shift(this.it[m.s]!.bbox, [
+        disp0[m.s]![0] - disp0[s0]![0],
+        disp0[m.s]![1] - disp0[s0]![1],
+        disp0[m.s]![2] - disp0[s0]![2],
+      ]),
+    );
+    const overlaps = (a: Bounds, b: Bounds, u: number): boolean => {
+      for (let j = 0; j < 3; j++) {
+        if (j === u) continue;
+        if (Math.min(a[j + 3]!, b[j + 3]!) - Math.max(a[j]!, b[j]!) <= EPS) return false;
+      }
+      return true;
     };
+    for (const u of axes > 0 ? [axes - 1] : [0, 1, 2]) {
+      const uLo = P[u]! + lo[u]!;
+      const uHi = P[u + 3]! + hi[u]!;
+      const planes = [
+        ...new Set(frame.filter((b) => overlaps(b, P0, u)).map((b) => b[u + 3]!)),
+      ].sort((a, b) => a - b);
+      for (const F of planes) {
+        if (!(uHi > F + EPS && uLo < F - EPS)) continue;
+        const low = [...P0];
+        low[u] = uLo;
+        low[u + 3] = F;
+        this.pairChecks += frame.length;
+        if (!insideUnion(low as unknown as Bounds, frame)) continue;
+        const high = [...P0];
+        high[u] = F;
+        high[u + 3] = uHi;
+        if (frame.some((b) => interpenetrates(high as unknown as Bounds, b))) continue;
+        const k = frame.findIndex((b) => Math.abs(b[u + 3]! - F) <= EPS && overlaps(b, P0, u));
+        if (k < 0) continue;
+        const M = members[k]!.s;
+        // Prism in M's rest frame: the block frame shifted by M's offset from s0.
+        const c: Vec = [
+          disp0[M]![0] - disp0[s0]![0],
+          disp0[M]![1] - disp0[s0]![1],
+          disp0[M]![2] - disp0[s0]![2],
+        ];
+        const top = Math.max(uHi, F);
+        const prism = [...P0];
+        prism[u] = F;
+        prism[u + 3] = top + Math.max(1, top - F);
+        const item = this.it[p]!.key;
+        return {
+          clip: {
+            item,
+            solid: this.it[M]!.key,
+            axis: (["x", "y", "z"] as const)[u]!,
+            prism: fromBounds(shift(prism as unknown as Bounds, neg(c))),
+            clip: this.clipId(item, 0),
+          },
+          solid: M,
+          u,
+        };
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Times at which a clipped leaf's `+u` face passes its clip face (`p.max_u(t) = F(t)`): there
+   * it switches between enclosed (hidden) and crossing (clipped, visible). When every relative
+   * move along `u` active in the phase has the same sign, the gap is monotone and one bisection
+   * from the end signs locates the single root; otherwise the phase is sampled (17 points) and
+   * each sign change refined (60 steps on time). These are only extra phase breakpoints: every
+   * interval is still certified, so a missed root costs bisection, never soundness. Bounded by
+   * `maxCollisionSamples` evaluations (`budget/time` when hit).
+   */
+  private clipEvents(spans: readonly Span[]): number[] {
+    const out: number[] = [];
+    if (this.clips.length === 0) return out;
+    let evals = 0;
+    const cap = this.budgets.maxCollisionSamples;
+    const keyIndex = new Map(this.it.map((x, i) => [x.key, i] as const));
+    const clipped = this.clips.map((c) => {
+      const p = keyIndex.get(c.item)!;
+      return { p, s: this.clipSolid[p]!, u: this.clipAxis[p]! };
+    });
+    const refine = (f: (t: number) => number, a: number, b: number, fa: number): number => {
+      let lo = a;
+      let hi = b;
+      const neg0 = fa < 0;
+      for (let q = 0; q < 60; q++) {
+        const mid = (lo + hi) / 2;
+        if (f(mid) < 0 === neg0) lo = mid;
+        else hi = mid;
+      }
+      return (lo + hi) / 2;
+    };
+    for (const span of spans) {
+      const ph = this.phase(span);
+      for (const { p, s, u } of clipped) {
+        if (evals > cap) {
+          this.diags.add({
+            severity: "warning",
+            code: "budget/time",
+            path: "",
+            message:
+              "Clip event search exceeded its work budget; the remaining clip switches are found by bisection (approximate near them).",
+            params: { evaluations: evals },
+          });
+          return out;
+        }
+        const A = ph.act[p]!;
+        const B = ph.act[s]!;
+        if (A.length === B.length && A.every((m, k) => m === B[k])) continue; // no relative motion
+        const P = this.it[p]!.bbox;
+        const S = this.it[s]!.bbox;
+        const f = (t: number): number => {
+          evals++;
+          return P[u + 3]! + this.dispAtTime(p, t)[u]! - (S[u + 3]! + this.dispAtTime(s, t)[u]!);
+        };
+        // Signs of the active relative moves along u (moves of only one side).
+        let pos = false;
+        let negS = false;
+        const onlyIn = (X: readonly number[], Y: readonly number[], sign: number): void => {
+          for (const m of X) {
+            if (Y.includes(m)) continue;
+            const d = sign * (this.mv[m]!.to[u]! - this.mv[m]!.from[u]!);
+            if (d > EPS) pos = true;
+            else if (d < -EPS) negS = true;
+          }
+        };
+        onlyIn(A, B, 1);
+        onlyIn(B, A, -1);
+        if (!(pos && negS)) {
+          const fa = f(ph.a);
+          const fb = f(ph.b);
+          if (fa < 0 !== fb < 0) out.push(refine(f, ph.a, ph.b, fa));
+          continue;
+        }
+        const N = 16;
+        let t0 = ph.a;
+        let f0 = f(t0);
+        for (let k = 1; k <= N; k++) {
+          const t1 = ph.a + ((ph.b - ph.a) * k) / N;
+          const f1 = f(t1);
+          if (f0 < 0 !== f1 < 0) out.push(refine(f, t0, t1, f0));
+          t0 = t1;
+          f0 = f1;
+        }
+      }
+    }
+    return out;
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1494,8 +1721,8 @@ class EpochSolver {
     const I = this.it[i]!;
     const J = this.it[j]!;
     if (!this.screenOverlap(sweep(I.bbox, lo, hi), J.bbox)) return 0;
-    if (this.clipSolid[i] === j) return this.edge(j, i, F);
-    if (this.clipSolid[j] === i) return this.edge(i, j, F);
+    if (this.clipMembers[i]!.includes(j)) return this.edge(j, i, F);
+    if (this.clipMembers[j]!.includes(i)) return this.edge(i, j, F);
     const sameLeaf = I.leaf === J.leaf;
     if (I.ring !== 0 && J.ring !== 0 && sameLeaf) {
       return I.ring === 1 ? this.edge(i, j, F) : this.edge(j, i, F);
@@ -1543,6 +1770,8 @@ class EpochSolver {
       if (J.solid && weakBehind(I.bbox, J.bbox, hi)) return this.edge(i, j, F);
       // j relative to i ranges over [-hi, -lo]: its upper end is -lo.
       if (I.solid && weakBehind(J.bbox, I.bbox, neg(lo))) return this.edge(j, i, F);
+      if (this.blockWeakBehind(i, j, hi)) return this.edge(i, j, F);
+      if (this.blockWeakBehind(j, i, neg(lo))) return this.edge(j, i, F);
       if (this.behindClipSolid(j, i)) return this.edge(j, i, C);
       if (this.behindClipSolid(i, j)) return this.edge(i, j, C);
     }
@@ -1553,19 +1782,48 @@ class EpochSolver {
   private curPose: Pose | undefined;
 
   /**
-   * `q` before `p` when `p` is clipped at solid `s` and `q` is weak-behind `s` for the whole
-   * interval: every visible point of `p` lies beyond `s`'s clipped `+u` face inside `s`'s
-   * footprint, while every point of `q` lies at or below `s.max` on every axis, so no point of `q`
-   * is on the viewer's side of a visible point of `p` (the ray from `p` toward the viewer only
-   * increases every coordinate). A rod resting on a crank pin inside a block, the rod leaving
-   * through the deck (clipped) and the crank through the bottom: crank < block < rod, exactly.
+   * Weak-behind a BLOCK that fills its bounding box (its union is one box occluder, e.g. a
+   * housing split in two halves): `p` (relative to member `s`, upper offset `hi`) never reaches
+   * past a visible face of that box, so `p` before every member is exact (as for one box).
+   */
+  private blockWeakBehind(p: number, s: number, hi: Vec): boolean {
+    const ph = this.curPh;
+    const pose = this.curPose;
+    if (!ph?.block || !ph.blockMembers || !pose || !this.it[s]!.solid) return false;
+    const b = ph.block[s]!;
+    const members = b >= 0 ? ph.blockMembers.get(b) : undefined;
+    if (!members || members.length > MAX_UNION_BOXES || members.includes(p)) return false;
+    const frame = members.map((m) =>
+      shift(this.it[m]!.bbox, [
+        pose.disp[3 * m]! - pose.disp[3 * s]!,
+        pose.disp[3 * m + 1]! - pose.disp[3 * s + 1]!,
+        pose.disp[3 * m + 2]! - pose.disp[3 * s + 2]!,
+      ]),
+    );
+    const ub = unionBounds(frame);
+    let fills = ph.blockFills?.get(b);
+    if (fills === undefined) {
+      this.pairChecks += frame.length;
+      fills = insideUnion(ub, frame);
+      ph.blockFills?.set(b, fills);
+    }
+    return fills && weakBehind(this.it[p]!.bbox, ub, hi);
+  }
+
+  /**
+   * `q` before `p` when `p` is clipped at face plane F (`+u` face of its clip solid `s`) and `q`
+   * stays at or below F along `u` for the whole interval (`q.max_u ≤ F` in `s`'s frame): every
+   * visible point of `p` lies beyond F, and the ray from such a point toward the viewer only
+   * increases `u`, so it never meets `q`. A rod resting on a crank pin inside a block, the rod
+   * leaving through the deck (clipped) and the crank through the bottom: crank < rod, exactly.
    */
   private behindClipSolid(q: number, p: number): boolean {
     const s = this.clipSolid[p]!;
     if (s < 0 || s === q || !this.curPh || !this.curPose) return false;
-    if (this.it[q]!.leaf === this.it[s]!.leaf) return false;
+    if (this.clipMembers[p]!.includes(q)) return false; // members are forced already
+    const u = this.clipAxis[p]!;
     this.rel(this.curPh, this.curPose, q, s);
-    return weakBehind(this.it[q]!.bbox, this.it[s]!.bbox, this.rhi as unknown as Vec);
+    return this.it[q]!.bbox[u + 3]! + this.rhi[u]! <= this.it[s]!.bbox[u + 3]! + EPS;
   }
 
   /** §9.2 for one relative offset `r` (i in j's frame): separation, containment, centre depth. */
@@ -1734,7 +1992,28 @@ class EpochSolver {
     const cands: Map<number, number[]> = full ? new Map() : (task.cands ?? new Map());
     const relEdges: number[] = []; // from, to, strength
     const unsure: number[] = [];
-    const rigidSolids: [number, number][] = [];
+    if (full && !ph.block) {
+      // Blocks first (relate() orders items against filled blocks): touching occluders that
+      // do not move relative to each other in this phase.
+      const rigidSolids: [number, number][] = [];
+      for (let q = 0; q < pairs.length; q += 2) {
+        const i = pairs[q]!;
+        const j = pairs[q + 1]!;
+        const I = this.it[i]!;
+        const J = this.it[j]!;
+        if (I.solid && J.solid && I.leaf !== J.leaf && this.rel(ph, p, i, j))
+          rigidSolids.push([i, j]);
+      }
+      const solidBoxes = this.it.map((x, i) =>
+        shift(x.bbox, [p.disp[3 * i]!, p.disp[3 * i + 1]!, p.disp[3 * i + 2]!]),
+      );
+      ph.block = blocksOf(n, rigidSolids, solidBoxes);
+      for (let i = 0; i < n; i++) if (!this.it[i]!.solid) ph.block[i] = -1;
+      ph.blockMembers = new Map();
+      for (let i = 0; i < n; i++) if (ph.block[i]! >= 0) pushMap(ph.blockMembers, ph.block[i]!, i);
+      for (const [b, m] of [...ph.blockMembers]) if (m.length < 2) ph.blockMembers.delete(b);
+      ph.blockFills = new Map();
+    }
     for (let q = 0; q < pairs.length; q += 2) {
       const i = pairs[q]!;
       const j = pairs[q + 1]!;
@@ -1750,13 +2029,17 @@ class EpochSolver {
       const I = this.it[i]!;
       const J = this.it[j]!;
       if (full && I.leaf !== J.leaf) {
-        if (J.solid && mayInterpenetrate(I.bbox, J.bbox, lo, hi)) pushMap(cands, i, j);
-        if (I.solid && mayInterpenetrateNeg(J.bbox, I.bbox, lo, hi)) pushMap(cands, j, i);
-        if (I.solid && J.solid && rigid) rigidSolids.push([i, j]);
+        if (J.solid && this.meets(i, J.bbox, lo, hi, false)) pushMap(cands, i, j);
+        if (I.solid && J.boxes.some((b) => mayInterpenetrateNeg(b, I.bbox, lo, hi)))
+          pushMap(cands, j, i);
       }
       // A rigid pair's relation depends only on the pair and its relative offset (clipped items
       // excepted: `behindClipSolid` looks at a third item), so it is cached by exact offset.
-      const cacheable = rigid && this.clipSolid[i]! < 0 && this.clipSolid[j]! < 0;
+      // (Nor members of a multi-member block: block weak-behind looks at the other members.)
+      const inBlock = (x: number): boolean =>
+        !!ph.blockMembers && ph.block![x]! >= 0 && ph.blockMembers.has(ph.block![x]!);
+      const cacheable =
+        rigid && this.clipSolid[i]! < 0 && this.clipSolid[j]! < 0 && !inBlock(i) && !inBlock(j);
       const key = i * n + j;
       const hit = cacheable ? this.rigidCache.get(key) : undefined;
       let r: 0 | 1 | 2;
@@ -1772,16 +2055,7 @@ class EpochSolver {
       if (r === 2) unsure.push(i, j);
       if (full && ph.moving && !rigid) this.collisions(i, j, lo, hi, ta, tb);
     }
-    if (full) {
-      for (const l of cands.values()) l.sort((a, b) => a - b);
-      if (!ph.block) {
-        const solidBoxes = this.it.map((x, i) =>
-          shift(x.bbox, [p.disp[3 * i]!, p.disp[3 * i + 1]!, p.disp[3 * i + 2]!]),
-        );
-        ph.block = blocksOf(n, rigidSolids, solidBoxes);
-        for (let i = 0; i < n; i++) if (!this.it[i]!.solid) ph.block[i] = -1;
-      }
-    }
+    if (full) for (const l of cands.values()) l.sort((a, b) => a - b);
 
     // Visibility.
     const status = new Int8Array(n); // 0 visible, 1 hidden, 2 uncertain
@@ -1827,8 +2101,12 @@ class EpochSolver {
   }
 
   /**
-   * Visibility of item i over the pose interval against its candidate solids: 0 visible, 1
+   * Visibility of item i over the pose interval against its candidate occluders: 0 visible, 1
    * hidden, 2 uncertain. `exact`: the pose is a point (midpoint resolution), never uncertain.
+   * Every occluder i interpenetrates is resolved one of four ways: i's clip block (exact while i
+   * is beyond the clip face, hidden while inside), an exact pair order (weak-behind either way),
+   * a block decision (members of a rigid group of ≥ 2: enclosed, block crossing), or hiding i
+   * with `assembly/clip-fallback`. Nothing is left to the static heuristic.
    */
   private visibility(
     ph: Phase,
@@ -1838,44 +2116,73 @@ class EpochSolver {
     exact: boolean,
   ): 0 | 1 | 2 {
     const P = this.it[i]!.bbox;
+    const iSolid = this.it[i]!.solid;
     let unsure = false;
-    const okMember = new Set<number>();
+    const ok = new Set<number>();
+    const members = this.clipMembers[i]!;
+    if (members.length > 0 && cands.some((s) => members.includes(s))) {
+      // The clip is exact only while the leaf's +u face is at or beyond the clip face F (§9.5's
+      // proof covers side-face points; a +u face still below F would project inside the clip).
+      // Fully below F the leaf lies inside the block and is hidden. The switch instants are
+      // phase breakpoints (`clipEvents`), so both sides certify.
+      const M = this.clipSolid[i]!;
+      const u = this.clipAxis[i]!;
+      this.rel(ph, p, i, M);
+      const lo = exact ? mid3(this.rlo, this.rhi) : this.rlo;
+      const hi = exact ? lo : this.rhi;
+      const F = this.it[M]!.bbox[u + 3]!;
+      if (P[u + 3]! + hi[u]! <= F + EPS) return 1;
+      if (P[u + 3]! + lo[u]! >= F - EPS) for (const m of members) ok.add(m);
+      else unsure = true;
+    }
+    const block = ph.block;
+    const grouped = (s: number): boolean =>
+      !!block && block[s]! >= 0 && cands.some((t) => t !== s && block[t] === block[s]);
     for (const s of cands) {
+      if (members.includes(s)) continue;
       this.rel(ph, p, i, s);
       const lo: Vec = exact ? mid3(this.rlo, this.rhi) : [this.rlo[0]!, this.rlo[1]!, this.rlo[2]!];
       const hi: Vec = exact ? lo : [this.rhi[0]!, this.rhi[1]!, this.rhi[2]!];
       const S = this.it[s]!.bbox;
-      if (s === this.clipSolid[i]) {
-        // The clip is exact only while the leaf's +u face is at or beyond the clip face (§9.5's
-        // proof covers side-face points; a top face still below the face would project inside
-        // the clip). Fully below it the leaf is enclosed and hidden. The switch instants are
-        // phase breakpoints (`clipEvents`), so both sides certify.
-        const u = this.clipAxis[i]!;
-        if (P[u + 3]! + hi[u]! <= S[u + 3]! + EPS) return 1;
-        if (P[u + 3]! + lo[u]! >= S[u + 3]! - EPS) okMember.add(s);
-        else unsure = true;
+      if (!this.meets(i, S, lo, hi, false)) {
+        ok.add(s); // no sub-box of i meets s here
         continue;
       }
+      const nlo = neg(hi);
+      const nhi = neg(lo);
+      // s crossing, enclosed in, or weak-behind the occluder i (or i's filled block): the pair
+      // is decided from s's side (s hidden, or drawn before i), i stays as it is.
+      if (
+        iSolid &&
+        (hideThroughout(S, P, nlo, nhi) ||
+          weakBehind(S, P, nhi) ||
+          this.clipMembers[s]!.includes(i) ||
+          this.blockWeakBehind(s, i, nhi))
+      ) {
+        ok.add(s);
+        continue;
+      }
+      if (grouped(s)) continue; // a member of a block among the candidates: decided below
       if (hideThroughout(P, S, lo, hi)) {
-        if (!enclosedThroughout(P, S, lo, hi)) {
-          this.diags.add(
-            {
-              severity: "info",
-              code: "assembly/clip-fallback",
-              path: this.pointer(this.it[i]!.key),
-              message: `"${this.it[i]!.key}" crosses a visible face of "${this.it[s]!.key}" without a valid static clip; it is hidden until clear.`,
-              params: { item: this.it[i]!.key, solid: this.it[s]!.key },
-            },
-            `${i}/${s}`,
-          );
-        }
+        if (!enclosedThroughout(P, S, lo, hi)) this.fallback(i, s);
         return 1;
       }
-      if (weakBehind(P, S, hi)) okMember.add(s);
-      else if (!neverHide(P, S, lo, hi)) unsure = true;
+      // i never past a visible face of s: i before s, exact.
+      if (weakBehind(P, S, hi)) {
+        ok.add(s);
+        continue;
+      }
+      if (this.meets(i, S, lo, hi, true)) {
+        if (!this.yields(i, s)) {
+          ok.add(s); // a collision of two occluders: the other one is hidden
+          continue;
+        }
+        this.fallback(i, s);
+        return 1;
+      }
+      if (!exact) unsure = true;
     }
-    // Union of touching solids (rigid blocks with ≥ 2 candidate members).
-    const block = ph.block;
+    // Blocks of touching occluders rigid in this phase, with ≥ 2 candidate members.
     if (block && cands.length >= 2) {
       const groups = new Map<number, number[]>();
       for (const s of cands) {
@@ -1883,29 +2190,164 @@ class EpochSolver {
         if (b < 0) continue;
         pushMap(groups, b, s);
       }
-      for (const members of [...groups.keys()].sort((a, b) => a - b).map((k) => groups.get(k)!)) {
-        if (members.length < 2 || members.length > MAX_UNION_BOXES) continue;
-        const s0 = members[0]!;
+      for (const group of [...groups.keys()].sort((a, b) => a - b).map((k) => groups.get(k)!)) {
+        if (group.length < 2) {
+          // Alone among the candidates: decide it as a single occluder.
+          const s = group[0]!;
+          if (ok.has(s) || members.includes(s)) continue;
+          this.rel(ph, p, i, s);
+          const lo: Vec = exact
+            ? mid3(this.rlo, this.rhi)
+            : [this.rlo[0]!, this.rlo[1]!, this.rlo[2]!];
+          const hi: Vec = exact ? lo : [this.rhi[0]!, this.rhi[1]!, this.rhi[2]!];
+          if (this.meets(i, this.it[s]!.bbox, lo, hi, true) && this.yields(i, s)) {
+            this.fallback(i, s);
+            return 1;
+          }
+          if (!exact && !ok.has(s)) unsure = true;
+          continue;
+        }
+        if (group.length > MAX_UNION_BOXES) {
+          if (group.every((m) => ok.has(m))) continue;
+          this.fallback(i, group[0]!);
+          return 1;
+        }
+        const s0 = group[0]!;
         this.rel(ph, p, i, s0);
         const lo: Vec = exact
           ? mid3(this.rlo, this.rhi)
           : [this.rlo[0]!, this.rlo[1]!, this.rlo[2]!];
         const hi: Vec = exact ? lo : [this.rhi[0]!, this.rhi[1]!, this.rhi[2]!];
-        const frame: Bounds[] = members.map((m) =>
+        const frame: Bounds[] = group.map((m) =>
           shift(this.it[m]!.bbox, [
             p.disp[3 * m]! - p.disp[3 * s0]!,
             p.disp[3 * m + 1]! - p.disp[3 * s0 + 1]!,
             p.disp[3 * m + 2]! - p.disp[3 * s0 + 2]!,
           ]),
         );
-        if (insideUnion(sweep(P, lo, hi), frame)) return 1;
-        const c = core(P, lo, hi);
-        if (c && !insideUnion(c, frame)) continue;
-        if (members.every((m) => okMember.has(m))) continue;
-        unsure = true;
+        this.pairChecks += frame.length;
+        const sw = sweep(P, lo, hi);
+        if (insideUnion(sw, frame)) return 1; // enclosed by the union
+        if (group.every((m) => ok.has(m))) continue;
+        // A block that fills its bounding box is one box occluder: weak-behind it (never past a
+        // visible face: inside, or out through hidden faces) draws i before every member, exact.
+        const ub = unionBounds(frame);
+        if (insideUnion(ub, frame) && weakBehind(P, ub, hi)) continue;
+        // Crossing ONE exterior face of the block without a valid clip at it: hidden until
+        // clear (§9.5 fallback).
+        if (this.blockCross(sw, [P[0] + hi[0], P[1] + hi[1], P[2] + hi[2]], frame)) {
+          this.fallback(i, s0);
+          return 1;
+        }
+        // Interpenetrating a member otherwise (several faces): hidden while it lasts.
+        const k = group.findIndex(
+          (m, q) => !ok.has(m) && this.meets(i, frame[q]!, lo, hi, true) && this.yields(i, m),
+        );
+        if (k >= 0) {
+          this.fallback(i, group[k]!);
+          return 1;
+        }
+        if (!exact) unsure = true;
       }
     }
     return unsure && !exact ? 2 : 0;
+  }
+
+  /**
+   * The item crosses ONE exterior `+k` face of a block (members `frame`) at every time of the
+   * interval: for a face plane F of a member over the swept box's footprint, the swept box's part
+   * below F lies inside the union, its part above F meets no member, and the item never clears F
+   * (`mins` = its min corner at the top of its range). Then every pose is a crossing at F (or
+   * enclosed below it): hidden without a clip (§9.5 fallback).
+   */
+  private blockCross(sw: Bounds, mins: readonly number[], frame: readonly Bounds[]): boolean {
+    for (let k = 0; k < 3; k++) {
+      const planes = new Set<number>();
+      for (const b of frame) {
+        let over = true;
+        for (let j = 0; j < 3; j++) {
+          if (j !== k && Math.min(b[j + 3]!, sw[j + 3]!) - Math.max(b[j]!, sw[j]!) <= EPS) {
+            over = false;
+          }
+        }
+        if (over) planes.add(b[k + 3]!);
+      }
+      for (const F of [...planes].sort((a, b) => a - b)) {
+        if (!(mins[k]! < F - EPS) || !(sw[k + 3]! > F + EPS)) continue;
+        const below = [...sw];
+        below[k + 3] = F;
+        this.pairChecks += frame.length; // union tests are charged to the pair budget
+        if (!insideUnion(below as unknown as Bounds, frame)) continue;
+        const above = [...sw];
+        above[k] = F;
+        if (frame.some((b) => interpenetrates(above as unknown as Bounds, b))) continue;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether item i (any of its sub-boxes, offset by [lo, hi] relative to `s`) may meet the box
+   * `S` (`throughout`: interpenetrates it at every offset).
+   */
+  private meets(i: number, S: Bounds, lo: Vec, hi: Vec, throughout: boolean): boolean {
+    for (const b of this.it[i]!.boxes) {
+      if (throughout ? interpenetratesThroughout(b, S, lo, hi) : mayInterpenetrate(b, S, lo, hi)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * In a collision no rule orders (neither crosses one face of the other), the item that goes
+   * through yields and is hidden: a non-occluder always; between occluders the smaller box
+   * (then the smaller key), so exactly one of the two hides.
+   */
+  private yields(i: number, s: number): boolean {
+    const I = this.it[i]!;
+    if (!I.closed) return true; // not a closed solid (tray half, sprite, …)
+    const vol = (b: Bounds): number => (b[3] - b[0]) * (b[4] - b[1]) * (b[5] - b[2]);
+    const vi = vol(I.bbox);
+    const vs = vol(this.it[s]!.bbox);
+    return vi !== vs ? vi < vs : cmpStr(I.key, this.it[s]!.key) < 0;
+  }
+
+  /**
+   * At time t, box `a` of item i (in j's rest frame) is enclosed by, crossing one
+   * exterior face of, or weak-behind the filled block that j belongs to in the current phase: a
+   * seated relation with the block, not a collision with the member.
+   */
+  private seatedInBlock(i: number, j: number, a: Bounds, t: number): boolean {
+    const ph = this.curPh;
+    if (!ph?.block || !ph.blockMembers || !this.it[j]!.solid) return false;
+    const members = ph.blockMembers.get(ph.block[j]!);
+    if (!members || members.includes(i) || members.length > MAX_UNION_BOXES) return false;
+    // `a` is in j's rest frame (collision sampling works relative to j).
+    const dj = this.dispAtTime(j, t);
+    const frame = members.map((m) => {
+      const dm = this.dispAtTime(m, t);
+      return shift(this.it[m]!.bbox, [dm[0] - dj[0], dm[1] - dj[1], dm[2] - dj[2]]);
+    });
+    this.pairChecks += frame.length;
+    if (insideUnion(a, frame)) return true;
+    if (this.blockCross(a, [a[0], a[1], a[2]], frame)) return true;
+    const ub = unionBounds(frame);
+    return insideUnion(ub, frame) && weakBehind(a, ub, ZERO);
+  }
+
+  private fallback(i: number, s: number): void {
+    this.diags.add(
+      {
+        severity: "info",
+        code: "assembly/clip-fallback",
+        path: this.pointer(this.it[i]!.key),
+        message: `"${this.it[i]!.key}" crosses a visible face of "${this.it[s]!.key}"${this.clipMembers[i]!.length > 0 ? " (outside its clip block)" : ""} without a valid static clip; it is hidden until clear.`,
+        params: { item: this.it[i]!.key, solid: this.it[s]!.key },
+      },
+      `${i}/${s}`,
+    );
   }
 
   /** Bisection limit: the static rule at the midpoint decides (§9.3 step 3); approximate. */
@@ -1966,7 +2408,7 @@ class EpochSolver {
     const I = this.it[i]!;
     const J = this.it[j]!;
     if (this.samples === 0 || I.leaf === J.leaf || I.ring !== 0 || J.ring !== 0) return;
-    if (this.clipSolid[i] === j || this.clipSolid[j] === i) return;
+    if (this.clipMembers[i]!.includes(j) || this.clipMembers[j]!.includes(i)) return;
     const key = i * this.it.length + j;
     if (this.collided.has(key)) return;
     let possible = false;
@@ -1983,6 +2425,9 @@ class EpochSolver {
         const a = shift(a0, r);
         for (const b of J.boxes) {
           if (!interpenetrates(a, b) || seatedOrEnclosed(a, b)) continue;
+          if (this.seatedInBlock(i, j, a, t)) continue;
+          // (j's box in i's rest frame, for j seated in i's block)
+          if (this.seatedInBlock(j, i, shift(b, neg(r)), t)) continue;
           this.collided.add(key);
           this.diags.add({
             severity: "warning",
@@ -2019,10 +2464,15 @@ class EpochSolver {
       if (pe.fwd && pe.bwd) {
         const f = pe.fwd;
         const b = pe.bwd;
+        // A heuristic direction always yields to a certified or forced one; between two
+        // certified/forced directions the one held longer wins (strength does not decide which
+        // epochs are right), then the earlier one.
+        const hf = f.strength === H ? 0 : 1;
+        const hb = b.strength === H ? 0 : 1;
         const fwin =
-          f.strength !== b.strength
-            ? f.strength > b.strength
-            : Math.abs(f.duration - b.duration) > TIME_EPS
+          hf !== hb
+            ? hf > hb
+            : f.duration !== b.duration
               ? f.duration > b.duration
               : f.first <= b.first;
         const lose = fwin ? b : f;
@@ -2064,7 +2514,7 @@ class EpochSolver {
     const placed = new Uint8Array(n);
     const better = (x: number, y: number): boolean => {
       const d = this.depth0[x]! - this.depth0[y]!;
-      if (Math.abs(d) > EPS) return d < 0;
+      if (d !== 0) return d < 0; // raw values: a strict weak order (E-Q06)
       return cmpStr(this.it[x]!.key, this.it[y]!.key) < 0;
     };
     const heap = new MinHeap(better);
@@ -2073,7 +2523,7 @@ class EpochSolver {
     // Total order on edges: weakest first, then smallest centre-depth difference, then keys.
     const edgeLess = (a: number, b: number): boolean => {
       if (estr[a] !== estr[b]) return estr[a]! < estr[b]!;
-      if (Math.abs(ediff[a]! - ediff[b]!) > EPS) return ediff[a]! < ediff[b]!;
+      if (ediff[a] !== ediff[b]) return ediff[a]! < ediff[b]!;
       const f = cmpStr(this.it[efrom[a]!]!.key, this.it[efrom[b]!]!.key);
       if (f !== 0) return f < 0;
       return cmpStr(this.it[eto[a]!]!.key, this.it[eto[b]!]!.key) < 0;

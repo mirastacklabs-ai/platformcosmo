@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Box3, PartMove } from "../src/contracts/index.js";
 import type { DepthEpochResult, DepthItemInput, LoopMove } from "../src/depth/epochs.js";
 import {
+  DEFAULT_DEPTH_BUDGETS,
   depthEpochs,
   displacementAt,
   easeProgress,
@@ -33,6 +34,64 @@ function codes(r: DepthEpochResult): string[] {
 function visibleAt(r: DepthEpochResult, t: number): string[] {
   const e = r.epochs.find((x, k) => t >= x.t0 && (t < x.t1 || k === r.epochs.length - 1))!;
   return [...e.order];
+}
+
+function inRanges(r: DepthEpochResult, t: number): boolean {
+  return r.approximate.some((a) => t >= a.t0 - 1e-9 && t <= a.t1 + 1e-9);
+}
+
+/**
+ * Every visible pair that overlaps on screen and is separated on exactly one side at the pose
+ * of time t must be ordered that way (the static rule's separation, E-Q09).
+ */
+function staticViolations(s: Scene, r: DepthEpochResult, t: number): string[] {
+  const e = r.epochs.find((x, k) => t >= x.t0 && (t < x.t1 || k === r.epochs.length - 1))!;
+  const pos = new Map(e.order.map((k, q) => [k, q]));
+  const posed = new Map(
+    s.items.map((it) => {
+      const d = displacementAt(s.moves, it.path, t);
+      const b = it.box;
+      return [
+        it.key,
+        [
+          b.origin.x + d.x,
+          b.origin.y + d.y,
+          b.origin.z + d.z,
+          b.origin.x + b.size.x + d.x,
+          b.origin.y + b.size.y + d.y,
+          b.origin.z + b.size.z + d.z,
+        ],
+      ] as const;
+    }),
+  );
+  const rect = (b: readonly number[]): number[] => [
+    (b[0]! - b[4]!) * 32,
+    (b[3]! - b[1]!) * 32,
+    (b[0]! + b[1]!) * 16 - b[5]! * 32,
+    (b[3]! + b[4]!) * 16 - b[2]! * 32,
+  ];
+  const out: string[] = [];
+  for (const a of e.order) {
+    for (const b of e.order) {
+      if (a >= b) continue;
+      const A = posed.get(a)!;
+      const B = posed.get(b)!;
+      const ra = rect(A);
+      const rb = rect(B);
+      if (!(
+        ra[0]! < rb[1]! - 1e-6 &&
+        rb[0]! < ra[1]! - 1e-6 &&
+        ra[2]! < rb[3]! - 1e-6 &&
+        rb[2]! < ra[3]! - 1e-6
+      ))
+        continue;
+      const ab = [0, 1, 2].some((k) => A[k + 3]! <= B[k]! + 1e-6);
+      const ba = [0, 1, 2].some((k) => B[k + 3]! <= A[k]! + 1e-6);
+      if (ab === ba) continue;
+      if (ab !== pos.get(a)! < pos.get(b)!) out.push(`${a} / ${b} at ${t}`);
+    }
+  }
+  return out;
 }
 
 function isSubsequence(sub: readonly string[], of: readonly string[]): boolean {
@@ -91,6 +150,37 @@ describe("easing and moves", () => {
     }
     expect(easeProgress("ease-in-out", 0.5)).toBeCloseTo(0.5, 6);
     expect(easeProgress("ease-in", 0.5)).toBeCloseTo(0.3153, 3);
+  });
+
+  it("matches the CSS cubic-bézier curves (independent Newton solver, C-Q07)", () => {
+    // CSS Easing Functions Level 1 keyword control points.
+    const curves = {
+      ease: [0.25, 0.1, 0.25, 1],
+      "ease-in": [0.42, 0, 1, 1],
+      "ease-out": [0, 0, 0.58, 1],
+      "ease-in-out": [0.42, 0, 0.58, 1],
+    } as const;
+    const b = (p1: number, p2: number, s: number): number =>
+      3 * (1 - s) ** 2 * s * p1 + 3 * (1 - s) * s ** 2 * p2 + s ** 3;
+    const db = (p1: number, p2: number, s: number): number =>
+      3 * (1 - s) ** 2 * p1 + 6 * (1 - s) * s * (p2 - p1) + 3 * s ** 2 * (1 - p2);
+    for (const [name, [x1, y1, x2, y2]] of Object.entries(curves)) {
+      for (let k = 1; k < 200; k++) {
+        const x = k / 200;
+        let s = x;
+        for (let q = 0; q < 50; q++) {
+          const d = db(x1, x2, s);
+          if (Math.abs(d) < 1e-12) break;
+          s = Math.min(1, Math.max(0, s - (b(x1, x2, s) - x) / d));
+        }
+        expect(easeProgress(name as keyof typeof curves, x), `${name} @ ${x}`).toBeCloseTo(
+          b(y1, y2, s),
+          9,
+        );
+      }
+    }
+    // A published reference point: ease(0.5) ≈ 0.8024 (cubic-bezier(.25, .1, .25, 1)).
+    expect(easeProgress("ease", 0.5)).toBeCloseTo(0.8024, 3);
   });
 
   it("toLoopMoves: explode, implode mirrored, build from the origin", () => {
@@ -165,8 +255,8 @@ describe("swept boxes (§9.3): concurrent composed moves", () => {
     // the swept path goes. The endpoint hull (y ∈ [0, 1]) is y-separated from it for the whole
     // phase, yet the child runs into it mid-way.
     const items: DepthItemInput[] = [
-      { key: "d/child", path: "d/child", box: rest, solid: true },
-      { key: "post", box: box(0.2, -0.6, -1, 0.5, 0.3, 3), solid: true },
+      { key: "d/child", path: "d/child", box: rest, solid: true, fills: true },
+      { key: "post", box: box(0.2, -0.6, -1, 0.5, 0.3, 3), solid: true, fills: true },
     ];
     const minY = Math.min(
       ...Array.from({ length: 401 }, (_, k) => displacementAt(moves, "d/child", k / 400).y),
@@ -363,11 +453,72 @@ describe("cycles and copies", () => {
     expect(r.approximate).toEqual([{ t0: 0, t1: 1 }]);
   });
 
+  it("a cycle of FORCED edges only: one forced edge is dropped and reported (E-Q05/E-Q09)", () => {
+    // Within one interval the forced rules cannot close a cycle, but across intervals they can:
+    // a sits in b's bottom face [0,1) (a < b, weak-behind), b in c's [1,2) (b < c), c in a's
+    // [2,3) (c < a); the others are parked far away. No pair has both directions, so the union
+    // graph has a cycle of forced edges only.
+    const instant = (path: string, t: number, d: ReturnType<typeof v>): LoopMove => ({
+      path,
+      t0: t,
+      t1: t,
+      from: v(0, 0, 0),
+      to: d,
+      easing: "linear",
+    });
+    const items: DepthItemInput[] = [
+      { key: "a", path: "a", box: box(0, 0, -0.5, 1, 1, 1), solid: true, fills: true },
+      { key: "b", path: "b", box: box(0, 0, 0, 1, 1, 1), solid: true, fills: true },
+      { key: "c", path: "c", box: box(20, 20, 0, 1, 1, 1), solid: true, fills: true },
+    ];
+    const moves: LoopMove[] = [
+      instant("a", 1, v(10, 10, 0)),
+      instant("c", 1, v(-20, -20, 0.5)),
+      instant("b", 2, v(20, 0, 0)),
+      instant("a", 2, v(-10, -10, 1.5)),
+    ];
+    const r = depthEpochs(items, moves, 3);
+    expect(r.stats.copyConflicts).toBe(0);
+    const cyc = r.diagnostics.filter((d) => d.code === "assembly/depth-cycle");
+    expect(cyc).toHaveLength(1);
+    expect(cyc[0]!.params).toMatchObject({ strength: "forced" });
+    expect([...r.order].sort()).toEqual(["a", "b", "c"]);
+    expect(r.approximate.length).toBeGreaterThan(0);
+    expect(depthEpochs([...items].reverse(), [...moves].reverse(), 3)).toEqual(r);
+  });
+
+  it("copy conflicts: between certified and forced the longer-held direction wins (E-Q04)", () => {
+    // a sits in b's bottom face (forced a before b, weak-behind) for 1 s, drops out, slides
+    // beside b and rises (certified b before a, x-separated) for longer.
+    const scene: Scene = {
+      items: [
+        { key: "a", path: "a", box: box(0.5, 0.5, -0.5, 1, 1, 1.5), solid: true, fills: true },
+        { key: "b", box: box(0, 0, 0, 2, 2, 2), solid: true, fills: true },
+      ],
+      moves: [
+        { path: "a", t0: 1, t1: 1.5, from: v(0, 0, 0), to: v(0, 0, -2), easing: "linear" },
+        { path: "a", t0: 1.5, t1: 2, from: v(0, 0, 0), to: v(2.2, 0, 0), easing: "linear" },
+        { path: "a", t0: 2, t1: 2.5, from: v(0, 0, 0), to: v(0, 0, 4), easing: "linear" },
+      ],
+      loop: 6,
+    };
+    const r = run(scene);
+    invariants(r, 6);
+    expect(r.stats.copyConflicts).toBe(1);
+    expect(r.order).toEqual(["b", "a"]); // certified, held ~3.9 s, beats forced held ~1.6 s
+    const d = r.diagnostics.find((x) => x.code === "assembly/depth-approx" && x.params?.["copy"]);
+    expect(d?.params).toMatchObject({ items: ["a", "b"] });
+    expect(inRanges(r, 0.5)).toBe(true);
+    expect(inRanges(r, 4)).toBe(false);
+  });
+
   it("caps epochs per transition: merged and approximate beyond the cap", () => {
     // Ten parts enclosed in a housing leave through its hidden bottom face at staggered times.
     // Each is hidden while enclosed throughout a phase and visible (before the housing, which
     // covers it: weak-behind) once its phase also contains the exit: 9 certified epochs.
-    const items: DepthItemInput[] = [{ key: "h", box: box(0, 0, 0, 11, 1, 1), solid: true }];
+    const items: DepthItemInput[] = [
+      { key: "h", box: box(0, 0, 0, 11, 1, 1), solid: true, fills: true },
+    ];
     const moves: LoopMove[] = [];
     for (let k = 0; k < 10; k++) {
       items.push({
@@ -375,6 +526,7 @@ describe("cycles and copies", () => {
         path: `p${k}`,
         box: box(k + 0.2, 0.2, 0.2, 0.6, 0.6, 0.6),
         solid: true,
+        fills: true,
       });
       moves.push({
         path: `p${k}`,
@@ -402,8 +554,8 @@ describe("bisection and transit collisions", () => {
   // b (wider than a in y) slides through a: they collide mid-way, nothing certifies the pair.
   const scene: Scene = {
     items: [
-      { key: "a", box: box(0, 0, 0, 1, 1, 1), solid: true },
-      { key: "b", path: "b", box: box(-2, -0.25, 0.25, 0.5, 1.5, 0.5), solid: true },
+      { key: "a", box: box(0, 0, 0, 1, 1, 1), solid: true, fills: true },
+      { key: "b", path: "b", box: box(-2, -0.25, 0.25, 0.5, 1.5, 0.5), solid: true, fills: true },
     ],
     moves: [{ path: "b", t0: 0, t1: 1, from: v(0, 0, 0), to: v(4, 0, 0), easing: "linear" }],
     loop: 1,
@@ -442,7 +594,7 @@ describe("enclosure (§9.5)", () => {
   it("hides a part enclosed by one solid, shows contents of a non-solid tray", () => {
     const r = depthEpochs(
       [
-        { key: "case", box: box(0, 0, 0, 2, 2, 2), solid: true },
+        { key: "case", box: box(0, 0, 0, 2, 2, 2), solid: true, fills: true },
         { key: "chip", box: box(0.5, 0.5, 0.5, 1, 1, 1) },
         { key: "tray", box: box(3, 0, 0, 2, 2, 1), solid: false },
         { key: "card", box: box(3.5, 0.5, 0.3, 1, 1, 0.5) },
@@ -456,8 +608,8 @@ describe("enclosure (§9.5)", () => {
 
   it("hides a part enclosed by the union of touching solids only", () => {
     const items: DepthItemInput[] = [
-      { key: "low", box: box(0, 0, 0, 2, 2, 1), solid: true },
-      { key: "high", box: box(0, 0, 1, 2, 2, 1), solid: true },
+      { key: "low", box: box(0, 0, 0, 2, 2, 1), solid: true, fills: true },
+      { key: "high", box: box(0, 0, 1, 2, 2, 1), solid: true, fills: true },
       { key: "pin", box: box(0.8, 0.8, 0.5, 0.4, 0.4, 1) },
     ];
     expect(depthEpochs(items, [], 1).epochs[0]!.order).not.toContain("pin");
@@ -532,6 +684,15 @@ describe("diagnostics, never throws", () => {
     invariants(thin, s.loop);
     // Presence and clip-event cuts are kept; thinned move cuts only coarsen the sweeps.
     expect(thin.clips).toEqual(full.clips);
+    // Every non-approximate sampled pose of the thinned run agrees with the static rule.
+    let checked = 0;
+    for (let k = 0; k < 160; k++) {
+      const t = ((k + 0.5) * s.loop) / 160;
+      if (inRanges(thin, t)) continue;
+      checked++;
+      expect(staticViolations(s, thin, t)).toEqual([]);
+    }
+    expect(checked).toBeGreaterThan(40);
   });
 
   it("bounds cycle breaking work and still emits a total order", () => {
@@ -544,6 +705,29 @@ describe("diagnostics, never throws", () => {
     expect([...r.order].sort()).toEqual(["x", "y", "z"]);
     expect(codes(r)).toContain("budget/time");
     expect(r.epochs[0]!.approximate).toBe(true);
+  });
+
+  it("guards against wrong types and reports assembly/depth-input (E-Q08)", () => {
+    const junk = [
+      null,
+      7,
+      { key: "a", box: box(0, 0, 0, 1, 1, 1), path: 3 },
+      { key: "b", box: box(0, 0, 0, 1, 1, 1), boxes: "nope" },
+      { key: "c", box: box(0, 0, 0, 1, 1, 1), present: [[0]] },
+      { key: "d", box: box(0, 0, 0, 1, 1, 1), ring: "middle" },
+      { key: "ok", box: box(0, 0, 0, 1, 1, 1) },
+    ] as unknown as DepthItemInput[];
+    let r: DepthEpochResult | undefined;
+    expect(() => (r = depthEpochs(junk, [null, "x"] as unknown as LoopMove[], 1))).not.toThrow();
+    expect(codes(r!).filter((c) => c === "assembly/depth-input")).toHaveLength(8);
+    expect(r!.order).toEqual(["ok"]);
+    const notArrays = depthEpochs(
+      "x" as unknown as DepthItemInput[],
+      {} as unknown as LoopMove[],
+      1,
+    );
+    expect(codes(notArrays)).toEqual(["assembly/depth-input"]);
+    expect(notArrays.epochs).toEqual([{ t0: 0, t1: 1, order: [], approximate: false }]);
   });
 
   it("emits only codes listed in assemblies §18", () => {
@@ -597,6 +781,7 @@ describe("performance (§9.8): 300 leaves × 20 transitions", () => {
             path: key,
             box: box(col * 1.0, row * 1.0, layer * 0.6, 0.8, 0.8, 0.5),
             solid: true,
+            fills: true,
           });
         }
       }
@@ -652,7 +837,9 @@ describe("performance (§9.8): 300 leaves × 20 transitions", () => {
       });
     }
     const { r, ms } = measure("rows", moves);
-    expect(r.stats.pairChecks).toBeLessThan(250_000);
+    // The §9.8 target in operations: well inside the default budget derived from 2 s (E-Q03).
+    expect(r.stats.pairChecks).toBeLessThan(DEFAULT_DEPTH_BUDGETS.maxPairChecks / 10);
+    expect(r.diagnostics.map((d) => d.code)).not.toContain("budget/time");
     expect(ms).toBeLessThan(10_000);
   });
 
@@ -686,7 +873,8 @@ describe("performance (§9.8): 300 leaves × 20 transitions", () => {
     }
     const { r, ms } = measure("stress", moves);
     expect(r.stats.phases).toBeGreaterThan(700);
-    expect(r.stats.pairChecks).toBeLessThan(3_000_000);
+    expect(r.stats.pairChecks).toBeLessThan(DEFAULT_DEPTH_BUDGETS.maxPairChecks);
+    expect(r.diagnostics.map((d) => d.code)).not.toContain("budget/time");
     expect(ms).toBeLessThan(30_000);
   });
 });

@@ -28,6 +28,11 @@ export interface Scene {
   readonly items: readonly DepthItemInput[];
   readonly moves: readonly LoopMove[];
   readonly loop: number;
+  /**
+   * Item keys drawn and ray-cast as a vertical (z) cylinder inscribed in their box instead of the
+   * box (tests of solids that do not fill their `depthBox`).
+   */
+  readonly zcyl?: readonly string[];
 }
 
 /** Reference pixel where two items' visible faces are coplanar (excluded from comparison). */
@@ -75,8 +80,25 @@ function hull(pts: { x: number; y: number }[]): { x: number; y: number }[] {
   return [...lower.slice(0, -1), ...upper.slice(0, -1)];
 }
 
-export function silhouette(b: Box3): string {
-  return hull(corners(b).map(proj))
+export function silhouette(b: Box3, zcyl = false): string {
+  let pts: { x: number; y: number }[];
+  if (zcyl) {
+    // Vertical cylinder inscribed in the box: hull of its top and bottom ellipses.
+    pts = [];
+    const cx = b.origin.x + b.size.x / 2;
+    const cy = b.origin.y + b.size.y / 2;
+    for (let k = 0; k < 96; k++) {
+      const a = (2 * Math.PI * k) / 96;
+      for (const z of [b.origin.z, b.origin.z + b.size.z]) {
+        pts.push(
+          proj({ x: cx + (b.size.x / 2) * Math.cos(a), y: cy + (b.size.y / 2) * Math.sin(a), z }),
+        );
+      }
+    }
+  } else {
+    pts = corners(b).map(proj);
+  }
+  return hull(pts)
     .map((q) => `${q.x.toFixed(4)},${q.y.toFixed(4)}`)
     .join(" ");
 }
@@ -143,6 +165,10 @@ export interface PaintOptions {
   readonly clipMode?: ClipMode;
   /** Host track override per solid key (tests of nested composition). */
   readonly host?: (solid: string, t: number) => Vec3;
+  /** Draw these items even where the epoch hides them (negative controls). */
+  readonly forceVisible?: readonly string[];
+  /** Replace an item's clip prism (negative controls: a clip at the wrong face). */
+  readonly prism?: (item: string, prism: Box3) => Box3;
 }
 
 /** The painter SVG of the epoch containing `t`. */
@@ -158,7 +184,8 @@ export function paintSvg(
   const index = new Map(keys.map((k, i) => [k, i]));
   const byKey = new Map(scene.items.map((i) => [i.key, i]));
   const clips = new Map(result.clips.map((c) => [c.item, c]));
-  const visible = new Set(epochAt(result, t).order);
+  const visible = new Set([...epochAt(result, t).order, ...(opts.forceVisible ?? [])]);
+  const round = new Set(scene.zcyl ?? []);
   const defs: string[] = [];
   const body: string[] = [];
   const tr = (v: Vec3): string => {
@@ -170,7 +197,7 @@ export function paintSvg(
     const it = byKey.get(key)!;
     const fill = hex(colorOf(index.get(key)!));
     const polys = (it.boxes ?? [it.box])
-      .map((b) => `<polygon points="${silhouette(b)}" fill="${fill}"/>`)
+      .map((b) => `<polygon points="${silhouette(b, round.has(key))}" fill="${fill}"/>`)
       .join("");
     const d = displacementAt(scene.moves, it.path, t);
     const clip = clips.get(key);
@@ -179,7 +206,8 @@ export function paintSvg(
       continue;
     }
     const cid = `c${index.get(key)!}`;
-    defs.push(`<clipPath id="${cid}"><polygon points="${silhouette(clip.prism)}"/></clipPath>`);
+    const prism = opts.prism ? opts.prism(key, clip.prism) : clip.prism;
+    defs.push(`<clipPath id="${cid}"><polygon points="${silhouette(prism)}"/></clipPath>`);
     const solid = byKey.get(clip.solid)!;
     const h = opts.host ? opts.host(clip.solid, t) : displacementAt(scene.moves, solid.path, t);
     if (mode === "host") {
@@ -221,7 +249,8 @@ export async function painterIds(scene: Scene, svg: string, view: View): Promise
 /** Exact per-pixel visible item index at time `t` (ray cast). */
 export function zbufferIds(scene: Scene, t: number, view: View): Int32Array {
   const keys = [...scene.items].map((i) => i.key).sort();
-  const boxes: { idx: number; b: number[] }[] = [];
+  const boxes: { idx: number; b: number[]; round: boolean }[] = [];
+  const round = new Set(scene.zcyl ?? []);
   for (const it of scene.items) {
     if (it.present && !it.present.some((w) => t >= w[0] && t <= w[1])) continue; // not built yet
     const d = displacementAt(scene.moves, it.path, t);
@@ -229,6 +258,7 @@ export function zbufferIds(scene: Scene, t: number, view: View): Int32Array {
     for (const b of it.boxes ?? [it.box]) {
       boxes.push({
         idx,
+        round: round.has(it.key),
         b: [
           b.origin.x + d.x,
           b.origin.y + d.y,
@@ -252,9 +282,24 @@ export function zbufferIds(scene: Scene, t: number, view: View): Int32Array {
       let best = -Infinity;
       let who = -1;
       let tie = false;
-      for (const { idx, b } of boxes) {
-        const lo = Math.max(b[0]! - x0, b[1]! - y0, b[2]!);
-        const hi = Math.min(b[3]! - x0, b[4]! - y0, b[5]!);
+      for (const { idx, b, round: cyl } of boxes) {
+        let lo = Math.max(b[0]! - x0, b[1]! - y0, b[2]!);
+        let hi = Math.min(b[3]! - x0, b[4]! - y0, b[5]!);
+        if (cyl) {
+          // ((x0 + s - cx)/rx)^2 + ((y0 + s - cy)/ry)^2 <= 1: a quadratic in s.
+          const rx = (b[3]! - b[0]!) / 2;
+          const ry = (b[4]! - b[1]!) / 2;
+          const ax = (x0 - (b[0]! + rx)) / rx;
+          const ay = (y0 - (b[1]! + ry)) / ry;
+          const A = 1 / (rx * rx) + 1 / (ry * ry);
+          const B = 2 * (ax / rx + ay / ry);
+          const Cc = ax * ax + ay * ay - 1;
+          const disc = B * B - 4 * A * Cc;
+          if (disc < 0) continue;
+          const sq = Math.sqrt(disc);
+          lo = Math.max(lo, (-B - sq) / (2 * A));
+          hi = Math.min(hi, (-B + sq) / (2 * A));
+        }
         if (!(hi - lo > 1e-9)) continue;
         if (Math.abs(hi - best) <= 1e-7 && idx !== who) tie = true;
         else if (hi > best) {
@@ -272,18 +317,31 @@ export function zbufferIds(scene: Scene, t: number, view: View): Int32Array {
 
 export interface Comparison {
   readonly pixels: number;
+  /** Non-background reference pixels (the denominator of `fraction`). */
+  readonly covered: number;
   /** Non-boundary pixels where painter and reference disagree. */
   readonly mismatches: number;
+  /** `mismatches / covered`. */
   readonly fraction: number;
   /** Per reference item index: non-boundary pixels the painter shows as something else. */
   readonly byItem: ReadonlyMap<number, number>;
+  /** Worst per-item share: an item's wrong pixels over its reference pixels (≥ 5 px only). */
+  readonly worstItem: number;
 }
 
 export function compare(ref: Int32Array, got: Int32Array, view: View): Comparison {
   const W = Math.round(view.w * view.scale);
   const Hh = Math.round(view.h * view.scale);
   let mismatches = 0;
+  let covered = 0;
   const byItem = new Map<number, number>();
+  const refCount = new Map<number, number>();
+  for (const r of ref) {
+    if (r >= 0) {
+      covered++;
+      refCount.set(r, (refCount.get(r) ?? 0) + 1);
+    }
+  }
   for (let y = 1; y < Hh - 1; y++) {
     for (let x = 1; x < W - 1; x++) {
       const p = y * W + x;
@@ -297,7 +355,18 @@ export function compare(ref: Int32Array, got: Int32Array, view: View): Compariso
       byItem.set(r, (byItem.get(r) ?? 0) + 1);
     }
   }
-  return { pixels: W * Hh, mismatches, fraction: mismatches / (W * Hh), byItem };
+  let worstItem = 0;
+  for (const [k, n] of byItem) {
+    if (n >= 5) worstItem = Math.max(worstItem, n / Math.max(1, refCount.get(k) ?? 0));
+  }
+  return {
+    pixels: W * Hh,
+    covered,
+    mismatches,
+    fraction: mismatches / Math.max(1, covered),
+    byItem,
+    worstItem,
+  };
 }
 
 /** Painter vs z-buffer at time t. */

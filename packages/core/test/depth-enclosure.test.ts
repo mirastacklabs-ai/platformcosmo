@@ -68,6 +68,35 @@ describe("closed predicates with ε = 1e-6", () => {
     ).toBe(false);
   });
 
+  it("insideUnion: L-shaped notch, overlapping members, exactly 8 boxes, zero thickness (C-Q10)", () => {
+    // L: a 2×2 square missing its (+x, +y) quarter, made of two boxes.
+    const L = [B(0, 0, 0, 2, 1, 1), B(0, 1, 0, 1, 2, 1)];
+    expect(insideUnion(B(0.2, 0.2, 0.2, 1.8, 0.8, 0.8), L)).toBe(true);
+    expect(insideUnion(B(0.2, 0.2, 0.2, 0.8, 1.8, 0.8), L)).toBe(true);
+    expect(insideUnion(B(0.2, 0.2, 0.2, 1.8, 1.8, 0.8), L)).toBe(false); // reaches into the notch
+    expect(insideUnion(B(0.5, 0.5, 0.2, 1.2, 1.2, 0.8), L)).toBe(false); // just the notch corner
+    // Overlapping members (not just touching) cover their union.
+    const over = [B(0, 0, 0, 1.5, 1, 1), B(1, 0, 0, 3, 1, 1)];
+    expect(insideUnion(B(0.1, 0.1, 0.1, 2.9, 0.9, 0.9), over)).toBe(true);
+    expect(insideUnion(B(0.1, 0.1, 0.1, 3.1, 0.9, 0.9), over)).toBe(false);
+    // Exactly MAX_UNION_BOXES unit cubes in a row: accepted; one more box: refused (false).
+    const row = Array.from({ length: MAX_UNION_BOXES }, (_, k) => B(k, 0, 0, k + 1, 1, 1));
+    expect(insideUnion(B(0.1, 0.1, 0.1, MAX_UNION_BOXES - 0.1, 0.9, 0.9), row)).toBe(true);
+    expect(insideUnion(B(0.1, 0.1, 0.1, 0.9, 0.9, 0.9), [...row, B(20, 0, 0, 21, 1, 1)])).toBe(
+      false,
+    );
+    // A gap of more than ε between members is not covered.
+    const gap = [B(0, 0, 0, 1, 1, 1), B(1.01, 0, 0, 2, 1, 1)];
+    expect(insideUnion(B(0.5, 0.2, 0.2, 1.5, 0.8, 0.8), gap)).toBe(false);
+    // Zero-thickness boxes (a flat plate, a line) on a seam or face count as inside (closed).
+    expect(insideUnion(B(0.5, 0.2, 0.5, 1.5, 0.8, 0.5), over)).toBe(true);
+    expect(
+      insideUnion(B(1, 0.5, 0.5, 1, 0.5, 0.5), [B(0, 0, 0, 1, 1, 1), B(1, 0, 0, 2, 1, 1)]),
+    ).toBe(true);
+    expect(insideUnion(B(0.5, 0.5, 1, 1.5, 0.5, 1), L)).toBe(true); // on the top face
+    expect(insideUnion(B(0.5, 0.5, 1.5, 1.5, 0.5, 1.5), L)).toBe(false); // above it
+  });
+
   it("blocks are connected components with the smallest index as id", () => {
     const boxes: Bounds[] = [
       B(0, 0, 0, 1, 1, 1),
