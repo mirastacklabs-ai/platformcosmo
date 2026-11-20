@@ -2,9 +2,9 @@
  * The quality gate (ingestion §6.5). Re-renders every drawn state from the outputs (base plus
  * each sprite at its seat or exploded position, no redrawn hints), compares it with the source
  * drawing after alignment, and runs every check of the §6.5 table against the reference
- * analysis. All residual metrics are local: per connected component (8-connectivity, joined
- * across 1 px gaps so a comb of thin strokes counts as one), in pixels, with declared
- * annotations excluded but connective.
+ * analysis. All residual metrics are local: per connected component (pixels at Chebyshev distance
+ * up to 2 connect, i.e. across exactly 1 px gaps, so a comb of thin strokes counts as one), in
+ * pixels, with declared annotations excluded but connective.
  */
 import type { Diagnostic } from "@platformcosmo/core";
 import { crop } from "../ops.js";
@@ -27,6 +27,7 @@ import {
   holes,
   overlapCount,
   shifted,
+  union,
   type Box,
   type Component,
   type Mask,
@@ -384,13 +385,14 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
     const res = residualMap(st.lum, L, st.W, st.H, T.luminance);
     const X = a.excluded[s]!;
     const isRes = (x: number, y: number): boolean => res[y * st.W + x] === 1 && !has(X, x, y);
-    // Residual pixels 1 px apart are one defect (fins at a 2 px pitch the sprite lacks).
-    const joined = dilate({ x: 0, y: 0, w: st.W, h: st.H, data: res }, 1, st.W, st.H);
+    // Residual pixels across a 1 px gap are one defect (fins at a 2 px pitch the sprite
+    // lacks); a 2 px gap separates (scattered single pixels, a dotted recovery seam).
     const comps = components(
       { x: 0, y: 0, w: st.W, h: st.H },
-      (x, y) => has(joined, x, y) || has(X, x, y),
+      (x, y) => res[y * st.W + x] === 1 || has(X, x, y),
       8,
       isRes,
+      2,
     );
     const items: CheckItem[] = comps
       .filter((c) => c.pixels > T.residual)
@@ -532,11 +534,31 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
             }
             return false;
           };
-          const own0 = dilate(dp.V, 1, st.W, st.H);
-          const ext = filter(
-            inkM,
-            (x, y) => !has(own0, x, y) && st.ink[y * st.W + x] !== 0 && agrees(x, y),
+          // The template unit in its own drawing: its segmentation there plus what the analysis
+          // recovered from other depictions; nothing else (the sprite was cut from it).
+          const cls = a.classes[u.cls]!;
+          const isTemplate = cls.unit === k && cls.state === s;
+          const own0 = dilate(
+            isTemplate
+              ? union(
+                  dp.V,
+                  clipMask(shifted(cls.recovered, px - cls.mask.x, py - cls.mask.y), st.W, st.H),
+                )
+              : dp.V,
+            1,
+            st.W,
+            st.H,
           );
+          // Continuations (strokes segmentation missed, that the drawing shows here): only
+          // inside the unit's hull, and never for the template in its own drawing.
+          const hull = u.place[s]!.hull;
+          const ext = isTemplate
+            ? EMPTY
+            : filter(
+                inkM,
+                (x, y) =>
+                  !has(own0, x, y) && has(hull, x, y) && st.ink[y * st.W + x] !== 0 && agrees(x, y),
+              );
           // Continuations: consistent ink 8-connected to the own regions.
           const reach = blank(ext.x, ext.y, ext.w, ext.h);
           const stack: number[] = [];

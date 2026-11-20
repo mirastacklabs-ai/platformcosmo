@@ -110,11 +110,11 @@ describe("gate (G-Q02, G-Q06): contact allowances", () => {
     const E = clone(f.states.exploded!.image);
     const [px, py] = f.states.exploded!.truth.units["sink-1"]!.pos;
     const y = py + 24;
-    // Left: a mark, then a leader to the first fin's root. Right: the same at the last fin.
+    // A mark, then a leader to the first fin's root. (Not the last fin: right of it the comb's
+    // convex hull reaches 3 px past the fin, and a leader whose stroke lies inside the convex
+    // hull outside its square is invalid, ingestion §6.5 rule 2.)
     for (let k = 0; k < 9; k++) setPx(E, px - 28, y - 4 + k, BLACK);
     line1(E, px - 24, y, px, y);
-    for (let k = 0; k < 9; k++) setPx(E, px + 108, y - 4 + k, BLACK);
-    line1(E, px + 104, y, px + 81, y);
     const annotations = [
       { kind: "text", state: "exploded", rect: [px - 29, y - 5, 3, 11] },
       {
@@ -123,15 +123,6 @@ describe("gate (G-Q02, G-Q06): contact allowances", () => {
         polyline: [
           [px - 24, y],
           [px, y],
-        ],
-      },
-      { kind: "text", state: "exploded", rect: [px + 107, y - 5, 3, 11] },
-      {
-        kind: "leader",
-        state: "exploded",
-        polyline: [
-          [px + 104, y],
-          [px + 81, y],
         ],
       },
     ];
@@ -718,24 +709,371 @@ describe("limits and helpers (S-Q08, S-Q09, S-Q12, S-Q13)", () => {
           });
         }
       }
-      for (let k = 0; k < 32; k++) {
-        const x0 = 100 + (k % 8) * 230;
-        const y0 = 150 + Math.floor(k / 8) * 450;
-        void x0;
-        void y0;
-      }
       const t0 = Date.now();
       const r = runFigure(
         { sources: { exploded: "s.png" }, parts, annotations },
         { "s.png": { width: W, height: W, data } },
       );
       const ms = Date.now() - t0;
-      console.log(`S-Q09: 4 MP, 32 parts, 64 annotations: ${ms} ms`);
       expect(r.value).toBeDefined();
       expect(r.value!.report.parts).toHaveLength(32);
-      expect(ms).toBeLessThan(240_000);
+      // Measured about 6 s alone and 10 s under the full CI run; about 3x that.
+      expect(ms).toBeLessThan(30_000);
     },
   );
+});
+
+/** A quiet w x h patch: paper in both drawings at the aligned place, and no part there. */
+function quietPatch(
+  f: ReturnType<typeof figure>,
+  w: number,
+  h: number,
+): [number, number] | undefined {
+  const A = f.states.assembled!.image;
+  const X = f.states.exploded?.image;
+  const [dx, dy] = f.offset;
+  const paper = (r: Raster, x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < r.width && y < r.height && lumAt(r, x, y) > 250;
+  const parts = Object.values(f.states.assembled!.truth.units).map((t) => t.full);
+  for (let y0 = 4; y0 + h + 4 < A.height; y0 += 4) {
+    for (let x0 = 4; x0 + w + 4 < A.width; x0 += 4) {
+      let ok = true;
+      for (let y = y0 - 3; y < y0 + h + 3 && ok; y++)
+        for (let x = x0 - 3; x < x0 + w + 3 && ok; x++) {
+          if (!paper(A, x, y) || (X && !paper(X, x + dx, y + dy))) ok = false;
+          else if (parts.some((t) => maskHas(t, x, y))) ok = false;
+        }
+      if (ok) return [x0, y0];
+    }
+  }
+  return undefined;
+}
+
+describe("third review (gate N1-N4, segmentation N1-N6)", () => {
+  it("gate N1: a missed stroke inside the convex hull, declared as a leader, fails rule 2", () => {
+    const { f, result } = run("main");
+    const E = clone(f.states.exploded!.image);
+    const t = f.states.exploded!.truth.units["hs-1"]!.full;
+    // Left of the heat sink's top corner, above the fin block, the group's convex hull holds a
+    // paper triangle: a stroke there that no segmentation saw, with a leader drawn along it from
+    // outside the hull to a callout mark.
+    const y = t.y + 18;
+    line1(E, t.x - 16, y, t.x + 8, y);
+    for (let k = 0; k < 9; k++) setPx(E, t.x - 20, y - 4 + k, BLACK);
+    const annotations = [
+      ...f.manifest.annotations,
+      { kind: "text", state: "exploded", rect: [t.x - 21, y - 5, 3, 11] },
+      {
+        kind: "leader",
+        state: "exploded",
+        polyline: [
+          [t.x - 16, y],
+          [t.x + 8, y],
+        ],
+      },
+    ];
+    const r = check(
+      { ...f.manifest, annotations },
+      { ...sourcesOf(f), "exploded.png": E },
+      result.outputs,
+    );
+    expect(
+      messages(r, "asset/annotation-invalid").some((m) =>
+        /band covers ink inside the hull of hs-1/.test(m),
+      ),
+    ).toBe(true);
+  });
+
+  it("gate N2: scattered single pixels and a dotted seam 2 px apart stay separate residuals", () => {
+    const { f, result } = run("main");
+    const spot = quietPatch(f, 24, 27);
+    expect(spot).toBeDefined();
+    const [x0, y0] = spot!;
+    const base = clone(result.outputs.base);
+    // A grid of single dark pixels 3 px apart (2 px gaps), and a dotted seam of a lighter grey
+    // (a recovery shifted by half a pixel leaves every third pixel off).
+    for (let j = 0; j < 8; j++)
+      for (let i = 0; i < 8; i++) setPx(base, x0 + 3 * i, y0 + 3 * j, BLACK);
+    for (let i = 0; i < 8; i++) setPx(base, x0 + 3 * i, y0 + 26, [150, 150, 150, 255]);
+    const r = check(f.manifest, sourcesOf(f), { ...result.outputs, base });
+    expect([...errorCodes(r)]).toEqual([]);
+  });
+
+  it("gate N3: an exploded arrow whose tip touches the seat outline is valid", () => {
+    const f = figure("main");
+    const t = f.states.assembled!.truth.units["hs-1"]!.full;
+    const [dx, dy] = f.offset;
+    const E = clone(f.states.exploded!.image);
+    // On the heat sink's top edge (kind x 58): the tip on the seat's outline row.
+    const x = t.x + 58 + dx;
+    const y1 = t.y + dy;
+    drawArrow(E, x, y1 - 50, y1);
+    const arrow = {
+      kind: "arrow",
+      state: "exploded",
+      polyline: [
+        [x, y1 - 50],
+        [x, y1],
+      ],
+    };
+    const r = runFigure(
+      { ...f.manifest, annotations: [...f.manifest.annotations, arrow] },
+      { ...sourcesOf(f), "exploded.png": E },
+    ).value!;
+    const bad = r.report.diagnostics.filter((d) => d.severity === "error");
+    expect(bad.map((d) => d.message)).toEqual([]);
+  });
+
+  it("gate N4: one drawing: a sprite grown along the frame touching it fails foreign-pixels", () => {
+    const { f, result } = run("screw-assembled");
+    const o = result.outputs;
+    const p = o.parts[0]!;
+    const sp = clone(o.sprites[p.sprite]!);
+    const A = f.states.assembled!.image;
+    // Frame ink inside the sprite's box, transparent in the sprite, 8-connected to its opaque
+    // pixels: the drawing shows it there, it is just not the screw.
+    const op = (i: number, j: number): boolean => sp.data[(j * sp.width + i) * 4 + 3]! > 0;
+    const ink = (i: number, j: number): boolean => lumAt(A, i + p.seat[0], j + p.seat[1]) < 128;
+    const stack: [number, number][] = [];
+    for (let j = 0; j < sp.height; j++)
+      for (let i = 0; i < sp.width; i++) if (op(i, j)) stack.push([i, j]);
+    let n = 0;
+    while (stack.length > 0) {
+      const [i, j] = stack.pop()!;
+      for (let b = -1; b <= 1; b++)
+        for (let a = -1; a <= 1; a++) {
+          const u = i + a;
+          const v = j + b;
+          if (u < 0 || v < 0 || u >= sp.width || v >= sp.height || op(u, v) || !ink(u, v)) continue;
+          copyPx(sp, A, u, v, u + p.seat[0], v + p.seat[1]);
+          sp.data[(v * sp.width + u) * 4 + 3] = 255;
+          n++;
+          stack.push([u, v]);
+        }
+    }
+    expect(n).toBeGreaterThan(8);
+    const sprites = o.sprites.map((s, i) => (i === p.sprite ? sp : s));
+    const r = check(f.manifest, sourcesOf(f), { ...o, sprites });
+    expect(errorCodes(r)).toContain("asset/foreign-pixels");
+  });
+
+  it("gate N4: continuations stop at the hull: a sprite grown along a seated part's traces fails", () => {
+    const { f, result } = run("main");
+    const o = result.outputs;
+    const k = o.parts.findIndex((p) => p.id === "hs-2");
+    const p = o.parts[k]!;
+    const sp = clone(o.sprites[p.sprite]!);
+    const A = f.states.assembled!.image;
+    // Board ink inside the sprite's box at hs-2's seat, transparent in the sprite, 8-connected
+    // to its opaque pixels: the traces hs-2 sits on, out to the box's edge (beyond its hull).
+    const op = (i: number, j: number): boolean => sp.data[(j * sp.width + i) * 4 + 3]! > 0;
+    const ink = (i: number, j: number): boolean => lumAt(A, i + p.seat[0], j + p.seat[1]) < 128;
+    const stack: [number, number][] = [];
+    for (let j = 0; j < sp.height; j++)
+      for (let i = 0; i < sp.width; i++) if (op(i, j)) stack.push([i, j]);
+    let n = 0;
+    while (stack.length > 0) {
+      const [i, j] = stack.pop()!;
+      for (let b = -1; b <= 1; b++)
+        for (let a = -1; a <= 1; a++) {
+          const u = i + a;
+          const v = j + b;
+          if (u < 0 || v < 0 || u >= sp.width || v >= sp.height || op(u, v) || !ink(u, v)) continue;
+          copyPx(sp, A, u, v, u + p.seat[0], v + p.seat[1]);
+          sp.data[(v * sp.width + u) * 4 + 3] = 255;
+          n++;
+          stack.push([u, v]);
+        }
+    }
+    expect(n).toBeGreaterThan(8);
+    const sprites = o.sprites.map((s, i) => (i === p.sprite ? sp : s));
+    const r = check(f.manifest, sourcesOf(f), { ...o, sprites });
+    expect(
+      messages(r, "asset/foreign-pixels").some((m) => /\(hs-2\) in the assembled drawing/.test(m)),
+    ).toBe(true);
+  });
+
+  it("segmentation N1: one drawing: a part in a frame about its size is not alone and never swallows it", () => {
+    for (const name of ["cage-assembled", "screw-assembled"]) {
+      const { f, result } = run(name);
+      expect(result.report.parts[0]!.standalone, name).toBeNull();
+      expect(result.report.confidence).toBe("reduced");
+      const p = result.outputs.parts[0]!;
+      const sp = result.outputs.sprites[p.sprite]!;
+      const own = f.states.assembled!.truth.units[p.id]!.full;
+      let stray = 0;
+      for (let j = 0; j < sp.height; j++)
+        for (let i = 0; i < sp.width; i++)
+          if (sp.data[(j * sp.width + i) * 4 + 3] && !maskHas(own, i + p.seat[0], j + p.seat[1]))
+            stray++;
+      expect(stray, name).toBeLessThan(8);
+    }
+  });
+
+  it("segmentation N2: a 1 px break in an unseeded face's outline (a scan) keeps the face opaque", () => {
+    const f = figure("main");
+    const sources = { ...sourcesOf(f) };
+    for (const s of ["exploded", "assembled"] as const) {
+      const img = clone(f.states[s]!.image);
+      for (const id of ["hs-1", "hs-2"]) {
+        const t = f.states[s]!.truth.units[id]!.full;
+        // A face of the fin block (not seeded) loses 1 px of its 2 px left outline.
+        const paper = [255, 255, 255, 255] as const;
+        setPx(img, t.x, t.y + 28, paper);
+        setPx(img, t.x + 1, t.y + 28, paper);
+      }
+      sources[`${s}.png`] = img;
+    }
+    const an = analyzeFigure(f.manifest, sources).value!;
+    for (const c of an.classes) {
+      const tu = an.units[c.unit]!;
+      const t = f.states[c.state]!.truth.units[tu.id]!.full;
+      expect(maskHas(c.mask, t.x + 6, t.y + 28)).toBe(true);
+    }
+  });
+
+  it(
+    "segmentation N3: densely packed parts (3 px apart, all near each other) finish in bounded time",
+    { timeout: 120_000 },
+    () => {
+      const W = 1024;
+      const data = new Uint8Array(W * W * 4).fill(255);
+      const ink = (x: number, y: number): void => data.set(BLACK, (y * W + x) * 4);
+      const parts: unknown[] = [];
+      for (let k = 0; k < 64; k++) {
+        const x0 = 100 + (k % 8) * 63;
+        const y0 = 100 + Math.floor(k / 8) * 63;
+        for (let i = 0; i < 60; i++)
+          for (const t of [0, 1]) {
+            ink(x0 + i, y0 + t);
+            ink(x0 + i, y0 + 58 + t);
+            ink(x0 + t, y0 + i);
+            ink(x0 + 58 + t, y0 + i);
+          }
+        for (let i = 8; i < 52; i++) ink(x0 + i, y0 + 30);
+        parts.push({ id: `p${k}`, seeds: { exploded: [[x0 + 30, y0 + 15]] }, prior: "box" });
+      }
+      const t0 = Date.now();
+      const r = runFigure(
+        { sources: { exploded: "s.png" }, parts },
+        { "s.png": { width: W, height: W, data } },
+      );
+      const ms = Date.now() - t0;
+      expect(r.value).toBeDefined();
+      expect(r.value!.report.parts).toHaveLength(64);
+      // Measured about 1.5 s alone: about 3x that under a loaded CI run, with margin.
+      expect(ms).toBeLessThan(10_000);
+    },
+  );
+
+  it("segmentation N6: a face only the other drawing closes is not recovered into the template", () => {
+    const f = figure("occluded");
+    const paper = [255, 255, 255, 255] as const;
+    // A dent in tw-1's top edge (kind x 30-40, clear of the seeds and of the tag) in both
+    // drawings; the exploded one narrows its mouth to 2 px (closed by the closing, so its paper
+    // is part of the silhouette there).
+    const dent = (img: Raster, t: { x: number; y: number }, lips: boolean): void => {
+      for (let y = t.y; y <= t.y + 6; y++)
+        for (let x = t.x + 30; x <= t.x + 40; x++) setPx(img, x, y, paper);
+      for (let y = t.y; y <= t.y + 6; y++)
+        for (const x of [t.x + 30, t.x + 31, t.x + 39, t.x + 40]) setPx(img, x, y, BLACK);
+      for (let x = t.x + 30; x <= t.x + 40; x++)
+        for (const y of [t.y + 5, t.y + 6]) setPx(img, x, y, BLACK);
+      for (let x = t.x + 30; x <= t.x + 40; x++)
+        if (!lips || (x >= t.x + 35 && x <= t.x + 36)) continue;
+        else for (const y of [t.y, t.y + 1]) setPx(img, x, y, BLACK);
+    };
+    const E = clone(f.states.exploded!.image);
+    const A = clone(f.states.assembled!.image);
+    dent(E, f.states.exploded!.truth.units["tw-1"]!.full, true);
+    const ta = f.states.assembled!.truth.units["tw-1"]!.full;
+    dent(A, ta, false);
+    const an = analyzeFigure(f.manifest, { "exploded.png": E, "assembled.png": A }).value!;
+    const c = an.classes[an.units[0]!.cls]!;
+    expect(c.state).toBe("assembled");
+    let island = 0;
+    for (let y = ta.y + 2; y < ta.y + 5; y++)
+      for (let x = ta.x + 32; x < ta.x + 39; x++) if (maskHas(c.mask, x, y)) island++;
+    expect(island).toBe(0);
+  });
+
+  it("segmentation N4: one drawing: a lever tip the mask misses inside the hull leaves the base", () => {
+    const f = figure("assembled-only");
+    const A = clone(f.states.assembled!.image);
+    const t = f.states.assembled!.truth.units["hs-1"]!.full;
+    // A 1 px lever off the heat sink's left edge into the paper triangle above the fin block;
+    // past the protrusion bound (D - 1 = 7 px) the mask does not take it.
+    const y = t.y + 18;
+    line1(A, t.x + 3, y, t.x + 12, y);
+    const r = runFigure(f.manifest, { "assembled.png": A }).value!;
+    const board = f.states.assembled!.board;
+    let left = 0;
+    for (let x = t.x + 3; x < t.x + 12; x++) {
+      const inSprite = r.outputs.parts.some((p) => {
+        const sp = r.outputs.sprites[p.sprite]!;
+        const i = x - p.seat[0];
+        const j = y - p.seat[1];
+        return (
+          i >= 0 &&
+          j >= 0 &&
+          i < sp.width &&
+          j < sp.height &&
+          sp.data[(j * sp.width + i) * 4 + 3]! > 0
+        );
+      });
+      if (!inSprite && Math.abs(lumAt(r.outputs.base, x, y) - lumAt(board, x, y)) > 48) left++;
+    }
+    expect(left).toBe(0);
+  });
+
+  it("S-Q11: main anti-aliased: every sprite pixel that differs from the truth is a fringe pixel", () => {
+    const { f, result } = run("main", 0, "aa");
+    const A = f.states.assembled!;
+    for (const p of result.outputs.parts) {
+      const sp = result.outputs.sprites[p.sprite]!;
+      const gt = f.sprites[p.id]!.raster;
+      const t = A.truth.units[p.id]!.full;
+      const at = (
+        r: Raster,
+        ox: number,
+        oy: number,
+        x: number,
+        y: number,
+      ): number[] | undefined => {
+        const i = x - ox;
+        const j = y - oy;
+        if (i < 0 || j < 0 || i >= r.width || j >= r.height) return undefined;
+        const q = (j * r.width + i) * 4;
+        return r.data[q + 3] ? [r.data[q]!, r.data[q + 1]!, r.data[q + 2]!] : undefined;
+      };
+      const lum = (c: number[]): number => 0.299 * c[0]! + 0.587 * c[1]! + 0.114 * c[2]!;
+      const gtAt = (x: number, y: number): number[] | undefined => at(gt, t.x, t.y, x, y);
+      const edge = (x: number, y: number): boolean => {
+        const o = gtAt(x, y) !== undefined;
+        for (let b = -1; b <= 1; b++)
+          for (let a = -1; a <= 1; a++) if ((gtAt(x + a, y + b) !== undefined) !== o) return true;
+        return false;
+      };
+      const x0 = Math.min(t.x, p.seat[0]) - 1;
+      const y0 = Math.min(t.y, p.seat[1]) - 1;
+      const x1 = Math.max(t.x + gt.width, p.seat[0] + sp.width) + 1;
+      const y1 = Math.max(t.y + gt.height, p.seat[1] + sp.height) + 1;
+      let bad = 0;
+      for (let y = y0; y < y1; y++)
+        for (let x = x0; x < x1; x++) {
+          const a = at(sp, p.seat[0], p.seat[1], x, y);
+          const b = gtAt(x, y);
+          // A fringe pixel: within 48 of the truth's luminance, or on the truth's alpha edge.
+          const differs =
+            (a !== undefined) !== (b !== undefined) ||
+            (a !== undefined && b !== undefined && lum(a) !== lum(b));
+          if (!differs) continue;
+          const near = a !== undefined && b !== undefined && Math.abs(lum(a) - lum(b)) <= 48;
+          if (!near && !edge(x, y)) bad++;
+        }
+      expect(bad, p.id).toBe(0);
+    }
+  });
 });
 
 void maskHas;

@@ -113,6 +113,9 @@ export interface Placement {
   E: Mask;
   /** Visible part: E minus the units in front. */
   visible: Mask;
+  /** The convex hull (mapped whole ink, mask, prior) before the 2 px margin. */
+  core: Mask;
+  /** `core` dilated by 2 px. */
   hull: Mask;
   partInk: Mask;
 }
@@ -154,6 +157,8 @@ export interface TemplateClass {
    * sprite. Template-state coordinates, like `mask`.
    */
   unrecovered: Mask;
+  /** Pixels added to the template from other depictions (template-state coordinates). */
+  recovered: Mask;
 }
 
 export interface Analysis {
@@ -850,7 +855,20 @@ export function analyzeFigure(
       const D = Math.max(6, 4 * st.stroke);
       const r = Math.ceil(1.5 * st.stroke) + 2;
       const nAnn = annotations.filter((g) => g.state === s).length;
-      cost += (R.w + 2 * D) * (R.h + 2 * D) * (1 + nAnn) + count(R) * (2 * r + 1) ** 2;
+      // Every nearby part (seeded regions within the window) is a rival in the bounding-ink and
+      // stand-alone passes over the same window.
+      let near = 0;
+      for (const [k2, R2] of seededR) {
+        if (k2 === key || k2.split(":")[1] !== s) continue;
+        if (
+          R2.x < R.x + R.w + 2 * D &&
+          R2.x + R2.w > R.x - 2 * D &&
+          R2.y < R.y + R.h + 2 * D &&
+          R2.y + R2.h > R.y - 2 * D
+        )
+          near++;
+      }
+      cost += (R.w + 2 * D) * (R.h + 2 * D) * (1 + nAnn) * (1 + near) + count(R) * (2 * r + 1) ** 2;
     }
     const limit = 128 * stateArea + 8_000_000;
     if (cost > limit) {
@@ -1149,7 +1167,16 @@ export function analyzeFigure(
       if (!dp) continue;
       const others = units.filter((w) => w !== u && w.dep[s]).map((w) => w.dep[s]!.P);
       const bound = polygonBound(u.polygons[s], st.W, st.H);
-      const finish = (M0: Mask): Mask => {
+      const finish = (M1: Mask): Mask => {
+        // Filled from closed ink: a 1 px break in an outline (a scan) is bridged by the closing,
+        // so the face behind it stays enclosed; the peel then opens only closing-only pixels.
+        const M0 = union(
+          M1,
+          filter(
+            dilate(M1, 1, st.W, st.H),
+            (x, y) => st.ink[y * st.W + x] !== 0 && st.rawInk[y * st.W + x] === 0,
+          ),
+        );
         let M = u.holes
           ? union(M0, intersect(fillHoles(M0), inkMask(st.ink, st.W, fillHoles(M0))))
           : fillHoles(M0);
@@ -1175,8 +1202,9 @@ export function analyzeFigure(
       // is given, and it is not the static drawing. With two drawings, ink of the whole ink
       // beyond the seeded mask that the other drawing also shows at the aligned place (a cage, a
       // bracket, a board) is static: more than a quarter of it (beyond D) means the part touches
-      // static ink and is not alone. With one drawing there is no such evidence; the whole ink's
-      // hull may then be at most 4x the seeded mask's.
+      // static ink and is not alone. With one drawing there is no such evidence: the part stands
+      // alone only where a polygon or a declared prior bounds its whole ink (a frame around it,
+      // even one only 1.5x its size, is then outside); otherwise it keeps P (hull-uncertain).
       let standalone = false;
       if (W0 && !others.some((p) => overlaps(dilate(W0, 4, st.W, st.H), p))) {
         const extra = minus(W0, dilate(dp.P, D, st.W, st.H));
@@ -1189,7 +1217,9 @@ export function analyzeFigure(
               if (extra.data[j * extra.w + i] && stat(i + extra.x, j + extra.y)) k++;
           standalone = k <= STANDALONE_STATIC * n + 4 * st.stroke;
         } else {
-          standalone = count(convexHull(union(dp.P, W0))) <= 4 * hullP;
+          const lim =
+            bound ?? (dp.prior !== EMPTY ? dilate(dp.prior, st.stroke + 1, st.W, st.H) : undefined);
+          standalone = lim !== undefined && isEmpty(minus(W0, lim));
         }
         if (bound && !isEmpty(minus(W0, bound))) standalone = false;
       }
@@ -1211,13 +1241,16 @@ export function analyzeFigure(
 
   // ---- templates (§6.3): fewest occluded pixels, then stand-alone, then consistency across
   // the depictions (mean IoU, centres aligned), then exploded first, then manifest order.
+  const dilatedV = new Map<string, Mask>();
+  for (const w of units)
+    for (const s of states)
+      if (w.dep[s]) dilatedV.set(`${w.index}:${s}`, dilate(w.dep[s]!.V, 1, img[s]!.W, img[s]!.H));
   const occludedOf = (u: Unit, s: FigureState): number => {
     const dp = u.dep[s]!;
-    const st = img[s]!;
     const shape = dp.prior !== EMPTY ? dp.prior : convexHull(dp.V);
     const others = units
       .filter((w) => w !== u && w.dep[s])
-      .map((w) => dilate(w.dep[s]!.V, 1, st.W, st.H));
+      .map((w) => dilatedV.get(`${w.index}:${s}`)!);
     let n = 0;
     for (let j = 0; j < shape.h; j++) {
       for (let i = 0; i < shape.w; i++) {
@@ -1278,6 +1311,7 @@ export function analyzeFigure(
       mask,
       sprite: colours(img[t.s]!.image, mask),
       unrecovered: EMPTY,
+      recovered: EMPTY,
     };
   });
   if (diagnostics.some((x) => x.severity === "error")) return { diagnostics };
@@ -1507,7 +1541,7 @@ export function analyzeFigure(
         const back = shifted(own, tp.x - p.x, tp.y - p.y);
         // Hidden in the template's drawing (covered in front), or shown there too (the drawings
         // agree) and claimed by no other unit: what segmentation dropped in one drawing (a corner
-        // tip running into another part's outline) comes back from the other.
+        // tip running into a touching stroke) may come back from the other (see below).
         const im = img[s]!.image;
         const cand = filter(
           minus(back, kept),
@@ -1520,6 +1554,27 @@ export function analyzeFigure(
         sources.push({ m: fresh, s, dx: p.x - tp.x, dy: p.y - tp.y });
       }
     }
+    // A pixel the template's drawing shows (not hidden) comes back only where both depictions
+    // agree: the other's segmentation claims it, and the template's drawing shows it as this
+    // part's. Ink must be raw ink there, 8-connected to the kept mask; paper must be enclosed by
+    // that ink. A face another depiction filled (an outline only it closes) stays out.
+    {
+      const hiddenAdd = filter(add, covered);
+      const viaAgree = minus(add, hiddenAdd);
+      if (!isEmpty(viaAgree)) {
+        const base0 = union(kept, hiddenAdd);
+        const inkA = filter(viaAgree, (x, y) => st.rawInk[y * st.W + x] !== 0);
+        const conn = geodesic(st.rawInk, st.W, dilate(base0, 1, st.W, st.H), inkA);
+        const enclosed = fillHoles(union(base0, conn));
+        const ok = filter(
+          viaAgree,
+          (x, y) => has(conn, x, y) || (st.rawInk[y * st.W + x] === 0 && has(enclosed, x, y)),
+        );
+        add = union(hiddenAdd, ok);
+        for (let k = 0; k < sources.length; k++)
+          sources[k] = { ...sources[k]!, m: intersect(sources[k]!.m, add) };
+      }
+    }
     // Hidden and shown nowhere: the prior (or the hull) of the template, covered in front.
     const shape = tu.dep[c.state]!.prior !== EMPTY ? tu.dep[c.state]!.prior : convexHull(c.mask);
     // Pixels enclosed by the recovered silhouette that no depiction showed (a shared outline
@@ -1528,6 +1583,7 @@ export function analyzeFigure(
     const full = u0holes(units, c) ? joined : fillHoles(joined);
     const filledIn = minus(full, joined);
     c.unrecovered = tight(union(filter(minus(shape, full), covered), filledIn));
+    c.recovered = tight(add);
     if (isEmpty(add) && count(kept) === count(c.mask)) continue;
     const mask = tight(full);
     const sprite = colours(st.image, mask);
@@ -1603,7 +1659,8 @@ export function analyzeFigure(
         (tplPrior !== EMPTY
           ? clipMask(shifted(tplPrior, p.x - tp.x, p.y - tp.y), st.W, st.H)
           : EMPTY);
-      p.hull = dilate(convexHull(union(mapped, p.E, prior)), 2, st.W, st.H);
+      p.core = convexHull(union(mapped, p.E, prior));
+      p.hull = dilate(p.core, 2, st.W, st.H);
       p.partInk = geodesic(
         cutInk[s]!,
         st.W,
@@ -1774,12 +1831,14 @@ export function analyzeFigure(
         });
         continue;
       }
-      // Ink under the band inside the hull, other than the polyline's own stroke (the runs
-      // through its samples): a stroke inside the hull that is not part ink.
+      // Ink under the band inside the hull: a stroke inside the hull that is not part ink (a
+      // lever segmentation missed). The polyline's own stroke (the runs through its samples) is
+      // exempt only in the hull's 2 px margin, never inside the convex hull itself: a leader
+      // drawn along a missed stroke there would otherwise hide it.
       const own = ownStroke(g, st.W, st.H);
       const covered = filter(
         intersect(inkMask(st.rawInk, st.W, g.band), p.hull),
-        (x, y) => !inExempt(g, u, x, y) && !has(own, x, y),
+        (x, y) => !inExempt(g, u, x, y) && !(has(own, x, y) && !has(p.core, x, y)),
       );
       if (!isEmpty(covered)) {
         invalid.push({
@@ -1807,11 +1866,33 @@ export function analyzeFigure(
         parts.push(clipMask(shifted(u.place[o]!.E, dx, dy), st.W, st.H));
       }
       const own = union(...parts);
+      // An arrow's tip touching the mapped mask (the seat outline, in the exploded drawing) gets
+      // an allowance there like a contact square: the arrow points at where the part goes.
+      const tipBoxes = new Map<number, Box[]>();
+      for (const g of inState) {
+        if (g.kind !== "arrow") continue;
+        const r = Math.ceil(g.halfWidth) + 1;
+        const side = g.width + 2;
+        const half = Math.floor(side / 2);
+        const ends = g.head !== undefined ? [g.head] : [0, 1];
+        for (const m of parts.slice(1)) {
+          for (const e of ends) {
+            const [ex, ey] = g.points[e === 0 ? 0 : g.points.length - 1]!;
+            const n = nearest(m, Math.round(ex), Math.round(ey), r);
+            if (!n) continue;
+            const b: Box = { x: n.x - half, y: n.y - half, w: side, h: side };
+            tipBoxes.set(g.index, [...(tipBoxes.get(g.index) ?? []), b]);
+          }
+        }
+      }
       // The annotation masks of this state minus this unit's exempt squares, as one mask (a
       // mask is its band dilated by 2, so its exempt square is the allowance dilated by 2 too).
       const live = union(
         ...inState.map((g) => {
-          const boxes = (exempt.get(`${g.index}:${u.index}`) ?? []).map((b) => ({
+          const boxes = [
+            ...(exempt.get(`${g.index}:${u.index}`) ?? []),
+            ...(tipBoxes.get(g.index) ?? []),
+          ].map((b) => ({
             x: b.x - 2,
             y: b.y - 2,
             w: b.w + 4,
@@ -1889,6 +1970,7 @@ export function analyzeFigure(
       score,
       E,
       visible: E,
+      core: EMPTY,
       hull: EMPTY,
       partInk: EMPTY,
     };
@@ -1896,12 +1978,16 @@ export function analyzeFigure(
 }
 
 /**
- * The unbounded peel (§6.2): every pixel of the mask that the exterior reaches through closing-
- * only ink or paper goes (comb fin gaps open to the outside, notches between stair steps); raw
- * ink and the seeded faces stay.
+ * The unbounded peel (§6.2): every closing-only pixel of the mask (ink only after the closing)
+ * that the exterior reaches through closing-only pixels goes: comb fin gaps of up to 2 px open
+ * to the outside. Raw ink, the seeded faces and paper stay, so a face behind a 1 px outline break
+ * stays opaque (and so does a cavity behind a narrow mouth: declare it a hole).
  */
 function peel(st: StateImage, m: Mask, R: Mask): Mask {
-  return peelExterior(m, (x, y) => st.rawInk[y * st.W + x] !== 0 || has(R, x, y));
+  return peelExterior(
+    m,
+    (x, y) => st.rawInk[y * st.W + x] !== 0 || has(R, x, y) || st.ink[y * st.W + x] === 0,
+  );
 }
 
 /**
