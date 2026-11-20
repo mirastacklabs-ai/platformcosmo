@@ -1366,7 +1366,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 64,
-          "description": "Repeat the part count times; copies get ids <id>-1 ... <id>-n and are offset by pitch.",
+          "description": "Repeat the part count times; when count is above 1 copies get ids <id>-1 ... <id>-n (count 1 keeps the id) and are offset by pitch.",
           "default": 1
         },
         "pitch": {
@@ -1584,13 +1584,13 @@
             },
             "program": {
               "$ref": "#/$defs/id",
-              "description": "Build program; default the target's first build program."
+              "description": "Build program; default the target's program when it is a build program, else its first build program."
             },
             "to": {
               "type": "integer",
               "minimum": 0,
               "maximum": 500,
-              "description": "Build step (or storyboard frame) to reach; default the last."
+              "description": "Build step (or storyboard frame) to reach; default: advance by one step (see advance)."
             },
             "advance": {
               "type": "integer",
