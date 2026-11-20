@@ -250,9 +250,10 @@ performance (300 leaves × 20 transitions < 2 s).
 ### A1-3 Assembly render model and emit (L, ~2200 LOC, 7 files)
 
 Owns `render/assembly/*.ts`, `emit/ids.ts` (assembly ids, `__c<k>` suffix scheme ready for
-copies), emit `attrs` overrides. `AssemblyRenderModel`, the wrapper chain (motion > visible >
-fade > clip > part), label and leader placement, top-face labels, fade wrappers only when used,
-reach-bounds viewBox, per-step focus rects.
+copies), emit `attrs` overrides. `AssemblyRenderModel`, the wrapper chain of §9.4 (host > clip >
+motion > visible > fade > part; host and clip only on clipped copies), label and leader
+placement, top-face labels, fade wrappers only when used, reach-bounds viewBox, per-step focus
+rects.
 Tests: viewBox covers every swept box; wrapper chain structure; label placement deterministic;
 byte-identity gate; snapshots of the Phase 1b examples.
 
