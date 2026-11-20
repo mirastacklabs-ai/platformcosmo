@@ -1,7 +1,8 @@
 ---
 layout: home
+title: prompt to animated isometric diagrams
 hero:
-  name: PlatformCosmo
+  name: platformcosmo · Open source
   text: Prompt to animated isometric diagrams
   tagline: A Claude Code plugin and CLI for cloud, platform engineering, AI and data-center architecture diagrams. One self-contained SVG, no JavaScript.
   actions:
