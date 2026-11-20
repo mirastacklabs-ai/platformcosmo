@@ -63,6 +63,9 @@ const DISCRIMINATED: ReadonlySet<string> = new Set([
   "SpecAssemblyAction",
   "SpecProgram",
   "SpecPartImage",
+  // A2-1: stage directions (preset | vector) and distances (number | "auto" | "<k>x").
+  "SpecDirection",
+  "SpecDistance",
 ]);
 
 /** What a oneOf's discriminator selected: a branch to report on, or a ready diagnostic. */
@@ -159,9 +162,16 @@ export function discriminateBranch(
   }
   // 3. type
   const t = jsonType(data);
+  // A branch's JSON types: its `type`, else the types of its `enum` values (an enum-only branch).
+  const typesOf = (r: Resolved): string[] =>
+    typeof r.type === "string"
+      ? [r.type]
+      : Array.isArray(r.enum)
+        ? [...new Set(r.enum.map(jsonType))]
+        : [];
   const same = rs
     .map((r, i) => ({ r, i }))
-    .filter(({ r }) => r.type === t || (t === "number" && r.type === "integer"));
+    .filter(({ r }) => typesOf(r).some((x) => x === t || (t === "number" && x === "integer")));
   return same.length === 1 ? { branch: same[0]!.i } : undefined;
 }
 

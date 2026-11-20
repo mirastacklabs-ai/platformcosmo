@@ -1,18 +1,30 @@
-import type { DcPack, Diagnostic, IconResolver } from "../contracts/index.js";
+import type { DcPack, Diagnostic, IconResolver, PartShapeRegistry } from "../contracts/index.js";
 import { DEFAULT_RACK_U, SLOT_HEIGHT_U, footprintOf } from "../scene/sizes.js";
 import type { PlatformCosmoSpec, SpecFlow } from "./types.gen.js";
 import { closest, didYouMean, q } from "./suggest.js";
-import { figureDiagnostics } from "./assembly-semantic.js";
+import { assemblyDiagnostics, figureDiagnostics, isAssemblyPath } from "./assembly-semantic.js";
 import { unsupportedDiagnostics } from "./unsupported.js";
 
 /** Σ over every flow of ceil(rate × 2); shared formula with Track B (no path lengths needed). */
 export const PARTICLE_LIMIT = 2000;
 
-type Kind = "node" | "group" | "rack" | "equipment" | "row" | "aisle" | "cable" | "figure";
+type Kind =
+  | "node"
+  | "group"
+  | "rack"
+  | "equipment"
+  | "row"
+  | "aisle"
+  | "cable"
+  | "figure"
+  | "assembly"
+  | "storyboard";
 
 export interface SemanticContext {
   readonly icons?: IconResolver;
   readonly dc?: DcPack;
+  /** Schema 1.2.0: installed pack shapes; unknown `pack:id` shapes become errors. */
+  readonly parts?: PartShapeRegistry;
 }
 
 export function particleCount(flows: readonly SpecFlow[]): number {
@@ -57,6 +69,20 @@ export function semanticDiagnostics(
 
   // ---- one id namespace -------------------------------------------------------------
   const ids = new Map<string, { kind: Kind; path: string }>();
+  // The kinds named in the duplicate-id suggestion: 1.1 kinds, then the 1.2.0 ones present.
+  const sharedKinds = [
+    "nodes",
+    "groups",
+    "racks",
+    "equipment",
+    "rows",
+    "aisles",
+    "cables",
+    ...(spec.figures === undefined ? [] : ["figures"]),
+    ...(spec.assemblies === undefined ? [] : ["assemblies"]),
+    ...(spec.storyboards === undefined ? [] : ["storyboards"]),
+  ];
+  const shared = `${sharedKinds.slice(0, -1).join(", ")} and ${sharedKinds[sharedKinds.length - 1]}`;
   const declare = (id: string, kind: Kind, path: string): void => {
     const prev = ids.get(id);
     if (prev) {
@@ -64,9 +90,7 @@ export function semanticDiagnostics(
         "semantic/duplicate-id",
         path,
         `Duplicate id ${q(id)} (already used by a ${prev.kind} at ${prev.path})`,
-        `Ids are shared by nodes, groups, racks, equipment, rows, aisles${
-          spec.figures === undefined ? " and cables" : ", cables and figures"
-        }; rename one`,
+        `Ids are shared by ${shared}; rename one`,
         { id, first: prev.path },
       );
     } else ids.set(id, { kind, path });
@@ -81,6 +105,8 @@ export function semanticDiagnostics(
     if (c.id !== undefined) declare(c.id, "cable", `/cables/${i}/id`);
   });
   (spec.figures ?? []).forEach((f, i) => declare(f.id, "figure", `/figures/${i}/id`));
+  (spec.assemblies ?? []).forEach((a, i) => declare(a.id, "assembly", `/assemblies/${i}/id`));
+  (spec.storyboards ?? []).forEach((b, i) => declare(b.id, "storyboard", `/storyboards/${i}/id`));
 
   // Edge ids and cable ids share the namespace flows refer to.
   const edgeIds = new Map<string, string>();
@@ -177,6 +203,11 @@ export function semanticDiagnostics(
     const k = ids.get(ep)?.kind;
     return k === "node" || k === "rack" || k === "equipment";
   };
+  // Edge and flow endpoints may also name a whole assembly, storyboard or figure (never a part).
+  const isBoard = (k: Kind | undefined): boolean =>
+    k === "assembly" || k === "storyboard" || k === "figure";
+  const isEndpoint = (ep: string): boolean =>
+    isObject(ep) || (!ep.includes("/") && isBoard(ids.get(ep)?.kind));
   const isAreaRef = (ep: string): boolean => {
     const k = ids.get(ep)?.kind;
     return k === "group" || k === "row" || k === "aisle";
@@ -184,6 +215,17 @@ export function semanticDiagnostics(
   const unknownObject = (path: string, ep: string, what: string, allowAreas = false): void => {
     const slash = ep.indexOf("/");
     let message = `Unknown ${what} ${q(ep)}`;
+    if (slash > 0 && isBoard(ids.get(ep.slice(0, slash))?.kind)) {
+      const root = ep.slice(0, slash);
+      err(
+        "assembly/edge-to-part",
+        path,
+        `${what[0]!.toUpperCase()}${what.slice(1)} ${q(ep)} is a part path; endpoints name a whole ${ids.get(root)!.kind}`,
+        `Use "${root}"`,
+        { id: ep },
+      );
+      return;
+    }
     if (slash > 0) {
       const rack = ep.slice(0, slash);
       if (!rackIds.has(rack))
@@ -280,7 +322,7 @@ export function semanticDiagnostics(
     });
   };
   // Cables connect DC gear only (racks, equipment, rack/slot); edges connect any object.
-  checkEnds(edges, "/edges", "node", isObject);
+  checkEnds(edges, "/edges", "node", isEndpoint);
   checkEnds(cables, "/cables", "cable endpoint", isDcObject);
 
   // ---- DC refs ----------------------------------------------------------------------
@@ -333,7 +375,7 @@ export function semanticDiagnostics(
       const areas = f.kind === "airflow";
       for (const end of ["from", "to"] as const) {
         const ep = f[end];
-        if (isObject(ep) || (areas && isAreaRef(ep))) continue;
+        if (isEndpoint(ep) || (areas && isAreaRef(ep))) continue;
         unknownObject(`${p}/${end}`, ep, "flow endpoint", areas);
       }
       if (f.from === f.to)
@@ -348,11 +390,22 @@ export function semanticDiagnostics(
   checkFlows(spec.flows ?? [], "/flows");
   // Images, figures and figure actions (A2-F); these run alongside the guard. Focus ids that
   // zoom are the ones the check below accepts, as in the scene.
-  out.push(...figureDiagnostics(spec, undefined, (id) => isObject(id) || isAreaRef(id)));
+  // Assembly checks (A2-1) name more targets than the figure planner does, so where both report
+  // the same code at the same path the assembly check's did-you-mean wins.
+  const assembly = assemblyDiagnostics(spec, undefined, ctx);
+  const taken = new Set(assembly.map((d) => `${d.path}\0${d.code}`));
+  out.push(...assembly);
+  out.push(
+    ...figureDiagnostics(spec, undefined, (id) => isObject(id) || isAreaRef(id)).filter(
+      (d) => !taken.has(`${d.path}\0${d.code}`),
+    ),
+  );
   (spec.steps ?? []).forEach((s, si) => {
     const base = `/steps/${si}`;
     for (const key of Object.keys(s.set ?? {})) {
-      if (!isObject(key)) unknownObject(`${base}/set/${key}`, key, "step target");
+      if (!isObject(key) && !isAssemblyPath(spec, key)) {
+        unknownObject(`${base}/set/${key}`, key, "step target");
+      }
     }
     for (const key of Object.keys(s.metrics ?? {})) {
       if (!metricIds.has(key))
@@ -364,7 +417,12 @@ export function semanticDiagnostics(
           { id: key },
         );
     }
-    if (s.focus !== undefined && !isObject(s.focus) && !isAreaRef(s.focus)) {
+    if (
+      s.focus !== undefined &&
+      !isObject(s.focus) &&
+      !isAreaRef(s.focus) &&
+      !isAssemblyPath(spec, s.focus)
+    ) {
       unknownObject(`${base}/focus`, s.focus, "focus target", true);
     }
     checkFlows(s.flows ?? [], `${base}/flows`);
