@@ -1761,4 +1761,13 @@ encrypted PDFs with an empty user password are supported in the PDF phase, other
 (ingestion §4.1); close-ups and quarter-turn views ship in Phase 2; image caps 2 MiB per image,
 8 MiB total, warning at 1 MiB (4 MiB for document outputs).
 
+Interpretations taken in A2-3 (scene): `away` leaves the mate, i.e. the direction from the mate's
+contact face toward the part; a part that interpenetrates a sibling without a face contact or an
+enclosure leaves along the axis of least penetration (before the `out` fallback); a descendant
+selected in the same stage as its selected ancestor is not a separate mover; `overrides[].order`
+ranks before the stage `order`; `ProgramLevel.program` of a sub-assembly program is
+`<owner path below the assembly>/<program id>` (a root program is its plain id); a nested
+action's `length` covers its implied access move and its own program; reach covers the programs
+the actions (and the base pose) play, not every declared program.
+
 Open: none blocking the schema; implementation-level questions are listed per PR in the tracks.

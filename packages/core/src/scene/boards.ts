@@ -66,7 +66,7 @@ export const mirrorBezier = ([x1, y1, x2, y2]: Bezier): Bezier => [
  * Keyword of the time-reversed curve. `ease` has no keyword counterpart: it keeps its name and
  * the mirrored `bezier` (0.75, 0, 0.75, 0.9) is the authoritative curve of a reversed move.
  */
-const REVERSED_EASING: Readonly<Record<SpecEasing, SpecEasing>> = {
+export const REVERSED_EASING: Readonly<Record<SpecEasing, SpecEasing>> = {
   linear: "linear",
   ease: "ease",
   "ease-in": "ease-out",
@@ -488,11 +488,15 @@ export function fitDuration(need: number, lead: boolean, tr: boolean): number {
 export function stepWindows(
   durations: readonly number[],
   views: readonly (string | undefined)[],
+  /** The last step's end pose differs from the base pose: it reserves a closing window even
+   * when no camera transition follows (§7.3, §7.4). */
+  closeLast = false,
 ): StepWindow[] {
   return durations.map((d, i) => {
     const lead = i === 0 && views[0] !== undefined ? transitionOf(d) : 0;
     const next = i + 1 < durations.length ? views[i + 1] : undefined;
-    const tr = views[i] !== next ? transitionOf(d) : 0;
+    const last = i === durations.length - 1;
+    const tr = views[i] !== next || (last && closeLast) ? transitionOf(d) : 0;
     return { lead, tr, window: Math.max(MIN_WINDOW, r4(d - lead - tr - HOLD)) };
   });
 }
@@ -508,6 +512,23 @@ export interface PlanOptions {
   /** Phases still gated by the merge guard. Non-figure targets of a gated phase are reported
    * as `assembly/unknown-target` once `phase1a` is lifted (tracks §0). */
   readonly gated?: Readonly<Record<RootPhase, boolean>>;
+  /**
+   * Actions on non-figure targets (assemblies, A2-3) planned by another track: `foreign(step,
+   * action)` (0-based indices into `steps[].assembly`) returns what the action needs, or
+   * undefined when the action is not theirs. Such actions share the step's cursor, motion
+   * window and compression with the figure actions, so one window computation serves both.
+   * Must be pure: the plan may be made twice (loop closure).
+   */
+  readonly foreign?: (step: number, action: number) => ForeignAction | undefined;
+  /** The last step ends away from the base pose for a reason other than a figure (§7.4). */
+  readonly closeLoop?: boolean;
+}
+
+/** One action planned by another track: `start` and `length` are filled in by the step. */
+export interface ForeignAction {
+  /** Seconds the action plays at speed 1, uncompressed. */
+  readonly natural: number;
+  readonly action: ResolvedAction;
 }
 
 const KEYS = ["explode", "implode", "build", "unbuild"] as const;
@@ -527,6 +548,19 @@ export function planFigureSteps(
   views: readonly (string | undefined)[],
   opts: PlanOptions = {},
 ): { plan: AssemblyStepPlan[]; diagnostics: Diagnostic[] } {
+  // A2-3: `opts.closeLoop` reserves the last step's closing window (§7.3, §7.4) when an
+  // assembly ends away from its base pose. Figure-only plans are unchanged here: the figure
+  // loop-closure rule arrives with R-1 (which re-plans with `closesLoop`).
+  return planPass(spec, figures, views, opts);
+}
+
+function planPass(
+  spec: PlatformCosmoSpec,
+  figures: ReadonlyMap<string, ResolvedFigure>,
+  views: readonly (string | undefined)[],
+  opts: PlanOptions,
+): { plan: AssemblyStepPlan[]; diagnostics: Diagnostic[] } {
+  const closeLast = opts.closeLoop === true;
   const steps: readonly SpecStep[] = spec.steps ?? [];
   const diagnostics: Diagnostic[] = [];
   const level = new Map<string, number>();
@@ -534,6 +568,7 @@ export function planFigureSteps(
   const windows = stepWindows(
     steps.map((s) => s.duration ?? 3),
     views,
+    closeLast,
   );
   // Every declared non-figure root: its gating phase ("none": never an action target) and name.
   const phaseOf = new Map<string, RootPhase | "none">();
@@ -570,6 +605,13 @@ export function planFigureSteps(
       const target = (a as unknown as Record<string, string>)[kind] as string;
       const root = target.split("/")[0] as string;
       const fig = figures.get(root);
+      const foreign = fig === undefined ? opts.foreign?.(si, ai) : undefined;
+      if (foreign !== undefined) {
+        const start = (a as { start?: number }).start ?? cursor;
+        cursor = r4(start + foreign.natural);
+        planned.push({ natural: foreign.natural, action: { ...foreign.action, start } });
+        return;
+      }
       if (fig === undefined) {
         // A non-figure target. While its phase is gated the guard already rejects it; after
         // phase1a lifts it must not resolve here (tracks §0), so report it unknown.
