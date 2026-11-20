@@ -1,7 +1,7 @@
 # PlatformCosmo
 
 Prompt -> spec (`*.cosmo.json`) -> deterministic engine -> animated isometric SVG.
-Plan: `docs/PLAN.md`. Working rules: PLAN section 17 (milestone by milestone, deterministic
+Plan: `docs/PLAN.md`. **New session? Start with `HANDOFF.md`.** Working rules: PLAN section 17 (milestone by milestone, deterministic
 output, no runtime network in core/cli, schema is the source of truth, minimal deps,
 Conventional Commits with DCO sign-off).
 
