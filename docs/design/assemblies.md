@@ -142,7 +142,12 @@ existing `PrimitiveKind` union is untouched so its exhaustive maps stay source-c
 `camshaft`, `piston`, `rod`, `valve`, `oil-pan`, `intake`, `exhaust`, `timing-belt`) and
 `brick:` (stud grid, §5.1). A shape's `build` returns `PartGeometry` (primitives in its local
 frame, `bounds`, `depthBox`, `solid`, optional `split`). Shapes are generic and vendor-neutral
-(no trade dress, no trademarks).
+(no trade dress, no trademarks, no vendor names); standards-body interface and form-factor names
+(M.2, E1.S, OCP 3.0, PCIe, NVMe, CRPS) may be used descriptively in ids, labels and docs.
+`hw:` shapes have one canonical orientation (x width, y depth, z height, mm), devices with a
+front put it at +y, and `depthBox` is the solid core (fingers, ears, handles, sockets and
+connectors are drawn but excluded, like brick studs). Use the part's `rotate` to turn a shape;
+`hw:e1s` also takes `params.orientation` (`flat` | `upright`).
 
 ### 5.1 Stud-grid bricks (`@platformcosmo/parts-brick`, Track E)
 
@@ -1094,7 +1099,8 @@ All examples validate against `schema/v1.json` (checked when this design was wri
           "count": 8,
           "at": [175, 410, 7],
           "pitch": [11, 0, 0],
-          "size": [7, 133, 31],
+          "rotate": 90,
+          "size": [133, 7, 31],
           "label": "DIMM"
         },
         {
@@ -1104,7 +1110,8 @@ All examples validate against `schema/v1.json` (checked when this design was wri
           "count": 4,
           "at": [370, 410, 7],
           "pitch": [11, 0, 0],
-          "size": [7, 133, 31],
+          "rotate": 90,
+          "size": [133, 7, 31],
           "label": "DIMM"
         },
         {
@@ -1112,9 +1119,10 @@ All examples validate against `schema/v1.json` (checked when this design was wri
           "type": "nvme",
           "shape": "hw:e1s",
           "count": 8,
-          "at": [20, 700, 7],
+          "at": [20, 632, 7],
           "pitch": [14, 0, 0],
-          "size": [10, 45, 60],
+          "params": { "orientation": "upright" },
+          "size": [10, 118, 34],
           "label": "E1.S NVMe"
         }
       ],
@@ -1385,7 +1393,7 @@ pistons, head, camshafts, valve cover, so the cover (moved first) ends highest.
           "id": "board",
           "shape": "hw:board",
           "at": [10, 260, 0],
-          "size": [418, 400, 3],
+          "size": [418, 400, 12],
           "label": "Motherboard"
         },
         {
@@ -1405,7 +1413,8 @@ pistons, head, camshafts, valve cover, so the cover (moved first) ends highest.
           "count": 8,
           "at": [175, 410, 3],
           "pitch": [11, 0, 0],
-          "size": [7, 133, 31],
+          "rotate": 90,
+          "size": [133, 7, 31],
           "label": "DIMM"
         },
         {
