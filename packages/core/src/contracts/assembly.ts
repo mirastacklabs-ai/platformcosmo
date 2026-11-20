@@ -708,6 +708,72 @@ export interface AssemblyStepClock {
   readonly end: number;
 }
 
+/** `p' = scale * p + (tx, ty)`: uniform scale and translation of screen coordinates. */
+export interface AssemblyAffine {
+  readonly scale: number;
+  readonly tx: number;
+  readonly ty: number;
+}
+
+/**
+ * One close-up level group (§8.4, A1-4). All rects are screen rects (user units). A level has
+ * its own coordinates ("local": its world projected, no camera); `overview` places them in the
+ * main viewport. The level group `<g id=group>` sits in the overlay layer (pinned like captions:
+ * a sibling of the camera) with `transform = overview` and `opacity = 0` at rest.
+ */
+export interface AssemblyLevelRender {
+  readonly path: string;
+  readonly host: string;
+  readonly kind: "assembly" | "figure" | "storyboard";
+  readonly depth: number;
+  readonly parent?: string;
+  /** `ids.level(path)`. */
+  readonly group: string;
+  /** The level's own model (ids, tracks, epochs, frames in LOCAL coordinates); assemblies only. */
+  readonly model?: AssemblyRenderModel;
+  /** Rest bounds of the level's content, local. Figure and storyboard levels: `hostLocal`. */
+  readonly rest: Rect;
+  /** Everything the level draws (swept boxes, labels, leaders), local. */
+  readonly reach: Rect;
+  /** Screen rect of the host box in its PARENT level's local coordinates, at rest. */
+  readonly hostLocal: Rect;
+  /** The host rect in the main viewport at the parent's overview (no camera). */
+  readonly hostRect: Rect;
+  /** Camera rect that frames the host (in the viewport): `hostRect` plus the focus margins. */
+  readonly hostFocus: Rect;
+  /** Level overview: local -> viewport, the reach contained in the main overview area. */
+  readonly overview: AssemblyAffine;
+  /** Where the overview puts the level's reach in the viewport: the level camera's focus rect. */
+  readonly focus: Rect;
+  /**
+   * Start of the cross-fade at zoom 1: local -> viewport with `rest` contained in `hostRect`.
+   * The group eases from here to `overview` while the parent camera zooms to `hostFocus`.
+   */
+  readonly enter: AssemblyAffine;
+  /** `enter` for any (zoomed) host rect: `rest` contained in `zoomed`, centred. */
+  fromHost(zoomed: Rect): AssemblyAffine;
+  /** Host rect (viewport, no camera) at the END pose of a step: the host may have moved. */
+  hostAt(step: number): Rect;
+  /** Elements of the group, its content included. */
+  readonly elements: number;
+}
+
+/** One quarter-turn view group (§7.7, A1-4): the scene turned by -`turn`, drawn on its own. */
+export interface AssemblyViewRender {
+  readonly turn: QuarterTurn;
+  /** `ids.view(turn)`: objects and labels of this view; views other than 0 start at opacity 0. */
+  readonly group: string;
+  /**
+   * This view's model: its own projection, depth epochs, tracks and frames, with ids scoped to the
+   * view (`__v<turn>` suffix on every part, label, clip and fade id; view 0 is unscoped).
+   */
+  readonly model: AssemblyRenderModel;
+  /** Screen rect of the rotated `reachBounds` plus labels: this view's viewBox. */
+  readonly viewBox: Rect;
+  /** Elements of the group, its content included. */
+  readonly elements: number;
+}
+
 /** What A1 adds to `RenderModel` for 1.2.0 content (`RenderModel.assembly`). */
 export interface AssemblyRenderModel {
   readonly ids: AssemblyIdScheme;
@@ -744,8 +810,19 @@ export interface AssemblyRenderModel {
   frameAt(t: number): AssemblyFrameState;
   /** Pose at the end of a step (per-step outputs and reduced-motion keyframes). */
   stepEnd(step: number): AssemblyFrameState;
-  /** Element estimate added by assemblies (copies, labels, leaders, callouts). */
+  /**
+   * Element count added by assemblies (copies, labels, leaders, callouts): every level and every
+   * view included (§13).
+   */
   readonly elements: number;
+  /**
+   * Close-up levels (§8.4), sorted by path; absent without. `frameAt`, `stepEnd`, `focusRect`
+   * and `elements` above already include them; `items`, `tracks`, `epochs` and the rest of this
+   * model describe the main scene (view 0) only.
+   */
+  readonly levels?: readonly AssemblyLevelRender[];
+  /** Quarter-turn views, sorted by turn, view 0 first; absent when no build step uses `view`. */
+  readonly views?: readonly AssemblyViewRender[];
 }
 
 /**

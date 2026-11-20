@@ -759,6 +759,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     layers.background.push(...asmBuild.defs);
     layers.objects.push(...asmBuild.objects);
     extents.push(...asmBuild.extents);
+    // Close-up levels (§8.4): first in the overlay layer, so captions and tiles draw above them.
+    if (asmBuild.levelNodes !== undefined) layers.overlay.push(...asmBuild.levelNodes);
   }
 
   // ---- Viewbox, overlays ---------------------------------------------------------------
