@@ -160,6 +160,8 @@ export interface Analysis {
   /** Front relations: front[state] has "u>v" when unit u is in front of v there. */
   readonly front: Partial<Record<FigureState, ReadonlySet<string>>>;
   readonly diagnostics: Diagnostic[];
+  /** Matcher budget (multiply-adds) for later searches (the exploded-only seat search). */
+  readonly maxMultiplyAdds: number;
   /** Per annotation: invalidity reasons (rules 2-5) with their bbox. */
   readonly invalid: {
     readonly annotation: number | null;
@@ -576,7 +578,12 @@ export function analyzeFigure(
   const annInputs: { index: number; points?: [number, number][]; rect?: Box }[] = [];
   let totalLength = 0;
   let maxSide = 0;
-  for (const s of states) maxSide = Math.max(maxSide, img[s]!.W + img[s]!.H);
+  let maskArea = 0;
+  let stateArea = 0;
+  for (const s of states) {
+    maxSide = Math.max(maxSide, img[s]!.W + img[s]!.H);
+    stateArea += img[s]!.W * img[s]!.H;
+  }
   (manifest.annotations ?? []).forEach((a, i) => {
     if (a.kind === "text") {
       const p = toLocal(a.state, [a.rect[0], a.rect[1]], `/annotations/${i}/rect`);
@@ -595,6 +602,7 @@ export function analyzeFigure(
         });
         return;
       }
+      maskArea += (a.rect[2] + 4) * (a.rect[3] + 4);
       annInputs.push({ index: i, rect: { x: p[0], y: p[1], w: a.rect[2], h: a.rect[3] } });
     } else {
       const pts: [number, number][] = [];
@@ -604,6 +612,14 @@ export function analyzeFigure(
       });
       if (pts.length !== a.polyline.length) return;
       totalLength += polylineLength(pts);
+      // Each mask is allocated over the polyline's bbox plus the widest possible band.
+      const xw =
+        pts.reduce((m, q) => Math.max(m, q[0]), 0) -
+        pts.reduce((m, q) => Math.min(m, q[0]), Infinity);
+      const yh =
+        pts.reduce((m, q) => Math.max(m, q[1]), 0) -
+        pts.reduce((m, q) => Math.min(m, q[1]), Infinity);
+      maskArea += (xw + 80) * (yh + 80);
       annInputs.push({ index: i, points: pts });
     }
   });
@@ -624,6 +640,23 @@ export function analyzeFigure(
       ],
     };
   }
+  // Bounded memory: the annotation masks together may cover each drawing about four times.
+  if (maskArea > 4 * stateArea + 1_000_000) {
+    return {
+      diagnostics: [
+        ...diagnostics,
+        err(
+          "asset/too-expensive",
+          `the annotations cover about ${maskArea} px of masks, above ${4 * stateArea + 1_000_000}`,
+          {
+            suggestion:
+              "declare arrows and leaders by their ends, and text rectangles around the text only",
+            params: { pixels: maskArea, limit: 4 * stateArea + 1_000_000 },
+          },
+        ),
+      ],
+    };
+  }
   const annotations: AnnotationGeometry[] = annInputs.map((ai) => {
     const a = manifest.annotations![ai.index]!;
     const st = img[a.state]!;
@@ -639,14 +672,6 @@ export function analyzeFigure(
       st.H,
     );
   });
-  for (const g of annotations) {
-    if (g.kind !== "leader") continue;
-    const texts = annotations.filter((t) => t.kind === "text" && t.state === g.state);
-    const ends = [g.points[0]!, g.points[g.points.length - 1]!];
-    if (!ends.some(([x, y]) => texts.some((t) => boxDistance(x, y, t.rect!) <= 4))) {
-      g.problems.push("the leader does not end within 4 px of a text rectangle of its state");
-    }
-  }
 
   // ---- preliminary depictions (seeded regions)
   const seededR = new Map<string, Mask>();
@@ -873,6 +898,13 @@ export function analyzeFigure(
     }
     const t = best!;
     const mask = tight(t.u.dep[t.s]!.V);
+    if (mask.w === 0) {
+      diagnostics.push(
+        err("asset/empty", `the mask of ${t.u.id} is empty (check its polygon against its seeds)`, {
+          params: { part: t.u.id, state: t.s },
+        }),
+      );
+    }
     return {
       index: ci,
       id,
@@ -883,6 +915,7 @@ export function analyzeFigure(
       sprite: colours(img[t.s]!.image, mask),
     };
   });
+  if (diagnostics.some((x) => x.severity === "error")) return { diagnostics };
   for (const c of classes) {
     for (const s of states) {
       const st = img[s]!;
@@ -975,6 +1008,38 @@ export function analyzeFigure(
   if (diagnostics.some((x) => x.severity === "error")) return { diagnostics };
 
   // ---- front relations and visible masks
+  // Bounded work: the pairwise overlap tests and subtractions are paid for up front.
+  {
+    let cost = 0;
+    for (const s of states) {
+      for (const u of units) {
+        for (const w of units) {
+          if (w.index <= u.index) continue;
+          const a = u.place[s]!.E;
+          const b = w.place[s]!.E;
+          const ow = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+          const oh = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+          if (ow > 0 && oh > 0) cost += 2 * ow * oh + a.w * a.h + b.w * b.h;
+        }
+      }
+    }
+    const limit = 32 * stateArea + 1_000_000;
+    if (cost > limit) {
+      return {
+        diagnostics: [
+          ...diagnostics,
+          err(
+            "asset/too-expensive",
+            `the parts overlap too much to separate (about ${cost} px of work, above ${limit})`,
+            {
+              suggestion: "crop the figure (regions) or split it into fewer, smaller parts",
+              params: { pixels: cost, limit },
+            },
+          ),
+        ],
+      };
+    }
+  }
   const front: Partial<Record<FigureState, Set<string>>> = {};
   const computeVisible = (): void => {
     for (const s of states) {
@@ -1027,13 +1092,33 @@ export function analyzeFigure(
   };
   computeVisible();
 
-  // ---- occlusion recovery into the template (one pass)
+  // ---- occlusion recovery into the template (one pass over all classes, then one recompute)
+  const coverCount: Partial<Record<FigureState, Uint16Array>> = {};
+  for (const s of states) {
+    const st = img[s]!;
+    const cc = new Uint16Array(st.W * st.H);
+    for (const u of units) {
+      const m = u.place[s]!.E;
+      for (let j = 0; j < m.h; j++) {
+        for (let i = 0; i < m.w; i++) {
+          const x = i + m.x;
+          const y = j + m.y;
+          if (m.data[j * m.w + i] && x >= 0 && y >= 0 && x < st.W && y < st.H) cc[y * st.W + x]!++;
+        }
+      }
+    }
+    coverCount[s] = cc;
+  }
+  let recovered = false;
   for (const c of classes) {
     const tu = units[c.unit]!;
     const tp = tu.place[c.state]!;
     const st = img[c.state]!;
-    let covered: Mask = EMPTY;
-    for (const w of units) if (w !== tu) covered = union(covered, w.place[c.state]!.E);
+    const cc = coverCount[c.state]!;
+    const ownE = tp.E;
+    // Covered in the template's drawing by another unit's expected silhouette.
+    const covered = (x: number, y: number): boolean =>
+      x >= 0 && y >= 0 && x < st.W && y < st.H && cc[y * st.W + x]! - (has(ownE, x, y) ? 1 : 0) > 0;
     let add: Mask = EMPTY;
     const sources: { m: Mask; s: FigureState; dx: number; dy: number }[] = [];
     for (const ui of c.units) {
@@ -1043,7 +1128,7 @@ export function analyzeFigure(
         const p = u.place[s]!;
         // Pixels this depiction shows that the template lacks and that are covered in the template.
         const back = shifted(p.visible, tp.x - p.x, tp.y - p.y);
-        const cand = intersect(minus(back, c.mask), covered);
+        const cand = filter(minus(back, c.mask), covered);
         if (isEmpty(cand)) continue;
         const fresh = minus(cand, add);
         add = union(add, fresh);
@@ -1062,6 +1147,7 @@ export function analyzeFigure(
           const y = j + src.m.y;
           const sx = x + src.dx;
           const sy = y + src.dy;
+          if (sx < 0 || sy < 0 || sx >= im.width || sy >= im.height) continue;
           const o = ((y - mask.y) * mask.w + x - mask.x) * 4;
           const q = (sy * im.width + sx) * 4;
           sprite.data[o] = im.data[q]!;
@@ -1089,8 +1175,9 @@ export function analyzeFigure(
         };
       }
     }
-    computeVisible();
+    recovered = true;
   }
+  if (recovered) computeVisible();
 
   // ---- hulls and part ink
   for (const u of units) {
@@ -1112,7 +1199,10 @@ export function analyzeFigure(
     for (const s of states) {
       const st = img[s]!;
       const p = u.place[s]!;
-      const mapped = H0 && S0 ? clipMask(shifted(H0, p.x - u.place[S0]!.x, p.y - u.place[S0]!.y), st.W, st.H) : EMPTY;
+      const mapped =
+        H0 && S0
+          ? clipMask(shifted(H0, p.x - u.place[S0]!.x, p.y - u.place[S0]!.y), st.W, st.H)
+          : EMPTY;
       p.hull = dilate(convexHull(union(mapped, p.E)), 2, st.W, st.H);
       p.partInk = geodesic(
         cutInk[s]!,
@@ -1130,6 +1220,22 @@ export function analyzeFigure(
     d[to]![0] - d[from]![0],
     d[to]![1] - d[from]![1],
   ];
+  // Leaders: the free end (the one without a part contact) must end at a text rectangle of the
+  // same state. When both or neither end touch a part, either end may.
+  for (const g of annotations) {
+    if (g.kind !== "leader") continue;
+    const st = img[g.state]!;
+    const ends = [g.points[0]!, g.points[g.points.length - 1]!];
+    const contact = g.allowances.map((b) => {
+      const sq = boxMask(b, st.W, st.H);
+      return units.some((u) => overlaps(sq, dilate(u.place[g.state]!.E, 1, st.W, st.H)));
+    });
+    const free = contact[0] !== contact[1] ? [ends[contact[0] ? 1 : 0]!] : ends;
+    const texts = annotations.filter((t) => t.kind === "text" && t.state === g.state);
+    if (!free.some(([x, y]) => texts.some((t) => boxDistance(x, y, t.rect!) <= 4))) {
+      g.problems.push("the leader's free end is not within 4 px of a text rectangle of its state");
+    }
+  }
   // Exemptions: an annotation's allowance square exempts that annotation's own band and mask
   // where it touches a unit, at most 8 squares per unit and state (in annotation order).
   const exempt = new Map<string, Box[]>();
@@ -1255,9 +1361,18 @@ export function analyzeFigure(
   const excluded: Partial<Record<FigureState, Mask>> = {};
   for (const s of states) {
     const st = img[s]!;
+    // An annotation mapped in from the other drawing is not drawn here: it excludes only
+    // non-part pixels (the base areas recovered from or for it), never a part's silhouette or
+    // part ink, so it cannot hide a defect of a part in this state.
+    const partPx = (x: number, y: number): boolean =>
+      units.some((u) => {
+        const pl = u.place[s]!;
+        return has(pl.E, x, y) || has(pl.partInk, x, y);
+      });
     const parts = annotations.map((g) => {
       const [dx, dy] = shiftTo(g.state, s);
-      return clipMask(shifted(g.mask, dx, dy), st.W, st.H);
+      const m = clipMask(shifted(g.mask, dx, dy), st.W, st.H);
+      return g.state === s ? m : filter(m, (x, y) => !partPx(x, y));
     });
     const X = parts.length > 0 ? union(...parts) : EMPTY;
     excluded[s] = X;
@@ -1288,6 +1403,7 @@ export function analyzeFigure(
       excluded,
       front,
       diagnostics,
+      maxMultiplyAdds: maxMacs,
       invalid,
     },
     diagnostics,
@@ -1327,13 +1443,19 @@ function boundingInk(st: StateImage, R: Mask, rivals: readonly Mask[] = []): Mas
   const close = rivals.filter((v) => overlaps(dilate(v, 2 * reach, st.W, st.H), far));
   // One union of the nearby rivals: each pixel costs at most two (4 reach + 1)^2 window scans.
   const rival = close.length > 0 ? union(...close) : undefined;
-  const mineFirst = (x: number, y: number, r: number): boolean => !rival || near(rival, x, y, r) >= near(R, x, y, r);
-  const B00 = filter(inkMask(st.ink, st.W, dilate(R, st.stroke, st.W, st.H)), (x, y) => mineFirst(x, y, reach));
+  const mineFirst = (x: number, y: number, r: number): boolean =>
+    !rival || near(rival, x, y, r) >= near(R, x, y, r);
+  const B00 = filter(inkMask(st.ink, st.W, dilate(R, st.stroke, st.W, st.H)), (x, y) =>
+    mineFirst(x, y, reach),
+  );
   // The rest of the outline: ink connected to it inside the convex hull of the seeded regions and
   // their outline, within D of the regions (where a face tapers into a corner its stroke is
   // farther than one stroke width).
   const hull = intersect(convexHull(union(R, B00)), far);
-  const B0 = filter(union(B00, geodesic(st.ink, st.W, B00, hull)), (x, y) => has(B00, x, y) || mineFirst(x, y, 2 * reach));
+  const B0 = filter(
+    union(B00, geodesic(st.ink, st.W, B00, hull)),
+    (x, y) => has(B00, x, y) || mineFirst(x, y, 2 * reach),
+  );
   const nearRim = dilate(R, D - 1, st.W, st.H);
   const band = filter(inkMask(st.ink, st.W, far), (x, y) => !has(B0, x, y));
   const touch = dilate(B0, 1, st.W, st.H);

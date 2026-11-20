@@ -103,9 +103,19 @@ const RESIDUAL_RISK =
   "exclusion overlay and the verification renders are the backstop.";
 
 const r1 = (v: number): number => Math.round(v * 1000) / 1000;
+/** Code-unit string order (no locale: the report must not depend on the host). */
+const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 /** Composites `sprite` over `dst` (straight alpha) with its top-left at (x, y); marks coverage. */
-function over(dst: Raster, sprite: Raster, x: number, y: number, cover?: Uint8Array): void {
+function over(
+  dst: Raster,
+  sprite: Raster,
+  x: number,
+  y: number,
+  cover?: Uint8Array,
+  top?: Int16Array,
+  rank = 0,
+): void {
   for (let j = 0; j < sprite.height; j++) {
     const gy = y + j;
     if (gy < 0 || gy >= dst.height) continue;
@@ -129,6 +139,7 @@ function over(dst: Raster, sprite: Raster, x: number, y: number, cover?: Uint8Ar
         dst.data[d + 3] = 255;
       }
       if (cover) cover[gy * dst.width + gx] = 1;
+      if (top) top[gy * dst.width + gx] = rank;
     }
   }
 }
@@ -143,7 +154,7 @@ export function rerender(
   a: Analysis,
   out: FigureOutputs,
   s: FigureState,
-): { image: Raster; cover: Uint8Array } {
+): { image: Raster; cover: Uint8Array; top: Int16Array } {
   const st = a.img[s]!;
   const [dx, dy] = a.d[s]!;
   const data = new Uint8Array(st.W * st.H * 4);
@@ -156,12 +167,16 @@ export function rerender(
   const image: Raster = { width: st.W, height: st.H, data };
   over(image, out.base, dx, dy);
   const cover = new Uint8Array(st.W * st.H);
-  for (const k of renderOrder(out.parts, out.sprites)) {
+  // top[q] = 1 + draw rank of the last sprite covering q (0 = none).
+  const top = new Int16Array(st.W * st.H);
+  renderOrder(out.parts, out.sprites).forEach((k, rank) => {
     const p = out.parts[k]!;
     const pos = s === "assembled" ? p.seat : p.exploded;
-    over(image, out.sprites[p.sprite]!, Math.round(pos[0]) + dx, Math.round(pos[1]) + dy, cover);
-  }
-  return { image, cover };
+    const x = Math.round(pos[0]) + dx;
+    const y = Math.round(pos[1]) + dy;
+    over(image, out.sprites[p.sprite]!, x, y, cover, top, rank + 1);
+  });
+  return { image, cover, top };
 }
 
 /** Residual pixels (|Δ luminance| > limit with a 3x3 tolerance both ways). */
@@ -216,11 +231,27 @@ function validOutputs(a: Analysis, out: unknown): Diagnostic | undefined {
   const sprites = out.sprites;
   if (!Array.isArray(sprites) || sprites.length < 1 || sprites.length > 64)
     return bad("there must be 1 to 64 sprites");
+  // Bounded work: no sprite larger than the largest drawing, and all sprites together at most
+  // 8 drawings' worth of pixels (the gate allocates per sprite and state).
+  let maxW = 0;
+  let maxH = 0;
+  let area = 0;
+  for (const s of a.states) {
+    maxW = Math.max(maxW, a.img[s]!.W);
+    maxH = Math.max(maxH, a.img[s]!.H);
+    area += a.img[s]!.W * a.img[s]!.H;
+  }
+  let total = 0;
   for (const s of sprites) {
     if (!rasterLike(s)) return bad("a sprite is not an image");
     const e = checkRaster(s, "a sprite");
     if (e) return e;
+    if (s.width > maxW || s.height > maxH) {
+      return bad(`a sprite of ${s.width}x${s.height} is larger than the drawings`);
+    }
+    total += s.width * s.height;
   }
+  if (total > 8 * area) return bad("the sprites together are larger than eight drawings");
   const parts = out.parts;
   if (!Array.isArray(parts) || parts.length !== a.units.length)
     return bad(`there must be one output part per group (${a.units.length})`);
@@ -245,6 +276,9 @@ function validOutputs(a: Analysis, out: unknown): Diagnostic | undefined {
     }
     if (!pos(p.seat) || !pos(p.exploded))
       return bad(`output part ${a.units[i]!.id} needs a finite seat and exploded position`);
+    if (p.inferred !== undefined && p.inferred !== "seat" && p.inferred !== "exploded") {
+      return bad(`output part ${a.units[i]!.id} has an invalid "inferred"`);
+    }
     if (
       p.z !== undefined &&
       !(typeof p.z === "number" && Number.isInteger(p.z) && Math.abs(p.z) <= 1000)
@@ -285,12 +319,12 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
     const sorted = [...items].sort(
       (x, y) =>
         (y.pixels ?? 0) - (x.pixels ?? 0) ||
-        (x.state ?? "").localeCompare(y.state ?? "") ||
-        (x.part ?? "").localeCompare(y.part ?? "") ||
+        cmp(x.state ?? "", y.state ?? "") ||
+        cmp(x.part ?? "", y.part ?? "") ||
         (x.annotation ?? -1) - (y.annotation ?? -1) ||
         (x.bbox?.y ?? 0) - (y.bbox?.y ?? 0) ||
         (x.bbox?.x ?? 0) - (y.bbox?.x ?? 0) ||
-        (x.reason ?? "").localeCompare(y.reason ?? ""),
+        cmp(x.reason ?? "", y.reason ?? ""),
     );
     const status: CheckStatus = opts.notRun
       ? "not-run"
@@ -321,7 +355,7 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
   };
 
   // ---- residuals per state
-  const renders: Partial<Record<FigureState, { image: Raster; cover: Uint8Array }>> = {};
+  const renders: Partial<Record<FigureState, ReturnType<typeof rerender>>> = {};
   for (const s of ["assembled", "exploded"] as const) {
     const code = `asset/${s}-residual`;
     if (!states.includes(s)) {
@@ -514,6 +548,7 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
   // ---- instance assignment
   {
     const items: CheckItem[] = [];
+    const ambiguous: string[] = [];
     if (usable) {
       for (const c of a.classes) {
         if (c.units.length < 2) continue;
@@ -535,6 +570,11 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
             for (let jj = ii + 1; jj < c.units.length; jj++) {
               const ka = c.units[ii]!;
               const kb = c.units[jj]!;
+              const hint = (u: Unit): boolean =>
+                (u.seeds[s]?.length ?? 0) > 0 || u.nearest[s] !== undefined;
+              if (!hint(unitOf(ka)) && !hint(unitOf(kb)) && ambiguous.length < MAX_ITEMS) {
+                ambiguous.push(`${unitOf(ka).id} and ${unitOf(kb).id} (${s})`);
+              }
               const ma = placed(ka);
               const mb = placed(kb);
               const ov = overlapCount(ma, mb);
@@ -562,6 +602,15 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
       }
     }
     entry("instance-swap", "asset/instance-swap", items, 0, "error");
+    for (const pair of ambiguous) {
+      diagnostics.push({
+        severity: "warning",
+        code: "asset/ambiguous",
+        path: "",
+        message: `instances ${pair} have no seeds or nearest hint there, so their assignment is unverified`,
+        suggestion: "add seeds or a nearest hint for each instance in every drawn state",
+      });
+    }
   }
 
   // ---- unrecovered base
@@ -622,7 +671,9 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
         for (let k = 0; k < a.units.length; k++) {
           const u = unitOf(k);
           const op = opaque(k, s);
-          const later = order.slice(order.indexOf(k) + 1).map((q) => opaque(q, s));
+          const top = renders[s]!.top;
+          const rank = order.indexOf(k) + 1;
+          // Missing: in the expected silhouette, not in this sprite, and no later sprite on top.
           const miss = (x: number, y: number): boolean =>
             x >= 0 &&
             y >= 0 &&
@@ -630,7 +681,7 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
             y < st.H &&
             has(u.place[s]!.E, x, y) &&
             !has(op, x, y) &&
-            !later.some((m) => has(m, x, y)) &&
+            top[y * st.W + x]! < rank &&
             !has(a.excluded[s]!, x, y);
           for (const c of components(u.place[s]!.E, miss, 8).sort(byPixels)) {
             (c.pixels > T.occluded ? items : warnItems).push({

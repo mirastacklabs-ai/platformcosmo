@@ -1225,8 +1225,10 @@ figure pipeline adds manifest, with a JSON pointer `path` into the manifest, out
 small best-vs-second margin), `flat` (one scale skipped), and info/warning `shrink-passthrough`.
 Image validation errors keep C-1's `image/*` codes. The figure pipeline (§6) uses the §6.5 gate
 codes (`asset/seat-unverified` is a warning) plus these; `not-found` also covers a seed on the
-background or a part that `locate` cannot find in a drawing, and `too-large` a manifest with more
-than 64 parts.
+background or a part that `locate` cannot find in a drawing, `too-large` a manifest with more
+than 64 parts, `too-expensive` annotation masks or part overlaps beyond the work budget, `empty` a
+part whose mask is empty (a polygon away from its seeds), and the warning `ambiguous` instances
+with neither seeds nor a `nearest` hint in a drawn state (their assignment is unverified).
 
 ## 14. Limits
 

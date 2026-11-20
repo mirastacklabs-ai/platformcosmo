@@ -393,8 +393,10 @@ describe("one source image with a region per state", () => {
     const A = f.states.assembled!.image;
     const W = Math.max(E.width, A.width);
     const data = new Uint8Array(W * (E.height + A.height) * 4).fill(255);
-    for (let y = 0; y < E.height; y++) data.set(E.data.subarray(y * E.width * 4, (y + 1) * E.width * 4), y * W * 4);
-    for (let y = 0; y < A.height; y++) data.set(A.data.subarray(y * A.width * 4, (y + 1) * A.width * 4), (E.height + y) * W * 4);
+    for (let y = 0; y < E.height; y++)
+      data.set(E.data.subarray(y * E.width * 4, (y + 1) * E.width * 4), y * W * 4);
+    for (let y = 0; y < A.height; y++)
+      data.set(A.data.subarray(y * A.width * 4, (y + 1) * A.width * 4), (E.height + y) * W * 4);
     const sheet: Raster = { width: W, height: E.height + A.height, data };
     const dy = E.height;
     const move = (pts: number[][]) => pts.map(([x, y]) => [x!, y! + dy]);
@@ -403,17 +405,32 @@ describe("one source image with a region per state", () => {
       sources: { exploded: "sheet.png" },
       regions: { exploded: [0, 0, E.width, E.height], assembled: [0, dy, A.width, A.height] },
       background: "#ffffff",
-      parts: f.manifest.parts.map((p: { seeds: { exploded: number[][]; assembled: number[][] } }) => ({ ...p, seeds: { exploded: p.seeds.exploded, assembled: move(p.seeds.assembled) } })),
-      annotations: f.manifest.annotations.map((a: { state: string; rect?: number[]; polyline?: number[][] }) =>
-        a.state !== "assembled" ? a : a.rect ? { ...a, rect: [a.rect[0], a.rect[1]! + dy, a.rect[2], a.rect[3]] } : { ...a, polyline: move(a.polyline!) },
+      parts: f.manifest.parts.map(
+        (p: { seeds: { exploded: number[][]; assembled: number[][] } }) => ({
+          ...p,
+          seeds: { exploded: p.seeds.exploded, assembled: move(p.seeds.assembled) },
+        }),
+      ),
+      annotations: f.manifest.annotations.map(
+        (a: { state: string; rect?: number[]; polyline?: number[][] }) =>
+          a.state !== "assembled"
+            ? a
+            : a.rect
+              ? { ...a, rect: [a.rect[0], a.rect[1]! + dy, a.rect[2], a.rect[3]] }
+              : { ...a, polyline: move(a.polyline!) },
       ),
     };
     const r = runFigure(manifest, { "sheet.png": sheet });
-    expect(r.value?.report.ok, JSON.stringify(r.diagnostics.filter((d) => d.severity === "error"))).toBe(true);
+    expect(
+      r.value?.report.ok,
+      JSON.stringify(r.diagnostics.filter((d) => d.severity === "error")),
+    ).toBe(true);
     const ref = run("main").result.outputs;
     expect(r.value!.outputs.parts).toEqual(ref.parts);
     expect(Buffer.from(r.value!.outputs.base.data).equals(Buffer.from(ref.base.data))).toBe(true);
-    expect(Buffer.from(r.value!.outputs.sprites[0]!.data).equals(Buffer.from(ref.sprites[0]!.data))).toBe(true);
+    expect(
+      Buffer.from(r.value!.outputs.sprites[0]!.data).equals(Buffer.from(ref.sprites[0]!.data)),
+    ).toBe(true);
   });
 });
 
@@ -489,9 +506,17 @@ describe("error codes", () => {
 // Golden hashes: update only when an intended change alters the outputs, and review the diff.
 const GOLDEN_MAIN = {
   report: "7595fe53b9a4c8c0dc36008d16b1b0170d47ef7025bbe67a1672d8ea5e66cea7",
-  files: ["base.png:07ae16ca138387cb", "sprite-1.png:ed91d850d0dd47f7", "report.json:7595fe53b9a4c8c0"],
+  files: [
+    "base.png:07ae16ca138387cb",
+    "sprite-1.png:ed91d850d0dd47f7",
+    "report.json:7595fe53b9a4c8c0",
+  ],
 };
 const GOLDEN_TWINS = {
   report: "97b17425eda6cd1be83dedccf7e66d012a18a3db9300546d07843d6e78a782de",
-  files: ["base.png:e6b114549e337db9", "sprite-1.png:984b868295e185aa", "report.json:97b17425eda6cd1b"],
+  files: [
+    "base.png:e6b114549e337db9",
+    "sprite-1.png:984b868295e185aa",
+    "report.json:97b17425eda6cd1b",
+  ],
 };

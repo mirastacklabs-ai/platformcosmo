@@ -3,7 +3,7 @@
  * the clean base (moved parts and annotations erased, filled from the other drawing), seat and
  * exploded positions in base pixels, the draw order, and the spec fragment.
  */
-import { nccAt, luminancePlane, type LuminancePlane } from "../locate.js";
+import { luminancePlane, type LuminancePlane } from "../locate.js";
 import type { Raster } from "../raster.js";
 import type { Analysis, Unit } from "./analyze.js";
 import { inBox } from "./annotations.js";
@@ -115,7 +115,9 @@ export function buildOutputs(
   }
   const base: Raster = { width: st.W, height: st.H, data };
   const plane = luminancePlane(base);
-  const parts = a.units.map((u) => positions(a, u, sprites[u.cls]!, base, plane));
+  // The seat search of exploded-only figures shares the matcher budget (3 per ring pixel).
+  const budget = { left: a.maxMultiplyAdds };
+  const parts = a.units.map((u) => positions(a, u, sprites[u.cls]!, base, plane, budget));
   return { outputs: { base, sprites, parts: drawOrder(a, parts, sprites) }, filled };
 }
 
@@ -172,7 +174,19 @@ function cleanSprite(a: Analysis, ci: number): Raster {
 }
 
 /** Silhouette ring template of a sprite: 2 px inside (dark) and 2 px outside (light). */
-export function ringTemplate(sprite: Raster): { raster: Raster; mask: Uint8Array } {
+export interface RingTemplate {
+  /** Offsets from the sprite's top-left (the ring reaches 2 px outside it). */
+  readonly dx: Int32Array;
+  readonly dy: Int32Array;
+  /** Mean-removed template values (dark inside, light outside). */
+  readonly t: Float32Array;
+  readonly denT: number;
+  readonly w: number;
+  readonly h: number;
+}
+
+/** Silhouette ring template of a sprite: 2 px inside (dark) and 2 px outside (light), built once. */
+export function ringTemplate(sprite: Raster): RingTemplate {
   const w = sprite.width + 4;
   const h = sprite.height + 4;
   const O = blank(0, 0, w, h);
@@ -182,24 +196,48 @@ export function ringTemplate(sprite: Raster): { raster: Raster; mask: Uint8Array
   }
   const inner = erode1(erode1(O));
   const outer = dilate(O, 2, w, h);
-  const data = new Uint8Array(w * h * 4);
-  const mask = new Uint8Array(w * h);
+  const dx: number[] = [];
+  const dy: number[] = [];
+  const v: number[] = [];
   for (let i = 0; i < w * h; i++) {
     const inO = O.data[i] === 1;
     const ring = inO ? !inner.data[i] : has(outer, i % w, Math.floor(i / w));
     if (!ring) continue;
-    const v = inO ? 0 : 255;
-    data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = v;
-    data[i * 4 + 3] = 255;
-    mask[i] = 255;
+    dx.push((i % w) - 2);
+    dy.push(Math.floor(i / w) - 2);
+    v.push(inO ? 0 : 255);
   }
-  return { raster: { width: w, height: h, data }, mask };
+  const mean = v.reduce((a, b) => a + b, 0) / Math.max(1, v.length);
+  const t = Float32Array.from(v, (x) => x - mean);
+  let denT = 0;
+  for (const x of t) denT += x * x;
+  return { dx: Int32Array.from(dx), dy: Int32Array.from(dy), t, denT, w, h };
 }
 
-/** Best ring NCC of the sprite with its top-left within ±r of (x, y) in the plane; -1 when none fits. */
+/** Ring NCC with the sprite's top-left at (x, y); undefined when the ring leaves the plane. */
+function ringNcc(plane: LuminancePlane, r: RingTemplate, x: number, y: number): number | undefined {
+  if (x - 2 < 0 || y - 2 < 0 || x - 2 + r.w > plane.width || y - 2 + r.h > plane.height)
+    return undefined;
+  const n = r.t.length;
+  if (n === 0 || r.denT <= 0) return 0;
+  let ss = 0;
+  let sss = 0;
+  let sts = 0;
+  for (let i = 0; i < n; i++) {
+    const v = plane.data[(y + r.dy[i]!) * plane.width + x + r.dx[i]!]!;
+    ss += v;
+    sss += v * v;
+    sts += r.t[i]! * v;
+  }
+  const varS = sss - (ss * ss) / n;
+  if (varS <= 1e-6 * n) return 0;
+  return Math.round((sts / Math.sqrt(r.denT * varS)) * 1e6) / 1e6;
+}
+
+/** Best ring NCC with the sprite's top-left within ±r of (x, y); -1 when none fits. */
 export function ringScore(
   plane: LuminancePlane,
-  ring: { raster: Raster; mask: Uint8Array },
+  ring: RingTemplate,
   x: number,
   y: number,
   r: number,
@@ -207,7 +245,7 @@ export function ringScore(
   let best = -1;
   for (let dy = -r; dy <= r; dy++) {
     for (let dx = -r; dx <= r; dx++) {
-      const v = nccAt(plane, ring.raster, x + dx - 2, y + dy - 2, ring.mask);
+      const v = ringNcc(plane, ring, x + dx, y + dy);
       if (v !== undefined && v > best) best = v;
     }
   }
@@ -220,6 +258,7 @@ function positions(
   sprite: Raster,
   base: Raster,
   plane: LuminancePlane,
+  budget: { left: number },
 ): FigureOutputPart {
   const inBase = (s: FigureState): [number, number] => {
     const p = u.place[s]!;
@@ -265,6 +304,9 @@ function positions(
       const py = Math.round(ex[1] + uy * t);
       if (px < 0 || py < 0 || px + sprite.width > base.width || py + sprite.height > base.height)
         continue;
+      const cost = 3 * ring.t.length;
+      if (budget.left < cost) break;
+      budget.left -= cost;
       const v = ringScore(plane, ring, px, py, 0);
       if (v > best) {
         best = v;

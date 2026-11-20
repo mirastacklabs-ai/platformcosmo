@@ -189,6 +189,86 @@ describe("figure limits", () => {
     },
   );
 
+  it(
+    "a valid figure with 64 separate parts reaches the gate in bounded time",
+    { timeout: 120_000 },
+    () => {
+      // 64 framed boxes on a 512x512 sheet, one seed each, plus 128 short leaders between them.
+      const W = 512;
+      const data = new Uint8Array(W * W * 4).fill(255);
+      const ink = (x: number, y: number): void => data.set([0, 0, 0, 255], (y * W + x) * 4);
+      const parts: unknown[] = [];
+      for (let k = 0; k < 64; k++) {
+        const x0 = 16 + (k % 8) * 62;
+        const y0 = 16 + Math.floor(k / 8) * 62;
+        for (let i = 0; i < 40; i++) {
+          for (const t of [0, 1]) {
+            ink(x0 + i, y0 + t);
+            ink(x0 + i, y0 + 38 + t);
+            ink(x0 + t, y0 + i);
+            ink(x0 + 38 + t, y0 + i);
+          }
+        }
+        ink(x0 + 10 + (k % 7), y0 + 20);
+        parts.push({ id: `p${k}`, seeds: { exploded: [[x0 + 20, y0 + 10]] } });
+      }
+      const annotations = Array.from({ length: 128 }, (_, i) => ({
+        kind: "leader",
+        state: "exploded",
+        polyline: [
+          [10 + (i % 64) * 7, 4],
+          [10 + (i % 64) * 7, 12],
+        ],
+      }));
+      const t0 = Date.now();
+      const r = runFigure(
+        { sources: { exploded: "s.png" }, parts, annotations },
+        { "s.png": { width: W, height: W, data } },
+      );
+      expect(Date.now() - t0).toBeLessThan(100_000);
+      noGuard(r);
+      expect(r.value).toBeDefined();
+      expect(r.value!.report.parts).toHaveLength(64);
+      expect(r.value!.report.checks.find((c) => c.check === "annotation-invalid")!.status).toBe(
+        "fail",
+      );
+    },
+  );
+
+  it("refuses annotation masks that would cover the drawing many times over", () => {
+    const f = figure("main");
+    const annotations = Array.from({ length: 128 }, () => ({
+      kind: "text",
+      state: "exploded",
+      rect: [0, 0, 379, 399],
+    }));
+    const r = runFigure({ ...f.manifest, annotations }, sourcesOf(f));
+    expect(codes(r)).toEqual(["asset/too-expensive"]);
+  });
+
+  it("refuses output sprites larger than the drawings before working on them", () => {
+    const { f, result } = run("main");
+    const huge: Raster = { width: 2000, height: 2000, data: new Uint8Array(2000 * 2000 * 4) };
+    const r = checkFigure(f.manifest, sourcesOf(f), { ...result.outputs, sprites: [huge] });
+    noGuard(r);
+    expect(r.diagnostics.find((d) => d.severity === "error")?.params?.option).toBe("outputs");
+  });
+
+  it("an empty mask (polygon away from the seeds) is asset/empty, not a 0x0 sprite", () => {
+    const f = figure("leaders");
+    const seeds = f.manifest.parts[0].seeds.exploded;
+    const r = cutout(f.states.exploded!.image, {
+      seeds,
+      polygon: [
+        [2, 2],
+        [8, 2],
+        [8, 8],
+      ],
+    });
+    expect(r.value).toBeUndefined();
+    expect(codes(r)).toContain("asset/empty");
+  });
+
   it("cutout reports bad input as diagnostics", () => {
     const img: Raster = { width: 20, height: 20, data: new Uint8Array(20 * 20 * 4).fill(255) };
     expect(codes(cutout(img, { seeds: [] }))).toContain("asset/bad-option");

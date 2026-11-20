@@ -320,18 +320,27 @@ describe("broken variants fail with their codes (tracks C-4, normative)", () => 
       restore(c, base, "hs-1", CLIP);
       const [px, py] = pos(c, "hs-1", "assembled");
       const [dx, dy] = c.f.offset;
+      // A real 2 px arrow drawn across the ghost clip's place, declared 20 px wide to cover it.
+      const x = px + 89 + dx;
+      const E = clone(c.f.states.exploded!.image);
+      drawArrow(E, x, py + 50 + dy, py + 4 + dy);
       const arrow = {
         kind: "arrow",
         state: "exploded",
         polyline: [
-          [px + 89 + dx, py + 6 + dy],
-          [px + 89 + dx, py + 50 + dy],
+          [x, py + 50 + dy],
+          [x, py + 4 + dy],
         ],
         width: 20,
       };
       const manifest = { ...c.f.manifest, annotations: [...c.f.manifest.annotations, arrow] };
-      const got = errorCodes(check(manifest, sourcesOf(c.f), { ...c.o, base }));
-      expect(got.has("asset/annotation-invalid") || got.has("asset/exploded-residual")).toBe(true);
+      const sources = { ...sourcesOf(c.f), "exploded.png": E };
+      const r = check(manifest, sources, { ...c.o, base });
+      // The declared width is refused (the band is measured, never the declared width); the
+      // ghost clip itself is also found in the base.
+      expectCodes(r, ["asset/annotation-invalid", "asset/leftover-fragment"]);
+      expect(r.diagnostics.some((d) => /declared width 20/.test(d.message))).toBe(true);
+      expect(r.diagnostics.some((d) => /no arrowhead|not on ink/.test(d.message))).toBe(false);
     });
   });
 
@@ -477,6 +486,11 @@ describe("broken variants fail with their codes (tracks C-4, normative)", () => 
     expect(left + right).toBeGreaterThan(24);
     const r = runGate(an, { ...c.o, base });
     expectCodes(r, ["asset/exploded-residual"]);
+    // The bridged component itself (not only the per-band sum) carries every residual pixel.
+    const items = r.checks.find((x) => x.check === "exploded-residual")!.items;
+    expect(items.some((i) => i.annotation === undefined && (i.pixels ?? 0) >= left + right)).toBe(
+      true,
+    );
   });
 
   it("clip lever not grouped with its heat sink: asset/exploded-residual (the lever stays seated)", () => {
@@ -507,6 +521,40 @@ describe("broken variants fail with their codes (tracks C-4, normative)", () => 
     const r = gate(c, withSprite(c.o, 0, sp));
     expectCodes(r, ["asset/foreign-pixels"]);
     expect(errorCodes(r).has("asset/rect-mask")).toBe(false);
+  });
+
+  it("an annotation of the other drawing mapped over a seated part hides nothing of it", () => {
+    const c = ctx("main");
+    // Fin-block strips transparent in the sprite: the board's dark pad shows through when seated.
+    const sp = cut(
+      c,
+      c.o.sprites[0]!,
+      "hs-1",
+      (lx, ly) =>
+        lx >= 2 &&
+        lx <= 11 &&
+        ly >= 28 &&
+        ly <= 57 &&
+        ![32, 33, 38, 39, 44, 45, 50, 51].includes(ly),
+    );
+    // A drawn, valid exploded-state arrow whose place maps onto hs-1's seated fin block.
+    const [px, py] = pos(c, "hs-1", "assembled");
+    const [dx, dy] = c.f.offset;
+    const x = px + 6 + dx;
+    const E = clone(c.f.states.exploded!.image);
+    drawArrow(E, x, py + 62 + dy, py + 24 + dy);
+    const arrow = {
+      kind: "arrow",
+      state: "exploded",
+      polyline: [
+        [x, py + 62 + dy],
+        [x, py + 24 + dy],
+      ],
+    };
+    const manifest = { ...c.f.manifest, annotations: [...c.f.manifest.annotations, arrow] };
+    const sources = { ...sourcesOf(c.f), "exploded.png": E };
+    const r = check(manifest, sources, { ...c.o, sprites: [sp] });
+    expectCodes(r, ["asset/assembled-residual"]);
   });
 
   it("the correct outputs pass the same gate (control)", () => {

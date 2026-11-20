@@ -226,7 +226,8 @@ export function annotationGeometry(
   }
   let band = capsules(pts, hw, W, H);
   let headStamp: Mask | undefined;
-  if (head !== undefined) {
+  // A head on a stroke wider than 12 px is already invalid; it is not stamped (bounded work).
+  if (head !== undefined && med <= 12) {
     // The band follows the measured wedge: each head sample's run (or span), thickened by 1 px.
     const total = samples[samples.length - 1]?.s ?? 0;
     const win = samples.filter((s) => (head === 0 ? s.s : total - s.s) <= 3 * w + 1e-9);
@@ -261,13 +262,21 @@ export function annotationGeometry(
         }
       }
     }
-    const xs = stampPts.map((p) => p[0]);
-    const ys = stampPts.map((p) => p[1]);
     if (stampPts.length > 0) {
-      const x0 = Math.max(0, Math.min(...xs));
-      const y0 = Math.max(0, Math.min(...ys));
-      const x1 = Math.min(W - 1, Math.max(...xs));
-      const y1 = Math.min(H - 1, Math.max(...ys));
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (const [x, y] of stampPts) {
+        if (x < x0) x0 = x;
+        if (y < y0) y0 = y;
+        if (x > x1) x1 = x;
+        if (y > y1) y1 = y;
+      }
+      x0 = Math.max(0, x0);
+      y0 = Math.max(0, y0);
+      x1 = Math.min(W - 1, x1);
+      y1 = Math.min(H - 1, y1);
       if (x1 >= x0 && y1 >= y0) {
         const m = blank(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
         for (const [x, y] of stampPts) {
@@ -281,9 +290,9 @@ export function annotationGeometry(
   const mask = headStamp
     ? union(capsules(pts, hw + 2, W, H), dilate(headStamp, 2, W, H))
     : capsules(pts, hw + 2, W, H);
-  // A w x w square around each end, plus a 3 px margin: rasterized ends and the closing's
-  // 2 px bridges between a shallow polyline and the outline it meets stay inside it.
-  const half = Math.ceil(hw) + 3;
+  // A w x w square around each end, plus a 2 px margin: rasterized ends and the closing's
+  // bridges between a polyline and the outline it meets stay inside it.
+  const half = Math.ceil(hw) + 2;
   const ends = [pts[0]!, pts[pts.length - 1]!];
   const allowances: Box[] = ends.map(([x, y]) => ({
     x: Math.round(x) - half,
