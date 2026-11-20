@@ -89,7 +89,7 @@ before stripping (`ImageAsset.orientation`), APNG rejection, SVG at 256 KiB thro
 sanitizer, data-URI decode, caps, hashing.
 Tests: per format good/bad/truncated/oversized fixtures generated in the test; EXIF, XMP, ICC,
 tEXt, COM removed (byte-level); orientation 1–8 read correctly, malformed EXIF ignored;
-polyglots (PNG with trailing HTML, SVG with script, JPEG with a `.png` name) rejected; WebP
+polyglots (PNG with trailing HTML, JPEG with a `.png` name) rejected, SVG active content (script, handlers, foreignObject) stripped and reported (`image/sanitized`, warning); WebP
 rejected with the hint; fuzz (never throws, bounded time).
 
 ### R-1 Figure and storyboard render (L, ~2000 LOC, 7 files)

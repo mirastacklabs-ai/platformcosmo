@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { crc32 } from "../src/assets/png.js";
 import { DEFAULT_IMAGE_LIMITS, prepareImage } from "../src/assets/prepare.js";
 import {
   JPEG_METADATA,
@@ -9,6 +10,7 @@ import {
   makeJpeg,
   makePng,
   rng,
+  seg,
 } from "./assets-fixtures.js";
 
 const seeds = [
@@ -39,6 +41,21 @@ function mutate(base: Uint8Array, r: () => number): Uint8Array {
   return Uint8Array.from(b);
 }
 
+/** Mutates a PNG, then repairs every chunk CRC that still fits so the parser goes deeper. */
+function mutatePng(base: Uint8Array, r: () => number): Uint8Array {
+  const b = mutate(base, r);
+  const v = new DataView(b.buffer);
+  let off = 8;
+  while (off + 12 <= b.length) {
+    const len = v.getUint32(off);
+    const end = off + 12 + len;
+    if (end > b.length) break;
+    v.setUint32(end - 4, crc32(b, off + 4, end - 4));
+    off = end;
+  }
+  return b;
+}
+
 describe("fuzz", () => {
   test("mutated and random input never throws, stays bounded, and is deterministic", () => {
     const runOnce = (): string[] => {
@@ -50,7 +67,9 @@ describe("fuzz", () => {
         const bytes =
           i % 10 === 9
             ? Uint8Array.from({ length: Math.floor(r() * 200) }, () => Math.floor(r() * 256))
-            : mutate(base, r);
+            : i % 3 === 0 && base === seeds[0]
+              ? mutatePng(base, r)
+              : mutate(base, r);
         const src = srcs[Math.floor(r() * srcs.length)] as string;
         const res = prepareImage({ key: `k${i}`, src, bytes }, DEFAULT_IMAGE_LIMITS);
         // the contract: an asset or at least one diagnostic, and no error alongside an asset
@@ -91,6 +110,23 @@ describe("fuzz", () => {
     prepareImage({ key: "a", src: "a.jpg", bytes: huge }, DEFAULT_IMAGE_LIMITS);
     const deep = enc(`<svg viewBox="0 0 1 1">${"<g>".repeat(5000)}`);
     prepareImage({ key: "b", src: "b.svg", bytes: deep }, DEFAULT_IMAGE_LIMITS);
+    const floods: Uint8Array[] = [
+      enc("<!---->".repeat(500) + "x"), // Q01
+      enc(
+        `<svg viewBox="0 0 1 1">${'<image href="data:image/png;base64,AAAA"/>'.repeat(3000)}</svg>`,
+      ), // Q02
+      enc(`<svg viewBox="0 0 1 1">${"<image>".repeat(3000)}</svg>`),
+      enc(`<svg viewBox="0 0 1 1"><rect/></svg>`.repeat(100)), // Q03/Q05 shape
+      enc(`<!-- ${"x".repeat(200_000)} -->` + SVG_OK), // Q05
+      makeJpeg({ meta: Array.from({ length: 3000 }, () => JPEG_METADATA.com) }),
+      makeJpeg({ meta: Array.from({ length: 2000 }, () => seg(0xe0, enc("JFXX\0xx"))) }), // Q04
+    ];
+    for (const bytes of floods) {
+      const t1 = performance.now();
+      prepareImage({ key: "f", src: "f.svg", bytes }, DEFAULT_IMAGE_LIMITS);
+      prepareImage({ key: "f", src: "f.jpg", bytes }, DEFAULT_IMAGE_LIMITS);
+      expect(performance.now() - t1).toBeLessThan(2000);
+    }
     expect(performance.now() - t0).toBeLessThan(10_000);
   });
 });

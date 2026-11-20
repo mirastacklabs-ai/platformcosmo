@@ -5,6 +5,8 @@ import { parseExifOrientation } from "../src/assets/jpeg.js";
 import type { ImageLimits } from "../src/contracts/index.js";
 import {
   JPEG_METADATA,
+  PNG_SIG,
+  ihdr,
   METADATA_CHUNKS,
   SVG_OK,
   b64,
@@ -21,6 +23,10 @@ import {
 const L = DEFAULT_IMAGE_LIMITS;
 const run = (bytes: Uint8Array, src = "img.png", limits: ImageLimits = L) =>
   prepareImage({ key: "pic", src, bytes }, limits);
+const dataOf = (r: { asset?: { data: Uint8Array } }): Uint8Array => {
+  expect(r.asset).toBeDefined();
+  return r.asset?.data ?? new Uint8Array();
+};
 const codes = (r: ReturnType<typeof run>) => r.diagnostics.map((d) => d.code);
 
 describe("crc32", () => {
@@ -68,7 +74,7 @@ describe("PNG", () => {
     expect(indexOfBytes(png, name)).toBeGreaterThan(0);
     const r = run(png);
     expect(r.asset).toBeDefined();
-    const out = r.asset?.data ?? new Uint8Array();
+    const out = dataOf(r);
     expect(indexOfBytes(out, name)).toBe(-1);
     expect(indexOfBytes(out, "SECRET")).toBe(-1);
     expect(out.length).toBeLessThan(png.length);
@@ -78,7 +84,7 @@ describe("PNG", () => {
 
   test("metadata after IDAT is removed; ICC reports image/icc-ignored", () => {
     const png = makePng({ late: [METADATA_CHUNKS.tEXt as Uint8Array] });
-    expect(indexOfBytes(run(png).asset?.data ?? new Uint8Array(), "tEXt")).toBe(-1);
+    expect(indexOfBytes(dataOf(run(png)), "tEXt")).toBe(-1);
     const icc = run(makePng({ extra: [METADATA_CHUNKS.iCCP as Uint8Array] }));
     expect(codes(icc)).toEqual(["image/icc-ignored"]);
     expect(icc.diagnostics[0]?.severity).toBe("info");
@@ -152,7 +158,7 @@ describe("JPEG", () => {
       ],
     });
     const r = run(jpg, "a.jpg");
-    const out = r.asset?.data ?? new Uint8Array();
+    const out = dataOf(r);
     expect(out.length).toBeGreaterThan(0);
     for (const s of ["Exif", "xmpmeta", "ICC_PROFILE", "Photoshop", "SECRET"]) {
       expect(indexOfBytes(jpg, s)).toBeGreaterThan(0);
@@ -176,7 +182,7 @@ describe("JPEG", () => {
       expect(a?.orientation).toBe(o);
       expect(a?.width).toBe(o >= 5 ? 50 : 100);
       expect(a?.height).toBe(o >= 5 ? 100 : 50);
-      expect(indexOfBytes(a?.data ?? new Uint8Array(), "Exif")).toBe(-1);
+      expect(indexOfBytes(dataOf({ asset: a }), "Exif")).toBe(-1);
     }
   });
 
@@ -221,7 +227,7 @@ describe("JPEG", () => {
       expect(r.asset?.width).toBe(16);
       expect(codes(r)).toEqual(["image/exif-ignored"]);
       expect(r.diagnostics[0]?.severity).toBe("info");
-      expect(indexOfBytes(r.asset?.data ?? new Uint8Array(), "Exif")).toBe(-1);
+      expect(indexOfBytes(dataOf(r), "Exif")).toBe(-1);
     }
   });
 
@@ -396,12 +402,12 @@ describe("polyglots", () => {
 
   test("PNG with HTML hidden in a text chunk is stripped", () => {
     const r = run(makePng({ extra: [pngChunk("tEXt", enc("x\0<script>alert(1)</script>"))] }));
-    expect(indexOfBytes(r.asset?.data ?? new Uint8Array(), "<script>")).toBe(-1);
+    expect(indexOfBytes(dataOf(r), "<script>")).toBe(-1);
   });
 
   test("HTML in a JPEG comment is stripped; trailing HTML rejected", () => {
     const r = run(makeJpeg({ meta: [seg(0xfe, enc("<script>alert(1)</script>"))] }), "a.jpg");
-    expect(indexOfBytes(r.asset?.data ?? new Uint8Array(), "<script>")).toBe(-1);
+    expect(indexOfBytes(dataOf(r), "<script>")).toBe(-1);
     expect(run(makeJpeg({ trailing: enc("<script>") }), "a.jpg").asset).toBeUndefined();
   });
 
@@ -470,5 +476,133 @@ describe("contract details", () => {
     const a = run(png, "a.png").asset?.hash;
     const b = run(new Uint8Array(0), `data:image/png;base64,${b64(png)}`).asset?.hash;
     expect(a).toBe(b);
+  });
+});
+
+describe("review fixes", () => {
+  const svgWith = (inner: string, vb = "0 0 40 20") =>
+    enc(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}">${inner}</svg>`);
+
+  test("Q01: comment flood is linear, not exponential", () => {
+    const t0 = performance.now();
+    const r = run(enc("<!---->".repeat(500) + "x"), "x.svg");
+    expect(performance.now() - t0).toBeLessThan(50);
+    expect(codes(r)).toEqual(["image/format"]);
+    const ok = run(enc("<!---->".repeat(500) + SVG_OK), "x.svg");
+    expect(ok.asset?.format).toBe("svg");
+  });
+
+  test("Q01/Q05: DOCTYPE and long leading licence comments are accepted", () => {
+    const doctype = `<?xml version="1.0" encoding="utf-8"?>\n<!-- Generator: Adobe Illustrator -->\n<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n${SVG_OK}`;
+    expect(run(enc(doctype), "i.svg").asset?.format).toBe("svg");
+    const long = `<!-- ${"licence text ".repeat(8000)} -->\n${SVG_OK}`;
+    expect(long.length).toBeGreaterThan(100_000);
+    expect(run(enc(long), "l.svg").asset?.format).toBe("svg");
+    const subset = `<!DOCTYPE svg [<!ENTITY x "y">]>${SVG_OK}`;
+    expect(run(enc(subset), "s.svg").asset).toBeUndefined();
+  });
+
+  test("Q02: nested rasters and images are removed from SVG images", () => {
+    const webp = `data:image/webp;base64,${b64(cat(enc("RIFF"), Uint8Array.from([4, 0, 0, 0]), enc("WEBPSECRET_WEBP")))}`;
+    const jpg = `data:image/jpeg;base64,${b64(makeJpeg({ meta: [JPEG_METADATA.exif(6), JPEG_METADATA.com] }))}`;
+    const png = `data:image/png;base64,${b64(makePng())}`;
+    const r = run(
+      svgWith(
+        `<image href="${webp}" width="5" height="5"/><image href="${jpg}" width="5" height="5"/><image xlink:href="${png}" width="5" height="5"/><rect width="1" height="1"/>`,
+      ),
+      "n.svg",
+    );
+    expect(r.asset).toBeDefined();
+    const body = r.asset?.svg?.body ?? "";
+    expect(body).not.toMatch(/<image|data:|SECRET|base64/i);
+    expect(body).toContain("<rect");
+    expect(r.diagnostics[0]?.code).toBe("image/sanitized");
+    expect(JSON.stringify(r.diagnostics[0]?.params)).toContain("element:image");
+  });
+
+  test("Q03: same body with different viewBoxes hashes differently", () => {
+    const a = run(svgWith(`<rect width="1" height="1"/>`, "0 0 40 20"), "a.svg").asset;
+    const b = run(svgWith(`<rect width="1" height="1"/>`, "0 0 20 40"), "a.svg").asset;
+    expect(a?.svg?.body).toBe(b?.svg?.body);
+    expect(a?.hash).not.toBe(b?.hash);
+  });
+
+  test("Q04: JFIF is rewritten without thumbnail; JFXX and other APP0 are dropped", () => {
+    const thumb = seg(
+      0xe0,
+      cat(enc("JFIF\0\x01\x02\x01\0\x48\0\x48\x02\x02"), new Uint8Array(12).fill(7)),
+    );
+    const jfxx = seg(0xe0, enc("JFXX\0\x10SECRET_THUMB"));
+    const other = seg(0xe0, enc("OTHER\0SECRET_APP0"));
+    const jpg = cat(Uint8Array.from([0xff, 0xd8]), thumb, jfxx, other, makeJpeg().subarray(2 + 18));
+    const out = dataOf(run(jpg, "a.jpg"));
+    expect(Array.from(out.subarray(0, 4))).toEqual([0xff, 0xd8, 0xff, 0xe0]);
+    expect(Array.from(out.subarray(4, 6))).toEqual([0, 16]);
+    expect(Array.from(out.subarray(6, 11))).toEqual([...enc("JFIF\0")]);
+    expect(Array.from(out.subarray(11, 20))).toEqual([1, 2, 1, 0, 0x48, 0, 0x48, 0, 0]);
+    expect(out[20]).toBe(0xff);
+    expect(out[21]).not.toBe(0xe0);
+    expect(indexOfBytes(out, "JFXX")).toBe(-1);
+    expect(indexOfBytes(out, "SECRET")).toBe(-1);
+    expect(indexOfBytes(out, "OTHER")).toBe(-1);
+  });
+
+  test("Q06: unsupported JPEG markers are rejected", () => {
+    for (const m of [0xde, 0xdc, 0xf0, 0xdf]) {
+      expect(codes(run(makeJpeg({ meta: [seg(m, enc("xx"))] }), "a.jpg"))).toEqual([
+        "image/format",
+      ]);
+    }
+  });
+
+  test("Q11: only 8-bit JPEG precision", () => {
+    const j = makeJpeg().slice();
+    const at = j.findIndex((v, i) => v === 0xff && j[i + 1] === 0xc0);
+    j[at + 4] = 12;
+    expect(codes(run(j, "a.jpg"))).toEqual(["image/format"]);
+  });
+
+  test("Q07: PNG structure checks", () => {
+    const iend = pngChunk("IEND", Uint8Array.from([1]));
+    const idat = pngChunk("IDAT", Uint8Array.from([0x78, 0x9c, 1]));
+    expect(codes(run(cat(PNG_SIG, ihdr(2, 2), idat, iend)))).toEqual(["image/format"]);
+    const plte = (n: number) => pngChunk("PLTE", new Uint8Array(n));
+    expect(codes(run(makePng({ color: 2, extra: [plte(4)] })))).toEqual(["image/format"]);
+    expect(codes(run(makePng({ color: 2, extra: [plte(771)] })))).toEqual(["image/format"]);
+    expect(codes(run(makePng({ color: 2, extra: [plte(3), plte(3)] })))).toEqual(["image/format"]);
+    expect(codes(run(makePng({ color: 2, late: [plte(3)] })))).toEqual(["image/format"]);
+    const trns = pngChunk("tRNS", Uint8Array.from([0, 0]));
+    expect(codes(run(makePng({ color: 0, extra: [trns, trns] })))).toEqual(["image/format"]);
+    expect(codes(run(makePng({ color: 0, late: [trns] })))).toEqual(["image/format"]);
+    expect(run(makePng({ color: 0, extra: [trns] })).asset).toBeDefined();
+  });
+
+  test("Q08: oversized data URI is rejected before decoding", () => {
+    const uri = `data:image/png;base64,${"A".repeat(4 * Math.ceil(L.maxBytes / 3) + 8)}`;
+    const r = run(new Uint8Array(0), uri);
+    expect(codes(r)).toEqual(["image/too-large"]);
+  });
+
+  test("Q09: a data URI is always decoded; differing bytes are an error", () => {
+    const png = makePng();
+    const uri = `data:image/png;base64,${b64(png)}`;
+    expect(run(png, uri).asset?.data).toEqual(png);
+    const r = run(makePng({ w: 9 }), uri);
+    expect(r.asset).toBeUndefined();
+    expect(codes(r)).toEqual(["image/format"]);
+  });
+
+  test("Q10: active content is a warning, cosmetic removal is info", () => {
+    const evil = run(svgWith(`<script>alert(1)</script><rect width="1" height="1"/>`), "e.svg");
+    expect(evil.diagnostics.map((d) => [d.code, d.severity])).toEqual([
+      ["image/sanitized", "warning"],
+    ]);
+    const handler = run(svgWith(`<rect width="1" height="1" onclick="x()"/>`), "e.svg");
+    expect(handler.diagnostics[0]?.severity).toBe("warning");
+    const cosmetic = run(
+      svgWith(`<image href="data:image/png;base64,AAAA" width="1" height="1"/>`),
+      "e.svg",
+    );
+    expect(cosmetic.diagnostics.every((d) => d.severity === "info")).toBe(true);
   });
 });

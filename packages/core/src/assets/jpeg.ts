@@ -54,7 +54,6 @@ export function cleanJpeg(bytes: Uint8Array): RasterOk | RasterFail {
   let exifSeen = false;
   let exifIgnored = false;
   let icc = false;
-  let dropped = false;
   let eoi = false;
   while (off < bytes.length) {
     if (bytes[off] !== 0xff) return fail("JPEG has a stray byte between segments");
@@ -79,9 +78,11 @@ export function cleanJpeg(bytes: Uint8Array): RasterOk | RasterFail {
     if (end > bytes.length) return fail("truncated JPEG (segment runs past the end)");
     const payload = bytes.subarray(off + 2, end);
     let keep = true;
+    let replacement: Uint8Array | undefined;
     if (marker === 0xc0 || marker === 0xc1 || marker === 0xc2) {
       if (sawSof) return fail("JPEG has more than one frame header");
       if (payload.length < 6) return fail("JPEG frame header is too short");
+      if (payload[0] !== 8) return fail("unsupported JPEG sample precision (only 8-bit)");
       height = ((payload[1] as number) << 8) | (payload[2] as number);
       width = ((payload[3] as number) << 8) | (payload[4] as number);
       comps = payload[5] as number;
@@ -90,8 +91,18 @@ export function cleanJpeg(bytes: Uint8Array): RasterOk | RasterFail {
         return fail("JPEG frame header is malformed");
       }
       sawSof = true;
-    } else if (marker >= 0xc3 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xcc) {
-      return fail("unsupported JPEG variant (only baseline and progressive Huffman are accepted)");
+    } else if (marker === 0xc4 || marker === 0xdb || marker === 0xdd) {
+      // DHT, DQT, DRI: kept as is
+    } else if (marker === 0xe0) {
+      keep = false;
+      if (payload.length >= 14 && ascii(payload, 0, "JFIF\0")) {
+        // JFIF header only: thumbnail size set to 0 and thumbnail bytes dropped (length 16)
+        replacement = cat2(
+          Uint8Array.from([0xff, 0xe0, 0x00, 0x10]),
+          payload.subarray(0, 12),
+          Uint8Array.from([0, 0]),
+        );
+      }
     } else if (marker === 0xfe) {
       keep = false;
     } else if (marker >= 0xe1 && marker <= 0xef) {
@@ -110,9 +121,11 @@ export function cleanJpeg(bytes: Uint8Array): RasterOk | RasterFail {
     } else if (marker === 0xda) {
       if (!sawSof) return fail("JPEG scan before the frame header");
       sawScan = true;
+    } else {
+      return fail(`JPEG has an unsupported marker FF${marker.toString(16).toUpperCase()}`);
     }
-    if (keep) out.push(bytes.subarray(segStart, end));
-    else dropped = true;
+    if (replacement) out.push(replacement);
+    else if (keep) out.push(bytes.subarray(segStart, end));
     off = end;
     if (marker === 0xda) {
       // Entropy-coded data runs to the next marker that is not stuffing (FF00), RSTn or fill.
@@ -158,6 +171,15 @@ export function cleanJpeg(bytes: Uint8Array): RasterOk | RasterFail {
     icc,
     cmyk: comps === 4,
     exifIgnored,
-    stripped: dropped,
   };
+}
+
+function cat2(...parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
 }

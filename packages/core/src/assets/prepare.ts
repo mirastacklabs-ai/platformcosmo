@@ -13,7 +13,7 @@ import type {
 import { sha256 } from "../icons/integrity.js";
 import { cleanJpeg, isJpeg } from "./jpeg.js";
 import { cleanPng, isPng } from "./png.js";
-import { cleanSvg, looksLikeSvg } from "./svg.js";
+import { cleanSvg, isActiveRemoval, looksLikeSvg } from "./svg.js";
 
 /** Successful raster parse (internal, shared by png.ts and jpeg.ts). */
 export interface RasterOk {
@@ -26,7 +26,6 @@ export interface RasterOk {
   readonly icc: boolean;
   readonly cmyk: boolean;
   readonly exifIgnored: boolean;
-  readonly stripped: boolean;
 }
 export interface RasterFail {
   readonly ok: false;
@@ -143,6 +142,15 @@ function prepare(
   let bytes = input.bytes;
   let declared: ImageFormat | undefined;
   if (inline) {
+    const maxEncoded =
+      input.src.indexOf(",") + 1 + Math.ceil(Math.max(limits.maxBytes, limits.maxSvgBytes) / 3) * 4;
+    if (input.src.length > maxEncoded) {
+      return err(
+        "image/too-large",
+        `image "${input.key}" (${label}) is larger than the image size limits allow`,
+        "use a smaller image or a relative file path",
+      );
+    }
     const dec = decodeImageDataUri(input.src);
     if (!dec) {
       return err(
@@ -152,7 +160,16 @@ function prepare(
       );
     }
     declared = dec.format;
-    if (bytes.length === 0) bytes = dec.bytes;
+    if (
+      bytes.length !== 0 &&
+      (bytes.length !== dec.bytes.length || bytes.some((v, i) => v !== dec.bytes[i]))
+    ) {
+      return err(
+        "image/format",
+        `image "${input.key}": the supplied bytes differ from the inline data URI in src`,
+      );
+    }
+    bytes = dec.bytes;
   } else {
     const ext = /\.([A-Za-z0-9]+)$/.exec(input.src)?.[1]?.toLowerCase();
     declared = ext ? EXT_FORMAT[ext] : undefined;
@@ -163,7 +180,7 @@ function prepare(
   let format: ImageFormat;
   if (isPng(bytes)) format = "png";
   else if (isJpeg(bytes)) format = "jpeg";
-  else if (looksLikeSvg(bytes)) format = "svg";
+  else if (looksLikeSvg(bytes, limits.maxSvgBytes)) format = "svg";
   else {
     const other = otherFormat(bytes);
     return err(
@@ -193,11 +210,12 @@ function prepare(
     const r = cleanSvg(bytes, limits.maxSvgBytes);
     if (!r.ok) return err("image/format", `image "${input.key}" (${label}): ${r.message}`);
     if (r.removed.length > 0) {
+      const active = r.removed.filter(isActiveRemoval);
       diagnostics.push({
-        severity: "info",
+        severity: active.length > 0 ? "warning" : "info",
         code: "image/sanitized",
         path,
-        message: `image "${input.key}": the sanitizer removed ${r.removed.length} unsafe or unsupported item(s): ${r.removed.slice(0, 8).join(", ")}`,
+        message: `image "${input.key}": ${active.length > 0 ? "active content (script, event handlers or foreignObject) was stripped; " : ""}the sanitizer removed ${r.removed.length} unsafe or unsupported item(s): ${r.removed.slice(0, 8).join(", ")}`,
         params: { removed: r.removed },
       });
     }
@@ -208,7 +226,7 @@ function prepare(
       width: r.width,
       height: r.height,
       orientation: 1,
-      hash: hashOf(new TextEncoder().encode(r.svg.body)),
+      hash: hashOf(new TextEncoder().encode(`${r.svg.viewBox}\n${r.svg.body}`)),
       data: new Uint8Array(0),
       svg: r.svg,
     };

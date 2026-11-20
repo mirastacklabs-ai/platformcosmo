@@ -54,10 +54,10 @@ export function cleanPng(bytes: Uint8Array): RasterOk | RasterFail {
   let colorType = -1;
   let first = true;
   let sawIdat = false;
+  let sawTrns = false;
   let sawPlte = false;
   let sawIend = false;
   let afterIdat = false;
-  let dropped = false;
   let icc = false;
   while (off < bytes.length) {
     if (off + 12 > bytes.length) return fail("truncated PNG (incomplete chunk header)");
@@ -97,8 +97,19 @@ export function cleanPng(bytes: Uint8Array): RasterOk | RasterFail {
       sawIdat = true;
     } else {
       if (sawIdat) afterIdat = true;
-      if (type === "PLTE") sawPlte = true;
-      if (type === "IEND") sawIend = true;
+      if (type === "PLTE") {
+        if (sawPlte || sawIdat) return fail("PNG PLTE is duplicated or after IDAT");
+        if (len % 3 !== 0 || len === 0 || len > 768) return fail("PNG PLTE has an invalid length");
+        sawPlte = true;
+      }
+      if (type === "tRNS") {
+        if (sawTrns || sawIdat) return fail("PNG tRNS is duplicated or after IDAT");
+        sawTrns = true;
+      }
+      if (type === "IEND") {
+        if (len !== 0) return fail("PNG IEND must be empty");
+        sawIend = true;
+      }
     }
     first = false;
     if (KEEP.has(type)) {
@@ -106,7 +117,6 @@ export function cleanPng(bytes: Uint8Array): RasterOk | RasterFail {
     } else if (type.charCodeAt(0) < 0x61) {
       return fail(`PNG has an unknown critical chunk ${type}`);
     } else {
-      dropped = true;
       if (type === "iCCP") icc = true;
     }
     off = end;
@@ -126,7 +136,6 @@ export function cleanPng(bytes: Uint8Array): RasterOk | RasterFail {
     icc,
     cmyk: false,
     exifIgnored: false,
-    stripped: dropped,
   };
 }
 
