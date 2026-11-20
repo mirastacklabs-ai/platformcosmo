@@ -1,0 +1,149 @@
+{
+  "metric": [
+    {
+      "severity": "error",
+      "code": "schema/one-of",
+      "path": "/metrics/0/value",
+      "message": "Not a valid SpecMetricValue",
+      "suggestion": "Use one of: a string; a number",
+      "params": {
+        "branches": ["a string", "a number"]
+      }
+    }
+  ],
+  "metricType": [
+    {
+      "severity": "error",
+      "code": "schema/one-of",
+      "path": "/metrics/0/value",
+      "message": "Not a valid SpecMetricValue",
+      "suggestion": "Use one of: a string; a number",
+      "params": {
+        "branches": ["a string", "a number"]
+      }
+    }
+  ],
+  "flowMissingTo": [
+    {
+      "severity": "error",
+      "code": "schema/one-of",
+      "path": "/flows/0",
+      "message": "Not a valid SpecFlow",
+      "suggestion": "Use one of: SpecFlowByEdge (needs \"edge\"); SpecFlowByEndpoints (needs \"from\" + \"to\")",
+      "params": {
+        "branches": [
+          "SpecFlowByEdge (needs \"edge\")",
+          "SpecFlowByEndpoints (needs \"from\" + \"to\")"
+        ]
+      }
+    }
+  ],
+  "flowBoth": [
+    {
+      "severity": "error",
+      "code": "schema/one-of",
+      "path": "/flows/0",
+      "message": "Not a valid SpecFlow",
+      "suggestion": "Use one of: SpecFlowByEdge (needs \"edge\"); SpecFlowByEndpoints (needs \"from\" + \"to\")",
+      "params": {
+        "branches": [
+          "SpecFlowByEdge (needs \"edge\")",
+          "SpecFlowByEndpoints (needs \"from\" + \"to\")"
+        ]
+      }
+    }
+  ],
+  "flowEdges": [
+    {
+      "severity": "error",
+      "code": "schema/one-of",
+      "path": "/flows/0",
+      "message": "Not a valid SpecFlow",
+      "suggestion": "Use one of: SpecFlowByEdge (needs \"edge\"); SpecFlowByEndpoints (needs \"from\" + \"to\")",
+      "params": {
+        "branches": [
+          "SpecFlowByEdge (needs \"edge\")",
+          "SpecFlowByEndpoints (needs \"from\" + \"to\")"
+        ]
+      }
+    }
+  ],
+  "flowEmpty": [
+    {
+      "severity": "error",
+      "code": "schema/one-of",
+      "path": "/flows/0",
+      "message": "Not a valid SpecFlow",
+      "suggestion": "Use one of: SpecFlowByEdge (needs \"edge\"); SpecFlowByEndpoints (needs \"from\" + \"to\")",
+      "params": {
+        "branches": [
+          "SpecFlowByEdge (needs \"edge\")",
+          "SpecFlowByEndpoints (needs \"from\" + \"to\")"
+        ]
+      }
+    }
+  ],
+  "flowKind": [
+    {
+      "severity": "error",
+      "params": {
+        "allowedValues": ["normal", "heavy", "health", "failed", "airflow", "power"]
+      },
+      "code": "schema/enum",
+      "path": "/flows/0/kind",
+      "message": "Invalid value; expected one of: normal, heavy, health, failed, airflow, power",
+      "suggestion": "Did you mean \"normal\"?"
+    }
+  ],
+  "legendMax": [
+    {
+      "severity": "error",
+      "code": "schema/one-of",
+      "path": "/legend",
+      "message": "Not a valid value",
+      "suggestion": "Use one of: \"auto\"; a array",
+      "params": {
+        "branches": ["\"auto\"", "a array"]
+      }
+    }
+  ],
+  "legendStr": [
+    {
+      "severity": "error",
+      "code": "schema/one-of",
+      "path": "/legend",
+      "message": "Not a valid value",
+      "suggestion": "Use one of: \"auto\"; a array",
+      "params": {
+        "branches": ["\"auto\"", "a array"]
+      }
+    }
+  ],
+  "legendItem": [
+    {
+      "severity": "error",
+      "params": {
+        "additionalProperty": "extra"
+      },
+      "code": "schema/additional-property",
+      "path": "/legend/0/extra",
+      "message": "Unknown field \"extra\"",
+      "suggestion": "Remove \"extra\"; allowed fields: label, color"
+    }
+  ],
+  "stepFlow": [
+    {
+      "severity": "error",
+      "code": "schema/one-of",
+      "path": "/steps/0/flows/0",
+      "message": "Not a valid SpecFlow",
+      "suggestion": "Use one of: SpecFlowByEdge (needs \"edge\"); SpecFlowByEndpoints (needs \"from\" + \"to\")",
+      "params": {
+        "branches": [
+          "SpecFlowByEdge (needs \"edge\")",
+          "SpecFlowByEndpoints (needs \"from\" + \"to\")"
+        ]
+      }
+    }
+  ]
+}
