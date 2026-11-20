@@ -119,7 +119,7 @@ const err = (
   ...extra,
 });
 
-interface ValidSlot {
+export interface ValidSlot {
   readonly index: number;
   readonly id: string;
   readonly at: number;
@@ -128,7 +128,7 @@ interface ValidSlot {
 }
 
 /** Validates slot ranges/overlaps/ids for one rack; returns the buildable slots. */
-function checkSlots(rack: SpecRack, rackIndex: number, diags: Diagnostic[]): ValidSlot[] {
+export function checkSlots(rack: SpecRack, rackIndex: number, diags: Diagnostic[]): ValidSlot[] {
   const u = readRackParams({ u: rack.u }).u;
   const slots = (rack.slots ?? []).map((s, index) => {
     const def = registry.get(s.type);
