@@ -651,7 +651,7 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
       y: bounds.origin.y,
       z: 0,
     },
-    views: timeline.map((t) => t.focus),
+    isFocusTarget: (id) => Object.hasOwn(focusTargets, id),
   });
 
   const outDiagnostics = diagnostics.sort(

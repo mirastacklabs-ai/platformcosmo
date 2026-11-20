@@ -10,8 +10,10 @@ import {
   figureSegment,
   matchFigureSelector,
   mirrorBezier,
+  fitDuration,
   planFigureSteps,
   resolveFigure,
+  stepViews,
   stepWindows,
   transitionOf,
 } from "../src/scene/boards.js";
@@ -266,6 +268,28 @@ describe("timing tables", () => {
     const ease = back.moves.find((m) => m.part === "p3")!;
     expect(ease.easing).toBe("ease");
     expect(ease.bezier).toEqual([0.75, 0, 0.75, 0.9]);
+    // ease-in-out is its own mirror; ease-in and ease-out swap keywords with the curves
+    expect(back.moves.find((m) => m.part === "p1")).toMatchObject({
+      easing: "ease-in-out",
+      bezier: [0.42, 0, 0.58, 1],
+    });
+    const swapped = fig(
+      mk({
+        stages: [
+          { parts: ["p1"], easing: "ease-in" },
+          { parts: ["p2"], easing: "ease-out" },
+          { parts: ["p3"], easing: "linear" },
+        ],
+      }),
+    );
+    const rev = figureSegment(swapped, 3, 0).moves;
+    expect(rev.map((m) => [m.part, m.easing, m.bezier])).toEqual([
+      ["p3", "linear", [0, 0, 1, 1]],
+      ["p2", "ease-in", [0.42, 0, 1, 1]],
+      ["p1", "ease-out", [0, 0, 0.58, 1]],
+    ]);
+    // each reversed keyword's curve is the keyword table's curve
+    for (const m of rev) expect(m.bezier).toEqual(BEZIER[m.easing]);
     // partial implode: the reverse of stage 2 only
     const part = figureSegment(f, 2, 1);
     expect([part.length, part.moves.map((m) => m.part)]).toEqual([0.6, ["p3"]]);
@@ -364,13 +388,13 @@ describe("actions: levels, plan and compression", () => {
     });
     // window = 2 - 0.2 = 1.8; scale = 1.8 / 2.6
     const a = info.plan[0]!.actions[0]!;
-    expect(a.scale).toBe(0.6923);
-    expect(a.length).toBe(1.8);
+    expect(a.scale).toBe(0.6923); // floor of 0.69230769
+    expect(a.length).toBe(1.7999); // floored, so it never overruns 1.8
     expect(a.start).toBe(0);
 
     const warn = plan(mk({ stages: TWO_STAGES }, steps(1)));
     expect(warn.diagnostics[0]).toMatchObject({ severity: "warning", code: "assembly/compressed" });
-    expect(warn.plan[0]!.actions[0]!.scale).toBe(0.3077);
+    expect(warn.plan[0]!.actions[0]!.scale).toBe(0.3076);
 
     const exact = plan(mk({ stages: TWO_STAGES }, steps(2.8)));
     expect(exact.diagnostics).toEqual([]);
@@ -384,7 +408,7 @@ describe("actions: levels, plan and compression", () => {
     ]);
     const { diagnostics, plan: p } = plan(spec);
     expect(diagnostics[0]?.suggestion).toBe('Set "duration": 5 on this step'); // 2.6+.8+.8+.2=4.4
-    expect(p[0]!.actions[0]!.scale).toBe(0.8462);
+    expect(p[0]!.actions[0]!.scale).toBe(0.8461);
   });
 
   test("compression applies to every action of the step, starts included", () => {
@@ -394,8 +418,8 @@ describe("actions: levels, plan and compression", () => {
     const a = plan(spec).plan[0]!.actions;
     // natural: [0, 1.5], [1.5, 0.6]: need 2.1 > 1.8 -> scale 0.8571
     expect(a.map((x) => [x.start, x.length])).toEqual([
-      [0, 1.2857],
-      [1.2857, 0.5143],
+      [0, 1.2856],
+      [1.2856, 0.5142],
     ]);
   });
 
@@ -446,7 +470,172 @@ describe("actions: levels, plan and compression", () => {
   });
 });
 
+describe("step views, suggestions and the same-view rule", () => {
+  test("a closing transition only exists when the next view differs", () => {
+    const tr = (views: (string | undefined)[]) =>
+      stepWindows([3, 3, 3], views).map((w) => [w.lead, w.tr]);
+    expect(tr(["a", "a", "a"])).toEqual([
+      [0.75, 0],
+      [0, 0],
+      [0, 0.75], // the last step returns to the overview
+    ]);
+    expect(tr([undefined, undefined, undefined])).toEqual([
+      [0, 0],
+      [0, 0],
+      [0, 0],
+    ]);
+    expect(tr(["a", "b", undefined])).toEqual([
+      [0.75, 0.75],
+      [0, 0.75],
+      [0, 0],
+    ]);
+  });
+
+  test("stepViews drops focus ids that do not zoom, for validate and scene alike", () => {
+    const spec = mk({}, [{ focus: "n" }, { focus: "ghost" }, {}, { focus: "n" }], {
+      nodes: [{ id: "n", type: "server" }],
+    });
+    expect(stepViews(spec, (id) => id === "n")).toEqual(["n", undefined, undefined, "n"]);
+    expect(stepViews(spec, () => true)).toEqual(["n", "ghost", undefined, "n"]);
+    // validate (semantic.ts) and the scene agree on the windows of a step with an unknown focus
+    const steps = [{ duration: 2, focus: "ghost", assembly: [{ explode: "f" }] }];
+    const withGhost = mk({ stages: TWO_STAGES }, steps, { nodes: [{ id: "n", type: "server" }] });
+    const a = validate(withGhost).diagnostics.filter((d) => d.code === "assembly/compressed");
+    const b = buildScene(withGhost, {}).assemblies!.plan[0]!.actions[0]!;
+    expect(a[0]?.params?.window).toBe(1.8); // no lead, no closing transition: ghost is no view
+    expect(b.scale).toBe(0.6923);
+  });
+
+  test("suggested durations remove the compression (property loop)", () => {
+    const cases = [[undefined], ["f"], ["f", "f"], ["f", undefined]] as const;
+    for (const views of cases) {
+      for (const L of [0.3, 0.96, 1.5, 2.6, 4.04, 7.5, 13.2]) {
+        const stages = [{ parts: ["p1"], duration: L }];
+        const steps = views.map((f, i) => ({
+          duration: 0.1,
+          ...(f === undefined ? {} : { focus: f }),
+          ...(i === 0 ? { assembly: [{ explode: "f" }] } : {}),
+        }));
+        const spec = mk({ stages }, steps);
+        const figs = new Map([["f", fig(spec)]]);
+        const v = steps.map((st) => st.focus);
+        const first = planFigureSteps(spec, figs, v);
+        const sug = first.diagnostics.find((d) => d.code === "assembly/compressed");
+        expect(sug).toBeDefined();
+        const D = sug?.params?.duration as number;
+        expect(Number.isInteger(D)).toBe(true);
+        const again = planFigureSteps(
+          mk(
+            { stages },
+            steps.map((st, i) => (i === 0 ? { ...st, duration: D } : st)),
+          ),
+          figs,
+          v,
+        );
+        expect(again.diagnostics.filter((d) => d.code === "assembly/compressed")).toEqual([]);
+        // smallest whole second: one less still compresses
+        if (D > 1) {
+          const less = planFigureSteps(
+            mk(
+              { stages },
+              steps.map((st, i) => (i === 0 ? { ...st, duration: D - 1 } : st)),
+            ),
+            figs,
+            v,
+          );
+          expect(less.diagnostics.some((d) => d.code === "assembly/compressed")).toBe(true);
+        }
+      }
+    }
+  });
+
+  test("the reviewer's case: need 2.6, 1 s step with focus suggests 5", () => {
+    const spec = mk({ stages: TWO_STAGES }, [
+      { duration: 1, focus: "f", assembly: [{ explode: "f" }] },
+    ]);
+    const d = planFigureSteps(spec, new Map([["f", fig(spec)]]), ["f"]).diagnostics;
+    expect(d[0]?.suggestion).toBe('Set "duration": 5 on this step');
+    expect(fitDuration(2.6, true, true)).toBe(5);
+    expect(fitDuration(2.6, false, false)).toBe(3);
+  });
+
+  test("scaled actions never overrun the motion window", () => {
+    for (const d of [1, 1.3, 2, 2.2, 2.7]) {
+      const spec = mk({ stages: TWO_STAGES }, [
+        { duration: d, assembly: [{ explode: "f", to: 1 }, { explode: "f" }] },
+      ]);
+      const [w] = stepWindows([d], [undefined]);
+      for (const a of planFigureSteps(spec, new Map([["f", fig(spec)]]), [undefined]).plan[0]!
+        .actions) {
+        expect(a.start + a.length).toBeLessThanOrEqual(w!.window);
+      }
+    }
+  });
+
+  test("an any-depth scope is stripped before the did-you-mean and re-added", () => {
+    const d = only(
+      diags(mk({ stages: [{ parts: ["**/p-1"] }, { parts: ["p2", "p3"] }] })),
+      "assembly/selector-empty",
+    );
+    expect(d.map((x) => x.suggestion)).toEqual(['Did you mean "**/p1"?']);
+  });
+
+  test("part-not-staged is info", () => {
+    const d = only(diags(mk({ stages: [{ parts: ["p1", "p2"] }] })), "assembly/part-not-staged");
+    expect(d.map((x) => x.severity)).toEqual(["info"]);
+  });
+
+  test("duplicate-id suggestion names figures only in specs that have them", () => {
+    const withFig = mk({}, undefined, { nodes: [{ id: "f", type: "server" }] });
+    const d = validate(withFig).diagnostics.find((x) => x.code === "semantic/duplicate-id");
+    expect(d?.suggestion).toBe(
+      "Ids are shared by nodes, groups, racks, equipment, rows, aisles, cables and figures; rename one",
+    );
+    const plain = validate({
+      meta: { version: "1" },
+      nodes: [
+        { id: "a", type: "server" },
+        { id: "a", type: "server" },
+      ],
+    }).diagnostics.find((x) => x.code === "semantic/duplicate-id");
+    expect(plain?.suggestion).toBe(
+      "Ids are shared by nodes, groups, racks, equipment, rows, aisles and cables; rename one",
+    );
+  });
+});
+
 describe("action targets and the guard (tracks §0)", () => {
+  test("any declared non-figure id says it is not a figure (groups, equipment, rows, aisles)", () => {
+    const spec = {
+      ...mk({}, [
+        {
+          assembly: [
+            { explode: "grp" },
+            { implode: "eq" },
+            { explode: "rw" },
+            { explode: "ais" },
+            { explode: "cbl" },
+          ],
+        },
+      ]),
+      nodes: [{ id: "n", type: "server", group: "grp" }],
+      groups: [{ id: "grp" }],
+      equipment: [{ id: "eq", type: "pdu" }],
+      rows: [{ id: "rw", members: ["eq"] }],
+      aisles: [{ id: "ais", rows: ["rw"] }],
+      cables: [{ id: "cbl", from: "eq", to: "eq", kind: "power" }],
+    } as unknown as PlatformCosmoSpec;
+    const d = only(diags(spec, { phase1a: false }), "assembly/unknown-target");
+    expect(d.map((x) => x.message)).toEqual([
+      'Cannot explode "grp": it is a group, not a figure',
+      'Cannot implode "eq": it is equipment, not a figure',
+      'Cannot explode "rw": it is a row, not a figure',
+      'Cannot explode "ais": it is an aisle, not a figure',
+      'Cannot explode "cbl": it is a cable, not a figure',
+    ]);
+    expect(d.every((x) => x.suggestion === "Figures: f")).toBe(true);
+  });
+
   const spec = {
     meta: { version: "1" },
     images: IMAGES,
@@ -484,10 +673,10 @@ describe("action targets and the guard (tracks §0)", () => {
       ["/steps/0/assembly/5/explode", 'Did you mean "heat-sink"?'],
       ["/steps/0/assembly/6/explode", "Figures: heat-sink"],
     ]);
-    expect(d[0]?.message).toMatch(/assemblies/);
-    expect(d[1]?.message).toMatch(/racks and slots/);
-    expect(d[2]?.message).toMatch(/storyboards/);
-    expect(d[3]?.message).toMatch(/nodes/);
+    expect(d[0]?.message).toBe('Cannot explode "box": it is an assembly, not a figure');
+    expect(d[1]?.message).toMatch(/it is a rack, not a figure/);
+    expect(d[2]?.message).toMatch(/it is a storyboard, not a figure/);
+    expect(d[3]?.message).toMatch(/it is a node, not a figure/);
     expect(d[4]?.message).toBe('Unknown explode target "heat-sinc"');
     expect(d.every((x) => x.severity === "error")).toBe(true);
   });

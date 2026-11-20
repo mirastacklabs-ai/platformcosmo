@@ -61,6 +61,18 @@ export const mirrorBezier = ([x1, y1, x2, y2]: Bezier): Bezier => [
   r4(1 - y1),
 ];
 
+/**
+ * Keyword of the time-reversed curve. `ease` has no keyword counterpart: it keeps its name and
+ * the mirrored `bezier` (0.75, 0, 0.75, 0.9) is the authoritative curve of a reversed move.
+ */
+const REVERSED_EASING: Readonly<Record<SpecEasing, SpecEasing>> = {
+  linear: "linear",
+  ease: "ease",
+  "ease-in": "ease-out",
+  "ease-out": "ease-in",
+  "ease-in-out": "ease-in-out",
+};
+
 // ---------------------------------------------------------------------------------------------
 // Resolved figure
 // ---------------------------------------------------------------------------------------------
@@ -71,7 +83,7 @@ export interface FigureMove {
   /** From the program start (stages) or from the segment start (`FigureSegment`). */
   readonly start: number;
   readonly duration: number;
-  /** Spec easing of the stage; for a reversed move `bezier` is the mirrored curve. */
+  /** Stage easing; reversed moves use the swapped keyword (`ease` keeps its name: see `bezier`). */
   readonly easing: SpecEasing;
   readonly bezier: Bezier;
   /** True when the move runs from the exploded to the seated position (implode). */
@@ -267,7 +279,14 @@ export function resolveFigure(
       const at = `${base}/stages/${si}/parts/${k}`;
       const hit = matchFigureSelector(sel, selectable);
       if (hit.length === 0) {
-        const near = closestMatches(sel, selectorCandidates(selectable), 1)[0];
+        // A leading any-depth scope is flat for figures: match without it, keep it in the hint.
+        const lead = /^(?:\*\*\/)+/.exec(sel)?.[0] ?? "";
+        const nearRaw = closestMatches(
+          sel.slice(lead.length),
+          selectorCandidates(selectable),
+          1,
+        )[0];
+        const near = nearRaw === undefined ? undefined : `${lead}${nearRaw}`;
         const scoped = sel.includes("/") && !/^(\*\*\/)+[^/]+$/.test(sel);
         diagnostics.push(
           mk(
@@ -348,7 +367,7 @@ export function resolveFigure(
       if (stageOf.has(p.id)) return;
       diagnostics.push(
         mk(
-          "warning",
+          "info",
           "assembly/part-not-staged",
           `${base}/parts/${i}`,
           `Part ${q(p.id)} is moved by no stage, so it stays seated`,
@@ -410,6 +429,7 @@ export function figureSegment(fig: ResolvedFigure, from: number, to: number): Fi
       : forward.map((m) => ({
           ...m,
           start: r4(length - (m.start - offset + m.duration)),
+          easing: REVERSED_EASING[m.easing],
           bezier: mirrorBezier(m.bezier),
           reversed: true,
         }));
@@ -435,6 +455,32 @@ export interface StepWindow {
   readonly tr: number;
   /** Length of the motion window: `duration − lead − tr − 0.2` (floored at 0.05). */
   readonly window: number;
+}
+
+/**
+ * Zoom target of every step: `focus` when `isFocusTarget` accepts it, else the overview. One
+ * helper for `validate` and the scene so both compute the same windows.
+ * TODO(R-1): figure ids become focus targets once boards have geometry.
+ */
+export function stepViews(
+  spec: PlatformCosmoSpec,
+  isFocusTarget: (id: string) => boolean,
+): (string | undefined)[] {
+  return (spec.steps ?? []).map((s) =>
+    s.focus !== undefined && isFocusTarget(s.focus) ? s.focus : undefined,
+  );
+}
+
+/**
+ * Smallest whole-second step duration `D` whose motion window holds `need` seconds:
+ * `D − lead(D) − tr(D) − 0.2 ≥ need`, with `lead`/`tr` = `min(0.8, 0.25·D)` where they apply.
+ */
+export function fitDuration(need: number, lead: boolean, tr: boolean): number {
+  for (let d = Math.max(1, Math.ceil(need + HOLD)); d < 600; d++) {
+    const t = transitionOf(d);
+    if (r4(d - (lead ? t : 0) - (tr ? t : 0) - HOLD) >= need) return d;
+  }
+  return 600;
 }
 
 /**
@@ -491,11 +537,29 @@ export function planFigureSteps(
     steps.map((s) => s.duration ?? 3),
     views,
   );
+  // Every declared non-figure root: its gating phase ("none": never an action target) and name.
   const phaseOf = new Map<string, RootPhase | "none">();
-  for (const r of spec.racks ?? []) phaseOf.set(r.id, "phase2");
-  for (const a of spec.assemblies ?? []) phaseOf.set(a.id, "phase1b");
-  for (const b of spec.storyboards ?? []) phaseOf.set(b.id, "phase3");
-  for (const n of spec.nodes ?? []) phaseOf.set(n.id, "none");
+  const labelOf = new Map<string, string>();
+  const declare = (
+    list: readonly { readonly id?: string }[] | undefined,
+    phase: RootPhase | "none",
+    label: string,
+  ): void => {
+    for (const it of list ?? []) {
+      if (it.id === undefined) continue;
+      phaseOf.set(it.id, phase);
+      labelOf.set(it.id, label);
+    }
+  };
+  declare(spec.nodes, "none", "a node");
+  declare(spec.groups, "none", "a group");
+  declare(spec.equipment, "none", "equipment");
+  declare(spec.rows, "none", "a row");
+  declare(spec.aisles, "none", "an aisle");
+  declare(spec.cables, "none", "a cable");
+  declare(spec.racks, "phase2", "a rack");
+  declare(spec.assemblies, "phase1b", "an assembly");
+  declare(spec.storyboards, "phase3", "a storyboard");
   const sortedFigs = [...figures.keys()].sort();
   const plan: AssemblyStepPlan[] = [];
 
@@ -522,7 +586,7 @@ export function planFigureSteps(
             `${at}/${kind}`,
             phase === undefined
               ? `Unknown ${kind} target ${q(target)}`
-              : `Cannot ${kind} ${q(target)}: this build only animates figures, not ${phase === "none" ? "nodes" : phase === "phase1b" ? "assemblies" : phase === "phase2" ? "racks and slots" : "storyboards"}`,
+              : `Cannot ${kind} ${q(target)}: it is ${labelOf.get(root)}, not a figure`,
             closest(root, sortedFigs) !== undefined
               ? `Did you mean "${closest(root, sortedFigs)}"?`
               : sortedFigs.length > 0
@@ -653,8 +717,8 @@ export function planFigureSteps(
     const need = planned.reduce((m, p) => Math.max(m, p.action.start + p.natural), 0);
     let scale = 1;
     if (need > w.window) {
-      scale = r4(w.window / need);
-      const fit = Math.ceil(need + w.lead + w.tr + HOLD);
+      scale = Math.floor((w.window / need) * 10000) / 10000; // floor: never overrun the window
+      const fit = fitDuration(need, w.lead > 0, w.tr > 0);
       diagnostics.push(
         mk(
           scale < 0.5 ? "warning" : "info",
@@ -668,8 +732,8 @@ export function planFigureSteps(
     }
     const actions = planned.map(({ action, natural }) => ({
       ...action,
-      start: r4(action.start * scale),
-      length: r4(natural * scale),
+      start: Math.floor(action.start * scale * 10000) / 10000,
+      length: Math.floor(natural * scale * 10000) / 10000,
       scale,
     }));
     const poses: Record<string, readonly ProgramLevel[]> = {};
@@ -696,8 +760,8 @@ function toSource(s: SpecSource | undefined): AssetSource | undefined {
 export interface BoardOptions {
   /** Where figures without `pos` start: placed in a row along +x, one tile apart. */
   readonly origin?: Vec3;
-  /** Zoom target of each step (`SceneStep.focus`), for the motion windows. */
-  readonly views?: readonly (string | undefined)[];
+  /** Which `steps[].focus` ids zoom the camera (default: all), for the motion windows. */
+  readonly isFocusTarget?: (id: string) => boolean;
   /** Merge-guard groups, for the post-lift unknown-target rule (see `PlanOptions`). */
   readonly gated?: PlanOptions["gated"];
 }
@@ -777,7 +841,7 @@ export function buildFigureScene(
     });
   });
 
-  const views = opts.views ?? (spec.steps ?? []).map((s) => s.focus);
+  const views = stepViews(spec, opts.isFocusTarget ?? (() => true));
   const planned = planFigureSteps(spec, figures, views, opts.gated ? { gated: opts.gated } : {});
   diagnostics.push(...planned.diagnostics);
 

@@ -45,8 +45,6 @@ export function semanticDiagnostics(
 
   // Schema 1.2.0 fields that this build cannot render yet (merge guard, unsupported.ts).
   out.push(...unsupportedDiagnostics(spec));
-  // Images, figures and figure actions (A2-F); these run alongside the guard.
-  out.push(...figureDiagnostics(spec));
 
   const nodes = spec.nodes ?? [];
   const groups = spec.groups ?? [];
@@ -66,7 +64,9 @@ export function semanticDiagnostics(
         "semantic/duplicate-id",
         path,
         `Duplicate id ${q(id)} (already used by a ${prev.kind} at ${prev.path})`,
-        "Ids are shared by nodes, groups, racks, equipment, rows, aisles and cables; rename one",
+        `Ids are shared by nodes, groups, racks, equipment, rows, aisles${
+          spec.figures === undefined ? " and cables" : ", cables and figures"
+        }; rename one`,
         { id, first: prev.path },
       );
     } else ids.set(id, { kind, path });
@@ -346,6 +346,9 @@ export function semanticDiagnostics(
     });
   };
   checkFlows(spec.flows ?? [], "/flows");
+  // Images, figures and figure actions (A2-F); these run alongside the guard. Focus ids that
+  // zoom are the ones the check below accepts, as in the scene.
+  out.push(...figureDiagnostics(spec, undefined, (id) => isObject(id) || isAreaRef(id)));
   (spec.steps ?? []).forEach((s, si) => {
     const base = `/steps/${si}`;
     for (const key of Object.keys(s.set ?? {})) {

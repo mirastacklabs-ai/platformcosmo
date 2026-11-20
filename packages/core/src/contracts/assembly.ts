@@ -421,6 +421,7 @@ export type ResolvedProgram = ResolvedExplodeProgram | ResolvedBuildProgram;
 
 /** Pose level of one program: stages applied (explode) or build steps done (build). */
 export interface ProgramLevel {
+  /** Program id; a figure's stage list is the program `"stages"`. */
   readonly program: string;
   readonly level: number;
 }
@@ -468,6 +469,7 @@ export interface ResolvedAction {
   /** Assembly, sub-assembly, rack, slot, storyboard or figure path. */
   readonly target: string;
   readonly kind: "explode" | "implode" | "build" | "unbuild";
+  /** Program id; figure actions use the constant `"stages"`. */
   readonly program: string;
   readonly from: number;
   readonly to: number;

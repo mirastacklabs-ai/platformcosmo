@@ -12,7 +12,7 @@
  * gates that target's phase (tracks §0), so a Phase 1a build never resolves such a target.
  */
 import type { Diagnostic } from "../contracts/index.js";
-import { planFigureSteps, resolveFigure, type ResolvedFigure } from "../scene/boards.js";
+import { planFigureSteps, resolveFigure, stepViews, type ResolvedFigure } from "../scene/boards.js";
 import { UNRENDERED, type GuardGroup } from "./unsupported.js";
 import { didYouMean, q } from "./suggest.js";
 import type { PlatformCosmoSpec } from "./types.gen.js";
@@ -20,6 +20,8 @@ import type { PlatformCosmoSpec } from "./types.gen.js";
 export function figureDiagnostics(
   spec: PlatformCosmoSpec,
   groups: Readonly<Record<GuardGroup, boolean>> = UNRENDERED,
+  /** Which `steps[].focus` ids zoom the camera; the same set the scene uses (default: all). */
+  isFocusTarget: (id: string) => boolean = () => true,
 ): Diagnostic[] {
   const out: Diagnostic[] = [];
   const hasActions = (spec.steps ?? []).some((s) => s.assembly !== undefined);
@@ -70,7 +72,7 @@ export function figureDiagnostics(
   });
 
   // ---- actions ------------------------------------------------------------------------
-  const views = (spec.steps ?? []).map((s) => s.focus);
+  const views = stepViews(spec, isFocusTarget);
   out.push(...planFigureSteps(spec, figures, views, { gated: groups }).diagnostics);
   return out;
 }

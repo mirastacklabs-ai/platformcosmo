@@ -55,6 +55,16 @@ function derefBranch(b: unknown): Resolved | undefined {
 const jsonType = (v: unknown): string =>
   v === null ? "null" : Array.isArray(v) ? "array" : typeof v;
 
+/**
+ * The 1.2 unions the discriminator applies to (by schema title). 1.1 unions keep their
+ * existing diagnostics byte for byte (test/oneof-regression.test.ts); A2-1 extends this list.
+ */
+const DISCRIMINATED: ReadonlySet<string> = new Set([
+  "SpecAssemblyAction",
+  "SpecProgram",
+  "SpecPartImage",
+]);
+
 /** What a oneOf's discriminator selected: a branch to report on, or a ready diagnostic. */
 export type BranchChoice = { readonly branch: number } | { readonly diagnostic: Diagnostic };
 
@@ -185,7 +195,12 @@ function process(errors: ErrorObject[]): Diagnostic[] {
   errors.forEach((u, ui) => {
     if ((u.keyword !== "oneOf" && u.keyword !== "anyOf") || removed.has(ui)) return;
     const root = u.instancePath === "";
-    const refRoot = u.schemaPath === `#/${u.keyword}` && !root;
+    const ptitle = isObj(u.parentSchema) ? u.parentSchema.title : undefined;
+    const refRoot =
+      u.schemaPath === `#/${u.keyword}` &&
+      !root &&
+      typeof ptitle === "string" &&
+      DISCRIMINATED.has(ptitle);
     const inSub = (e: ErrorObject): boolean =>
       e.instancePath === u.instancePath || e.instancePath.startsWith(`${u.instancePath}/`);
     const run: number[] = [];
@@ -234,7 +249,7 @@ function process(errors: ErrorObject[]): Diagnostic[] {
     // The data's own discriminator (kind, action key, string vs object) names the branch:
     // report that branch's errors, ahead of the closest-branch heuristic.
     const pick =
-      u.keyword === "oneOf"
+      u.keyword === "oneOf" && title !== undefined && DISCRIMINATED.has(title)
         ? discriminateBranch(branches, u.data, u.instancePath, title)
         : undefined;
     if (pick !== undefined) {
