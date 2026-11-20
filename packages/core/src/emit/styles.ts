@@ -165,6 +165,8 @@ export function ruleFor(token: string): string | undefined {
     return `fill:none;stroke:${v("edge-stroke")};stroke-width:1;stroke-dasharray:2 2`;
   if (token === "arrow")
     return `fill:${v("edge-stroke")};stroke:${v("background")};stroke-width:1.5;stroke-linejoin:round;paint-order:stroke`;
+  if (token === "board")
+    return `fill:none;stroke:${v("edge-stroke")};stroke-opacity:0.35;stroke-width:1`;
   if (token === "shadow") return "fill:#000;fill-opacity:0.2;stroke:none";
   if (token === "elabel") return `fill:${v("edge-labelFill")};stroke:none`;
   if (token === "bg") return `fill:${v("background")}`;

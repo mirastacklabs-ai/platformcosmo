@@ -12,12 +12,14 @@ import { globMatch } from "../schema/glob.js";
 import type {
   AssemblyStepPlan,
   AssetSource,
+  ImageAssetResolver,
   ProgramLevel,
   ResolvedAction,
   SceneAssemblies,
   SceneFlatBoard,
 } from "../contracts/assembly.js";
-import type { Diagnostic, Vec3 } from "../contracts/index.js";
+import type { Box3, Diagnostic, Rect, Vec3 } from "../contracts/index.js";
+import { DEFAULT_TILE_WIDTH, createProjection, projectBoxBounds } from "../geometry/index.js";
 import { closest, closestMatches, q } from "../schema/suggest.js";
 import type {
   PlatformCosmoSpec,
@@ -457,8 +459,8 @@ export interface StepWindow {
 
 /**
  * Zoom target of every step: `focus` when `isFocusTarget` accepts it, else the overview. One
- * helper for `validate` and the scene so both compute the same windows.
- * TODO(R-1): figure ids become focus targets once boards have geometry.
+ * helper for `validate` and the scene so both compute the same windows. Figure ids are focus
+ * targets (R-1): `validate` accepts them as declared, the scene once the base image is known.
  */
 export function stepViews(
   spec: PlatformCosmoSpec,
@@ -548,10 +550,33 @@ export function planFigureSteps(
   views: readonly (string | undefined)[],
   opts: PlanOptions = {},
 ): { plan: AssemblyStepPlan[]; diagnostics: Diagnostic[] } {
-  // A2-3: `opts.closeLoop` reserves the last step's closing window (§7.3, §7.4) when an
-  // assembly ends away from its base pose. Figure-only plans are unchanged here: the figure
-  // loop-closure rule arrives with R-1 (which re-plans with `closesLoop`).
-  return planPass(spec, figures, views, opts);
+  // Levels do not depend on the windows, so a first pass tells whether the loop must close
+  // (the last step ends away from the base pose, §7.4); if so the last step reserves its
+  // closing window and the plan is made again with it (compression and suggestions agree).
+  // `opts.closeLoop` (A2-3: an assembly ends away from its base pose) forces the closing window.
+  if (opts.closeLoop === true) return planPass(spec, figures, views, opts, true);
+  const first = planPass(spec, figures, views, opts, false);
+  return closesLoop(figures.values(), first.plan)
+    ? planPass(spec, figures, views, opts, true)
+    : first;
+}
+
+/**
+ * Whether the loop ends away from its base pose: some figure's level after the last step
+ * differs from its base level. Then the last step has a closing window `tr_n` even when the
+ * camera does not move (§7.3, §7.4).
+ */
+export function closesLoop(
+  figures: Iterable<ResolvedFigure>,
+  plan: readonly AssemblyStepPlan[],
+): boolean {
+  const last = plan[plan.length - 1];
+  if (last === undefined) return false;
+  for (const f of figures) {
+    const end = last.poses[f.id]?.[0]?.level;
+    if (end !== undefined && end !== f.baseLevel) return true;
+  }
+  return false;
 }
 
 function planPass(
@@ -559,8 +584,8 @@ function planPass(
   figures: ReadonlyMap<string, ResolvedFigure>,
   views: readonly (string | undefined)[],
   opts: PlanOptions,
+  closeLast: boolean,
 ): { plan: AssemblyStepPlan[]; diagnostics: Diagnostic[] } {
-  const closeLast = opts.closeLoop === true;
   const steps: readonly SpecStep[] = spec.steps ?? [];
   const diagnostics: Diagnostic[] = [];
   const level = new Map<string, number>();
@@ -798,6 +823,8 @@ export interface BoardOptions {
   readonly isFocusTarget?: (id: string) => boolean;
   /** Merge-guard groups, for the post-lift unknown-target rule (see `PlanOptions`). */
   readonly gated?: PlanOptions["gated"];
+  /** Prepared images: with them a board has a size, so it joins bounds and focus targets. */
+  readonly images?: ImageAssetResolver;
 }
 
 export interface FigureScene {
@@ -806,12 +833,111 @@ export interface FigureScene {
   /** Diagnostics of the resolution and of the step plan. */
   readonly diagnostics: readonly Diagnostic[];
   readonly assemblies: SceneAssemblies;
+  /** World box of every board whose base image is known (bounds and focus targets). */
+  readonly boxes: ReadonlyMap<string, Box3>;
+  /** Screen rect of every such panel (the panel only, without moved sprites or labels). */
+  readonly panels: ReadonlyMap<string, Rect>;
+  /** Spec index of every board placed with an explicit `pos`. */
+  readonly explicit: ReadonlyMap<string, number>;
+}
+
+/**
+ * Screen size of a figure panel: `width` tiles along the +x axis, each `tileWidth / 2` of screen
+ * width, so a row of boards one tile apart never overlaps horizontally; the height follows the
+ * base image's aspect ratio. Panels are upright (the figure's own drawing plane, no projection).
+ * Undefined for a degenerate image.
+ */
+export function panelSize(
+  width: number,
+  imageWidth: number,
+  imageHeight: number,
+): { readonly width: number; readonly height: number } | undefined {
+  if (!(imageWidth > 0) || !(imageHeight > 0) || !(width > 0)) return undefined;
+  const w = (width * DEFAULT_TILE_WIDTH) / 2;
+  const h = (w * imageHeight) / imageWidth;
+  if (!Number.isFinite(h) || h <= 0) return undefined;
+  return { width: r2(w), height: r2(h) };
+}
+
+/**
+ * Screen rect of a panel whose bottom-left corner stands at world `anchor`, and the world box
+ * that holds it (`size.x = width`, no depth, height in z units, so its projection covers the
+ * panel; below the panel it keeps the slack of the +x slope of the floor line).
+ */
+export function panelPlacement(
+  anchor: Vec3,
+  width: number,
+  size: { readonly width: number; readonly height: number },
+): { readonly rect: Rect; readonly box: Box3 } {
+  const proj = createProjection();
+  const o = proj.project(anchor);
+  return {
+    rect: { x: o.x, y: r2(o.y - size.height), width: size.width, height: size.height },
+    box: {
+      origin: anchor,
+      size: { x: width, y: 0, z: r2(size.height / proj.zScale) },
+    },
+  };
+}
+
+/** Ids of the figures whose base image is known: the ones that can take a camera `focus`. */
+export function figureFocusIds(
+  spec: PlatformCosmoSpec,
+  images: ImageAssetResolver | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  for (const f of spec.figures ?? []) {
+    const a = images?.get(f.base);
+    if (a !== undefined && panelSize(f.width ?? DEFAULT_WIDTH, a.width, a.height) !== undefined)
+      out.add(f.id);
+  }
+  return out;
 }
 
 /** Image keys of a figure in first-use order: the base, then the parts' sprites. */
 function figureImages(f: ResolvedFigure): string[] {
   const out: string[] = [];
   for (const k of [f.base, ...f.parts.map((p) => p.image)]) if (!out.includes(k)) out.push(k);
+  return out;
+}
+
+const rectsCross = (a: Rect, b: Rect): boolean =>
+  Math.min(a.x + a.width, b.x + b.width) > Math.max(a.x, b.x) &&
+  Math.min(a.y + a.height, b.y + b.height) > Math.max(a.y, b.y);
+
+/**
+ * `layout/overlap` warnings for boards placed with an explicit `pos`: the panel's screen rect
+ * against the screen bounds of every scene box (`others`, by id) and against the other panels.
+ * One warning per board, naming the first thing it covers (sorted by id).
+ */
+export function boardOverlapDiagnostics(
+  scene: Pick<FigureScene, "panels" | "explicit">,
+  others: ReadonlyMap<string, Box3>,
+): Diagnostic[] {
+  const proj = createProjection();
+  const out: Diagnostic[] = [];
+  const otherRects = [...others.keys()]
+    .sort()
+    .map((id) => ({ id, rect: projectBoxBounds(proj, others.get(id) as Box3) }));
+  const panelIds = [...scene.panels.keys()].sort();
+  for (const [id, index] of [...scene.explicit].sort((a, b) => a[1] - b[1])) {
+    const mine = scene.panels.get(id);
+    if (mine === undefined) continue;
+    const hit =
+      otherRects.find((o) => o.id !== id && rectsCross(mine, o.rect))?.id ??
+      panelIds.find((p) => p !== id && rectsCross(mine, scene.panels.get(p) as Rect));
+    if (hit === undefined) continue;
+    out.push(
+      mk(
+        "warning",
+        "layout/overlap",
+        `/figures/${index}/pos`,
+        `Figure ${q(id)} overlaps ${q(hit)} at its manual position`,
+        'Move it, or drop "pos" to place it beside the other content',
+        { a: hit, b: id },
+      ),
+    );
+  }
   return out;
 }
 
@@ -828,6 +954,9 @@ export function buildFigureScene(
   const diagnostics: Diagnostic[] = [];
   const figures = new Map<string, ResolvedFigure>();
   const boards: SceneFlatBoard[] = [];
+  const boxes = new Map<string, Box3>();
+  const panels = new Map<string, Rect>();
+  const explicit = new Map<string, number>();
   const used: string[] = [];
   const credits: AssetSource[] = [];
   const creditKeys = new Set<string>();
@@ -857,6 +986,14 @@ export function buildFigureScene(
         ? { x: r2(nextX), y: origin.y, z: 0 }
         : { x: sf.pos.x, y: sf.pos.y, z: 0 };
     if (sf.pos === undefined) nextX += width + 1;
+    else explicit.set(figure.id, i);
+    const base = opts.images?.get(figure.base);
+    const size = base === undefined ? undefined : panelSize(width, base.width, base.height);
+    if (size !== undefined) {
+      const placed = panelPlacement(anchor, width, size);
+      boxes.set(figure.id, placed.box);
+      panels.set(figure.id, placed.rect);
+    }
     const source = toSource(sf.source);
     boards.push({
       id: figure.id,
@@ -882,6 +1019,9 @@ export function buildFigureScene(
   return {
     figures,
     diagnostics,
+    boxes,
+    panels,
+    explicit,
     assemblies: {
       assemblies: [],
       boards: boards.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
