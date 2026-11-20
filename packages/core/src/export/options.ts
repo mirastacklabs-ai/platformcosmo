@@ -66,6 +66,25 @@ export function validateRenderOptions(options: RenderOptions | undefined): Diagn
   if (time !== undefined && !(isNum(time) && time >= 0)) {
     out.push(err("options/invalid-png-time", "/png/time", "png.time must be a number >= 0."));
   }
+  const step = o.png?.step;
+  if (step !== undefined && !(isNum(step) && Number.isInteger(step) && step >= 1)) {
+    out.push(
+      err(
+        "options/invalid-png-step",
+        "/png/step",
+        "png.step must be a positive integer (1-based step number).",
+      ),
+    );
+  } else if (step !== undefined && time !== undefined) {
+    out.push(
+      err(
+        "options/invalid-png-step",
+        "/png/step",
+        "png.step and png.time are exclusive: a step has no time of its own.",
+        "Pass one of them.",
+      ),
+    );
+  }
   const fps = o.video?.fps;
   if (fps !== undefined && !(isNum(fps) && fps >= 1 && fps <= 60)) {
     out.push(

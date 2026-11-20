@@ -4,6 +4,7 @@
  * `render()` only wires them up. All outputs are deterministic (mp4 depends on the system ffmpeg).
  */
 import { r2, t4 } from "../anim/css.js";
+import { windows } from "../anim/timeline.js";
 import type {
   AnimationLayer,
   Diagnostic,
@@ -155,8 +156,12 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
   // Raster outputs ----------------------------------------------------------------------------
   let lastSvg: string | undefined;
   let lastPng: Uint8Array | undefined;
-  const renderFrame = async (time: number, scale: number): Promise<Uint8Array> => {
-    const layer = deps.animator.animate(model, { speed, mode: "frame", time });
+  const renderFrame = async (
+    time: number,
+    scale: number,
+    layerOf?: () => AnimationLayer,
+  ): Promise<Uint8Array> => {
+    const layer = layerOf?.() ?? deps.animator.animate(model, { speed, mode: "frame", time });
     const svg = withRootSize(
       deps.emit(pinOverlay(model, layer), layer, { font, target: "raster" }),
       model.viewBox,
@@ -214,15 +219,53 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
     });
   };
 
+  /**
+   * `png.step`: the end pose of step k as `steps` shows it. A raster cannot run the step layer's
+   * SMIL particles, so the layer is the frame layer just before the step ends (flows frozen
+   * mid-traversal, step state rules) with the step layer's camera and pose attributes.
+   */
+  const stepLayer = (step: number): AnimationLayer => {
+    const w = windows(model.scene.timeline, speed);
+    const k = step - 1;
+    const t = (w.starts[k] ?? 0) + (w.durations[k] ?? 0) * 0.999;
+    const frame = deps.animator.animate(model, { speed, mode: "frame", time: t });
+    const at = deps.animator.animate(model, { speed, motion, mode: "step", step });
+    return {
+      css: frame.css,
+      defs: frame.defs,
+      layers: frame.layers,
+      duration: frame.duration,
+      ...(at.viewBox ? { viewBox: at.viewBox } : {}),
+      ...(at.attrs ? { attrs: at.attrs } : {}),
+    };
+  };
+
   if (wanted.has("png")) {
     const scale = options.png?.scale ?? 2;
-    if (!tooLarge("png", scale, 1)) {
+    const step = options.png?.step;
+    const count = model.scene.timeline.length;
+    if (step !== undefined && step > count) {
+      diagnostics.push({
+        severity: "error",
+        code: "options/invalid-png-step",
+        path: "/png/step",
+        message:
+          count === 0
+            ? "png.step needs a spec with steps; this one has none."
+            : `png.step ${step} is beyond the ${count} step(s) of the spec.`,
+        suggestion: count === 0 ? "Use png.time or omit it." : `Use a step from 1 to ${count}.`,
+      });
+    } else if (!tooLarge("png", scale, 1)) {
       try {
         outputs.push({
           kind: "png",
           path: `${name}.png`,
           mime: "image/png",
-          data: await renderFrame(options.png?.time ?? 0, scale),
+          data: await renderFrame(
+            options.png?.time ?? 0,
+            scale,
+            step === undefined ? undefined : () => stepLayer(step),
+          ),
         });
       } catch (e) {
         diagnostics.push({

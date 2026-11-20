@@ -249,14 +249,22 @@ async function checkAnimates(name, browser, blocked, file, mode, probe) {
   }
   return withPage(browser, blocked, { reducedMotion: "no-preference" }, async (page) => {
     const box = await open(page, mode, file);
-    await seek(page, mode, 0.5);
+    // Assembly diagrams (B-2) carry two times known to differ (rest vs mid-move) in fixture.json.
+    const [ta, tb] = info?.assemblies?.[file]?.animate ?? [0.5, 1.7];
+    await seek(page, mode, ta);
     const a = await shot(page, box);
-    await seek(page, mode, 1.7);
+    await seek(page, mode, tb);
     const b = await shot(page, box);
-    await seek(page, mode, 0.5);
+    await seek(page, mode, ta);
     const c = await shot(page, box);
     const scratch = await scratchOf(page);
-    rec(name, file, mode, "animates (frames at 0.5 s and 1.7 s differ)", a !== b ? "pass" : "fail");
+    rec(
+      name,
+      file,
+      mode,
+      `animates (frames at ${ta} s and ${tb} s differ)`,
+      a !== b ? "pass" : "fail",
+    );
     // Same time, same frame (Chromium SMIL can move a particle by a sub-pixel between seeks).
     const same = await pixels(scratch, a, c);
     rec(
@@ -290,6 +298,8 @@ async function checkReduced(name, browser, blocked, file, mode, expected) {
       "image documents ignore emulated reduced motion (see probe); covered by inline and object",
     );
   }
+  const steps = info?.assemblies?.[file];
+  if (steps) return checkReducedDiscrete(name, browser, blocked, file, mode, steps.mids);
   return withPage(browser, blocked, { reducedMotion: "reduce" }, async (page) => {
     const box = await open(page, mode, file);
     await sleep(500);
@@ -312,6 +322,46 @@ async function checkReduced(name, browser, blocked, file, mode, expected) {
         `size match ${px.sameSize}, ${(px.diff * 100).toFixed(2)}% of pixels differ (limit 4%)`,
       );
     }
+  });
+}
+
+/**
+ * Assembly diagrams under reduced motion (assemblies.md 12): each step shows its end pose for the
+ * whole step, so two frames inside one step are equal (no tween), the poses of different steps
+ * differ somewhere (the discrete poses are really shown), and there is content.
+ */
+async function checkReducedDiscrete(name, browser, blocked, file, mode, mids) {
+  return withPage(browser, blocked, { reducedMotion: "reduce" }, async (page) => {
+    const box = await open(page, mode, file);
+    const poses = [];
+    const tweened = [];
+    for (const [k, mid] of mids.entries()) {
+      await seek(page, mode, mid);
+      const a = await shot(page, box);
+      await seek(page, mode, mid + 0.15);
+      const b = await shot(page, box);
+      poses.push(a);
+      if (a !== b) tweened.push(k + 1);
+    }
+    rec(
+      name,
+      file,
+      mode,
+      "reduced motion: discrete poses (frames inside a step are equal)",
+      tweened.length === 0 ? "pass" : "fail",
+      tweened.length ? `steps that change inside: ${tweened.join(",")}` : "",
+    );
+    const distinct = new Set(poses).size;
+    rec(
+      name,
+      file,
+      mode,
+      "reduced motion: step poses differ (not a single frozen frame)",
+      distinct > 1 ? "pass" : "fail",
+      `${distinct} distinct poses over ${poses.length} steps`,
+    );
+    const px = await pixels(await scratchOf(page), poses[0]);
+    rec(name, file, mode, "reduced motion: has content", px.ink > 0.01 ? "pass" : "fail");
   });
 }
 

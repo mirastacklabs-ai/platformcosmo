@@ -16,8 +16,8 @@ export type GuardGroup = "phase1a" | "phase1b" | "phase2" | "phase3";
 export const UNRENDERED: Readonly<Record<GuardGroup, boolean>> = {
   /** Phase 1a, figure mode: `images`, `figures`, explode/implode actions on figures. Lifted by R-1. */
   phase1a: false,
-  /** Phase 1b, plans and basic explode: `assemblies`, actions on assemblies, part paths. */
-  phase1b: true,
+  /** Phase 1b, plans and basic explode: `assemblies`, actions on assemblies, part paths. Lifted by B-1 + B-2. */
+  phase1b: false,
   /**
    * Phase 2, server → rack → hall: rack `programs`, slot `assembly`, `closeup` (fields and
    * `…/closeup` paths), actions on racks and slots, build programs and build/unbuild actions.

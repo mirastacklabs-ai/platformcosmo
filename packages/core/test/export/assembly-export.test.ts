@@ -1,0 +1,187 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, test, vi } from "vitest";
+import {
+  render,
+  validate,
+  type RenderOptions,
+  type RenderResult,
+  type VideoEncoder,
+} from "../../src/index.js";
+import { decodePng } from "../../src/export/png.js";
+import { fixtureTheme } from "../fixtures/theme.js";
+import { realPng, resolverOf } from "../figure-fixtures.js";
+
+// B-2: every Phase 1b design example (assemblies.md 2, 19.2, 19.3) through render(), in every
+// output (docs/design/assemblies.md section 12), plus png.time / png.step and bounded GIF/MP4.
+
+vi.setConfig({ testTimeout: 120_000 });
+
+type Obj = Record<string, unknown>;
+const THEME = fixtureTheme();
+const designExamples = (): Obj[] => {
+  const md = readFileSync(
+    new URL("../../../../docs/design/assemblies.md", import.meta.url),
+    "utf8",
+  );
+  return [...md.matchAll(/```json\n([\s\S]*?)```/g)]
+    .map((m) => JSON.parse(m[1] as string) as Obj)
+    .filter((s) => typeof s.meta === "object");
+};
+const TITLES = ["Two-part box", "2U GPU server internals", "Inline-4 engine teardown"];
+const example = (title: string): Obj =>
+  structuredClone(designExamples().find((s) => (s.meta as { title: string }).title === title)!);
+const images = () =>
+  resolverOf({ "gpu-photo": realPng(640, 240, (x, y) => [x % 256, y, 120, 255]) });
+
+/** A streaming sink that keeps the decoded frames' pixel hashes only. */
+function frameCollector() {
+  const frames: Uint8Array[] = [];
+  const encoder: VideoEncoder = {
+    encode: async () => new Uint8Array([1]),
+    open: () => ({
+      write: async (f: Uint8Array) => {
+        frames.push(decodePng(f).data);
+      },
+      finish: async () => new Uint8Array([0x4d, 0x50, 0x34]),
+      abort: async () => undefined,
+    }),
+  };
+  return { frames, encoder };
+}
+const same = (a: Uint8Array, b: Uint8Array): boolean =>
+  a.length === b.length && a.every((v, i) => v === b[i]);
+const pixels = (r: RenderResult): Uint8Array =>
+  decodePng(r.outputs.find((o) => o.kind === "png")!.data as Uint8Array).data;
+const run = (spec: Obj, o: RenderOptions = {}): Promise<RenderResult> =>
+  render(spec, { theme: THEME, font: "system", images: images(), ...o });
+const text = (r: RenderResult, kind: string): string =>
+  r.outputs.find((o) => o.kind === kind)!.data as string;
+
+describe("Phase 1b design examples through render()", () => {
+  test("the three examples are the ones the docs call Phase 1b", () => {
+    for (const t of TITLES) expect(validate(example(t)).valid, t).toBe(true);
+  });
+
+  test.each(TITLES)("%s: static, steps, animated, interactive, png and gif", async (title) => {
+    const spec = example(title);
+    const stepCount = (spec.steps as unknown[] | undefined)?.length ?? 0;
+    const r = await run(spec, {
+      outputs: ["animated", "static", "steps", "interactive", "png", "gif"],
+      png: { scale: 1 },
+      video: { fps: 4, durationSec: 2 },
+    });
+    expect(r.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(r.outputs.map((o) => o.kind).sort()).toEqual(
+      [
+        "animated",
+        "static",
+        "interactive",
+        "png",
+        "gif",
+        ...Array.from({ length: stepCount }, () => "steps"),
+      ].sort(),
+    );
+    const animated = text(r, "animated");
+    // assembly wrappers and motion keyframes
+    expect(animated).toMatch(/-ph_|-pm_/);
+    expect(animated).toContain("@keyframes");
+    expect(animated).toContain("prefers-reduced-motion");
+    // the static output is the rest frame: no animation at all
+    const staticSvg = text(r, "static");
+    expect(staticSvg).toMatch(/-ph_|-pm_/);
+    expect(staticSvg).not.toContain("@keyframes");
+    expect(text(r, "interactive")).toContain("@keyframes");
+    const steps = r.outputs.filter((o) => o.kind === "steps");
+    expect(steps).toHaveLength(stepCount);
+    for (const s of steps) expect(s.data as string).not.toContain("@keyframes");
+    const gif = r.outputs.find((o) => o.kind === "gif")!.data as Uint8Array;
+    expect(String.fromCharCode(...gif.subarray(0, 6))).toBe("GIF89a");
+    expect(
+      decodePng(r.outputs.find((o) => o.kind === "png")!.data as Uint8Array).width,
+    ).toBeGreaterThan(100);
+  });
+
+  test("the box: the png at t=0 is the rest frame; mid-move and step ends differ", async () => {
+    const spec = example("Two-part box");
+    const rest = await run(spec, { outputs: ["png"], png: { scale: 1 } });
+    const explicit0 = await run(spec, { outputs: ["png"], png: { scale: 1, time: 0 } });
+    expect(same(pixels(rest), pixels(explicit0))).toBe(true);
+    // one of the sampled times lies inside the lid move
+    const sampled: Uint8Array[] = [];
+    for (const time of [1.5, 2.5, 3.5, 4.5]) {
+      sampled.push(pixels(await run(spec, { outputs: ["png"], png: { scale: 1, time } })));
+    }
+    expect(sampled.some((p) => !same(p, pixels(rest)))).toBe(true);
+    // png.step N is the end pose of step N: step 2 (lid off) differs from step 1 and from rest
+    const s1 = await run(spec, { outputs: ["png"], png: { scale: 1, step: 1 } });
+    const s2 = await run(spec, { outputs: ["png"], png: { scale: 1, step: 2 } });
+    const s3 = await run(spec, { outputs: ["png"], png: { scale: 1, step: 3 } });
+    expect(same(pixels(s1), pixels(rest))).toBe(true);
+    expect(same(pixels(s2), pixels(rest))).toBe(false);
+    expect(same(pixels(s3), pixels(s2))).toBe(false);
+    // the step PNG shows the same pose as the step SVG output (same wrapper offsets)
+    const steps = await run(spec, { outputs: ["steps"] });
+    const step2 = steps.outputs.find((o) => o.kind === "steps" && o.step === 2)!.data as string;
+    expect(step2).toMatch(/-pm_[a-z0-9_-]+[^>]*transform=/);
+  });
+
+  test("the engine: gif/mp4 frames follow frameAt; first frame is the rest frame", async () => {
+    const spec = example("Inline-4 engine teardown");
+    const { frames, encoder } = frameCollector();
+    const rest = await run(spec, { outputs: ["png"], png: { scale: 1 } });
+    const r = await run(spec, {
+      outputs: ["mp4"],
+      video: { fps: 2, durationSec: 12, encoder },
+    });
+    expect(r.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(frames).toHaveLength(24);
+    expect(same(frames[0]!, pixels(rest))).toBe(true);
+    // the engine moves: more than a few distinct frames
+    expect(
+      new Set(frames.map((f) => f.reduce((a, b) => (a * 31 + b) | 0, 7))).size,
+    ).toBeGreaterThan(3);
+  });
+
+  test("png.step outside the timeline and png.step with png.time are errors, not throws", async () => {
+    const spec = example("Two-part box");
+    const far = await run(spec, { outputs: ["png"], png: { step: 9 } });
+    expect(far.outputs).toEqual([]);
+    expect(far.diagnostics.map((d) => [d.code, d.path])).toContainEqual([
+      "options/invalid-png-step",
+      "/png/step",
+    ]);
+    const both = await run(spec, { outputs: ["png"], png: { step: 1, time: 1 } });
+    expect(both.outputs).toEqual([]);
+    expect(both.diagnostics.some((d) => d.code === "options/invalid-png-step")).toBe(true);
+    for (const step of [0, 1.5, -1, Number.NaN]) {
+      const bad = await run(spec, { outputs: ["png"], png: { step } });
+      expect(
+        bad.diagnostics.some((d) => d.code === "options/invalid-png-step"),
+        `${step}`,
+      ).toBe(true);
+    }
+  });
+
+  test("rendering is deterministic (animated and steps, twice)", async () => {
+    const spec = example("Inline-4 engine teardown");
+    const a = await run(spec, { outputs: ["animated", "steps"] });
+    const b = await run(spec, { outputs: ["animated", "steps"] });
+    expect(a.outputs.map((o) => o.data)).toEqual(b.outputs.map((o) => o.data));
+  });
+
+  test("a 1.1 spec: png.step renders the end state of that step", async () => {
+    const spec: Obj = {
+      meta: { version: "1" },
+      nodes: [
+        { id: "a", type: "server" },
+        { id: "b", type: "sql" },
+      ],
+      edges: [{ from: "a", to: "b" }],
+      steps: [{ caption: "one" }, { caption: "two", set: { b: "down" } }],
+    };
+    const s1 = await run(spec, { outputs: ["png"], png: { scale: 1, step: 1 } });
+    const s2 = await run(spec, { outputs: ["png"], png: { scale: 1, step: 2 } });
+    expect(s1.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(same(pixels(s1), pixels(s2))).toBe(false);
+  });
+});

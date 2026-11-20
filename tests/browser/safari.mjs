@@ -18,6 +18,17 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { diffFraction as pixelDiff, ink as inkOf } from "./pngdiff.mjs";
 import { MODES, listSvgs, startServer } from "./server.mjs";
 
+const INFO = (() => {
+  try {
+    return JSON.parse(
+      readFileSync(`${process.env.INPUT_DIR ?? "tests/browser/out/fixtures"}/fixture.json`, "utf8"),
+    );
+  } catch {
+    return undefined;
+  }
+})();
+/** B-2: assembly diagrams show discrete step poses under reduced motion (assemblies.md 12). */
+const discreteOf = (file) => INFO?.assemblies?.[file] !== undefined;
 const PORT = process.env.SAFARIDRIVER_PORT ?? "4444";
 const IN = process.env.INPUT_DIR ?? "tests/browser/out/fixtures";
 const OUT = process.env.OUT_DIR ?? "tests/browser/out";
@@ -256,7 +267,12 @@ try {
             frames.push(await shot());
             await sleep(600);
           }
-          const still = frames.every((f) => f === frames[0]);
+          // Assembly diagrams (assemblies.md 12) show each step's end pose for the whole step: the
+          // frames may change at a step boundary but never continuously (a tween changes them all).
+          const discrete = discreteOf(file);
+          const still = discrete
+            ? frames[0] === frames[1] || frames[1] === frames[2]
+            : frames.every((f) => f === frames[0]);
           let moved = "";
           if (!still) {
             // Evidence of what moves: the first and last frame, and how much differs.
@@ -274,7 +290,13 @@ try {
             }
             await go(`/page/${mode}/${encodeURIComponent(file)}`); // restore the page for later steps
           }
-          rec(file, mode, "reduced motion: static", still ? "pass" : "fail", moved);
+          rec(
+            file,
+            mode,
+            discrete ? "reduced motion: discrete poses (no tween)" : "reduced motion: static",
+            still ? "pass" : "fail",
+            moved,
+          );
           // Real content, not just a different element size: >1% of pixels differ from the
           // background colour (a diagram hidden by its reduced-motion CSS has none).
           const inkShare = inkOf(frames[0]);
@@ -285,6 +307,7 @@ try {
             typeof inkShare === "number" && inkShare > 0.01 ? "pass" : "fail",
             typeof inkShare === "number" ? `${(inkShare * 100).toFixed(1)}% ink` : String(inkShare),
           );
+          if (discrete) continue; // no single rest frame to compare: poses follow the steps
           if (mode === "inline") {
             rest = frames[0];
             // The rest frame must match the motion pass's t=0 frame of the same diagram.
@@ -372,9 +395,10 @@ try {
             // The t=0 frame: the reduced-motion pass compares its rest frame with this one.
             writeFileSync(`${OUT}/t0-${file}.png`, Buffer.from(await at(0), "base64"));
           }
-          const a = await at(0.5);
-          const b = await at(1.7);
-          const c = await at(0.5);
+          const [ta, tb] = INFO?.assemblies?.[file]?.animate ?? [0.5, 1.7];
+          const a = await at(ta);
+          const b = await at(tb);
+          const c = await at(ta);
           first = a;
           animated = a !== b;
           // Safari may move a particle by a sub-pixel between seeks: identical bytes are not
