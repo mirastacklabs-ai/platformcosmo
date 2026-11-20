@@ -108,8 +108,23 @@ describe("design examples are fixtures", () => {
     expect(validate(s).diagnostics.filter((d) => d.code.startsWith("schema/"))).toEqual([]);
     // phases lifted: every action, program and reference check runs and finds nothing to report
     expect(assemblyDiagnostics(s as unknown as PlatformCosmoSpec, LIFT)).toEqual([]);
-    // default wiring: the guard rejects it, and nothing else is reported
-    const rest = validate(s).diagnostics.filter((d) => d.code !== "assembly/unsupported");
+    // default wiring (phase1a lifted by R-1): the guard rejects it, and the only other report is
+    // A2-F's post-lift rule: `assembly/unknown-target` on an action whose target is not a
+    // figure and whose phase is still gated (tracks §0), once per path.
+    const all = validate(s).diagnostics;
+    const unknown = all.filter((d) => d.code === "assembly/unknown-target");
+    const figureIds = new Set(((s.figures ?? []) as { id: string }[]).map((f) => f.id));
+    for (const d of unknown) {
+      expect(d.path).toMatch(/^\/steps\/\d+\/assembly\/\d+\/(explode|implode|build|unbuild)$/);
+      const m = /^\/steps\/(\d+)\/assembly\/(\d+)\//.exec(d.path)!;
+      const act = (s.steps as { assembly: Obj[] }[])[Number(m[1])]!.assembly[Number(m[2])] as Obj;
+      const target = String(Object.values(act)[0]);
+      expect(figureIds.has(target.split("/")[0] as string), d.path).toBe(false);
+    }
+    expect(new Set(unknown.map((d) => d.path)).size).toBe(unknown.length);
+    const rest = all.filter(
+      (d) => d.code !== "assembly/unsupported" && d.code !== "assembly/unknown-target",
+    );
     expect(rest).toEqual([]);
   });
   test("a typo in each example's first action target is caught with a did-you-mean", () => {
@@ -1419,7 +1434,13 @@ describe("per-target gating mirrors the merge guard", () => {
     steps,
   };
   const paths = (g: Partial<Record<GuardGroup, boolean>>) =>
-    assemblyDiagnostics(spec(all), { ...UNRENDERED, ...g })
+    assemblyDiagnostics(spec(all), {
+      phase1a: true,
+      phase1b: true,
+      phase2: true,
+      phase3: true,
+      ...g,
+    })
       .filter((d) => d.path.startsWith("/steps"))
       .map((d) => `${d.code}@${d.path.replace("/steps/0/assembly/", "")}`);
   test("with everything gated no action is checked (the guard reports them)", () => {
@@ -1455,11 +1476,12 @@ describe("per-target gating mirrors the merge guard", () => {
   });
   test("default wiring: validate reports structure plus the guard, and de-duplicates figure targets", () => {
     const d = val({ ...engine(), steps: [{ assembly: [{ explode: "enigne" }] }] });
-    expect(code(d, "assembly/unsupported").map((x) => x.path)).toEqual([
-      "/assemblies",
-      "/steps/0/assembly/0",
-    ]);
-    expect(code(d, "assembly/unknown-target")).toEqual([]); // gated: phase 1a is not lifted
+    // phase1a is lifted (R-1): an unknown root is no longer gated, so the guard only flags the
+    // assemblies, and the unknown target is reported once (A2-F's duplicate is filtered)
+    expect(code(d, "assembly/unsupported").map((x) => x.path)).toEqual(["/assemblies"]);
+    const unknown = code(d, "assembly/unknown-target");
+    expect(unknown.map((x) => x.path)).toEqual(["/steps/0/assembly/0/explode"]);
+    expect(unknown[0]?.suggestion).toBe('Did you mean "engine"?');
   });
 });
 
