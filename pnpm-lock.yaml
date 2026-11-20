@@ -84,6 +84,9 @@ importers:
       '@platformcosmo/themes':
         specifier: workspace:*
         version: link:../themes
+      fflate:
+        specifier: 0.8.3
+        version: 0.8.3
     devDependencies:
       '@platformcosmo/assets':
         specifier: workspace:*
