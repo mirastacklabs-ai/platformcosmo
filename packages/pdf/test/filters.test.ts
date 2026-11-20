@@ -137,7 +137,8 @@ describe("predictors", () => {
     const enc = g.flate(g.pngPredict(g.RGB_4x5, 12, 3, [2]).subarray(0, 13 * 4 + 5));
     const r = run(enc, [f("FlateDecode", "<< /Predictor 12 /Colors 3 /Columns 4 >>")]);
     expect(r.damaged).toBe(true);
-    expect(r.data).toHaveLength(60);
+    // sized from the data: 57 bytes minus 5 filter bytes (the image layer pads, not this one)
+    expect(r.data).toHaveLength(52);
     expect(r.data.subarray(0, 48)).toEqual(g.RGB_4x5.subarray(0, 48));
   });
 });

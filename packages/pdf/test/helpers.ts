@@ -64,6 +64,13 @@ export function decodePng(b: Uint8Array): Png {
   return { w, h, ch, px, chunks };
 }
 
+/** Latin-1 string of bytes (chunked: no argument-count limit). */
+export function latin1Of(b: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < b.length; i += 4096) s += String.fromCharCode(...b.subarray(i, i + 4096));
+  return s;
+}
+
 /** Opens and asserts success. */
 export function mustOpen(b: Uint8Array, o?: PdfOptions): PdfDocument {
   const r = openPdf(b, o);

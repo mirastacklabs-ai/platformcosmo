@@ -489,6 +489,8 @@ export interface ObjOpts {
   readonly length?: string;
   /** Never encrypted (xref streams, or a deliberately plain object). */
   readonly plain?: boolean;
+  /** Stream data written unencrypted while strings still are (Identity crypt filters). */
+  readonly plainData?: boolean;
 }
 
 export class PdfWriter {
@@ -533,7 +535,7 @@ export class PdfWriter {
     this.offsets.set(num, at);
     const text = typeof body === "string" ? body : body((s) => this.str(num, s, o.plain));
     if (data) {
-      const enc = this.sec && !o.plain ? this.sec.encrypt(num, 0, data) : data;
+      const enc = this.sec && !o.plain && !o.plainData ? this.sec.encrypt(num, 0, data) : data;
       const len = o.length ?? String(enc.length);
       this.raw(text.replace("<<", `<< /Length ${len}`));
       this.raw("\nstream\n");
@@ -622,7 +624,13 @@ export class PdfWriter {
   }
 
   bytes(): Uint8Array {
-    return cat(...this.parts);
+    const out = new Uint8Array(this.size);
+    let at = 0;
+    for (const p of this.parts) {
+      out.set(p, at);
+      at += p.length;
+    }
+    return out;
   }
 }
 
@@ -670,6 +678,10 @@ export function packBits(samples: number[], bpc: number, perRow: number): Uint8A
 
 export interface FixtureOpts {
   readonly crypt?: CryptConfig;
+  /** No Flate anywhere: byte mutations then hit content syntax and samples directly. */
+  readonly plain?: boolean;
+  /** Replaces page 1's decoded content (fuzzing the decoded layer). */
+  readonly content?: Uint8Array;
 }
 
 export const RASTER_PAGE1 = [
@@ -678,6 +690,14 @@ export const RASTER_PAGE1 = [
   "q 80 0 0 80 300 200 cm /Im3 Do Q",
   "q 20 0 0 20 10 10 cm BI /W 2 /H 2 /CS /G /BPC 8 ID\n",
 ].join("\n");
+
+export const RASTER_CONTENT = cat(
+  bytes(RASTER_PAGE1),
+  INLINE_GRAY,
+  bytes("\nEI Q\n"),
+  bytes("q 30 0 0 10 60 10 cm BI /W 2 /H 1 /CS /RGB /BPC 8 /F /AHx ID ff0000 00ff00> EI Q\n"),
+  bytes("q 1 0 0 1 100 100 cm /Fm1 Do Q\n"),
+);
 
 /**
  * (1) Page 1: JPEG XObject, Flate RGB with PNG predictors, Flate Indexed with a 4×4 SMask,
@@ -696,14 +716,10 @@ export function rasterPdf(o: FixtureOpts = {}): Uint8Array {
     4,
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Rotate 90 /Contents 12 0 R /Resources << /XObject << /Im2 7 0 R >> >> >>",
   );
-  const content = cat(
-    bytes(RASTER_PAGE1),
-    INLINE_GRAY,
-    bytes("\nEI Q\n"),
-    bytes("q 30 0 0 10 60 10 cm BI /W 2 /H 1 /CS /RGB /BPC 8 /F /AHx ID ff0000 00ff00> EI Q\n"),
-    bytes("q 1 0 0 1 100 100 cm /Fm1 Do Q\n"),
-  );
-  w.obj(5, "<< /Filter /FlateDecode >>", flate(content));
+  const content = o.content ?? RASTER_CONTENT;
+  const z = (d: Uint8Array): Uint8Array => (o.plain ? d : flate(d));
+  const fl = o.plain ? "" : "/Filter /FlateDecode";
+  w.obj(5, `<< ${fl} >>`, z(content));
   w.obj(
     6,
     "<< /Type /XObject /Subtype /Image /Width 16 /Height 8 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode >>",
@@ -712,20 +728,22 @@ export function rasterPdf(o: FixtureOpts = {}): Uint8Array {
   w.obj(
     7,
     "<< /Type /XObject /Subtype /Image /Width 4 /Height 5 /ColorSpace /DeviceRGB /BitsPerComponent 8 " +
-      "/Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns 4 >> >>",
-    flate(pngPredict(RGB_4x5, 12, 3, [0, 1, 2, 3, 4])),
+      (o.plain
+        ? ">>"
+        : "/Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns 4 >> >>"),
+    o.plain ? RGB_4x5 : flate(pngPredict(RGB_4x5, 12, 3, [0, 1, 2, 3, 4])),
   );
   w.obj(
     8,
     (s) =>
       `<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace [/Indexed /DeviceRGB 15 ${s(PALETTE)}] ` +
-      "/BitsPerComponent 4 /SMask 9 0 R /Filter /FlateDecode >>",
-    flate(packBits(INDEX_8x8, 4, 8)),
+      `/BitsPerComponent 4 /SMask 9 0 R ${fl} >>`,
+    z(packBits(INDEX_8x8, 4, 8)),
   );
   w.obj(
     9,
-    "<< /Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode >>",
-    flate(SMASK_4x4),
+    `<< /Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 8 ${fl} >>`,
+    z(SMASK_4x4),
   );
   w.obj(
     10,

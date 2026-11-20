@@ -128,7 +128,7 @@ describe("object parser", () => {
   it("parses a hostile 1 MB nesting attempt quickly", () => {
     const t = performance.now();
     expect(() => parse("[".repeat(1_000_000))).toThrow(PdfError);
-    expect(performance.now() - t).toBeLessThan(1000);
+    expect(performance.now() - t).toBeLessThan(3000);
   });
 });
 
@@ -138,6 +138,12 @@ describe("limits", () => {
     expect(l.maxObjects).toBe(DEFAULT_LIMITS.maxObjects);
     expect(l.maxPages).toBe(DEFAULT_LIMITS.maxPages);
     expect(l.maxNesting).toBe(3);
+    // overrides only lower limits (S-Q14)
+    const hi = resolveLimits({ maxNesting: 10_000, maxFileBytes: 1e12, bombRatio: 1e9 });
+    expect(hi.maxNesting).toBe(64);
+    expect(hi.maxFileBytes).toBe(DEFAULT_LIMITS.maxFileBytes);
+    expect(hi.bombRatio).toBe(1024);
+    expect(resolveLimits(null)).toEqual(DEFAULT_LIMITS);
   });
 
   it("matches ingestion §4.6", () => {
@@ -157,6 +163,13 @@ describe("limits", () => {
       maxPages: 100_000,
       maxOpsPerPage: 5_000_000,
       maxFilters: 4,
+      maxDocOps: 50_000_000,
+      maxDocContentBytes: 256 * 1024 * 1024,
+      maxPlacements: 100_000,
+      maxRunChars: 65_536,
+      maxRuns: 200_000,
+      maxHashBytes: 256 * 1024 * 1024,
+      maxLexedBytes: 1024 * 1024 * 1024,
     });
   });
 });

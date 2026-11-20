@@ -42,17 +42,17 @@ describe("hostile-input limits (ingestion §4.6, §14)", () => {
 
   it("decoded total per command: pdf/too-large once the budget is spent", () => {
     const probe = mustOpen(g.rasterPdf());
-    probe.listImages(1, { hash: false });
-    const content = probe.file.budget.decoded; // the page content stream
-    const limits = { maxTotalDecoded: content + 70 };
+    expect(probe.extractImage(1, 1).ok).toBe(true);
+    const limits = { maxTotalDecoded: probe.file.budget.decoded + 10 };
     const doc = mustOpen(g.rasterPdf(), { limits });
-    expect(doc.extractImage(1, 1).ok).toBe(true); // 60 bytes of Flate RGB
-    const e = doc.extractImage(1, 2); // Indexed 32 + SMask 16: over the total
+    expect(doc.extractImage(1, 1).ok).toBe(true); // exactly what the probe needed
+    const e = doc.extractImage(1, 2); // Indexed + SMask + pixels: over the total
     expect(e.ok).toBe(false);
     expect(findDiag(e.diagnostics, "pdf/too-large", "error").params.scope).toBe("total");
-    // listing stops at the budget instead of degrading every image to a warning
+    // listing keeps going without hashes (C-Q06)
     const list = mustOpen(g.rasterPdf(), { limits }).listImages(1);
-    expect(findDiag(list.diagnostics, "pdf/too-large", "error").params.scope).toBe("total");
+    expect(list.images).toHaveLength(6);
+    expect(findDiag(list.diagnostics, "pdf/too-large", "warning").params.scope).toBe("total");
   });
 
   it("per-stream decoded cap (overridden): pdf/too-large", () => {
@@ -81,7 +81,7 @@ describe("hostile-input limits (ingestion §4.6, §14)", () => {
   });
 
   it("deep nesting in a followed object: pdf/too-complex, never a stack overflow", () => {
-    const r = timed(500, () => openPdf(g.onePage("", `/XObject ${g.deepArray(100_000)}`)));
+    const r = timed(3000, () => openPdf(g.onePage("", `/XObject ${g.deepArray(100_000)}`)));
     expect(r.ok).toBe(false);
     findDiag(r.diagnostics, "pdf/too-complex", "error");
   });

@@ -95,6 +95,8 @@ function mutate(src: Uint8Array, r: () => number): Uint8Array {
 
 const SOURCES: [string, Uint8Array][] = [
   ["raster", g.rasterPdf()],
+  // uncompressed: byte mutations land in content syntax and image samples (S-Q10)
+  ["raster-plain", g.rasterPdf({ plain: true })],
   ["vector", g.vectorPdf()],
   ["damaged", g.damagedPdf()],
   ["objstm", g.objStmPdf()],
@@ -123,6 +125,25 @@ describe("fuzz", () => {
       expect(opened).toBeGreaterThan(10); // mutations mostly still open (repair works)
     });
   }
+
+  it("mutations of the decoded content layer, re-compressed (S-Q10)", () => {
+    const r = g.rng(0xc0ffee);
+    let slowest = 0;
+    let listed = 0;
+    for (let i = 0; i < 60; i++) {
+      const content = mutate(g.RASTER_CONTENT, r);
+      const pdf = g.rasterPdf({ content });
+      const t = performance.now();
+      let a: unknown;
+      expect(() => (a = everything(pdf))).not.toThrow();
+      slowest = Math.max(slowest, performance.now() - t);
+      const pages = (a as { pages?: { list: { images: unknown[] } }[] }).pages;
+      if (pages?.[0]?.list.images.length) listed++;
+      expect(JSON.stringify(everything(pdf))).toBe(JSON.stringify(a));
+    }
+    expect(slowest).toBeLessThan(2000);
+    expect(listed).toBeGreaterThan(20); // the structure is intact: only the content varies
+  });
 
   it("random bytes and PDF-looking noise never throw", () => {
     const r = g.rng(42);
