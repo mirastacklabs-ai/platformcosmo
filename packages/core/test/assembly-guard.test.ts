@@ -54,8 +54,8 @@ const paths = (groups: Record<string, boolean>) =>
   }).map((d) => d.path);
 
 describe("schema 1.2.0 guard", () => {
-  test("every phase is still unrendered in this build", () => {
-    expect(Object.values(UNRENDERED).every(Boolean)).toBe(true);
+  test("phase 1a (figures) is lifted by R-1; every later phase is still unrendered", () => {
+    expect(UNRENDERED).toEqual({ phase1a: false, phase1b: true, phase2: true, phase3: true });
   });
 
   test("assemblies-only spec is rejected at the field, not by the schema", () => {
@@ -76,7 +76,12 @@ describe("schema 1.2.0 guard", () => {
     expect(validate(everything).diagnostics.filter((d) => d.code.startsWith("schema/"))).toEqual(
       [],
     );
-    expect(at(everything)).toEqual([
+    const on = { phase1a: true, phase1b: true, phase2: true, phase3: true };
+    expect(
+      unsupportedDiagnostics(everything as unknown as PlatformCosmoSpec, on)
+        .map((d) => d.path)
+        .sort(),
+    ).toEqual([
       "/assemblies",
       "/figures",
       "/images",
@@ -87,6 +92,34 @@ describe("schema 1.2.0 guard", () => {
       "/steps/1/assembly/1",
       "/storyboards",
     ]);
+  });
+
+  test("with the shipped groups, figures and images pass and the later phases are flagged", () => {
+    expect(at(everything)).toEqual([
+      "/assemblies",
+      "/racks/0/programs",
+      "/racks/0/slots/0/assembly",
+      "/racks/0/slots/0/closeup",
+      "/steps/1/assembly/1",
+      "/storyboards",
+    ]);
+  });
+
+  test("with phase1a lifted, A2-F's post-lift rule is on: a non-figure target is unknown", () => {
+    // `build: "a"` targets an assembly (phase1b, still gated): the guard error stays AND the
+    // semantic check reports it, so a Phase 1a build never resolves it. The figure action passes.
+    const r = validate(everything);
+    const unknown = r.diagnostics.filter((d) => d.code === "assembly/unknown-target");
+    // A2-1 reports its own unknown references (sub-build, slot assembly); the action rule adds
+    // exactly one path, the non-figure target, never a duplicate at the same path
+    expect(unknown.map((d) => d.path)).toEqual([
+      "/assemblies/0/programs/1/steps/0/subBuild",
+      "/racks/0/slots/0/assembly",
+      "/steps/1/assembly/1/build",
+    ]);
+    expect(new Set(unknown.map((d) => d.path)).size).toBe(unknown.length);
+    expect(unknown[2]?.message).toBe('Cannot build "a": it is an assembly, not a figure');
+    expect(r.diagnostics.some((d) => d.path === "/steps/1/assembly/0/explode")).toBe(false);
   });
 
   test("actions are gated by their target: lifting 1a alone keeps rack and slot actions gated", () => {
@@ -172,17 +205,93 @@ describe("schema 1.2.0 guard", () => {
     expect(at(spec)).toEqual([]);
   });
 
+  // tracks §0: an example whose 1.2 fields are all phase 1a (images, figures, figure actions)
+  // renders now; every other example still hits the guard. The predicate does not use the guard.
+  const phase1aOnly = (spec: Record<string, unknown>): boolean => {
+    const racks = (spec.racks ?? []) as { programs?: unknown; slots?: Record<string, unknown>[] }[];
+    const figureIds = new Set(((spec.figures ?? []) as { id: string }[]).map((f) => f.id));
+    const actions = ((spec.steps ?? []) as { assembly?: Record<string, string>[] }[]).flatMap(
+      (s) => s.assembly ?? [],
+    );
+    return (
+      spec.assemblies === undefined &&
+      spec.storyboards === undefined &&
+      !racks.some(
+        (r) => r.programs !== undefined || r.slots?.some((s) => s.assembly || s.closeup),
+      ) &&
+      actions.every((a) => figureIds.has(String(Object.values(a)[0]).split("/")[0] as string)) &&
+      !JSON.stringify(spec).includes('"closeup"')
+    );
+  };
+
   test.each(["assemblies.md", "document-ingestion.md"])(
-    "design examples in %s pass the schema and hit only the guard",
+    "design examples in %s pass the schema; phase 1a ones render, the others hit the guard",
     (file) => {
       const specs = designExamples(file);
       expect(specs.length).toBeGreaterThan(3);
       for (const spec of specs) {
         const r = validate(spec);
         expect(r.diagnostics.filter((d) => d.code.startsWith("schema/"))).toEqual([]);
-        expect(r.diagnostics.some((d) => d.code === "assembly/unsupported")).toBe(true);
-        expect(r.valid).toBe(false);
+        const guarded = r.diagnostics.some((d) => d.code === "assembly/unsupported");
+        expect(guarded).toBe(!phase1aOnly(spec));
+        if (!guarded) expect(r.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+        else expect(r.valid).toBe(false);
       }
     },
   );
+
+  describe("what phase1a does not unlock (Q08)", () => {
+    const base = {
+      meta: { version: "1" },
+      images: [
+        { id: "b", src: "b.png" },
+        { id: "s", src: "s.png" },
+      ],
+      figures: [{ id: "fig", base: "b", parts: [{ id: "a", image: "s", seat: [0, 0] }] }],
+      nodes: [{ id: "n", type: "server" }],
+    };
+    const errors = (steps: unknown[]) =>
+      validate({ ...base, steps }).diagnostics.filter((d) => d.severity === "error");
+
+    test("explode on a node is an unknown target, not a pose change", () => {
+      const e = errors([{ assembly: [{ explode: "n" }] }]);
+      expect(e.map((d) => [d.code, d.path])).toEqual([
+        ["assembly/unknown-target", "/steps/0/assembly/0/explode"],
+      ]);
+      expect(e[0]?.message).toBe('Cannot explode "n": it is a node, not a figure');
+    });
+
+    test("explode on an unknown root is an unknown target with a did-you-mean", () => {
+      const e = errors([{ assembly: [{ explode: "fgi" }] }]);
+      expect(e.map((d) => d.code)).toEqual(["assembly/unknown-target"]);
+      expect(e[0]?.suggestion).toBe('Did you mean "fig"?');
+    });
+
+    test("a figure part path is not a target, and focus or set of fig/a/b is rejected", () => {
+      const act = errors([{ assembly: [{ explode: "fig/a" }] }]);
+      expect(act.map((d) => d.code)).toEqual(["assembly/unknown-target"]);
+      // focus and set of a part path: the guard (phase1b) AND semantic validation reject them
+      for (const step of [
+        { focus: "fig/a/b" },
+        { set: { "fig/a/b": "down" } },
+        { focus: "fig/a" },
+      ]) {
+        const e = errors([step]);
+        expect(
+          e.some((d) => d.code.startsWith("semantic/")),
+          JSON.stringify(step),
+        ).toBe(true);
+      }
+      expect(errors([{ focus: "fig" }])).toEqual([]);
+    });
+  });
+
+  test("the heat-sink figure example is the one example that renders", () => {
+    const rendering = designExamples("document-ingestion.md").filter(phase1aOnly);
+    expect(rendering.map((s) => (s.meta as { title: string }).title)).toEqual([
+      "Heat-sink installation figure",
+    ]);
+    expect(designExamples("assemblies.md").filter(phase1aOnly)).toEqual([]);
+    expect(validate(rendering[0]).valid).toBe(true);
+  });
 });
