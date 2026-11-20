@@ -27,7 +27,7 @@ import {
   RACK_WIDTH_MM,
 } from "./components/rack.js";
 import { DEVICE_WIDTH_MM } from "./components/devices.js";
-import { checkSlots } from "./scene.js";
+import { MIRRORED, checkSlots } from "./scene.js";
 import { registry } from "./registry.js";
 import { depthSort } from "./sort.js";
 import { U_MM } from "./units.js";
@@ -70,6 +70,8 @@ export const MAX_SLOTS = 48;
 const MAX_DEPTH = 8;
 const WALL_MM = 2;
 const LID_MM = 2;
+/** Width of the 19-inch interior, mm (assemblies.md 8.5). */
+const INTERIOR_WIDTH_MM = 450;
 /** Ids the pack owns inside a slot that has internals. */
 const RESERVED = ["tray", "lid", "faceplate", "rear"] as const;
 
@@ -403,7 +405,7 @@ function fitTemplate(
   const bounds: Box3[] = [];
   leafBoundsOf(tpl, bounds);
   const tb = unionOf(bounds);
-  if (tb === undefined) return undefined;
+  if (tb === undefined) return { nodes: [], factor: 1 };
   const m = unitMm(units ?? "mm");
   const ext = { x: tb.size.x * m.x, y: tb.size.y * m.y, z: tb.size.z * m.z };
   const ratio = (room: number, need: number): number => (need > EPS ? room / need : Infinity);
@@ -413,11 +415,12 @@ function fitTemplate(
     ratio(interior.size.y, ext.y),
     ratio(interior.size.z, ext.z),
   );
-  if (!(f > 0) || !Number.isFinite(f)) return undefined;
+  if (!(f > 0) || !Number.isFinite(f)) return { nodes: [], factor: 1 };
   const s = { x: m.x * f, y: m.y * f, z: m.z * f };
   const t = {
     x: interior.origin.x - tb.origin.x * s.x,
-    y: interior.origin.y - tb.origin.y * s.y,
+    // devices are front-mounted: the template's front (max y) meets the interior's front
+    y: interior.origin.y + interior.size.y - (tb.origin.y + tb.size.y) * s.y,
     z: interior.origin.z - tb.origin.z * s.z,
   };
   const mapBox = (b: Box3): Box3 =>
@@ -502,6 +505,9 @@ export function isTargeted(spec: PlatformCosmoSpec, rackId: string): boolean {
 
 /** A rack in a mirrored row has its front toward -y: the post pairs swap sides in the fragment. */
 function isMirrored(fragment: DcSceneFragment, rackId: string): boolean {
+  // the flag buildDcScene recorded; a copied fragment falls back to the post order
+  const known = MIRRORED.get(fragment);
+  if (known !== undefined) return known.has(rackId);
   const y = new Map<string, number>();
   for (const o of fragment.objects) {
     if (o.id !== rackId && o.id !== `${rackId}_front`) continue;
@@ -535,21 +541,37 @@ interface SlotBuild {
     readonly exclude: ReadonlySet<string>;
     readonly template: SpecAssembly;
     readonly factor: number;
+    /** The template has no parts: only the lid has a program. */
+    readonly empty: boolean;
     readonly ptr: string;
   };
 }
 
 /** The default program of a template: its `program`, else its first explode program. */
-function defaultTemplateProgram(a: SpecAssembly): { explode?: SpecExplodeProgram; steps: number } {
+function defaultTemplateProgram(a: SpecAssembly): {
+  explode?: SpecExplodeProgram;
+  steps: number;
+  labels: readonly (string | undefined)[];
+} {
   const list: readonly unknown[] = Array.isArray(a.programs) ? a.programs : [];
   const progs = list.filter(isObj);
   const named = progs.find((p) => p["id"] === a.program);
   const pick = named ?? progs.find((p) => p["kind"] !== "build");
-  if (pick === undefined) return { steps: 0 };
+  if (pick === undefined) return { steps: 0, labels: [] };
   if (Array.isArray(pick["stages"])) {
-    return { explode: pick as unknown as SpecExplodeProgram, steps: pick["stages"].length };
+    return {
+      explode: pick as unknown as SpecExplodeProgram,
+      steps: pick["stages"].length,
+      labels: [],
+    };
   }
-  return { steps: Array.isArray(pick["steps"]) ? pick["steps"].length : 0 };
+  const steps: readonly unknown[] = Array.isArray(pick["steps"]) ? pick["steps"] : [];
+  return {
+    steps: steps.length,
+    labels: steps.map((x) =>
+      isObj(x) && typeof x["caption"] === "string" ? x["caption"].slice(0, 200) : undefined,
+    ),
+  };
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
@@ -582,6 +604,28 @@ function distanceOf(d: unknown, k: number): number | string | undefined {
   return typeof d === "string" && /^(auto|\d{1,3}(\.\d{1,3})?x)$/.test(d) ? d : undefined;
 }
 
+/** Millimetres per owner unit along a direction (units are per axis: studs are anisotropic). */
+function axisScale(d: StageIn["direction"], k: Vec3): number {
+  if (Array.isArray(d)) {
+    const len = Math.hypot(d[0], d[1], d[2]);
+    return len > 0 ? Math.hypot((d[0] / len) * k.x, (d[1] / len) * k.y, (d[2] / len) * k.z) : k.x;
+  }
+  switch (d) {
+    case "up":
+    case "down":
+    case "+z":
+    case "-z":
+    case "lift":
+      return k.z;
+    case "+y":
+    case "-y":
+    case "drawer":
+      return k.y;
+    default:
+      return k.x;
+  }
+}
+
 function directionOf(d: unknown): StageIn["direction"] {
   if (Array.isArray(d)) {
     const v = d.slice(0, 3).map(fin);
@@ -595,8 +639,9 @@ function directionOf(d: unknown): StageIn["direction"] {
  * the enums are dropped (validation reports them; the scene never trusts them), numeric
  * distances are converted from `k` mm per owner unit.
  */
-function stageOf(st: unknown, k: number): StageIn {
+function stageOf(st: unknown, k: Vec3): StageIn {
   const s = isObj(st) ? st : {};
+  const stageDir = directionOf(s["direction"]);
   const strings = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
   const ov: Record<string, NonNullable<StageIn["overrides"]>[string]> = {};
@@ -604,7 +649,7 @@ function stageOf(st: unknown, k: number): StageIn {
     for (const [key, o] of Object.entries(s["overrides"]).slice(0, 200)) {
       if (!isObj(o)) continue;
       const direction = directionOf(o["direction"]);
-      const distance = distanceOf(o["distance"], k);
+      const distance = distanceOf(o["distance"], axisScale(direction ?? stageDir, k));
       const delay = fin(o["delay"]);
       const order = fin(o["order"]);
       ov[key] = {
@@ -615,8 +660,8 @@ function stageOf(st: unknown, k: number): StageIn {
       };
     }
   }
-  const direction = directionOf(s["direction"]);
-  const distance = distanceOf(s["distance"], k);
+  const direction = stageDir;
+  const distance = distanceOf(s["distance"], axisScale(direction, k));
   const order = oneOf(s["order"], [
     "spec",
     "outside-in",
@@ -661,8 +706,8 @@ export function buildRackAssembly(
   templates: Readonly<Record<string, SceneAssemblyNode>>,
 ): { readonly assembly?: SceneAssembly; readonly diagnostics: readonly Diagnostic[] } {
   const none = { diagnostics: [] as Diagnostic[] };
-  const racks = spec.racks ?? [];
-  const ri = racks.findIndex((r) => isObj(r) && r.id === rackId);
+  const racks: readonly unknown[] = Array.isArray(spec.racks) ? spec.racks : [];
+  const ri = racks.findIndex((r) => isObj(r) && r["id"] === rackId);
   if (ri < 0 || !isTargeted(spec, rackId)) return none;
   const rack: SpecRack = racks[ri] as SpecRack;
   const rackObj = fragment.objects.find((o) => o.id === rackId && o.type === "rack");
@@ -762,7 +807,9 @@ export function buildRackAssembly(
     const chassis = parts.find((p) => p.id === "chassis");
     if (tid !== undefined && chassis !== undefined) {
       const tpl = templates[tid];
-      const tspec = (spec.assemblies ?? []).find((a) => a.id === tid);
+      const tspec = (
+        Array.isArray(spec.assemblies) ? (spec.assemblies as readonly unknown[]) : []
+      ).find((a): a is SpecAssembly => isObj(a) && a["id"] === tid);
       if (tpl === undefined || tspec === undefined) {
         diagnostics.push(
           err(
@@ -789,17 +836,28 @@ export function buildRackAssembly(
         const trayH = Math.max(cb.size.z - LID_MM, cb.size.z / 2);
         const w = Math.min(WALL_MM, cb.size.x / 4, cb.size.y / 4);
         const trayBox = box(cb.origin.x, cb.origin.y, cb.origin.z, cb.size.x, cb.size.y, trayH);
+        // the chassis keeps the 1.1 device box (540 mm); the template fits the 19-inch interior,
+        // 450 mm wide, centred (assemblies.md 8.5)
+        const iw = Math.min(INTERIOR_WIDTH_MM, cb.size.x - 2 * w);
         const interior = box(
-          cb.origin.x + w,
+          cb.origin.x + (cb.size.x - iw) / 2,
           cb.origin.y + w,
           cb.origin.z + w,
-          cb.size.x - 2 * w,
+          iw,
           cb.size.y - 2 * w,
           trayH - w,
         );
         const fit = fitTemplate(tpl, tspec.units, interior, sp, sstate);
         if (fit !== undefined) {
-          if (fit.factor < 1 - 1e-9) {
+          if (fit.nodes.length === 0) {
+            diagnostics.push({
+              severity: "warning",
+              code: "assembly/size-mismatch",
+              path: `${spath}/assembly`,
+              message: `The template "${tid.slice(0, 64)}" has no parts to place inside the ${s.spec.type}; only the lid has a program.`,
+              params: { template: tid.slice(0, 64), parts: 0 },
+            });
+          } else if (fit.factor < 1 - 1e-9) {
             diagnostics.push({
               severity: "warning",
               code: "assembly/size-mismatch",
@@ -857,6 +915,7 @@ export function buildRackAssembly(
             exclude: new Set(RESERVED.map((r) => `${sp}/${r}`)),
             template: tspec,
             factor: fit.factor,
+            empty: fit.nodes.length === 0,
             ptr: spath,
           };
         }
@@ -924,7 +983,6 @@ export function buildRackAssembly(
     front: frontSide,
   };
   const programs = [...resolved.programs].sort((a, b) => cmp(a.owner, b.owner) || cmp(a.id, b.id));
-  const first = programs.find((p) => p.owner === rackId);
   return {
     assembly: {
       id: rackId,
@@ -934,7 +992,7 @@ export function buildRackAssembly(
       root,
       leaves,
       programs,
-      ...(first === undefined ? {} : { defaultProgram: first.id }),
+      ...(resolved.defaultProgram === undefined ? {} : { defaultProgram: resolved.defaultProgram }),
       basePose: [],
       restBounds,
       reachBounds: reach,
@@ -968,6 +1026,8 @@ interface Resolved {
   readonly programs: ResolvedProgram[];
   /** Local boxes (mm, final pose) of every leaf at every program's end pose. */
   readonly reach: Box3[];
+  /** The rack's first program in spec order (validation's default). */
+  readonly defaultProgram: string | undefined;
 }
 
 function resolvePrograms(
@@ -1050,7 +1110,6 @@ function resolvePrograms(
   };
 
   // ---- rack programs ----
-  const rear: Vec3 = { x: -front.x, y: -front.y, z: 0 };
   const custom = (Array.isArray(rack.programs) ? (rack.programs as readonly unknown[]) : [])
     .filter(isObj)
     .filter((p) => Array.isArray(p["stages"]) && typeof p["id"] === "string")
@@ -1061,7 +1120,7 @@ function resolvePrograms(
           id: p.id,
           ...(typeof p.label === "string" ? { label: p.label.slice(0, 200) } : {}),
           ...(fin(p.gap) === undefined ? {} : { gap: fin(p.gap) as number }),
-          stages: p.stages.slice(0, 32).map((st) => stageOf(st, 1)),
+          stages: p.stages.slice(0, 32).map((st) => stageOf(st, { x: 1, y: 1, z: 1 })),
           ptr: `${base}/programs/${i}`,
         }))
       : [
@@ -1073,9 +1132,9 @@ function resolvePrograms(
               {
                 label: "Doors",
                 parts: ["frame/role:cover"],
-                direction: [rear.x, rear.y, rear.z],
+                // a cover leaves along its own outward normal: the rear door goes rear
+                direction: "drawer",
                 labels: "hide",
-                leaveOwner: true,
               },
               {
                 label: "Drawers",
@@ -1112,8 +1171,9 @@ function resolvePrograms(
     const slot = turnedByPath.get(path);
     if (slot === undefined) continue;
     const pnode = toPNode(slot);
-    const k = unitMm(ix.template.units ?? "mm").x * ix.factor;
-    const def = defaultTemplateProgram(ix.template);
+    const um = unitMm(ix.template.units ?? "mm");
+    const k: Vec3 = { x: um.x * ix.factor, y: um.y * ix.factor, z: um.z * ix.factor };
+    const def = ix.empty ? { steps: 0, labels: [] } : defaultTemplateProgram(ix.template);
     const exclude = ix.exclude;
     const env = { owner: pnode, exclude, front };
     const stagesFor = (): ResolveResult | undefined =>
@@ -1125,7 +1185,7 @@ function resolvePrograms(
               ptr: `${ix.ptr}/assembly`,
               ...(fin(def.explode.gap) === undefined
                 ? {}
-                : { gap: (fin(def.explode.gap) as number) * k }),
+                : { gap: (fin(def.explode.gap) as number) * k.x }),
               stages: def.explode.stages.slice(0, 32).map((st) => stageOf(st, k)),
             },
             env,
@@ -1146,9 +1206,11 @@ function resolvePrograms(
     );
     let need = lidAuto.shifts.get(ix.lid)?.z ?? 0;
     if (tplRes !== undefined && lidNode !== undefined) {
+      const declared = fin(def.explode?.gap);
       const gap =
-        (fin(def.explode?.gap) ?? 0) * k ||
-        Math.max(...[slot.local.size.x, slot.local.size.y, slot.local.size.z]) * 0.1;
+        declared !== undefined
+          ? declared * k.x
+          : Math.max(slot.local.size.x, slot.local.size.y, slot.local.size.z) * 0.1;
       for (const [p, v] of tplRes.shifts) {
         const b = nodeBox.get(p);
         if (b === undefined) continue;
@@ -1173,6 +1235,7 @@ function resolvePrograms(
         : Array.from({ length: def.steps }, (_, i) => ({
             // a build program as default: stages exist (1 + steps) but carry no moves here
             index: i + 2,
+            ...(def.labels[i] === undefined ? {} : { label: def.labels[i] }),
             moves: [],
             start: shift,
             end: shift,
@@ -1202,5 +1265,5 @@ function resolvePrograms(
     leafReach(merged, slot);
   }
   if (below) return undefined;
-  return { programs, reach };
+  return { programs, reach, defaultProgram: rackIns[0]?.id };
 }

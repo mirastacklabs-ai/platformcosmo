@@ -123,11 +123,19 @@ describe("1.1 DC specs are byte-identical", () => {
     it(`${name}: buildAssembly does not touch the fragment`, () => {
       const s = make();
       const before = hash(s);
-      const f = dcPack.buildScene(s);
+      // every rack is targeted, so assembly mode really runs
+      const targeted = {
+        ...s,
+        steps: [{ assembly: (s.racks ?? []).map((r) => ({ explode: r.id })) }],
+      } as unknown as PlatformCosmoSpec;
+      expect(hash(targeted)).toBe(before);
+      const f = dcPack.buildScene(targeted);
+      const bytes = JSON.stringify(f);
       for (const r of s.racks ?? []) {
-        dcPack.buildAssembly?.(s, r.id, f, {});
+        const built = dcPack.buildAssembly!(targeted, r.id, f, {});
+        expect(built.assembly?.id, r.id).toBe(r.id);
       }
-      expect(JSON.stringify(f)).toBe(JSON.stringify(dcPack.buildScene(s)));
+      expect(JSON.stringify(f)).toBe(bytes);
       expect(hash(s)).toBe(before);
     });
   }

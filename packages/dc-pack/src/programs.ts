@@ -62,12 +62,10 @@ export interface PNode {
   readonly children: readonly PNode[];
 }
 
-/** A stage as the resolver reads it: the spec stage plus the pack's own `leaveOwner` flag. */
+/** A stage as the resolver reads it: a spec stage with plain selector lists. */
 export interface StageIn extends Omit<SpecStage, "parts" | "except"> {
   readonly parts: readonly string[];
   readonly except?: readonly string[];
-  /** Any axis direction clears the whole owner, as `drawer` does (the rack's rear doors). */
-  readonly leaveOwner?: boolean;
 }
 
 export interface ProgramIn {
@@ -151,17 +149,32 @@ function parseSelector(s: unknown): Selector | undefined {
   if (typeof s !== "string" || s.length === 0 || s.length > 256) return undefined;
   const segs = s.split("/");
   if (segs.length > MAX_SEGMENTS || segs.some((x) => x.length === 0)) return undefined;
-  return { scopes: segs.slice(0, -1), term: segs[segs.length - 1] as string };
+  const scopes = segs.slice(0, -1).filter((x, i, a) => !(x === "**" && a[i - 1] === "**"));
+  return { scopes, term: segs[segs.length - 1] as string };
 }
 
-function scopeMatch(sc: readonly string[], i: number, pre: readonly string[], j: number): boolean {
-  if (i === sc.length) return j === pre.length;
-  const s = sc[i] as string;
-  if (s === "**") {
-    for (let k = j; k <= pre.length; k++) if (scopeMatch(sc, i + 1, pre, k)) return true;
-    return false;
-  }
-  return j < pre.length && globMatch(s, pre[j] as string) && scopeMatch(sc, i + 1, pre, j + 1);
+/**
+ * Does the scope list match the ids from the owner down to the node's parent? `**` takes any
+ * number of ids; runs of `**` are collapsed by `parseSelector` and failed (i, j) states are
+ * memoised, so the work is O(scopes x ids) however many `**` there are.
+ */
+function scopeMatch(sc: readonly string[], pre: readonly string[]): boolean {
+  const w = pre.length + 1;
+  const failed = new Uint8Array((sc.length + 1) * w);
+  const go = (i: number, j: number): boolean => {
+    if (i === sc.length) return j === pre.length;
+    if (failed[i * w + j] === 1) return false;
+    const s = sc[i] as string;
+    let ok = false;
+    if (s === "**") {
+      for (let k = j; k <= pre.length && !ok; k++) ok = go(i + 1, k);
+    } else {
+      ok = j < pre.length && globMatch(s, pre[j] as string) && go(i + 1, j + 1);
+    }
+    if (!ok) failed[i * w + j] = 1;
+    return ok;
+  };
+  return go(0, 0);
 }
 
 function termMatch(term: string, n: PNode): boolean {
@@ -202,7 +215,7 @@ function candidates(env: ProgramEnv): { list: Cand[]; truncated: boolean } {
 
 function select(cands: readonly Cand[], selectors: readonly Selector[]): Cand[] {
   return cands.filter((c) =>
-    selectors.some((s) => scopeMatch(s.scopes, 0, c.pre, 0) && termMatch(s.term, c.node)),
+    selectors.some((s) => scopeMatch(s.scopes, c.pre) && termMatch(s.term, c.node)),
   );
 }
 
@@ -243,7 +256,17 @@ function direction(d: SpecDirection | undefined, node: PNode, owner: PNode, fron
     const u = { x: x / len, y: y / len, z: z / len };
     return { u, lift: false, drawer: false };
   }
-  if (dir === "drawer") return { u: front, lift: false, drawer: true };
+  if (dir === "drawer") {
+    // a cover (door, panel) leaves along its own outward normal: the side of the owner it is on
+    if (node.role === "cover") {
+      const c = centre(node.box);
+      const o = centre(owner.box);
+      const side = (c.x - o.x) * front.x + (c.y - o.y) * front.y;
+      const u = side < 0 ? { x: -front.x, y: -front.y, z: 0 } : front;
+      return { u, lift: false, drawer: true };
+    }
+    return { u: front, lift: false, drawer: true };
+  }
   if (dir === "lift") return { u: AXES["up"] as Vec3, lift: true, drawer: false };
   const axis = AXES[dir];
   if (axis !== undefined) return { u: axis, lift: false, drawer: false };
@@ -386,11 +409,10 @@ export function resolveProgram(prog: ProgramIn, env: ProgramEnv): ResolveResult 
       const rel = [...c.pre, c.node.id].join("/");
       const ov = st.overrides?.[rel];
       const dir = direction(ov?.direction ?? st.direction, c.node, owner, env.front);
-      const drawerDir = st.leaveOwner === true ? { ...dir, drawer: true } : dir;
       movers.push({
         stage: si,
         cand: c,
-        dir: drawerDir,
+        dir: dir,
         dist: parseK(ov?.distance ?? st.distance),
         d: 0,
       });

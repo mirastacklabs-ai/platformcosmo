@@ -1019,9 +1019,9 @@ describe("slot internals (rack -> server -> internals, assemblies.md 19.4)", () 
         id: "b",
         kind: "build",
         steps: [
-          { add: ["board"] },
-          { add: ["fan-1", "fan-2", "fan-3", "fan-4", "fan-5"] },
-          { add: ["psu"] },
+          { add: ["board"], caption: "Board" },
+          { add: ["fan-1", "fan-2", "fan-3", "fan-4", "fan-5"], caption: "Fans" },
+          { add: ["psu"], caption: "PSU" },
         ],
       },
     ];
@@ -1030,6 +1030,10 @@ describe("slot internals (rack -> server -> internals, assemblies.md 19.4)", () 
     expect(p.stages).toHaveLength(4);
     expect(p.stages.slice(1).every((s) => s.moves.length === 0)).toBe(true);
     expect(p.stages[0]!.moves).toHaveLength(1);
+    expect(p.stages.map((s) => s.index)).toEqual([1, 2, 3, 4]);
+    const lidEnd = p.stages[0]!.end;
+    expect(p.stages.slice(1).every((s) => s.start === lidEnd && s.end === lidEnd)).toBe(true);
+    expect(p.stages.slice(1).map((s) => s.label)).toEqual(["Board", "Fans", "PSU"]);
   });
 
   it("mirrored rows: tray halves follow the turn (+x/+y walls draw in front) and fronts face -y", () => {
@@ -1083,6 +1087,285 @@ describe("slot internals (rack -> server -> internals, assemblies.md 19.4)", () 
   });
 });
 
+describe("review round", () => {
+  it("defaultProgram is the first program in spec order; programs are sorted by id; each resolves", () => {
+    const s = spec({
+      racks: [
+        {
+          id: "r",
+          slots: [{ id: "a", at: 5, type: "server-1u" }],
+          programs: [
+            { id: "zeta", stages: [{ parts: ["a"], direction: "up", distance: 10 }] },
+            { id: "alpha", stages: [{ parts: ["a"], direction: "down", distance: 10 }] },
+          ],
+        },
+      ],
+      ...act("r"),
+    });
+    const a = must(build(s, "r").assembly);
+    expect(a.defaultProgram).toBe("zeta");
+    expect(a.programs.map((p) => p.id)).toEqual(["alpha", "zeta"]);
+    expect(program(a, "r", "zeta").stages[0]!.moves[0]!.offset.z * MM).toBeCloseTo(10, 6);
+    expect(program(a, "r", "alpha").stages[0]!.moves[0]!.offset.z * MM).toBeCloseTo(-10, 6);
+  });
+
+  it("scope matching with many ** is polynomial (collapsed and memoised)", () => {
+    // 4^5 = 1024 leaves, six levels deep
+    const level = (id: string, inner: Json[]): Json => ({
+      id,
+      count: 4,
+      at: [0, 0, 0],
+      pitch: [0, 0, 0],
+      size: [1, 1, 1],
+      parts: inner,
+    });
+    const leaf: Json = { id: "f", at: [0, 0, 0], size: [1, 1, 1] };
+    const parts = [level("a", [level("b", [level("c", [level("d", [level("e", [leaf])])])])])];
+    const selectors = [
+      "**/**/**/**/**/**/**/x",
+      "**/a*/**/b*/**/c*/**/x",
+      "**/**/a-*/**/**/d-*/**/zz",
+    ];
+    const tpl = {
+      id: "t",
+      template: true,
+      units: "mm",
+      parts,
+      programs: [{ id: "p", stages: selectors.map((sel) => ({ parts: [sel], direction: "up" })) }],
+    };
+    const s = spec({
+      assemblies: [tpl],
+      racks: [{ id: "r", slots: [{ id: "s", at: 1, type: "server-4u", assembly: "t" }] }],
+      ...act("r"),
+    });
+    const tree = template(s, "t");
+    const t0 = Date.now();
+    const r = build(s, "r", { t: tree });
+    expect(Date.now() - t0).toBeLessThan(2000);
+    const a = must(r.assembly);
+    expect(a.leaves.filter((l) => l.startsWith("r/s/")).length).toBeGreaterThan(1000);
+    expect(r.diagnostics.filter((d) => d.code === "assembly/selector-empty")).toHaveLength(3);
+    // and a matching deep selector still finds its parts
+    const hit = spec({
+      assemblies: [
+        { ...tpl, programs: [{ id: "p", stages: [{ parts: ["**/**/**/f"], direction: "up" }] }] },
+      ],
+      racks: [{ id: "r", slots: [{ id: "s", at: 1, type: "server-4u", assembly: "t" }] }],
+      ...act("r"),
+    });
+    const h = build(hit, "r", { t: template(hit, "t") });
+    const stage = program(must(h.assembly), "r/s", "internals").stages[1]!;
+    expect(stage.moves.length).toBeGreaterThan(0);
+    expect(stage.moves.every((m) => m.path.endsWith("/f"))).toBe(true);
+  });
+
+  it("a template with no leaves keeps a lid-only internals program and warns", () => {
+    const tpl = { id: "t", template: true, parts: [{ id: "x", at: [0, 0, 0], size: [1, 1, 1] }] };
+    const s = spec({
+      assemblies: [tpl],
+      racks: [{ id: "r", slots: [{ id: "s", at: 1, type: "server-2u", assembly: "t" }] }],
+      ...act("r"),
+    });
+    const empty = { ...template(s, "t"), children: [] };
+    const r = build(s, "r", { t: empty });
+    expect(r.diagnostics).toMatchObject([
+      { severity: "warning", code: "assembly/size-mismatch", path: "/racks/0/slots/0/assembly" },
+    ]);
+    const a = must(r.assembly);
+    expect(find(a.root, "r/s/tray")).toBeDefined();
+    const p = program(a, "r/s", "internals");
+    expect(p.stages).toHaveLength(1);
+    expect(p.stages[0]!.moves.map((m) => m.path)).toEqual(["r/s/lid"]);
+  });
+
+  it("covers leave along their own outward normal: the rear door -y, a front cover +y", () => {
+    const s = spec({
+      assemblies: [
+        { id: "t", template: true, parts: [{ id: "x", at: [0, 0, 0], size: [10, 10, 10] }] },
+      ],
+      racks: [
+        {
+          id: "r",
+          rearDoorHeatExchanger: true,
+          slots: [{ id: "s", at: 1, type: "server-2u", assembly: "t" }],
+          programs: [{ id: "p", stages: [{ parts: ["frame/role:cover"], direction: "drawer" }] }],
+        },
+      ],
+      ...act("r"),
+    });
+    const a = must(build(s, "r", { t: template(s, "t") }).assembly);
+    expect(a.frame.front).toBe("+y");
+    const door = program(a, "r", "p").stages[0]!.moves[0]!;
+    expect(door.path).toBe("r/frame/rear-door");
+    expect(door.offset.y).toBeLessThan(0);
+    // a cover on the front side of its owner goes toward the front (the slot's lid is one)
+    const s2 = spec({
+      assemblies: [
+        { id: "t", template: true, parts: [{ id: "x", at: [0, 0, 0], size: [10, 10, 10] }] },
+      ],
+      racks: [
+        {
+          id: "r",
+          slots: [{ id: "s", at: 1, type: "server-2u", assembly: "t" }],
+          programs: [{ id: "p", stages: [{ parts: ["s/lid"], direction: "drawer" }] }],
+        },
+      ],
+      ...act("r"),
+    });
+    const b = must(build(s2, "r", { t: template(s2, "t") }).assembly);
+    expect(program(b, "r", "p").stages[0]!.moves[0]!.offset.y).toBeGreaterThan(0);
+  });
+
+  it("the template fits a centred 450 mm interior (the chassis stays 540 mm) and meets the front", () => {
+    const { assembly } = nestedBuild();
+    const a = must(assembly);
+    const tray = find(a.root, "r1/srv/tray")!;
+    expect(tray.local.size.x).toBeCloseTo(540, 1);
+    const leaves = flat(find(a.root, "r1/srv")!).filter(
+      (n) => n.kind === "leaf" && !/\/(tray|lid|faceplate|rear)(\/|$)/.test(n.path),
+    );
+    const minX = Math.min(...leaves.map((l) => l.local.origin.x));
+    expect(minX).toBeCloseTo(tray.local.origin.x + 45, 3);
+    const maxY = Math.max(...leaves.map((l) => end(l.local, "y")));
+    expect(maxY).toBeCloseTo(end(tray.local, "y") - 2, 3);
+    // a 600 mm wide template is shrunk to 450 mm, not to 540 mm
+    const wide = {
+      id: "t",
+      template: true,
+      parts: [{ id: "w", at: [0, 0, 0], size: [600, 100, 20] }],
+    };
+    const s = spec({
+      assemblies: [wide],
+      racks: [{ id: "r", slots: [{ id: "s", at: 1, type: "server-2u", assembly: "t" }] }],
+      ...act("r"),
+    });
+    const r = build(s, "r", { t: template(s, "t") });
+    expect(find(r.assembly!.root, "r/s/w")!.local.size.x).toBeCloseTo(450, 3);
+    expect(r.diagnostics.map((d) => d.code)).toEqual(["assembly/size-mismatch"]);
+  });
+
+  it("an explicit gap of 0 is honoured by the template program", () => {
+    const tpl = (gap: number): Json => ({
+      id: "t",
+      template: true,
+      parts: [{ id: "blk", at: [0, 0, 0], size: [100, 100, 20] }],
+      programs: [{ id: "p", gap, stages: [{ parts: ["blk"], direction: "up", distance: 300 }] }],
+    });
+    const lidDz = (gap: number): number => {
+      const s = spec({
+        assemblies: [tpl(gap)],
+        racks: [{ id: "r", slots: [{ id: "s", at: 1, type: "server-2u", assembly: "t" }] }],
+        ...act("r"),
+      });
+      const a = must(build(s, "r", { t: template(s, "t") }).assembly);
+      const blk = find(a.root, "r/s/blk")!;
+      const lid = find(a.root, "r/s/lid")!;
+      const need = end(blk.local, "z") + 300 - lid.local.origin.z;
+      const dz = program(a, "r/s", "internals").stages[0]!.moves[0]!.offset.z * MM;
+      return dz - need;
+    };
+    expect(lidDz(0)).toBeCloseTo(0, 3);
+    expect(lidDz(25)).toBeCloseTo(25, 3);
+  });
+
+  it("template distances are scaled per axis (stud units: x 8 mm, z 3.2 mm)", () => {
+    const tpl = {
+      id: "t",
+      template: true,
+      units: "stud",
+      parts: [
+        { id: "a", at: [0, 0, 0], size: [10, 10, 3] },
+        { id: "b", at: [20, 0, 0], size: [10, 10, 3] },
+      ],
+      programs: [
+        {
+          id: "p",
+          stages: [
+            { parts: ["a"], direction: "up", distance: 10 },
+            { parts: ["b"], direction: "+x", distance: 10 },
+          ],
+        },
+      ],
+    };
+    const s = spec({
+      assemblies: [tpl],
+      racks: [{ id: "r", slots: [{ id: "s", at: 1, type: "server-2u", assembly: "t" }] }],
+      ...act("r"),
+    });
+    const a = must(build(s, "r", { t: template(s, "t") }).assembly);
+    const p = program(a, "r/s", "internals");
+    expect(p.stages[1]!.moves[0]!.offset.z * MM).toBeCloseTo(32, 4);
+    expect(p.stages[2]!.moves[0]!.offset.x * MM).toBeCloseTo(80, 4);
+  });
+
+  it("a turned (mirrored) rack differs from a reflected one: asymmetric parts change sides", () => {
+    const s = hall();
+    for (const r of s.racks ?? []) (r as unknown as Json)["pdu"] = "single";
+    const frag = dcPack.buildScene(s);
+    let sawMirror = false;
+    for (const rack of ["a1", "b1"]) {
+      const a = must(dcPack.buildAssembly!(s, rack, frag, {}).assembly);
+      const mid = a.restBounds.origin.x + a.restBounds.size.x / 2;
+      const cx = (b: Box3): number => b.origin.x + b.size.x / 2;
+      const pdu = find(a.root, `${rack}/frame/pdu-a`)!;
+      const obj = frag.objects.find((o) => o.id === rack || o.id === `${rack}_front`)!;
+      void obj;
+      const slot = a.root.children.find((c) => c.id !== "frame")!;
+      const led = find(a.root, `${slot.path}/led-0`)!;
+      const slotMid = cx(slot.world);
+      if (a.frame.front === "+y") {
+        expect(cx(pdu.world)).toBeLessThan(mid);
+        expect(cx(led.world)).toBeLessThan(slotMid);
+      } else {
+        sawMirror = true;
+        // the 1.1 fragment reflects (x unchanged); the assembly turns, so both swap sides
+        const rackObj = frag.objects.find((o) => o.id === rack)!;
+        const old = [
+          ...(rackObj.parts ?? []),
+          ...(frag.objects.find((o) => o.id === `${rack}_front`)?.parts ?? []),
+        ];
+        const oldPdu = old.find((p) => p.id === "pdu-a")!;
+        expect(cx(oldPdu.box)).toBeLessThan(mid);
+        expect(cx(pdu.world)).toBeGreaterThan(mid);
+        expect(cx(led.world)).toBeGreaterThan(slotMid);
+      }
+    }
+    expect(sawMirror).toBe(true);
+  });
+
+  it("magnitudes in tiles: every slot drawer is owner front - slot back + gap, mirrored or not", () => {
+    const s = hall();
+    const frag = dcPack.buildScene(s);
+    const fronts = new Set<string>();
+    for (const rack of ["a1", "b1"]) {
+      const a = must(dcPack.buildAssembly!(s, rack, frag, {}).assembly);
+      fronts.add(a.frame.front);
+      const sign = a.frame.front === "+y" ? 1 : -1;
+      const ext = Math.max(a.root.local.size.x, a.root.local.size.y, a.root.local.size.z);
+      for (const m of program(a, rack, "drawers").stages[1]!.moves) {
+        const slot = find(a.root, m.path)!;
+        const lo = sign === 1 ? slot.local.origin.y : -end(slot.local, "y");
+        const hi = sign === 1 ? end(a.root.local, "y") : -a.root.local.origin.y;
+        expect(m.offset.y * sign * MM).toBeCloseTo(hi - lo + ext * 0.1, 3);
+        expect(m.offset.y * sign).toBeGreaterThan(1);
+      }
+    }
+    expect([...fronts].sort()).toEqual(["+y", "-y"]);
+  });
+
+  it("the mirror flag comes from buildDcScene, not from the post order", () => {
+    const s = hall();
+    const frag = dcPack.buildScene(s);
+    // a copied fragment has no recorded flag and falls back to the posts: same answer
+    const copy = JSON.parse(JSON.stringify(frag)) as DcSceneFragment;
+    for (const rack of ["a1", "b1"]) {
+      const a = dcPack.buildAssembly!(s, rack, frag, {}).assembly!;
+      const b = dcPack.buildAssembly!(s, rack, copy, {}).assembly!;
+      expect(b.frame.front).toBe(a.frame.front);
+    }
+  });
+});
+
 describe("budgets and bad input", () => {
   it("only the first 48 slots are read and the result stays fast", () => {
     const slots = Array.from({ length: 5000 }, (_, i) => ({
@@ -1094,8 +1377,8 @@ describe("budgets and bad input", () => {
     const t0 = Date.now();
     const r = build(s, "r");
     expect(Date.now() - t0).toBeLessThan(5000);
-    const a = r.assembly;
-    if (a !== undefined) expect(a.root.children.length).toBeLessThanOrEqual(49);
+    const a = must(r.assembly);
+    expect(a.root.children.length).toBeLessThanOrEqual(49);
     expect(JSON.stringify(r.diagnostics)).not.toContain("NaN");
   });
 
@@ -1131,6 +1414,11 @@ describe("budgets and bad input", () => {
 
   it("never throws on garbage", () => {
     const junk = [
+      spec({
+        assemblies: [null, 7],
+        racks: [{ id: "r", slots: [{ at: 1, type: "server-1u", id: "s", assembly: "t" }] }],
+        ...act("r"),
+      }),
       spec({
         racks: [{ id: "r", slots: [null, 5, { at: "x" }, { at: 1, type: "nope" }] }],
         ...act("r"),
