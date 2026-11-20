@@ -19,7 +19,8 @@ Resume point for the autonomous run: read this file and `DECISIONS.md`, then con
 | Diagram from an attached image                                 | merged                                                                                                                                                            | #58                                                                                                                                                                            | sonnet, opus review                                   |
 | Phase 2 visual review                                          | done: 4 rounds, final round all 6 READY                                                                                                                           | —                                                                                                                                                                              | opus                                                  |
 | Phase 3 install without npm                                    | install from GitHub + bundled CLI verified in a clean container; skill-driven E2E simulated (Sonnet, 6/6 prompts; 3/3 images); real Claude Code run needs a token | —                                                                                                                                                                              | —                                                     |
-| Assemblies + programmable explode/implode (new scope)          | design in progress                                                                                                                                                | design PR pending                                                                                                                                                              | opus design                                           |
+| Brand look (D51), docs site on Cloudflare, legal entity        | merged                                                                                                                                                            | #61, #64, #65                                                                                                                                                                  | sonnet impl, opus review                              |
+| Assemblies + programmable explode/implode (new scope)          | design merged; Phase 1a next                                                                                                                                      | #60                                                                                                                                                                            | opus design                                           |
 
 ## Evidence
 
@@ -33,13 +34,8 @@ Resume point for the autonomous run: read this file and `DECISIONS.md`, then con
 
 ## Human-only items
 
-- Repo settings: enable secret scanning, push protection, private vulnerability reporting (SECURITY.md points to it), Dependabot security updates; branch protection with required checks; DCO app.
-- Docs site: enable GitHub Pages (source: GitHub Actions), restrict the `github-pages` environment to `main`, verify `platformcosmo.io`, DNS records, then set `PAGES_ENABLED=true` (CONTRIBUTING).
-- npm: org and package names, `npm-publish` environment, `RELEASE_ENABLED`, trusted publishing (or `NPM_TOKEN`).
-- Icon terms: accept Azure (D29) and confirm Google Cloud (D30) terms to render those examples.
-- `CLAUDE_CODE_OAUTH_TOKEN` for a real Claude Code prompt → diagram run in a container.
-- Renew the `platformbuilds.*` domains; add the redirect README in the `platformcosmo` GitHub org (PLAN §16).
-- Trademark search, conduct contact, close stale Dependabot PRs #2–#5.
+See HANDOFF.md ("Human-only items"). Repo security and branch protection are done; the docs site is
+live on Cloudflare (no GitHub Pages deploy).
 
 ## Follow-ups (logged, not blocking)
 
@@ -49,6 +45,5 @@ Resume point for the autonomous run: read this file and `DECISIONS.md`, then con
 
 ## Next
 
-1. Merge the docs-polish PR (this file, PLAN/NOTICE/SECURITY wording).
-2. Re-run the independent final verification on main.
-3. Assemblies design PR → user review → implementation phases 1–3.
+See HANDOFF.md ("Next work"): merge #66, handle #63, confirm analytics, then assemblies Phase 1a
+(figure mode) per docs/design/assemblies-tracks.md.

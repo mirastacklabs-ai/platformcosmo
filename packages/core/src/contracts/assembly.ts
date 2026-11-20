@@ -236,7 +236,7 @@ export interface ImageAsset {
    * although the EXIF block itself was removed.
    */
   readonly orientation: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
-  /** `sha256-<base64>` of `data` (or of `svg.body`); emit embeds each hash once (dedupe). */
+  /** `sha256-<base64>` of `data` (SVG: of `svg.viewBox + "\n" + svg.body`); emit embeds each hash once (dedupe). */
   readonly hash: string;
   /** Cleaned raster bytes; empty for SVG. */
   readonly data: Uint8Array;
