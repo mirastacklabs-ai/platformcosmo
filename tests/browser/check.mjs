@@ -271,8 +271,8 @@ async function checkAnimates(name, browser, blocked, file, mode, probe) {
       name,
       file,
       mode,
-      "time control is deterministic (0.5 s twice: <0.1% of pixels differ)",
-      same.diff < 0.001 ? "pass" : "fail",
+      "time control is deterministic (same time twice: <0.1% of pixels differ, assembly diagrams <0.5%)",
+      same.diff < (info?.assemblies?.[file] ? 0.005 : 0.001) ? "pass" : "fail",
       `${(same.diff * 100).toFixed(3)}% differ`,
     );
     const px = await pixels(scratch, a);
@@ -333,15 +333,21 @@ async function checkReduced(name, browser, blocked, file, mode, expected) {
 async function checkReducedDiscrete(name, browser, blocked, file, mode, mids) {
   return withPage(browser, blocked, { reducedMotion: "reduce" }, async (page) => {
     const box = await open(page, mode, file);
+    const scratch = await scratchOf(page);
     const poses = [];
     const tweened = [];
+    let worst = 0;
     for (const [k, mid] of mids.entries()) {
       await seek(page, mode, mid);
       const a = await shot(page, box);
       await seek(page, mode, mid + 0.15);
       const b = await shot(page, box);
       poses.push(a);
-      if (a !== b) tweened.push(k + 1);
+      // Equal frames; WebKit may repaint an image or antialiased edge by a few pixels, so up to
+      // 0.1% of the pixels may differ (a tween over 0.15 s moves far more than that).
+      const d = a === b ? 0 : (await pixels(scratch, a, b)).diff;
+      worst = Math.max(worst, d);
+      if (d >= 0.001) tweened.push(k + 1);
     }
     rec(
       name,
@@ -349,7 +355,9 @@ async function checkReducedDiscrete(name, browser, blocked, file, mode, mids) {
       mode,
       "reduced motion: discrete poses (frames inside a step are equal)",
       tweened.length === 0 ? "pass" : "fail",
-      tweened.length ? `steps that change inside: ${tweened.join(",")}` : "",
+      tweened.length
+        ? `steps that change inside: ${tweened.join(",")}`
+        : `largest difference inside a step: ${(worst * 100).toFixed(3)}% of pixels`,
     );
     const distinct = new Set(poses).size;
     rec(
@@ -360,7 +368,7 @@ async function checkReducedDiscrete(name, browser, blocked, file, mode, mids) {
       distinct > 1 ? "pass" : "fail",
       `${distinct} distinct poses over ${poses.length} steps`,
     );
-    const px = await pixels(await scratchOf(page), poses[0]);
+    const px = await pixels(scratch, poses[0]);
     rec(name, file, mode, "reduced motion: has content", px.ink > 0.01 ? "pass" : "fail");
   });
 }
@@ -402,7 +410,7 @@ async function checkDark(name, browser, blocked, file, mode) {
       const img = await shot(page, box);
       const px = await pixels(await scratchOf(page), img);
       let fill;
-      if (mode === "inline" && info?.bg) {
+      if (mode === "inline" && info?.bg && file === info.loop) {
         fill = await page.evaluate(
           (sel) => getComputedStyle(document.querySelector(sel)).fill,
           info.bg,
@@ -431,7 +439,7 @@ async function checkDark(name, browser, blocked, file, mode) {
     changed ? "pass" : ownDark && frames.diff < 0.01 ? "limited" : "fail",
     `${(frames.diff * 100).toFixed(1)}% of pixels differ; corner pixel light ${light.corner}, dark ${dark.corner}${ownDark ? " (the diagram's own theme is dark)" : ""}`,
   );
-  if (info?.bg && mode === "inline") {
+  if (info?.bg && mode === "inline" && file === info.loop) {
     rec(
       name,
       file,

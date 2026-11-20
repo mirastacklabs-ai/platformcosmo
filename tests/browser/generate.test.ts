@@ -80,15 +80,31 @@ async function generateAssemblies(): Promise<Record<string, unknown>> {
     if (typeof svg !== "string") throw new Error(`${ex.title}: ${JSON.stringify(r.diagnostics)}`);
     writeFileSync(join(out, ex.file), svg);
     // frames of the exporter at candidate times: the first one that differs from the rest frame
-    const png = async (time: number): Promise<string> => {
+    const png = async (time: number): Promise<Uint8Array> => {
       const f = await render(spec, { ...base, outputs: ["png"], png: { scale: 0.25, time } });
       const d = f.outputs[0]?.data;
       if (!d || typeof d === "string") throw new Error("no frame");
-      return Buffer.from(decodePng(d).data).toString("base64");
+      return decodePng(d).data;
+    };
+    // the sampled time whose frame differs most from the rest frame (a clear difference, not a
+    // hairline: engines round a barely started move differently)
+    const share = (a: Uint8Array, b: Uint8Array): number => {
+      let n = 0;
+      for (let i = 0; i < a.length; i += 4) {
+        if (a[i] !== b[i] || a[i + 1] !== b[i + 1] || a[i + 2] !== b[i + 2]) n++;
+      }
+      return n / (a.length / 4);
     };
     const rest = await png(0);
     let moving = -1;
-    for (let t = 0.25; t < 40 && moving < 0; t += 0.25) if ((await png(t)) !== rest) moving = t;
+    let best = 0.01;
+    for (let t = 0.5; t < 40; t += 0.5) {
+      const d = share(rest, await png(t));
+      if (d > best) {
+        best = d;
+        moving = t;
+      }
+    }
     if (moving < 0) throw new Error(`${ex.title}: no motion within 40 s`);
     let t0 = 0;
     const mids = (r.scene?.timeline ?? []).map((s) => {
@@ -140,4 +156,4 @@ test("generate browser fixtures", async () => {
       2,
     ),
   );
-});
+}, 300_000);
