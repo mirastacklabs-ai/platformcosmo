@@ -26,6 +26,7 @@ export {
   studGrid,
   trayParts,
   halfOf,
+  reassignSplit,
   partGeometryFaces,
   STUD_DIAMETER,
   STUD_HEIGHT,
