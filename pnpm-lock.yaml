@@ -56,6 +56,10 @@ importers:
       fflate:
         specifier: 0.8.3
         version: 0.8.3
+    devDependencies:
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
 
   packages/cli:
     dependencies:

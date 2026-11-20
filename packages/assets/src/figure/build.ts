@@ -1,0 +1,337 @@
+/**
+ * Pipeline outputs (ingestion §6.3, §6.4, §6.6): one clean template sprite per instance class,
+ * the clean base (moved parts and annotations erased, filled from the other drawing), seat and
+ * exploded positions in base pixels, the draw order, and the spec fragment.
+ */
+import { nccAt, luminancePlane, type LuminancePlane } from "../locate.js";
+import type { Raster } from "../raster.js";
+import type { Analysis, Unit } from "./analyze.js";
+import { inBox } from "./annotations.js";
+import type { FigureState } from "./manifest.js";
+import { blank, dilate, erode1, has, union, type Mask } from "./mask.js";
+
+export interface FigureOutputPart {
+  /** The unit's group id: the figure part id of the spec. */
+  readonly id: string;
+  /** Index into `sprites`. */
+  readonly sprite: number;
+  /** Top-left of the sprite in base pixels, seated and exploded. */
+  readonly seat: readonly [number, number];
+  readonly exploded: readonly [number, number];
+  readonly z?: number;
+  /** A position not drawn in the figure (single-state figures). */
+  readonly inferred?: "seat" | "exploded";
+}
+
+export interface FigureOutputs {
+  readonly base: Raster;
+  readonly sprites: readonly Raster[];
+  readonly parts: readonly FigureOutputPart[];
+}
+
+const other = (s: FigureState): FigureState => (s === "exploded" ? "assembled" : "exploded");
+
+/** The base model shared with the gate: what was erased and how each erased pixel is recovered. */
+export interface BaseModel {
+  /** Erased pixels in the base frame. */
+  readonly erase: Mask;
+  /** Colour from the other drawing, or undefined when no other depiction shows the pixel. */
+  readonly recover: (x: number, y: number) => readonly [number, number, number] | undefined;
+}
+
+export function baseModel(a: Analysis): BaseModel {
+  const b = a.base;
+  const st = a.img[b]!;
+  const parts: Mask[] = a.units.map((u) => dilate(u.place[b]!.E, 1, st.W, st.H));
+  const allowB = a.annotations.filter((g) => g.state === b).flatMap((g) => g.allowances);
+  const partInk = union(...a.units.map((u) => u.place[b]!.partInk));
+  const annErase: Mask[] = a.annotations
+    .filter((g) => g.state === b)
+    .map((g) => {
+      const m = g.mask;
+      const data = new Uint8Array(m.data);
+      for (let j = 0; j < m.h; j++) {
+        for (let i = 0; i < m.w; i++) {
+          if (!data[j * m.w + i]) continue;
+          const x = i + m.x;
+          const y = j + m.y;
+          if (has(partInk, x, y) && !allowB.some((q) => inBox(q, x, y))) data[j * m.w + i] = 0;
+        }
+      }
+      return { ...m, data };
+    });
+  const erase = union(...parts, ...annErase);
+  const o = a.states.includes(other(b)) ? other(b) : undefined;
+  if (!o) return { erase, recover: () => undefined };
+  const so = a.img[o]!;
+  const [dx, dy] = a.d[o]!;
+  const blocked = union(
+    ...a.units.map((u) => u.place[o]!.E),
+    ...a.annotations.filter((g) => g.state === o).map((g) => g.mask),
+  );
+  return {
+    erase,
+    recover: (x, y) => {
+      const qx = x + dx;
+      const qy = y + dy;
+      if (qx < 0 || qy < 0 || qx >= so.W || qy >= so.H || has(blocked, qx, qy)) return undefined;
+      const q = (qy * so.W + qx) * 4;
+      return [so.image.data[q]!, so.image.data[q + 1]!, so.image.data[q + 2]!];
+    },
+  };
+}
+
+/** Build options: `erase` overrides the manifest's (the broken-variant tests use "fill"). */
+export interface BuildOptions {
+  readonly erase?: "recover" | "fill";
+}
+
+export function buildOutputs(
+  a: Analysis,
+  options: BuildOptions = {},
+): { outputs: FigureOutputs; filled: number } {
+  const sprites = a.classes.map((c) => cleanSprite(a, c.index));
+  const b = a.base;
+  const st = a.img[b]!;
+  const model = baseModel(a);
+  const erase = options.erase ?? a.manifest.erase ?? "recover";
+  const data = new Uint8Array(st.image.data);
+  let filled = 0;
+  const m = model.erase;
+  for (let j = 0; j < m.h; j++) {
+    for (let i = 0; i < m.w; i++) {
+      if (!m.data[j * m.w + i]) continue;
+      const x = i + m.x;
+      const y = j + m.y;
+      const c = erase === "recover" ? model.recover(x, y) : undefined;
+      const o = (y * st.W + x) * 4;
+      const col = c ?? st.background;
+      if (!c) filled++;
+      data[o] = col[0];
+      data[o + 1] = col[1];
+      data[o + 2] = col[2];
+      data[o + 3] = 255;
+    }
+  }
+  const base: Raster = { width: st.W, height: st.H, data };
+  const plane = luminancePlane(base);
+  const parts = a.units.map((u) => positions(a, u, sprites[u.cls]!, base, plane));
+  return { outputs: { base, sprites, parts: drawOrder(a, parts, sprites) }, filled };
+}
+
+/** The template sprite with non-part annotation ink inside it replaced (§6.4 rule applied to sprites). */
+function cleanSprite(a: Analysis, ci: number): Raster {
+  const c = a.classes[ci]!;
+  const tu = a.units[c.unit]!;
+  const s = c.state;
+  const st = a.img[s]!;
+  const tp = tu.place[s]!;
+  const ann = a.annotations.filter((g) => g.state === s);
+  if (ann.length === 0) return c.sprite;
+  const allow = ann.flatMap((g) => g.allowances);
+  const masks = union(...ann.map((g) => g.mask));
+  const out = new Uint8Array(c.sprite.data);
+  for (let j = 0; j < c.mask.h; j++) {
+    for (let i = 0; i < c.mask.w; i++) {
+      if (!c.mask.data[j * c.mask.w + i]) continue;
+      const x = i + tp.x;
+      const y = j + tp.y;
+      if (
+        !has(masks, x, y) ||
+        !st.rawInk[y * st.W + x] ||
+        has(tp.partInk, x, y) ||
+        allow.some((q) => inBox(q, x, y))
+      )
+        continue;
+      // Recover from another depiction of the class where that pixel is visible and not annotated.
+      let col: readonly [number, number, number] | undefined;
+      for (const ui of c.units) {
+        const u = a.units[ui]!;
+        for (const s2 of a.states) {
+          if (u === tu && s2 === s) continue;
+          const p = u.place[s2]!;
+          const qx = i + p.x;
+          const qy = j + p.y;
+          const st2 = a.img[s2]!;
+          if (!has(p.visible, qx, qy)) continue;
+          if (a.annotations.some((g) => g.state === s2 && has(g.mask, qx, qy))) continue;
+          const q = (qy * st2.W + qx) * 4;
+          col = [st2.image.data[q]!, st2.image.data[q + 1]!, st2.image.data[q + 2]!];
+          break;
+        }
+        if (col) break;
+      }
+      col ??= st.background;
+      const o = (j * c.mask.w + i) * 4;
+      out[o] = col[0];
+      out[o + 1] = col[1];
+      out[o + 2] = col[2];
+    }
+  }
+  return { width: c.sprite.width, height: c.sprite.height, data: out };
+}
+
+/** Silhouette ring template of a sprite: 2 px inside (dark) and 2 px outside (light). */
+export function ringTemplate(sprite: Raster): { raster: Raster; mask: Uint8Array } {
+  const w = sprite.width + 4;
+  const h = sprite.height + 4;
+  const O = blank(0, 0, w, h);
+  for (let y = 0; y < sprite.height; y++) {
+    for (let x = 0; x < sprite.width; x++)
+      if (sprite.data[(y * sprite.width + x) * 4 + 3]) O.data[(y + 2) * w + x + 2] = 1;
+  }
+  const inner = erode1(erode1(O));
+  const outer = dilate(O, 2, w, h);
+  const data = new Uint8Array(w * h * 4);
+  const mask = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const inO = O.data[i] === 1;
+    const ring = inO ? !inner.data[i] : has(outer, i % w, Math.floor(i / w));
+    if (!ring) continue;
+    const v = inO ? 0 : 255;
+    data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = v;
+    data[i * 4 + 3] = 255;
+    mask[i] = 255;
+  }
+  return { raster: { width: w, height: h, data }, mask };
+}
+
+/** Best ring NCC of the sprite with its top-left within ±r of (x, y) in the plane; -1 when none fits. */
+export function ringScore(
+  plane: LuminancePlane,
+  ring: { raster: Raster; mask: Uint8Array },
+  x: number,
+  y: number,
+  r: number,
+): number {
+  let best = -1;
+  for (let dy = -r; dy <= r; dy++) {
+    for (let dx = -r; dx <= r; dx++) {
+      const v = nccAt(plane, ring.raster, x + dx - 2, y + dy - 2, ring.mask);
+      if (v !== undefined && v > best) best = v;
+    }
+  }
+  return best;
+}
+
+function positions(
+  a: Analysis,
+  u: Unit,
+  sprite: Raster,
+  base: Raster,
+  plane: LuminancePlane,
+): FigureOutputPart {
+  const inBase = (s: FigureState): [number, number] => {
+    const p = u.place[s]!;
+    const [dx, dy] = a.d[s]!;
+    return [p.x - dx, p.y - dy];
+  };
+  const lift = Math.round(sprite.height * 1.2);
+  if (a.states.length === 2) {
+    return { id: u.id, sprite: u.cls, seat: inBase("assembled"), exploded: inBase("exploded") };
+  }
+  if (a.states[0] === "assembled") {
+    const seat = inBase("assembled");
+    return {
+      id: u.id,
+      sprite: u.cls,
+      seat,
+      exploded: [seat[0], seat[1] - lift],
+      inferred: "exploded",
+    };
+  }
+  // Exploded only: follow the first arrow that touches the part to the best silhouette match.
+  const ex = inBase("exploded");
+  const st = a.img.exploded!;
+  const E = dilate(u.place.exploded!.E, 4, st.W, st.H);
+  let seat: [number, number] = [ex[0], ex[1] + lift];
+  for (const g of a.annotations) {
+    if (g.kind !== "arrow" || g.state !== "exploded") continue;
+    const ends = [g.points[0]!, g.points[g.points.length - 1]!];
+    const touch = ends.findIndex(([x, y]) => has(E, Math.round(x), Math.round(y)));
+    if (touch < 0) continue;
+    const c = ends[touch]!;
+    const f = ends[1 - touch]!;
+    const L = Math.hypot(f[0] - c[0], f[1] - c[1]);
+    if (L === 0) continue;
+    const ux = (f[0] - c[0]) / L;
+    const uy = (f[1] - c[1]) / L;
+    const ring = ringTemplate(sprite);
+    let best = -1;
+    let at: [number, number] = [Math.round(ex[0] + f[0] - c[0]), Math.round(ex[1] + f[1] - c[1])];
+    const reach = Math.ceil(L + 2 * (sprite.width + sprite.height));
+    for (let t = Math.floor(L); t <= reach; t++) {
+      const px = Math.round(ex[0] + ux * t);
+      const py = Math.round(ex[1] + uy * t);
+      if (px < 0 || py < 0 || px + sprite.width > base.width || py + sprite.height > base.height)
+        continue;
+      const v = ringScore(plane, ring, px, py, 0);
+      if (v > best) {
+        best = v;
+        at = [px, py];
+      }
+    }
+    seat = at;
+    break;
+  }
+  return { id: u.id, sprite: u.cls, seat, exploded: ex, inferred: "seat" };
+}
+
+/** Default draw key of the renderer: z, then the seat's bottom edge, then spec order. */
+export function drawKey(
+  p: FigureOutputPart,
+  spriteH: number,
+  index: number,
+): [number, number, number] {
+  return [p.z ?? 0, p.seat[1] + spriteH, index];
+}
+
+export function renderOrder(
+  parts: readonly FigureOutputPart[],
+  sprites: readonly Raster[],
+): number[] {
+  const keys = parts.map((p, i) => drawKey(p, sprites[p.sprite]?.height ?? 0, i));
+  return parts
+    .map((_, i) => i)
+    .sort(
+      (x, y) => keys[x]![0] - keys[y]![0] || keys[x]![1] - keys[y]![1] || keys[x]![2] - keys[y]![2],
+    );
+}
+
+/** Applies the manifest's z, or assigns z when the drawing's occlusions contradict the default order. */
+function drawOrder(
+  a: Analysis,
+  parts: FigureOutputPart[],
+  sprites: readonly Raster[],
+): FigureOutputPart[] {
+  const withZ = parts.map((p, i) => (a.units[i]!.z !== undefined ? { ...p, z: a.units[i]!.z } : p));
+  if (a.units.some((u) => u.z !== undefined)) return withZ;
+  const rel: [number, number][] = [];
+  for (const s of a.states) {
+    for (const r of a.front[s] ?? []) {
+      const [f, b] = r.split(">").map(Number) as [number, number];
+      rel.push([f, b]);
+    }
+  }
+  rel.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  const order = renderOrder(withZ, sprites);
+  const rank = new Map(order.map((u, k) => [u, k]));
+  if (rel.every(([f, b]) => rank.get(f)! > rank.get(b)!)) return withZ;
+  // Topological order (behind first), ties by the default order.
+  const placed: number[] = [];
+  const left = new Set(order);
+  while (left.size > 0) {
+    let pick: number | undefined;
+    for (const u of order) {
+      if (!left.has(u)) continue;
+      if (rel.every(([f, b]) => f !== u || !left.has(b))) {
+        pick = u;
+        break;
+      }
+    }
+    pick ??= order.find((u) => left.has(u))!;
+    placed.push(pick);
+    left.delete(pick);
+  }
+  return withZ.map((p, i) => ({ ...p, z: placed.indexOf(i) }));
+}

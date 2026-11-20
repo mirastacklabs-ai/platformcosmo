@@ -1216,12 +1216,17 @@ image index and bbox in `params`.
 
 Raster operations (`@platformcosmo/assets`, §5) use these `asset/*` codes, with a bbox in
 `params` wherever a region applies: errors `bad-option` (`params.option` names the option:
-tolerance, maxPx, rect, region, top, minScore, scales, svgSize, maxShift, exclude, input),
+tolerance, maxPx, rect, region, top, minScore, scales, svgSize, maxShift, exclude, input; the
+figure pipeline adds manifest, with a JSON pointer `path` into the manifest, outputs for
+`assets check`, figureId, dir and label),
 `bad-raster`, `too-large`, `too-expensive`, `empty`, `flat` (no texture under the mask),
 `not-found` (nothing fits or matches), `renderer-failed` (resvg wasm could not start); warnings
 `rect-clamped`, `no-background`, `background-covers-image`, `ambiguous` (align: no majority or a
 small best-vs-second margin), `flat` (one scale skipped), and info/warning `shrink-passthrough`.
-Image validation errors keep C-1's `image/*` codes.
+Image validation errors keep C-1's `image/*` codes. The figure pipeline (§6) uses the §6.5 gate
+codes (`asset/seat-unverified` is a warning) plus these; `not-found` also covers a seed on the
+background or a part that `locate` cannot find in a drawing, and `too-large` a manifest with more
+than 64 parts.
 
 ## 14. Limits
 
