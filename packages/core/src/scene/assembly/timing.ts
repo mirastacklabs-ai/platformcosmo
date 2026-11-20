@@ -112,6 +112,8 @@ export function programSegment(
   program: ResolvedExplodeProgram,
   from: number,
   to: number,
+  /** Node paths whose moves are left out (already opened by implicit access, §8.3). */
+  exclude?: ReadonlySet<string>,
 ): ProgramSegment {
   const lo = Math.max(0, Math.min(from, to));
   const hi = Math.min(program.stages.length, Math.max(from, to));
@@ -119,8 +121,12 @@ export function programSegment(
   const stages: readonly ResolvedStage[] = program.stages.slice(lo, hi);
   if (stages.length === 0) return { kind, from, to, length: 0, moves: [] };
   const offset = (stages[0] as ResolvedStage).start;
-  const length = r4(Math.max(...stages.map((s) => s.end)) - offset);
-  const forward = stages.flatMap((s) => s.moves);
+  const forward = stages.flatMap((s) => s.moves).filter((m) => exclude?.has(m.path) !== true);
+  const end =
+    exclude === undefined || exclude.size === 0
+      ? Math.max(...stages.map((s) => s.end))
+      : Math.max(offset, ...forward.map((m) => m.start + m.duration));
+  const length = r4(end - offset);
   const moves: SegmentMove[] =
     kind === "explode"
       ? forward.map((m) => ({

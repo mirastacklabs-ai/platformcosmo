@@ -491,6 +491,11 @@ export interface ResolvedAction {
    */
   readonly accessLength?: number;
   /**
+   * Node paths whose moves implicit access had already opened before this action: its segment
+   * does not play them again, they stay where they are.
+   */
+  readonly opened?: readonly string[];
+  /**
    * Access moves prepended for nested targets (a slot's drawer before its internals, §8.3),
    * as `ProgramLevel`s of ancestor programs.
    */

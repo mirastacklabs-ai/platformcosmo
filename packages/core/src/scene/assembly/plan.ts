@@ -537,9 +537,15 @@ export class AssemblyPrograms {
     const actions = new Map<string, ForeignAction>();
     const poses: (readonly ProgramLevel[])[] = [];
 
-    const segLen = (rel: string, id: string, from: number, to: number): number => {
+    const segLen = (
+      rel: string,
+      id: string,
+      from: number,
+      to: number,
+      exclude?: ReadonlySet<string>,
+    ): number => {
       const r = res.programs.get(`${rel}\u0000${id}`);
-      return r === undefined ? 0 : programSegment(r.program, from, to).length;
+      return r === undefined ? 0 : programSegment(r.program, from, to, exclude).length;
     };
     /** Duration of the one move of `path` in stage `stage` (the access move). */
     const moveLen = (rel: string, id: string, stage: number, path: string): number => {
@@ -592,6 +598,9 @@ export class AssemblyPrograms {
             ? {}
             : { defaultProg: owner.tnode.defaultProg }),
         };
+        // moves an earlier implicit access already opened are not played again (an explicit
+        // action on the parent program takes the opening over)
+        const openedBefore = new Map([...machine.opened].map(([k, v]) => [k, new Set(v)]));
         const r = machine.apply(
           a as { to?: number; program?: string },
           kind,
@@ -616,7 +625,8 @@ export class AssemblyPrograms {
           );
           return;
         }
-        const own = r.noop ? 0 : segLen(rel, r.prog.id, r.from, r.to);
+        const skip = openedBefore.get(r.key);
+        const own = r.noop ? 0 : segLen(rel, r.prog.id, r.from, r.to, skip);
         const implied: ProgramLevel[] = [];
         let access = 0;
         if (!r.noop && kind === "explode" && segs.length >= 2) {
@@ -658,6 +668,9 @@ export class AssemblyPrograms {
             length: natural,
             scale: 1,
             ...(implied.length === 0 ? {} : { accessLength: r4(access) }),
+            ...(skip === undefined || skip.size === 0 || r.noop
+              ? {}
+              : { opened: [...skip].sort() }),
             implied,
           },
         });

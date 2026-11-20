@@ -14,6 +14,7 @@ import { assemblyDiagnostics } from "../src/schema/assembly-semantic.js";
 import { assemblyNodes, buildAssemblies } from "../src/scene/assembly/tree.js";
 import { AssemblyPrograms } from "../src/scene/assembly/plan.js";
 import { makeWork } from "../src/scene/assembly/selectors.js";
+import { programSegment } from "../src/scene/assembly/timing.js";
 import type { PlatformCosmoSpec } from "../src/schema/types.gen.js";
 
 // A2-3 review round: stacking in moved frames, reach under co-active programs, the shared level
@@ -516,6 +517,31 @@ describe("implicit access is the target's own move in the parent's default progr
     // the implode must not undo what the explicit action now owns
     expect(s3!.actions[0]!.implied).toEqual([]);
     expect(s3!.poses.a!.find((p) => p.program === "drawers")).toEqual({
+      program: "drawers",
+      level: 2,
+    });
+  });
+
+  test("an explicit parent explode does not replay the opened drawer", () => {
+    const g = scene(
+      RACK([
+        { duration: 20, assembly: [{ explode: "a/srv-2" }] },
+        { duration: 20, assembly: [{ explode: "a" }] },
+      ]),
+    );
+    const a = asmOf(g);
+    const act = g.assemblies!.plan[1]!.actions[0]!;
+    expect(act.opened).toEqual(["a/srv-2"]);
+    // door (1 s) + srv-0 (starts 1) + srv-1 (1.5) end at 3.5; srv-2 (would end at 4) is skipped
+    expect(act.length).toBe(3.5);
+    const full = programSegment(prog(a, "drawers"), 0, 2);
+    expect(full.length).toBe(4);
+    const rest = programSegment(prog(a, "drawers"), 0, 2, new Set(["a/srv-2"]));
+    expect(rest.moves.map((m) => m.path)).toEqual(["a/door", "a/srv-0", "a/srv-1"]);
+    expect(rest.length).toBe(3.5);
+    // the drawer is a move of the opened set only: its offset never changes in the segment
+    expect(rest.moves.some((m) => m.path === "a/srv-2")).toBe(false);
+    expect(g.assemblies!.plan[1]!.poses.a!.find((p) => p.program === "drawers")).toEqual({
       program: "drawers",
       level: 2,
     });
