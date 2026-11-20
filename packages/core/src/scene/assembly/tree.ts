@@ -850,11 +850,7 @@ export function buildTemplateInstance(
     y: odd ? lb.x * mm.x : lb.y * mm.y,
     z: lb.z * mm.z,
   };
-  const asked = opts.adapt?.(
-    sizeMm,
-    units,
-    turnFront((a.front ?? "+y") as FrontSide, base),
-  );
+  const asked = opts.adapt?.(sizeMm, units, turnFront((a.front ?? "+y") as FrontSide, base));
   const turn = ((((base + (asked?.turn ?? opts.turn ?? 0)) % 360) + 360) % 360) as QuarterTurn;
   const k = asked?.fit;
   // a uniform factor on true scale: `fit` (tiles of the largest horizontal extent) = k x its true size

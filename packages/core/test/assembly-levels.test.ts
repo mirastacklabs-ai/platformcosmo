@@ -61,7 +61,7 @@ const box = (id: string, at: number[], size: number[], extra: Obj = {}): Obj => 
 
 const story = (srvSize = [418, 320, 60], extra: Obj[] = []): PlatformCosmoSpec =>
   spec({
-    figures: [{ id: "fan-fig" }],
+    figures: [{ id: "fan-fig", parts: [], stages: [] }],
     assemblies: [
       {
         id: "heatsink",
@@ -199,6 +199,8 @@ describe("close-up instances (§8.4, §19.4)", () => {
     expect(plan[1]!.poses["hall/srv/closeup/cpu-1/closeup"]).toEqual([
       { program: "lift", level: 1 },
     ]);
+    // the action belongs to the deepest registered instance only
+    expect(plan[1]!.poses["hall/srv/closeup"]).toEqual([{ program: "internals", level: 1 }]);
     expect(plan[1]!.poses["hall/srv/closeup/cpu-2/closeup"]).toEqual([
       { program: "lift", level: 0 },
     ]);
@@ -449,6 +451,48 @@ describe("levels budget (§13)", () => {
     ]);
     expect(out.levels.every((l) => l.path.split("/").length <= 8)).toBe(true);
     expect(codes(out.diagnostics, "budget/levels")).toEqual([]);
+    // validation walks each edge on its own and passes this chain; the scene reports the cut
+    const deep = codes(out.diagnostics, "assembly/too-deep");
+    expect(deep).toHaveLength(1);
+    expect(deep[0]).toMatchObject({
+      severity: "error",
+      path: "/assemblies/3",
+      params: { host: "a0/p/closeup/p/closeup/p/closeup/p", depth: 10, limit: 8 },
+    });
+  });
+
+  test("a template taller than the room left below the host is reported, not truncated", () => {
+    const tall = spec({
+      assemblies: [
+        {
+          id: "t",
+          template: true,
+          units: "mm",
+          parts: [{ id: "s", parts: [box("q", [0, 0, 0], [5, 5, 5])] }], // height 2
+        },
+        { id: "flat", template: true, units: "mm", parts: [box("q", [0, 0, 0], [5, 5, 5])] },
+      ],
+    });
+    const at = (ref: string): CloseupHost => ({
+      path: "a/b/c/d/e/f", // + closeup = 7 segments
+      closeup: ref,
+      box: { origin: { x: 0, y: 0, z: 0 }, size: { x: 1, y: 1, z: 1 } },
+      pointer: "/host",
+    });
+    const t = levels(tall, [at("t")]);
+    expect(t.levels).toEqual([]);
+    expect(codes(t.diagnostics, "assembly/too-deep")[0]).toMatchObject({
+      path: "/host",
+      params: { depth: 9, limit: 8 },
+    });
+    const f = levels(tall, [at("flat")]); // 7 + 1 = 8: fits exactly
+    expect(f.levels.map((l) => l.path)).toEqual(["a/b/c/d/e/f/closeup"]);
+    expect(codes(f.diagnostics, "assembly/too-deep")).toEqual([]);
+  });
+
+  test("budget/levels names the host's pointer", () => {
+    const over = levels(chain(6, "root"));
+    expect(codes(over.diagnostics, "budget/levels")[0]!.path).toBe("/assemblies/4");
   });
 
   test("eight instances build; the ninth is refused and nothing past it is looked at", () => {
@@ -575,6 +619,7 @@ describe("levels budget (§13)", () => {
       },
     ]);
     expect(bad.levels.map((l) => l.path)).not.toContain("a/b/c/d/e/f/g/h/closeup");
+    expect(codes(bad.diagnostics, "assembly/too-deep")).toHaveLength(1);
   });
 
   test("elements count every level", () => {
@@ -776,7 +821,7 @@ describe("quarter-turn views (§7.7)", () => {
     expect(a!.restBounds.origin.y - b!.restBounds.origin.y).toBeCloseTo(gap, 6);
   });
 
-  test("decals on faces turned away are dropped, billboards stay", () => {
+  test("decals stay in the data: faces are assembly-local, the renderer maps them", () => {
     const img = (face: string): Obj => ({ ref: "im", face, crop: [0, 0, 10, 10] });
     const s = spec({
       images: [{ id: "im", src: "x.png" }],
@@ -793,15 +838,38 @@ describe("quarter-turn views (§7.7)", () => {
       ],
     });
     const { base: b } = main(s);
-    const faces = (a: SceneAssembly, p: string): string[] =>
-      (node(a, p).geometry?.images ?? []).map((i) => i.face);
-    expect(faces(b[0]!, "a/r")).toEqual(["right"]); // the base scene has all three
-    expect(faces(b[0]!, "a/l")).toEqual(["left"]);
-    expect(faces(b[0]!, "a/t")).toEqual(["top"]);
-    const r90 = rotateScene(b, 90)[0]!; // net rotate 270: +x face turns away, +y shows
-    expect(faces(r90, "a/r")).toEqual([]);
-    expect(faces(r90, "a/l")).toEqual(["left"]);
-    expect(faces(r90, "a/t")).toEqual(["top"]);
+    const faces = (a: SceneAssembly): string[] =>
+      ["a/r", "a/l", "a/t"].flatMap((p) => (node(a, p).geometry?.images ?? []).map((i) => i.face));
+    expect(faces(b[0]!)).toEqual(["right", "left", "top"]);
+    for (const t of [90, 180, 270] as const) {
+      expect(faces(rotateScene(b, t)[0]!)).toEqual(["right", "left", "top"]);
+      expect(node(rotateScene(b, t)[0]!, "a/r").geometry).toBe(node(b[0]!, "a/r").geometry);
+    }
+  });
+
+  test("rotated world boxes all come from the new frame (one source)", () => {
+    const big = rotateScene(base, 90)[0]!;
+    const map = frameMap(big.frame, big.root.local);
+    for (const n of assemblyNodes(big)) {
+      if (n.kind !== "leaf") continue;
+      const g = n.geometry!;
+      const want = map.box({
+        origin: {
+          x: n.local.origin.x + g.depthBox.origin.x,
+          y: n.local.origin.y + g.depthBox.origin.y,
+          z: n.local.origin.z + g.depthBox.origin.z,
+        },
+        size: g.depthBox.size,
+      });
+      expect(n.world).toEqual(want);
+    }
+    expect(big.root.world).toEqual(map.box(big.root.local));
+  });
+
+  test("templates are not scene assemblies: their view steps are ignored", () => {
+    const s = row();
+    (s.assemblies![0] as unknown as Obj).template = true;
+    expect(usedViews(s)).toEqual([]);
   });
 
   test("usedViews reads build steps, always with the rest view", () => {
@@ -878,6 +946,87 @@ describe("views budget (§7.7, §13)", () => {
   });
 });
 
+// ---- wiring in buildScene ------------------------------------------------------------------------
+
+describe("levels and views in the scene graph", () => {
+  const img = {
+    id: "im",
+    src: "x.png",
+    source: { document: "Spec sheet", license: "CC-BY-4.0", attribution: "Alice" },
+  };
+  const withImage = (): PlatformCosmoSpec => {
+    const s = story();
+    delete (s as { figures?: unknown }).figures;
+    const srv = (s.assemblies as unknown as { id: string; parts: Obj[] }[]).find(
+      (a) => a.id === "srv-internals",
+    )!;
+    delete srv.parts.find((p) => p.id === "fan")!.closeup;
+    s.images = [img] as never;
+    const t = (s.assemblies as unknown as { id: string; parts: Obj[] }[]).find(
+      (a) => a.id === "heatsink",
+    )!;
+    t.parts = [
+      box("base", [0, 0, 0], [90, 90, 10], {
+        image: { ref: "im", face: "top", crop: [0, 0, 8, 8] },
+      }),
+      ...t.parts.slice(1),
+    ];
+    return s;
+  };
+
+  test("levels are in assemblies.levels, instances are not in assemblies", () => {
+    const g = buildScene(story(), {});
+    const a = g.assemblies!;
+    expect(a.assemblies.map((x) => x.id)).toEqual(["hall"]);
+    expect(a.levels!.map((l) => l.path)).toEqual([
+      "hall/srv/closeup",
+      "hall/srv/closeup/cpu-1/closeup",
+      "hall/srv/closeup/cpu-2/closeup",
+      "hall/srv/closeup/fan/closeup",
+    ]);
+    expect(a.views).toBeUndefined();
+    // focus on a path inside a close-up resolves, and node states are addressable
+    expect(g.focusTargets["hall/srv/closeup/cpu-1/closeup/fins"]).toBeDefined();
+    expect(g.diagnostics.filter((d) => d.code === "semantic/unknown-focus")).toEqual([]);
+  });
+
+  test("a close-up part's image and credit reach images and credits (CC-BY)", () => {
+    const a = buildScene(withImage(), {}).assemblies!;
+    expect(a.images).toEqual(["im"]);
+    expect(a.credits).toEqual([img.source]);
+    // listed once even when two instances use the image
+    expect(a.levels!.filter((l) => l.ref === "heatsink")).toHaveLength(2);
+    // and nothing when no instance uses it
+    const none = withImage();
+    (none.assemblies as unknown as { id: string; parts: Obj[] }[])[1]!.parts = [
+      box("board", [10, 260, 0], [418, 200, 3]),
+    ];
+    expect(buildScene(none, {}).assemblies!.images).toEqual([]);
+  });
+
+  test("plan poses cover close-up instances", () => {
+    const s = story();
+    s.steps = [
+      { caption: "internals", duration: 4, assembly: [{ explode: "hall/srv/closeup" }] },
+    ] as never;
+    const g = buildScene(s, {});
+    expect(g.assemblies!.plan[0]!.poses["hall/srv/closeup"]).toEqual([
+      { program: "internals", level: 1 },
+    ]);
+  });
+
+  test("views: sorted, include 0, turn 0 is the main assemblies; absent without view steps", () => {
+    const g = buildScene(row(), {});
+    const v = g.assemblies!.views!;
+    expect(v.map((x) => x.turn)).toEqual([0, 90, 270]);
+    expect(v[0]!.assemblies).toBe(g.assemblies!.assemblies);
+    expect(g.assemblies!.levels).toBeUndefined();
+    const plain = row();
+    (plain.assemblies![0] as unknown as Obj).programs = [];
+    expect(buildScene(plain, {}).assemblies!.views).toBeUndefined();
+  });
+});
+
 // ---- byte identity -------------------------------------------------------------------------------
 
 describe("existing output is unchanged", () => {
@@ -903,9 +1052,10 @@ describe("existing output is unchanged", () => {
   const DOC_GOLDEN: Record<string, string> = {
     "assemblies.md Two-part box": "be7ad58b82ee947c",
     "assemblies.md Loaded rack: service view": "ac8fb18af1133528",
-    "assemblies.md 2U GPU server internals": "e056025a38e5c6c1",
+    "assemblies.md 2U GPU server internals": "6ec32493bc488708", // hw: shapes from main
     "assemblies.md Inline-4 engine teardown": "37582f18c42ebc76",
     "assemblies.md Rack to server to internals": "b6f4978ff28ce3db",
+    // Brick rover uses build-step views: its scene is unchanged except `assemblies.views`
     "assemblies.md Brick rover": "c1de99110ff760b4",
     "document-ingestion.md Generic 2OU server from a spec document": "3251238436cc3bba",
     "document-ingestion.md Heat-sink installation figure": "0210858f1ee3bae2",
@@ -930,7 +1080,13 @@ describe("existing output is unchanged", () => {
           continue;
         }
         if (typeof s.meta !== "object") continue;
-        got[`${f} ${s.meta.title}`] = sha(buildScene(s, {}));
+        const g = buildScene(s, {});
+        const views = g.assemblies?.views;
+        if (views !== undefined) {
+          expect(views.map((v) => v.turn)[0]).toBe(0);
+          delete (g.assemblies as { views?: unknown }).views; // the one addition
+        }
+        got[`${f} ${s.meta.title}`] = sha(g);
       }
     }
     expect(got).toEqual(DOC_GOLDEN);

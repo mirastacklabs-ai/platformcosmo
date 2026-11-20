@@ -186,7 +186,7 @@ function reconcile(size: Vec3, turn: QuarterTurn, h: Vec3): Fit | undefined {
 
 /** Quarter turns that bring the world side `from` onto `to`. */
 const turnBetween = (from: FrontSide, to: FrontSide): QuarterTurn =>
-  ((((SIDES.indexOf(to) - SIDES.indexOf(from)) % 4) + 4) % 4) * 90 as QuarterTurn;
+  (((((SIDES.indexOf(to) - SIDES.indexOf(from)) % 4) + 4) % 4) * 90) as QuarterTurn;
 
 /**
  * Builds every close-up level of `base` (placed, programs attached) and `opts.hosts`. The levels

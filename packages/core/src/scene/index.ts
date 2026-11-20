@@ -577,7 +577,9 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
     for (const [path, state] of assemblyStates(assemblyScene.assemblies)) states[path] ??= state;
     // close-up levels (§8.4) and quarter-turn views (§7.7): only when the spec has them, so a
     // spec without keeps its scene byte for byte
-    if (assemblyScene.assemblies.some((a) => assemblyNodes(a).some((n) => n.closeup !== undefined))) {
+    if (
+      assemblyScene.assemblies.some((a) => assemblyNodes(a).some((n) => n.closeup !== undefined))
+    ) {
       closeups = buildCloseups(spec, assemblyScene.assemblies, {
         programs,
         color: resolveColor as (c: string) => string | undefined,
