@@ -239,7 +239,16 @@ function readSamples(
   const r = file.decodeStream(s, { limit: expected, mode: "truncate", where });
   if (r.jpeg) throw new PdfError("pdf/unsupported-filter", "a JPEG cannot be decoded here", where);
   let data = r.data;
+  // a few bytes declaring a huge image are not an image: never pad them up to its size
+  if (data.length < expected / 1024) {
+    throw new PdfError(
+      "pdf/malformed",
+      `image data has ${data.length} of ${expected} declared bytes`,
+      { ...where, expected, actual: data.length },
+    );
+  }
   if (data.length < expected) {
+    file.budget.charge(expected - data.length, where);
     diags.push(
       diag("warning", "pdf/malformed", "image data is shorter than declared; padded", {
         ...where,
@@ -375,6 +384,7 @@ function maskAlpha(
     return stencil ? (t < 0.5 ? 255 : 0) : to8(t);
   };
   for (let s = 0; s < lut.length; s++) lut[s] = value(s);
+  file.budget.charge(w * h, where);
   const out = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
     const my = mh === h ? y : Math.min(mh - 1, Math.floor((y * mh) / h));
@@ -403,8 +413,25 @@ export function decodeImage(
   if (filters[filters.length - 1] === "DCTDecode") {
     const r = file.decodeStream(s, { where });
     const b = r.data;
-    if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) {
+    if (!isJpeg(b)) {
       throw new PdfError("pdf/malformed", "a DCTDecode stream is not a JPEG file", where);
+    }
+    const notes = [
+      g("SMask") instanceof PdfStream ? "/SMask" : "",
+      g("Decode") !== undefined ? "/Decode" : "",
+    ].filter(Boolean);
+    if (notes.length) {
+      diags.push(
+        diag(
+          "info",
+          "pdf/colour-approx",
+          `the JPEG is passed through unchanged: its ${notes.join(" and ")} is not applied`,
+          {
+            ...where,
+            ignored: notes,
+          },
+        ),
+      );
     }
     return { kind: "jpeg", bytes: b, width: w, height: h };
   }
@@ -413,7 +440,8 @@ export function decodeImage(
   if (!cs) {
     throw new PdfError("pdf/malformed", "an image has a missing or unsupported /ColorSpace", where);
   }
-  if (cs.family === "approx" || cs.family === "lab") {
+  const approx = (c: ColourSpace): boolean => c.family === "approx" || c.family === "lab";
+  if (approx(cs) || (cs.family === "indexed" && cs.base && approx(cs.base))) {
     diags.push(
       diag("warning", "pdf/colour-approx", `${cs.label} colours are approximated as gray`, where),
     );
@@ -421,6 +449,7 @@ export function decodeImage(
   const bpc = imageMask ? 1 : (intOf(g("BitsPerComponent")) ?? 8);
   const sm = readSamples(file, s, w, h, cs.n, bpc, where, diags);
   const maxv = bpc === 16 ? 65535 : (1 << bpc) - 1;
+  file.budget.charge(w * h * 4, where); // before the pixel buffer exists
   const pixels = new Uint8Array(w * h * 4);
   let alpha = false;
 
@@ -537,6 +566,7 @@ export function decodeMask(
   else if (smask instanceof PdfStream) a = maskAlpha(file, smask, w, h, false, where, diags);
   else if (mask instanceof PdfStream) a = maskAlpha(file, mask, w, h, true, where, diags);
   if (!a) return null;
+  file.budget.charge(w * h * 4, where);
   const pixels = new Uint8Array(w * h * 4);
   for (let i = 0; i < w * h; i++) {
     const v = a[i] as number;
@@ -546,6 +576,24 @@ export function decodeMask(
     pixels[i * 4 + 3] = 255;
   }
   return { kind: "rgba", width: w, height: h, pixels, alpha: false };
+}
+
+/** A JPEG file: SOI, then markers up to a frame header (SOFn) before any scan. Linear. */
+export function isJpeg(b: Uint8Array): boolean {
+  if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8 || b[2] !== 0xff) return false;
+  let p = 2;
+  while (p + 1 < b.length) {
+    if (b[p] !== 0xff) return false;
+    while (p < b.length && b[p] === 0xff) p++; // fill bytes
+    const m = b[p++];
+    if (m === undefined) return false;
+    if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return true; // SOFn
+    if (m === 0xda || m === 0xd9) return false; // scan or end before a frame
+    if (m === 0x01 || (m >= 0xd0 && m <= 0xd7)) continue; // no length
+    if (p + 1 >= b.length) return false;
+    p += ((b[p] as number) << 8) | (b[p + 1] as number);
+  }
+  return false;
 }
 
 // ---- PNG -----------------------------------------------------------------------------------

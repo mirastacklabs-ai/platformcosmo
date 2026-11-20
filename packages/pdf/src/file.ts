@@ -2,6 +2,10 @@
  * Cross-reference tables and streams, `/Prev` chains, object streams, incremental updates and
  * repair (ingestion §4.1). Objects are loaded lazily and cached; references are resolved with
  * a cycle guard. Linearization hint tables are never read.
+ *
+ * Every parse is bounded: an indirect object is lexed only up to the next `endobj` (found by a
+ * forward search that never revisits a byte) or, after repair, the next object header; an
+ * object-stream member only within its own slice. Lexed bytes count against the decoded total.
  */
 import { setupSecurity, type Decryptor, type PdfEncryptionInfo } from "./crypt.js";
 import { decodeFilters, filterList, type CapMode } from "./filters.js";
@@ -42,13 +46,31 @@ interface Entry {
 }
 
 interface ObjStm {
+  /** Object number → member index (the first definition wins). */
+  readonly index: Map<number, number>;
   readonly nums: number[];
+  /** Strictly increasing member offsets, relative to `first`. */
   readonly offsets: number[];
   readonly data: Uint8Array;
   readonly first: number;
 }
 
+interface ScanResult {
+  /** [num, gen, offset], in file order. */
+  readonly objs: [number, number, number][];
+  readonly trailers: number[];
+}
+
 const FREE: Entry = { type: 0, offset: 0, gen: 0, stream: 0, index: 0 };
+
+/** Whitespace allowed between a stream's data and `endstream` (EOL plus a little slack). */
+export const MAX_GAP = 8;
+/** Trailers read by repair (the newest ones). */
+const MAX_TRAILERS = 64;
+/** Nested stream decodes (filter parameters resolved inside an object stream …). */
+const MAX_DECODE_DEPTH = 4;
+
+type DecodeOpts = { encrypted?: boolean; limit?: number; mode?: CapMode; where?: Where };
 
 export class PdfFile {
   readonly entries = new Map<number, Entry>();
@@ -69,9 +91,22 @@ export class PdfFile {
   private readonly resolving = new Set<number>();
   private readonly objStms = new Map<number, ObjStm | null>();
   private endstreams: number[] | null = null;
-  private scanResult: { objs: [number, number][]; trailers: number[] } | null = null;
+  private scanResult: ScanResult | null = null;
+  /** Sorted header offsets from the scan (bounds object parses after repair). */
+  private headers: number[] | null = null;
+  /** `endobj` positions found so far, and how far the forward search has gone. */
+  private readonly endobjs: number[] = [];
+  private endobjFrontier = 0;
   /** The table was rebuilt by `repair` (it runs at most once). */
   private rebuilt = false;
+  private sections = 0;
+  private readonly seenSections = new Set<number>();
+  private lengthDepth = 0;
+  private decodeDepth = 0;
+  private readonly failures = new WeakMap<PdfStream, Map<string, PdfError>>();
+  private readonly decrypted = new WeakMap<PdfStream, Uint8Array>();
+  private readonly warnedObjStm = new Set<number>();
+  private warnedCycle = false;
 
   constructor(
     readonly buf: Uint8Array,
@@ -92,7 +127,7 @@ export class PdfFile {
       while (
         e < b.length &&
         e < h + 12 &&
-        ((b[e] as number) === 46 || ((b[e] as number) >= 48 && (b[e] as number) <= 57))
+        (b[e] === 46 || ((b[e] as number) >= 48 && (b[e] as number) <= 57))
       )
         e++;
       this.version = latin1(b, h + 5, e) || null;
@@ -176,6 +211,36 @@ export class PdfFile {
     for (const [k, v] of d.map) if (!this.trailer.map.has(k)) this.trailer.map.set(k, v);
   }
 
+  /**
+   * Registers a section (a `/Prev` target or a hybrid file's `/XRefStm`): false when it was
+   * already read; throws (`scope: "sections"`) past the 64-section cap.
+   */
+  private enterSection(off: number): boolean {
+    if (this.seenSections.has(off)) {
+      if (!this.warnedCycle) {
+        this.warnedCycle = true;
+        this.diagnostics.push(
+          diag(
+            "warning",
+            "pdf/malformed",
+            "a cross-reference section points back at one already read; it is not read again",
+            { offset: off },
+          ),
+        );
+      }
+      return false;
+    }
+    this.seenSections.add(off);
+    if (++this.sections > this.limits.maxXrefSections) {
+      throw new PdfError(
+        "pdf/too-complex",
+        `more than ${this.limits.maxXrefSections} cross-reference sections; the rest are not followed`,
+        { scope: "sections" },
+      );
+    }
+    return true;
+  }
+
   /** Follows startxref and the /Prev chain. Returns false when it is unusable. */
   private readXrefChain(): boolean {
     const b = this.buf;
@@ -184,28 +249,23 @@ export class PdfFile {
     const lx = new Lexer(b, sx + 9);
     if (lx.next() !== T_NUM || !lx.isInt) return false;
     const queue: number[] = [lx.num];
-    const seen = new Set<number>();
-    let sections = 0;
-    while (queue.length > 0) {
-      const off = queue.shift() as number;
-      if (seen.has(off)) continue; // /Prev cycle
-      seen.add(off);
-      if (++sections > this.limits.maxXrefSections) {
+    try {
+      while (queue.length > 0) {
+        const off = queue.shift() as number;
+        if (!this.enterSection(off)) continue; // /Prev cycle
+        const trailer = this.readSection(off) ?? this.readSection(off + this.headerOffset);
+        if (!trailer) return false;
+        this.mergeTrailer(trailer);
+        const prev = intOf(trailer.get("Prev"));
+        if (prev !== null) queue.push(prev);
+      }
+    } catch (e) {
+      if (e instanceof PdfError && e.where.scope === "sections") {
         // ingestion §4.6: ≤ 64 sections; past that the file is rebuilt by the one-pass scan
-        this.diagnostics.push(
-          diag(
-            "warning",
-            "pdf/too-complex",
-            `more than ${this.limits.maxXrefSections} cross-reference sections; the rest are not followed`,
-          ),
-        );
+        this.diagnostics.push(diag("warning", "pdf/too-complex", e.message));
         return false;
       }
-      const trailer = this.readSection(off) ?? this.readSection(off + this.headerOffset);
-      if (!trailer) return false;
-      this.mergeTrailer(trailer);
-      const prev = intOf(trailer.get("Prev"));
-      if (prev !== null) queue.push(prev);
+      throw e;
     }
     return this.entries.size > 0;
   }
@@ -218,7 +278,6 @@ export class PdfFile {
     const t = lx.next();
     if (t === T_KW && lx.word === "xref") return this.readTable(lx);
     if (t !== T_NUM) return null;
-    lx.pos = off;
     const obj = this.parseIndirectAt(off, -1);
     if (!obj || !(obj.value instanceof PdfStream)) return null;
     const s = obj.value;
@@ -230,6 +289,7 @@ export class PdfFile {
   private readTable(lx: Lexer): PdfDict | null {
     // pending entries of this section; the XRefStm of a hybrid file must win over them
     const pending: [number, Entry][] = [];
+    const max = this.limits.maxObjects;
     for (;;) {
       const save = lx.pos;
       const t = lx.next();
@@ -242,10 +302,9 @@ export class PdfFile {
       if (lx.next() !== T_NUM || !lx.isInt) return null;
       const count = lx.num;
       if (count < 0 || start < 0) return null;
-      if (count > this.limits.maxObjects) {
-        throw new PdfError("pdf/too-complex", `an xref subsection declares ${count} entries`);
-      }
-      if (count * 18 > this.buf.length - lx.pos + 18) return null; // lying count: repair
+      // a count above the cap or the bytes left is damage (or a lie): repair instead
+      if (count > max || pending.length + count > max) return null;
+      if (count * 18 > this.buf.length - lx.pos + 18) return null;
       for (let i = 0; i < count; i++) {
         if (lx.next() !== T_NUM) return null;
         const offset = lx.num;
@@ -262,7 +321,7 @@ export class PdfFile {
     const trailer = parseValue(lx, this.limits);
     if (!(trailer instanceof PdfDict)) return null;
     const xs = intOf(trailer.get("XRefStm"));
-    if (xs !== null) this.readSection(xs);
+    if (xs !== null && this.enterSection(xs)) this.readSection(xs);
     for (const [num, e] of pending) {
       // object 0 is always free; an offset-0 "in use" entry is a known writer bug
       if (num === 0 || (e.type === 1 && e.offset <= 0)) this.setEntry(num, FREE);
@@ -313,14 +372,34 @@ export class PdfFile {
 
   // ---- repair ------------------------------------------------------------------------------
 
-  /** One pass over the file for `N G obj`, `endstream` and `trailer` (ingestion §4.1). */
-  private scan(): { objs: [number, number][]; trailers: number[] } {
+  /** Parses the dictionary of the object whose header is at `h`, bounded to `[h, end)`. */
+  private headerDict(h: number, end: number): PdfDict | null {
+    const lx = new Lexer(this.buf, h, end);
+    if (lx.next() !== T_NUM || lx.next() !== T_NUM || lx.next() !== T_KW || lx.word !== "obj")
+      return null;
+    try {
+      const v = parseValue(lx, this.limits);
+      return v instanceof PdfDict ? v : null;
+    } catch (e) {
+      if (e instanceof PdfError) return null;
+      throw e;
+    }
+  }
+
+  /**
+   * One pass over the file (ingestion §4.1) for `N G obj`, `endstream` and `trailer`. Stream
+   * data is skipped (by a valid /Length, else to the next `endstream`), so objects of an
+   * embedded file are never adopted.
+   */
+  private scan(): ScanResult {
     if (this.scanResult) return this.scanResult;
     const b = this.buf;
-    const objs: [number, number][] = [];
+    const objs: [number, number, number][] = [];
     const trailers: number[] = [];
     const ends: number[] = [];
     const n = b.length;
+    const bound = (c: number | undefined): boolean => c === undefined || isWs(c) || isDelimByte(c);
+    let lastDictHeader = -1;
     for (let i = 0; i + 3 <= n; i++) {
       const c = b[i] as number;
       if (c === 111 /* o */) {
@@ -338,12 +417,14 @@ export class PdfFile {
         let p = i - 1;
         if (p < 0 || !isWs(b[p] as number)) continue;
         while (p >= 0 && isWs(b[p] as number)) p--;
+        const genEnd = p + 1;
         let digits = 0;
         while (p >= 0 && (b[p] as number) >= 48 && (b[p] as number) <= 57 && digits < 6) {
           p--;
           digits++;
         }
         if (digits === 0 || p < 0 || !isWs(b[p] as number)) continue;
+        const gen = Number(latin1(b, p + 1, genEnd));
         while (p >= 0 && isWs(b[p] as number)) p--;
         const numEnd = p + 1;
         digits = 0;
@@ -358,7 +439,7 @@ export class PdfFile {
         if (objs.length >= this.limits.maxObjects) {
           throw new PdfError("pdf/too-complex", `more than ${this.limits.maxObjects} objects`);
         }
-        objs.push([num, p + 1]);
+        objs.push([num, gen, p + 1]);
       } else if (c === 101 /* e */) {
         if (
           b[i + 1] === 110 &&
@@ -370,12 +451,54 @@ export class PdfFile {
           i += 8;
         }
       } else if (c === 116 /* t */) {
-        if (b[i + 1] === 114 && indexOf(b, "trailer", i, i + 7) === i) trailers.push(i + 7);
+        if (
+          b[i + 1] === 114 &&
+          indexOf(b, "trailer", i, i + 7) === i &&
+          bound(b[i - 1]) &&
+          bound(b[i + 7])
+        ) {
+          trailers.push(i + 7);
+          i += 6;
+        }
+      } else if (c === 115 /* s */) {
+        if (b[i + 1] !== 116 || indexOf(b, "stream", i, i + 6) !== i) continue;
+        const after = b[i + 6];
+        if (after !== 10 && after !== 13) continue;
+        const before = b[i - 1];
+        if (before === undefined || (!isWs(before) && before !== 62)) continue;
+        let start = i + 6;
+        if (b[start] === 13 && b[start + 1] === 10) start += 2;
+        else start += 1;
+        // the stream's own /Length, when it is direct and lands on `endstream`
+        const last = objs[objs.length - 1];
+        let skipTo = -1;
+        if (last && last[2] > lastDictHeader) {
+          lastDictHeader = last[2];
+          const len = intOf(this.headerDict(last[2], i)?.get("Length"));
+          if (len !== null && len >= 0 && start + len <= n) {
+            const e = this.endstreamNear(start + len);
+            if (e >= 0) skipTo = e;
+          }
+        }
+        if (skipTo < 0) {
+          const e = indexOf(b, "endstream", start);
+          skipTo = e < 0 ? n : e;
+        }
+        if (skipTo < n) ends.push(skipTo);
+        i = Math.max(i, skipTo + 8);
       }
     }
     this.endstreams = ends;
     this.scanResult = { objs, trailers };
     return this.scanResult;
+  }
+
+  /** `endstream` within `MAX_GAP` whitespace bytes of `p`, or -1. */
+  private endstreamNear(p: number): number {
+    const b = this.buf;
+    let q = p;
+    while (q < b.length && q - p < MAX_GAP && isWs(b[q] as number)) q++;
+    return indexOf(b, "endstream", q, q + 9) === q ? q : -1;
   }
 
   private repair(reason: string): void {
@@ -387,15 +510,17 @@ export class PdfFile {
     this.cache.clear();
     this.objStms.clear();
     this.trailer = new PdfDict();
+    this.headers = objs.map((o) => o[2]).sort((a, b) => a - b);
     // the last definition of an object wins
-    const last = new Map<number, number>();
-    for (const [num, off] of objs) last.set(num, off);
-    for (const [num, off] of [...last.entries()].sort((a, b) => a[0] - b[0])) {
-      this.entries.set(num, { type: 1, offset: off, gen: 0, stream: 0, index: 0 });
+    const last = new Map<number, [number, number]>();
+    for (const [num, gen, off] of objs) last.set(num, [gen, off]);
+    for (const [num, [gen, off]] of [...last.entries()].sort((a, b) => a[0] - b[0])) {
+      this.entries.set(num, { type: 1, offset: off, gen, stream: 0, index: 0 });
     }
-    // trailers, newest (last in the file) first
-    for (let i = trailers.length - 1; i >= 0; i--) {
-      const lx = new Lexer(this.buf, trailers[i] as number);
+    // the newest 64 trailers, each lexed only up to the next one (no byte is lexed twice)
+    for (let i = trailers.length - 1; i >= Math.max(0, trailers.length - MAX_TRAILERS); i--) {
+      const end = i + 1 < trailers.length ? (trailers[i + 1] as number) - 7 : this.buf.length;
+      const lx = new Lexer(this.buf, trailers[i] as number, end);
       try {
         const t = parseValue(lx, this.limits);
         if (t instanceof PdfDict) this.mergeTrailer(t);
@@ -429,10 +554,11 @@ export class PdfFile {
           if (!(e instanceof PdfError) || e.code === "pdf/too-large") throw e;
         }
         if (!os) continue;
-        os.nums.forEach((n, index) => {
-          if (!this.entries.has(n))
-            this.setEntry(n, { type: 2, offset: 0, gen: 0, stream: num, index });
-        });
+        for (let index = 0; index < os.nums.length; index++) {
+          const m = os.nums[index] as number;
+          if (!this.entries.has(m))
+            this.setEntry(m, { type: 2, offset: 0, gen: 0, stream: num, index });
+        }
       }
     }
     for (let i = xrefDicts.length - 1; i >= 0; i--) this.mergeTrailer(xrefDicts[i] as PdfDict);
@@ -443,18 +569,63 @@ export class PdfFile {
 
   // ---- objects -----------------------------------------------------------------------------
 
+  /** First `endobj` at or after `pos` (file length if none). Each byte is searched once. */
+  private nextEndobj(pos: number): number {
+    const a = this.endobjs;
+    let lo = 0;
+    let hi = a.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((a[mid] as number) < pos) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo < a.length) return a[lo] as number;
+    for (;;) {
+      if (this.endobjFrontier >= this.buf.length) return this.buf.length;
+      const at = indexOf(this.buf, "endobj", this.endobjFrontier);
+      if (at < 0) {
+        this.endobjFrontier = this.buf.length;
+        return this.buf.length;
+      }
+      a.push(at);
+      this.endobjFrontier = at + 6;
+      if (at >= pos) return at;
+    }
+  }
+
+  /** After repair: the next object header after `off` (file length if none). */
+  private nextHeader(off: number): number {
+    const h = this.headers;
+    if (!h) return this.buf.length;
+    let lo = 0;
+    let hi = h.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((h[mid] as number) <= off) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo < h.length ? (h[lo] as number) : this.buf.length;
+  }
+
   /** Parses `N G obj … endobj` at `off`; `expect` is the object number (-1: any). */
   private parseIndirectAt(off: number, expect: number): { num: number; value: PdfValue } | null {
     const b = this.buf;
     if (off < 0 || off >= b.length) return null;
-    const lx = new Lexer(b, off);
+    if (this.budget.lexed >= this.limits.maxLexedBytes) this.budget.chargeLex(1);
+    const end = Math.min(this.nextEndobj(off), this.nextHeader(off));
+    const lx = new Lexer(b, off, end);
     if (lx.next() !== T_NUM || !lx.isInt) return null;
     const num = lx.num;
     if (lx.next() !== T_NUM || !lx.isInt) return null;
     const gen = lx.num;
     if (lx.next() !== T_KW || lx.word !== "obj") return null;
     if (expect >= 0 && num !== expect) return null;
-    const value = parseValue(lx, this.limits);
+    let value: PdfValue | undefined;
+    try {
+      value = parseValue(lx, this.limits);
+    } finally {
+      this.budget.chargeLex(lx.pos - off); // lexed bytes, strings included
+    }
     if (value === undefined) return { num, value: null };
     const save = lx.pos;
     if (value instanceof PdfDict && lx.next() === T_KW && (lx.word as string) === "stream") {
@@ -472,9 +643,7 @@ export class PdfFile {
     const lenV = dict.get("Length");
     let len = intOf(lenV instanceof PdfRef ? this.resolveLength(lenV) : lenV);
     if (len !== null && len >= 0 && start + len <= b.length) {
-      let p = start + len;
-      while (p < b.length && isWs(b[p] as number)) p++;
-      if (indexOf(b, "endstream", p, p + 9) !== p) len = null;
+      if (this.endstreamNear(start + len) < 0) len = null;
     } else len = null;
     if (len === null) {
       // wrong /Length: the stream ends at the next `endstream` (repair scan, ingestion §4.1)
@@ -495,8 +664,6 @@ export class PdfFile {
     }
     return new PdfStream(dict, b.subarray(start, start + len), num, gen);
   }
-
-  private lengthDepth = 0;
 
   /** An indirect /Length; nested look-ups (a length object that is itself a stream…) stop at 4. */
   private resolveLength(ref: PdfRef): PdfValue {
@@ -523,14 +690,33 @@ export class PdfFile {
     const lx = new Lexer(data, 0, Math.min(first, data.length));
     const nums: number[] = [];
     const offsets: number[] = [];
+    const index = new Map<number, number>();
     for (let i = 0; i < n; i++) {
-      if (lx.next() !== T_NUM) break;
+      if (lx.next() !== T_NUM || !lx.isInt) break;
       const on = lx.num;
-      if (lx.next() !== T_NUM) break;
+      if (lx.next() !== T_NUM || !lx.isInt) break;
+      const off = lx.num;
+      const prev = offsets[offsets.length - 1];
+      if (off < 0 || (prev !== undefined && off <= prev) || first + off > data.length) {
+        // duplicate or decreasing offsets would let every member re-parse the same bytes
+        if (!this.warnedObjStm.has(num)) {
+          this.warnedObjStm.add(num);
+          this.diagnostics.push(
+            diag(
+              "warning",
+              "pdf/malformed",
+              `object stream ${num} has overlapping member offsets; it is ignored`,
+              { object: num },
+            ),
+          );
+        }
+        return null;
+      }
+      if (!index.has(on)) index.set(on, nums.length);
       nums.push(on);
-      offsets.push(lx.num);
+      offsets.push(off);
     }
-    const os: ObjStm = { nums, offsets, data, first };
+    const os: ObjStm = { index, nums, offsets, data, first };
     this.objStms.set(num, os);
     return os;
   }
@@ -551,19 +737,25 @@ export class PdfFile {
     if (e.type === 2) {
       // an object stream is itself a plain object: this bounds the nesting to one level
       if (this.entries.get(e.stream)?.type !== 1) return null;
-      {
-        const sv = this.loadObject(e.stream);
-        if (!(sv instanceof PdfStream)) return null;
-        const os = this.objStm(e.stream, sv);
-        if (!os) return null;
-        let i = os.nums[e.index] === num ? e.index : os.nums.indexOf(num);
-        if (i < 0) i = e.index;
-        const rel = os.offsets[i];
-        if (rel === undefined) return null;
-        const lx = new Lexer(os.data, os.first + rel);
-        const v = parseValue(lx, this.limits);
-        return v === undefined || v instanceof PdfStream ? null : v;
+      const sv = this.loadObject(e.stream);
+      if (!(sv instanceof PdfStream)) return null;
+      const os = this.objStm(e.stream, sv);
+      if (!os) return null;
+      const i = os.index.get(num);
+      if (i === undefined) return null;
+      // each member is parsed only within its own slice
+      const start = os.first + (os.offsets[i] as number);
+      const next = os.offsets[i + 1];
+      const end = next === undefined ? os.data.length : os.first + next;
+      if (this.budget.lexed >= this.limits.maxLexedBytes) this.budget.chargeLex(1);
+      const lx = new Lexer(os.data, start, end);
+      let v: PdfValue | undefined;
+      try {
+        v = parseValue(lx, this.limits);
+      } finally {
+        this.budget.chargeLex(lx.pos - start);
       }
+      return v === undefined || v instanceof PdfStream ? null : v;
     }
     return null;
   }
@@ -618,39 +810,86 @@ export class PdfFile {
   // ---- streams -----------------------------------------------------------------------------
 
   /** Decrypts and decodes a stream. Images pass `limit` (declared size) and "truncate". */
-  streamBytes(
-    s: PdfStream,
-    o: { encrypted?: boolean; limit?: number; mode?: CapMode; where?: Where } = {},
-  ): Uint8Array {
+  streamBytes(s: PdfStream, o: DecodeOpts = {}): Uint8Array {
     return this.decodeStream(s, o).data;
   }
 
   decodeStream(
     s: PdfStream,
-    o: { encrypted?: boolean; limit?: number; mode?: CapMode; where?: Where } = {},
+    o: DecodeOpts = {},
   ): { data: Uint8Array; jpeg: boolean; damaged: boolean } {
-    let raw = s.raw;
-    if (this.decryptor && o.encrypted !== false && s.num >= 0) {
-      raw = this.decryptor.decrypt(raw, s.num, s.gen, "stream");
+    const limit = o.limit ?? this.limits.maxStreamBytes;
+    const mode = o.mode ?? "error";
+    const key = `${mode}:${limit}:${o.encrypted !== false}`;
+    const failed = this.failures.get(s)?.get(key);
+    if (failed) throw failed;
+    if (this.decodeDepth >= MAX_DECODE_DEPTH) {
+      throw new PdfError("pdf/too-complex", "stream decodes nest too deeply", o.where ?? {});
     }
-    const filters = filterList(s.dict.get("Filter"), s.dict.get("DecodeParms"), (v) =>
-      this.resolve(v),
-    );
-    return decodeFilters(raw, filters, {
-      limit: o.limit ?? this.limits.maxStreamBytes,
-      mode: o.mode ?? "error",
-      limits: this.limits,
-      budget: this.budget,
-      where: o.where ?? {},
-    });
+    this.decodeDepth++;
+    try {
+      let filters = filterList(
+        s.dict.get("Filter"),
+        s.dict.get("DecodeParms"),
+        (v) => this.resolve(v),
+        this.limits.maxFilters + 1,
+      );
+      // an Identity /Crypt filter (the default name) means: this stream is not encrypted
+      let encrypted = o.encrypted !== false && s.num >= 0;
+      if (filters[0]?.name === "Crypt") {
+        const p = filters[0].parms;
+        const name = p instanceof PdfDict ? nameOf(this.resolve(p.get("Name"))) : null;
+        if (name === null || name === "Identity") {
+          encrypted = false;
+          filters = filters.slice(1);
+        }
+      }
+      let raw = s.raw;
+      if (this.decryptor && encrypted && this.decryptor.method("stream") !== "none") {
+        const cached = this.decrypted.get(s);
+        if (cached) raw = cached;
+        else if (
+          this.decryptor.method("stream") === "rc4" &&
+          filters.length === 0 &&
+          limit < raw.length
+        ) {
+          // a stream cipher: only the prefix the caller can use is decrypted
+          this.budget.charge(limit, o.where ?? {});
+          raw = this.decryptor.decrypt(raw.subarray(0, limit), s.num, s.gen, "stream");
+        } else {
+          this.budget.charge(raw.length, o.where ?? {});
+          raw = this.decryptor.decrypt(raw, s.num, s.gen, "stream");
+          this.decrypted.set(s, raw);
+        }
+      }
+      return decodeFilters(raw, filters, {
+        limit,
+        mode,
+        limits: this.limits,
+        budget: this.budget,
+        where: o.where ?? {},
+      });
+    } catch (e) {
+      if (e instanceof PdfError && e.where.scope !== "total") {
+        let m = this.failures.get(s);
+        if (!m) this.failures.set(s, (m = new Map()));
+        m.set(key, e);
+      }
+      throw e;
+    } finally {
+      this.decodeDepth--;
+    }
   }
 
   /** Filter names of a stream (resolved), for listings. */
   filterNames(s: PdfStream | PdfDict): string[] {
     const d = s instanceof PdfStream ? s.dict : s;
-    return filterList(d.get("Filter"), d.get("DecodeParms"), (v) => this.resolve(v)).map(
-      (f) => f.name,
-    );
+    return filterList(
+      d.get("Filter"),
+      d.get("DecodeParms"),
+      (v) => this.resolve(v),
+      this.limits.maxFilters + 1,
+    ).map((f) => f.name);
   }
 
   /** `/Info` `/Producer` as text (the only `/Info` entry read). */
@@ -663,6 +902,19 @@ export class PdfFile {
 
 const isDelimByte = (c: number): boolean =>
   c === 40 || c === 41 || c === 60 || c === 62 || c === 91 || c === 93 || c === 47 || c === 37;
+
+/** True for C0/C1 controls and bidirectional formatting characters (never shown raw). */
+export function isControl(c: number): boolean {
+  return (
+    c < 32 ||
+    (c >= 0x7f && c < 0xa0) ||
+    c === 0x061c ||
+    c === 0x200e ||
+    c === 0x200f ||
+    (c >= 0x202a && c <= 0x202e) ||
+    (c >= 0x2066 && c <= 0x2069)
+  );
+}
 
 /** Decodes a PDF text string (UTF-16BE with BOM, UTF-8 with BOM, else PDFDocEncoding ≈ Latin-1). */
 export function textString(bytes: Uint8Array, max = 1024): string {
@@ -677,8 +929,7 @@ export function textString(bytes: Uint8Array, max = 1024): string {
   } else s = latin1(b);
   let out = "";
   for (const ch of s) {
-    const c = ch.codePointAt(0) as number;
-    if (c < 32 || (c >= 0x7f && c < 0xa0)) continue;
+    if (isControl(ch.codePointAt(0) as number)) continue;
     out += ch;
     if (out.length >= max) break;
   }

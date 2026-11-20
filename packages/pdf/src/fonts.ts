@@ -277,14 +277,6 @@ export function parseCMap(data: Uint8Array): CMap {
 
 // ---- fonts ---------------------------------------------------------------------------------
 
-export interface Glyph {
-  readonly text: string;
-  /** Advance in text space units per unit font size. */
-  readonly width: number;
-  /** A single-byte code 32 (word spacing applies). */
-  readonly space: boolean;
-}
-
 export class Font {
   private constructor(
     private readonly simple: (string | null)[] | null,
@@ -293,8 +285,11 @@ export class Font {
     private readonly widthOf: (code: number) => number,
   ) {}
 
-  decode(bytes: Uint8Array): Glyph[] {
-    const out: Glyph[] = [];
+  /**
+   * Calls `fn(text, width, space)` per glyph code, without building arrays; `fn` returning
+   * false stops the walk.
+   */
+  each(bytes: Uint8Array, fn: (text: string, width: number, space: boolean) => boolean): void {
     let i = 0;
     while (i < bytes.length) {
       let len = 1;
@@ -302,7 +297,8 @@ export class Font {
         len = 2;
         for (const [l, lo, hi] of this.codespace) {
           if (i + l > bytes.length) continue;
-          const c = codeOf(bytes.subarray(i, i + l));
+          let c = 0;
+          for (let k = 0; k < l; k++) c = c * 256 + (bytes[i + k] as number);
           if (c >= lo && c <= hi) {
             len = l;
             break;
@@ -310,17 +306,13 @@ export class Font {
         }
         len = Math.min(len, bytes.length - i);
       }
-      const code = codeOf(bytes.subarray(i, i + len));
+      let code = 0;
+      for (let k = 0; k < len; k++) code = code * 256 + (bytes[i + k] as number);
       i += len;
       let text = this.toUnicode?.map.get(code) ?? null;
       if (text === null && this.simple) text = this.simple[code] ?? null;
-      out.push({
-        text: text ?? REPLACEMENT,
-        width: this.widthOf(code),
-        space: len === 1 && code === 32,
-      });
+      if (!fn(text ?? REPLACEMENT, this.widthOf(code), len === 1 && code === 32)) return;
     }
-    return out;
   }
 
   static load(file: PdfFile, fd: PdfDict): Font {

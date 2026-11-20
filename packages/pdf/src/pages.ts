@@ -5,7 +5,7 @@
  */
 import type { PdfFile } from "./file.js";
 import { PdfError, diag, type PdfBox, type PdfDiagnostic } from "./limits.js";
-import { PdfDict, PdfRef, intOf, nameOf, numOf, type PdfValue } from "./objects.js";
+import { PdfDict, intOf, nameOf, numOf, type PdfValue } from "./objects.js";
 
 /** Affine matrix [a b c d e f] (PDF row-vector convention). */
 export type Matrix = readonly [number, number, number, number, number, number];
@@ -105,7 +105,8 @@ interface Inherited {
 export function walkPages(file: PdfFile, diags: PdfDiagnostic[]): PageRec[] {
   const pages: PageRec[] = [];
   const limits = file.limits;
-  const seen = new Set<number>();
+  // keyed on the resolved node, so a direct and an indirect path to one node count once
+  const seen = new Set<PdfDict>();
   const root = file.root;
   const stack: { v: PdfValue | undefined; inh: Inherited }[] = [
     {
@@ -116,15 +117,12 @@ export function walkPages(file: PdfFile, diags: PdfDiagnostic[]): PageRec[] {
   let visits = 0;
   while (stack.length > 0) {
     const { v, inh } = stack.pop() as { v: PdfValue | undefined; inh: Inherited };
-    if (v instanceof PdfRef) {
-      if (seen.has(v.num)) continue; // cycle or shared node
-      seen.add(v.num);
-    }
     if (++visits > limits.maxObjects) {
       throw new PdfError("pdf/too-complex", "the page tree has too many nodes");
     }
     const node = file.resolveDict(v);
-    if (!node) continue;
+    if (!node || seen.has(node)) continue; // cycle or shared node
+    seen.add(node);
     const here: Inherited = {
       resources: node.get("Resources") ?? inh.resources,
       mediaBox: node.get("MediaBox") ?? inh.mediaBox,

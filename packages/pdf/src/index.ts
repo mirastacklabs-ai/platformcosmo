@@ -19,7 +19,7 @@ import {
   type PdfLimits,
   type Where,
 } from "./limits.js";
-import type { PdfStream } from "./objects.js";
+import type { PdfDict, PdfStream } from "./objects.js";
 import { bboxOf, mul, r3, walkPages, type Matrix, type PageRec } from "./pages.js";
 
 export { DEFAULT_LIMITS } from "./limits.js";
@@ -127,8 +127,14 @@ const IMAGE_SPACE: Matrix = [1, 0, 0, -1, 0, 1];
 
 export class PdfDocument {
   private cached: { page: number; scan: ScanResult } | null = null;
-  private readonly metas = new WeakMap<PdfStream, ImageMeta>();
-  private readonly hashes = new WeakMap<PdfStream, string | null>();
+  /** Per image stream and resources (a named /ColorSpace depends on the resources). */
+  private readonly images = new WeakMap<
+    PdfStream,
+    Map<PdfDict | null, { meta: ImageMeta; hash?: string | null }>
+  >();
+  /** Bytes decoded for hashes by the current `listImages` call, and whether it warned. */
+  private hashSpent = 0;
+  private hashWarned = false;
 
   /** @internal use `openPdf`. */
   constructor(
@@ -173,8 +179,10 @@ export class PdfDocument {
     return this.guard({ page }, { page, images: [], diagnostics: [] }, (diags) => {
       const p = this.page(page);
       const scan = this.scan(p);
-      diags.push(...scan.diagnostics);
+      for (const d of scan.diagnostics) diags.push(d);
       const images: PdfImage[] = [];
+      this.hashSpent = 0;
+      this.hashWarned = false;
       for (const pl of scan.placements) {
         const img = this.describe(p, pl, opts.hash !== false, diags);
         images.push(img);
@@ -210,7 +218,7 @@ export class PdfDocument {
           const out = this.extract(pl, where, diags, opts.mask === true);
           if (!out) {
             diags.push(
-              diag("error", "pdf/bad-page", `image ${index} on page ${page} has no mask`, where),
+              diag("info", "pdf/malformed", `image ${index} on page ${page} has no mask`, where),
             );
             return { ok: false, image: null, diagnostics: diags };
           }
@@ -228,7 +236,7 @@ export class PdfDocument {
     return this.guard({ page }, { page, runs: [], diagnostics: [] }, (diags) => {
       const p = this.page(page);
       const scan = scanPage(this.file, p, { images: false, text: true });
-      diags.push(...scan.diagnostics);
+      for (const d of scan.diagnostics) diags.push(d);
       return { page, runs: scan.runs, diagnostics: diags };
     });
   }
@@ -276,7 +284,7 @@ export class PdfDocument {
     const scan = this.scan(p);
     const pl = Number.isSafeInteger(index) ? scan.placements[index] : undefined;
     if (!pl) {
-      diags.push(...scan.diagnostics); // why the page has fewer images, if it does
+      for (const d of scan.diagnostics) diags.push(d); // why the page has fewer images
       throw new PdfError(
         "pdf/bad-page",
         `page ${p.page} has no image ${index} (it has ${scan.placements.length})`,
@@ -314,26 +322,57 @@ export class PdfDocument {
     return { format: "png", bytes, width: d.width, height: d.height, sha256: sha256(bytes) };
   }
 
+  private pendingDiags: PdfDiagnostic[] | null = null;
+
+  private hashBudgetWarning(message: string, where: Where, scope: "hash" | "total"): void {
+    if (this.hashWarned || !this.pendingDiags) return;
+    this.hashWarned = true;
+    this.pendingDiags.push(
+      diag("warning", "pdf/too-large", message, { ...where, image: null, bbox: null, scope }),
+    );
+  }
+
   private describe(p: PageRec, pl: Placement, hash: boolean, diags: PdfDiagnostic[]): PdfImage {
+    this.pendingDiags = diags;
     const { bbox, matrix } = this.geometry(p, pl);
     const where: Where = { page: p.page, image: pl.index, bbox };
-    let meta = this.metas.get(pl.stream);
-    if (!meta) {
-      meta = imageMeta(this.file, pl.stream, pl.resources, this.file.limits);
-      this.metas.set(pl.stream, meta);
+    let byRes = this.images.get(pl.stream);
+    if (!byRes) this.images.set(pl.stream, (byRes = new Map()));
+    let entry = byRes.get(pl.resources);
+    if (!entry) {
+      entry = { meta: imageMeta(this.file, pl.stream, pl.resources, this.file.limits) };
+      byRes.set(pl.resources, entry);
     }
+    const meta = entry.meta;
     let digest: string | null = null;
     if (hash && meta.format !== "unsupported" && meta.withinCaps) {
-      if (this.hashes.has(pl.stream)) digest = this.hashes.get(pl.stream) as string | null;
-      else {
+      if (entry.hash !== undefined) digest = entry.hash;
+      else if (this.hashSpent >= this.file.limits.maxHashBytes) {
+        this.hashBudgetWarning(
+          `hashing stopped after ${this.file.limits.maxHashBytes} decoded bytes on this page; the rest have sha256 null`,
+          where,
+          "hash",
+        );
+      } else {
         const local: PdfDiagnostic[] = [];
+        const before = this.file.budget.decoded;
         try {
           digest = this.extract(pl, where, local, false)?.sha256 ?? null;
+          entry.hash = digest;
         } catch (e) {
-          if (e instanceof PdfError && e.where.scope === "total") throw e; // command budget
-          local.push(errorToDiag(e, where));
+          if (e instanceof PdfError && e.where.scope === "total") {
+            // the command budget is spent: keep listing, without hashes
+            this.hashBudgetWarning(
+              `${e.message}; the remaining images have sha256 null`,
+              where,
+              "total",
+            );
+          } else {
+            entry.hash = null;
+            local.push(errorToDiag(e, where));
+          }
         }
-        this.hashes.set(pl.stream, digest);
+        this.hashSpent += this.file.budget.decoded - before;
         // listing still succeeds: image-level problems are warnings here
         for (const x of local)
           diags.push(x.severity === "error" ? { ...x, severity: "warning" } : x);
@@ -390,8 +429,8 @@ export class PdfDocument {
 }
 
 /** Opens a PDF. Never throws: failures (not a PDF, refused encryption, caps) are diagnostics. */
-export function openPdf(bytes: Uint8Array, options: PdfOptions = {}): PdfOpenResult {
-  const limits = resolveLimits(options.limits);
+export function openPdf(bytes: Uint8Array, options?: PdfOptions | null): PdfOpenResult {
+  const limits = resolveLimits((options ?? {}).limits);
   if (!(bytes instanceof Uint8Array)) {
     return {
       ok: false,

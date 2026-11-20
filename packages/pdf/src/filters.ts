@@ -318,17 +318,18 @@ export function unpredict(data: Uint8Array, p: PredictorParams, limits: PdfLimit
     return { data: out, damaged: out.length % rowBytes !== 0 };
   }
   if (p.predictor < 10) return { data, damaged: true };
-  // PNG predictors: each row starts with a filter-type byte
+  // PNG predictors: each row starts with a filter-type byte; the output is sized from the
+  // data (every byte but the filter bytes), never from the declared row width
   const stride = rowBytes + 1;
   const rows = Math.ceil(data.length / stride);
-  const out = new Uint8Array(rows * rowBytes);
+  const out = new Uint8Array(Math.max(0, data.length - rows));
   let damaged = data.length % stride !== 0;
   for (let r = 0; r < rows; r++) {
     const src = r * stride;
     const ft = data[src] as number;
     const dst = r * rowBytes;
     const up = dst - rowBytes;
-    const n = Math.min(rowBytes, data.length - src - 1);
+    const n = Math.min(rowBytes, data.length - src - 1, out.length - dst);
     for (let i = 0; i < n; i++) {
       const x = data[src + 1 + i] as number;
       const a = i >= bpp ? (out[dst + i - bpp] as number) : 0;
@@ -423,10 +424,13 @@ export function filterList(
   filter: PdfValue | undefined,
   parms: PdfValue | undefined,
   resolve: (v: PdfValue | undefined) => PdfValue | undefined,
+  max = 5,
 ): FilterSpec[] {
   const names: (string | null)[] = [];
   const f = resolve(filter);
-  if (Array.isArray(f)) for (const x of f) names.push(nameOf(resolve(x)));
+  // at most `max` entries are built: one past the chain cap is enough to refuse it
+  if (Array.isArray(f))
+    for (let i = 0; i < f.length && i < max; i++) names.push(nameOf(resolve(f[i])));
   else if (f !== undefined && f !== null) names.push(nameOf(f));
   const p = resolve(parms);
   return names.map((n, i) => ({
@@ -471,8 +475,23 @@ export function decodeFilters(
       o.where,
     );
   }
+  // refuse before any work once the per-command total is spent
+  o.budget.ensure(0, o.where);
   let data = input;
   let damaged = false;
+  if (filters.length === 0) {
+    // unfiltered data is still bytes this command handles
+    const out = data.length > o.limit ? data.subarray(0, o.limit) : data;
+    if (out.length > o.limits.maxStreamBytes) {
+      throw new PdfError(
+        "pdf/too-large",
+        `a stream exceeds ${o.limits.maxStreamBytes} bytes`,
+        o.where,
+      );
+    }
+    o.budget.charge(out.length, o.where);
+    return { data: out, jpeg: false, damaged };
+  }
   for (let i = 0; i < filters.length; i++) {
     const f = filters[i] as FilterSpec;
     const last = i === filters.length - 1;
@@ -487,6 +506,7 @@ export function decodeFilters(
       if (data.length > o.limits.maxStreamBytes) {
         throw new PdfError("pdf/too-large", "a JPEG stream exceeds the stream cap", o.where);
       }
+      o.budget.charge(data.length, o.where);
       return { data, jpeg: true, damaged };
     }
     if (UNSUPPORTED.has(f.name)) {
@@ -542,6 +562,7 @@ export function decodeFilters(
     o.budget.charge(r.data.length, o.where);
     if (usesPred && pred.predictor > 1) {
       const u = unpredict(r.data, pred, o.limits);
+      if (u.data !== r.data) o.budget.charge(u.data.length, o.where);
       r = { data: u.data, damaged: r.damaged || u.damaged };
     }
     damaged ||= r.damaged;

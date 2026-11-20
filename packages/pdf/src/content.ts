@@ -2,10 +2,11 @@
  * Content-stream scan (ingestion §4.3): `q`/`Q` (≤ 256), `cm`, `Do` (image and form XObjects),
  * inline images (`BI`/`ID`/`EI`) and, for `pdf text`, `BT`/`ET` and the text operators. Forms
  * apply `/Matrix` and are entered through an explicit frame stack (≤ 16 deep, each form at
- * most once per stack). At most `maxOpsPerPage` operators per page, forms included.
+ * most once per stack). Every token counts toward the per-page cap (5 M, forms included) and
+ * the per-document cap (50 M); page content counts toward the per-document content budget.
  */
-import type { PdfFile } from "./file.js";
-import { Font, type Glyph } from "./fonts.js";
+import { MAX_GAP, isControl, type PdfFile } from "./file.js";
+import { Font } from "./fonts.js";
 import { PdfError, diag, type PdfBox, type PdfDiagnostic } from "./limits.js";
 import {
   Lexer,
@@ -44,6 +45,7 @@ export interface Placement {
 }
 
 export interface TextRun {
+  /** Text as data; C0/C1 controls and bidi formatting characters are replaced by U+FFFD. */
   readonly text: string;
   readonly bbox: PdfBox;
   /** Effective font size in pt on the page. */
@@ -73,8 +75,8 @@ interface GState {
 interface Frame {
   readonly lx: Lexer;
   readonly resources: PdfDict | null;
-  /** Object number of the form (-1 for the page). */
-  readonly form: number;
+  /** The form XObject (null for the page). */
+  readonly form: PdfStream | null;
   /** Graphics-state stack depth when the frame was entered. */
   readonly qBase: number;
 }
@@ -95,9 +97,35 @@ const INLINE_KEYS: Record<string, string> = {
 /** Text extent below/above the baseline, in units of the font size. */
 const DESCENT = 0.2;
 const ASCENT = 0.8;
-/** A TJ adjustment more negative than this (thousandths of an em) reads as a space. */
-const TJ_SPACE = -250;
-const MAX_OPERANDS = 64;
+/** A TJ adjustment at or below this (thousandths of an em) reads as a space. */
+const TJ_SPACE = -200;
+const REPLACEMENT = "�";
+
+/** The last `size` operands, without shifting (a ring buffer). */
+class Operands {
+  private readonly ring: PdfValue[];
+  private n = 0;
+  private head = 0;
+  constructor(private readonly size = 64) {
+    this.ring = new Array<PdfValue>(size).fill(null);
+  }
+  push(v: PdfValue): void {
+    this.ring[this.head] = v;
+    this.head = (this.head + 1) % this.size;
+    if (this.n < this.size) this.n++;
+  }
+  get length(): number {
+    return this.n;
+  }
+  /** The k-th operand from the end (1 = last); undefined when absent. */
+  last(k = 1): PdfValue | undefined {
+    if (k > this.n) return undefined;
+    return this.ring[(this.head - k + this.size) % this.size];
+  }
+  clear(): void {
+    this.n = 0;
+  }
+}
 
 /** Concatenated, decoded page content (array of streams joined by newlines). */
 function pageContent(file: PdfFile, page: PageRec): Uint8Array {
@@ -111,26 +139,32 @@ function pageContent(file: PdfFile, page: PageRec): Uint8Array {
     file.lastContent = { page: page.page, data };
     return data;
   } catch (e) {
-    if (e instanceof PdfError && e.where.scope !== "total")
+    if (e instanceof PdfError && e.where.scope !== "total" && e.where.scope !== "document") {
       file.lastContent = { page: page.page, data: e };
+    }
     throw e;
   }
 }
 
 function decodeContent(file: PdfFile, page: PageRec): Uint8Array {
+  const where = { page: page.page };
+  file.budget.ensure(0, where);
+  file.budget.ensureContent(where);
   const c = file.resolve(page.dict.get("Contents"));
   const parts: Uint8Array[] = [];
   const list = Array.isArray(c) ? c : [c];
+  let total = 0;
   for (const x of list) {
     const s = file.resolve(x);
-    if (s instanceof PdfStream) parts.push(file.streamBytes(s, { where: { page: page.page } }));
+    if (!(s instanceof PdfStream)) continue;
+    const p = file.streamBytes(s, { where });
+    total += p.length + 1;
+    if (total > file.limits.maxStreamBytes) {
+      throw new PdfError("pdf/too-large", "the page content exceeds the stream cap", where);
+    }
+    parts.push(p);
   }
-  const total = parts.reduce((n, p) => n + p.length + 1, 0);
-  if (total > file.limits.maxStreamBytes) {
-    throw new PdfError("pdf/too-large", "the page content exceeds the stream cap", {
-      page: page.page,
-    });
-  }
+  file.budget.charge(total, where); // the concatenated copy
   const out = new Uint8Array(total);
   let at = 0;
   for (const p of parts) {
@@ -148,19 +182,19 @@ function inlineEnd(
   end: number,
   known: number | null,
 ): [number, number] {
-  const eiAt = (p: number): number => {
-    let q = p;
-    while (q < end && isWs(b[q] as number)) q++;
-    return b[q] === 69 &&
+  // EI after the known length: at most MAX_GAP whitespace bytes in between
+  if (known !== null && known >= 0 && start + known <= end) {
+    let q = start + known;
+    while (q < end && q - (start + known) < MAX_GAP && isWs(b[q] as number)) q++;
+    if (
+      b[q] === 69 &&
       b[q + 1] === 73 &&
       (q + 2 >= end || isWs(b[q + 2] as number) || isDelim(b[q + 2] as number))
-      ? q
-      : -1;
-  };
-  if (known !== null && known >= 0 && start + known <= end) {
-    const q = eiAt(start + known);
-    if (q >= 0) return [start + known, q + 2];
+    ) {
+      return [start + known, q + 2];
+    }
   }
+  // otherwise the first plausible `EI`; the lexer resumes after it, so each byte is seen once
   for (let i = start; i + 1 < end; i++) {
     if (b[i] !== 69 || b[i + 1] !== 73) continue;
     if (i > start && !isWs(b[i - 1] as number)) continue;
@@ -177,6 +211,14 @@ function inlineEnd(
     return [dEnd, i + 2];
   }
   return [end, end];
+}
+
+/** Replaces control and bidi characters of one glyph's text (C-Q05). */
+function clean(t: string): string {
+  if (t.length === 1) return isControl(t.charCodeAt(0)) ? REPLACEMENT : t;
+  let out = "";
+  for (const ch of t) out += isControl(ch.codePointAt(0) as number) ? REPLACEMENT : ch;
+  return out;
 }
 
 export function scanPage(
@@ -204,9 +246,9 @@ export function scanPage(
   const gstack: GState[] = [];
   let tm: Matrix = IDENTITY;
   let tlm: Matrix = IDENTITY;
-  let ops = 0;
-  const warned = new Set<string>();
-  const warnOnce = (key: string, d: PdfDiagnostic): void => {
+  let tokens = 0;
+  const warned = new Set<unknown>();
+  const warnOnce = (key: unknown, d: PdfDiagnostic): void => {
     if (!warned.has(key)) {
       warned.add(key);
       diagnostics.push(d);
@@ -216,15 +258,16 @@ export function scanPage(
   let content: Uint8Array;
   try {
     content = pageContent(file, page);
+    file.budget.chargeContent(content.length, where);
   } catch (e) {
     if (!(e instanceof PdfError)) throw e;
     diagnostics.push(diag("error", e.code, e.message, { ...where, ...e.where }, e.suggestion));
     return { placements, runs, diagnostics };
   }
   const frames: Frame[] = [
-    { lx: new Lexer(content), resources: page.resources, form: -1, qBase: 0 },
+    { lx: new Lexer(content), resources: page.resources, form: null, qBase: 0 },
   ];
-  const operands: PdfValue[] = [];
+  const operands = new Operands();
 
   const push = (): void => {
     if (gstack.length >= limits.maxQStack) {
@@ -242,8 +285,8 @@ export function scanPage(
   const nums = (n: number): number[] | null => {
     if (operands.length < n) return null;
     const out: number[] = [];
-    for (let i = operands.length - n; i < operands.length; i++) {
-      const v = numOf(operands[i]);
+    for (let k = n; k >= 1; k--) {
+      const v = numOf(operands.last(k));
       if (v === null) return null;
       out.push(v);
     }
@@ -262,32 +305,77 @@ export function scanPage(
       font = Font.load(file, d);
     } catch (e) {
       if (!(e instanceof PdfError) || e.code === "pdf/too-large") throw e;
-      diagnostics.push(diag("warning", e.code, e.message, where));
+      warnOnce(d, diag("warning", e.code, e.message, where));
     }
     fonts.set(d, font);
     return font;
   };
 
-  /** Shows glyphs; returns the run text and advances the text matrix. */
-  const show = (items: (PdfString | number)[]): void => {
+  const place = (p: Omit<Placement, "index">): void => {
+    if (placements.length >= limits.maxPlacements) {
+      warnOnce(
+        "placements",
+        diag(
+          "warning",
+          "pdf/too-complex",
+          `the page has more than ${limits.maxPlacements} image placements; the rest are not listed`,
+          where,
+        ),
+      );
+      return;
+    }
+    placements.push({ index: placements.length, ...p });
+  };
+
+  /** Shows glyphs one by one (no per-byte arrays), records one run, advances the text matrix. */
+  const show = (items: readonly PdfValue[]): void => {
     if (!mode.text) return;
+    if (runs.length >= limits.maxRuns) {
+      warnOnce(
+        "runs",
+        diag(
+          "warning",
+          "pdf/too-complex",
+          `the page has more than ${limits.maxRuns} text runs; the rest are skipped`,
+          where,
+        ),
+      );
+      return;
+    }
     const font = gs.font;
     const size = gs.size;
+    const cap = limits.maxRunChars;
     let text = "";
+    let truncated = false;
     let adv = 0;
+    const add = (t: string, width: number, space: boolean): boolean => {
+      if (!truncated) {
+        if (text.length + t.length > cap) truncated = true;
+        else text += clean(t);
+      }
+      adv += (width * size + gs.tc + (space ? gs.tw : 0)) * gs.th;
+      return true;
+    };
     for (const it of items) {
       if (typeof it === "number") {
         adv -= (it / 1000) * size * gs.th;
-        if (it < TJ_SPACE && text.length > 0 && !text.endsWith(" ")) text += " ";
+        if (it <= TJ_SPACE && text.length > 0 && !text.endsWith(" ") && !truncated) text += " ";
         continue;
       }
-      const glyphs: Glyph[] = font
-        ? font.decode(it.bytes)
-        : Array.from(it.bytes, () => ({ text: "�", width: 0.5, space: false }));
-      for (const g of glyphs) {
-        text += g.text;
-        adv += (g.width * size + gs.tc + (g.space ? gs.tw : 0)) * gs.th;
-      }
+      if (!(it instanceof PdfString)) continue;
+      if (font) font.each(it.bytes, add);
+      else for (let i = 0; i < it.bytes.length; i++) add(REPLACEMENT, 0.5, false);
+    }
+    if (truncated) {
+      warnOnce(
+        "chars",
+        diag(
+          "warning",
+          "pdf/too-complex",
+          `a text run is longer than ${cap} characters; it is truncated`,
+          where,
+        ),
+      );
     }
     if (text.length > 0) {
       const trm = mul(mul([1, 0, 0, 1, 0, gs.rise], tm), gs.ctm);
@@ -311,9 +399,24 @@ export function scanPage(
       if (t === T_EOF) {
         while (gstack.length > f.qBase) pop(f.qBase);
         frames.pop();
-        if (f.form >= 0) pop(f.qBase - 1); // the implicit q around the form
-        operands.length = 0;
+        if (f.form) pop(f.qBase - 1); // the implicit q around the form
+        operands.clear();
         continue;
+      }
+      // every token counts, operands included (S-Q13)
+      if (++tokens > limits.maxOpsPerPage) {
+        throw new PdfError(
+          "pdf/too-complex",
+          `the page has more than ${limits.maxOpsPerPage} content tokens (operators and operands)`,
+          where,
+        );
+      }
+      if (!file.budget.op()) {
+        throw new PdfError(
+          "pdf/too-complex",
+          `more than ${limits.maxDocOps} content tokens in this command`,
+          { ...where, scope: "document" },
+        );
       }
       if (t === T_NUM) operands.push(lx.num);
       else if (t === T_STR) operands.push(lx.str);
@@ -325,17 +428,7 @@ export function scanPage(
           lx.next(); // skip the structural keyword
         else operands.push(v);
       }
-      if (t !== T_KW) {
-        if (operands.length > MAX_OPERANDS) operands.splice(0, operands.length - MAX_OPERANDS);
-        continue;
-      }
-      if (++ops > limits.maxOpsPerPage) {
-        throw new PdfError(
-          "pdf/too-complex",
-          `the page has more than ${limits.maxOpsPerPage} content operators`,
-          where,
-        );
-      }
+      if (t !== T_KW) continue;
       const op = lx.word;
       switch (op) {
         case "q":
@@ -350,7 +443,7 @@ export function scanPage(
           break;
         }
         case "Do": {
-          const name = nameOf(operands[operands.length - 1]);
+          const name = nameOf(operands.last());
           const xd = resDict(f, "XObject");
           const ref = name && xd ? xd.get(name) : undefined;
           const xo = file.resolve(ref);
@@ -358,8 +451,7 @@ export function scanPage(
           const sub = nameOf(file.resolve(xo.dict.get("Subtype")));
           if (sub === "Image") {
             if (mode.images) {
-              placements.push({
-                index: placements.length,
+              place({
                 stream: xo,
                 inline: false,
                 ref: ref instanceof PdfRef ? ref.num : null,
@@ -368,10 +460,10 @@ export function scanPage(
               });
             }
           } else if (sub === "Form") {
-            const num = ref instanceof PdfRef ? ref.num : -2;
-            if (frames.some((x) => x.form === num)) {
+            // keyed on the resolved object, so two references to one form are one form
+            if (frames.some((x) => x.form === xo)) {
               warnOnce(
-                "self",
+                xo,
                 diag(
                   "warning",
                   "pdf/too-complex",
@@ -398,7 +490,8 @@ export function scanPage(
               data = file.streamBytes(xo, { where });
             } catch (e) {
               if (!(e instanceof PdfError) || e.code === "pdf/too-large") throw e;
-              diagnostics.push(
+              warnOnce(
+                xo,
                 diag("warning", e.code, e.message, { ...where, ...e.where }, e.suggestion),
               );
               break;
@@ -410,7 +503,7 @@ export function scanPage(
               if (m.every((x) => x !== null)) gs.ctm = mul(m as unknown as Matrix, gs.ctm);
             }
             const res = file.resolveDict(xo.dict.get("Resources")) ?? f.resources;
-            frames.push({ lx: new Lexer(data), resources: res, form: num, qBase: gstack.length });
+            frames.push({ lx: new Lexer(data), resources: res, form: xo, qBase: gstack.length });
           }
           break;
         }
@@ -460,8 +553,7 @@ export function scanPage(
           const [dEnd, after] = inlineEnd(lx.buf, start, lx.end, known);
           lx.pos = after;
           if (mode.images) {
-            placements.push({
-              index: placements.length,
+            place({
               stream: new PdfStream(d, lx.buf.subarray(start, dEnd), -1, 0),
               inline: true,
               ref: null,
@@ -476,8 +568,8 @@ export function scanPage(
           tlm = IDENTITY;
           break;
         case "Tf": {
-          const size = numOf(operands[operands.length - 1]);
-          const name = nameOf(operands[operands.length - 2]);
+          const size = numOf(operands.last(1));
+          const name = nameOf(operands.last(2));
           if (size !== null) gs.size = size;
           if (name !== null && mode.text) {
             gs.font = fontFor(f, name);
@@ -522,10 +614,10 @@ export function scanPage(
         case "Tj":
         case "'":
         case '"': {
-          const s = operands[operands.length - 1];
+          const s = operands.last();
           if (op === '"') {
-            const n = numOf(operands[operands.length - 3]);
-            const c = numOf(operands[operands.length - 2]);
+            const n = numOf(operands.last(3));
+            const c = numOf(operands.last(2));
             if (n !== null) gs.tw = n;
             if (c !== null) gs.tc = c;
           }
@@ -534,20 +626,14 @@ export function scanPage(
           break;
         }
         case "TJ": {
-          const a = operands[operands.length - 1];
-          if (Array.isArray(a)) {
-            show(
-              a.filter(
-                (x): x is PdfString | number => x instanceof PdfString || typeof x === "number",
-              ),
-            );
-          }
+          const a = operands.last();
+          if (Array.isArray(a)) show(a);
           break;
         }
         default:
           break;
       }
-      operands.length = 0;
+      operands.clear();
     }
   } catch (e) {
     if (!(e instanceof PdfError)) throw e;

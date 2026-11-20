@@ -133,10 +133,15 @@ const METHOD_LABEL: Record<CryptMethod, string> = {
 
 export class Decryptor {
   constructor(
-    private readonly key: Uint8Array,
+    /** The file key (exposed for known-answer tests). */
+    readonly key: Uint8Array,
     readonly stm: CryptMethod,
     readonly str: CryptMethod,
   ) {}
+
+  method(kind: "stream" | "string"): CryptMethod {
+    return kind === "stream" ? this.stm : this.str;
+  }
 
   decrypt(data: Uint8Array, num: number, gen: number, kind: "stream" | "string"): Uint8Array {
     const m = kind === "stream" ? this.stm : this.str;
@@ -176,9 +181,22 @@ export function setupSecurity(
   let stm: CryptMethod = "rc4";
   let str: CryptMethod = "rc4";
   let keyLen = 5;
+  // /Length, when present, must be a whole number of bytes (ISO 32000 Table 20)
+  const lenV = resolve(enc.get("Length"));
+  if (lenV !== undefined && lenV !== null) {
+    const bits = intOf(lenV);
+    if (bits === null || bits % 8 !== 0 || bits < 40 || bits > 256) {
+      return {
+        ok: false,
+        reason: "the /Length of the key is not a multiple of 8 bits",
+        info: null,
+      };
+    }
+  }
   if (v === 2) {
-    const bits = intOf(resolve(enc.get("Length"))) ?? 40;
-    keyLen = bits >= 40 && bits <= 128 && bits % 8 === 0 ? bits / 8 : 5;
+    const bits = intOf(lenV) ?? 40;
+    if (bits > 128) return { ok: false, reason: "an RC4 key longer than 128 bits", info: null };
+    keyLen = bits / 8;
   } else if (v === 4 || v === 5) {
     const cf = resolve(enc.get("CF"));
     const method = (fname: string | null): { m: CryptMethod; len: number } | null => {
@@ -186,7 +204,10 @@ export function setupSecurity(
       const entry = cf instanceof PdfDict ? resolve(cf.get(fname)) : undefined;
       if (!(entry instanceof PdfDict)) return null;
       const cfm = nameOf(resolve(entry.get("CFM"))) ?? "None";
-      const l = intOf(resolve(entry.get("Length"))) ?? 16;
+      const lv = resolve(entry.get("Length"));
+      const l = lv === undefined || lv === null ? 16 : intOf(lv);
+      // bytes (5–32, as Acrobat writes) or bits (a multiple of 8)
+      if (l === null || l < 5 || (l > 32 && l % 8 !== 0)) return null;
       const len = l <= 32 ? l : l / 8;
       if (cfm === "None") return { m: "none", len: 0 };
       if (cfm === "V2") return { m: "rc4", len: len >= 5 && len <= 16 ? len : 16 };
@@ -198,6 +219,11 @@ export function setupSecurity(
     const t = method(nameOf(resolve(enc.get("StrF"))));
     if (s === null || t === null) {
       return { ok: false, reason: "unsupported crypt filter", info: null };
+    }
+    // AESV3 belongs to V5 only, and V5 allows nothing but AESV3 (or no encryption)
+    const v5ok = (m: CryptMethod): boolean => m === "aesv3" || m === "none";
+    if (v === 5 ? !v5ok(s.m) || !v5ok(t.m) : s.m === "aesv3" || t.m === "aesv3") {
+      return { ok: false, reason: `crypt filter not allowed with V${v}`, info: null };
     }
     stm = s.m;
     str = t.m;
