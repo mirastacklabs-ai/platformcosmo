@@ -19,9 +19,13 @@ import {
   partPrimitiveSilhouette,
   primitiveFaces,
   studGrid,
-  trayBoxes,
+  trayParts,
+  halfOf,
+  partGeometryFaces,
+  STUD_HEIGHT,
 } from "../src/geometry/index.js";
-import type { PartFace } from "../src/geometry/index.js";
+import type { Half, PartFace } from "../src/geometry/index.js";
+import { createHash } from "node:crypto";
 
 const proj = createProjection();
 const box = (x: number, y: number, z: number, sx: number, sy: number, sz: number): Box3 => ({
@@ -124,30 +128,36 @@ describe("cylinders along x and y", () => {
     const f = partPrimitiveFaces(prim("cylinder", box(0, 0, 0, 1, 2, 1), { axis: "y" }), proj);
     expect(names(f)).toEqual(["right", "top", "left"]);
   });
-  test("the cap is the true projected ellipse at the near end", () => {
+  test("every face point lies on the true cylinder (unprojected, x axis)", () => {
     const b = box(0, 0, 0, 2, 1, 1);
     const f = partPrimitiveFaces(prim("cylinder", b, { axis: "x" }), proj);
-    const cap = f[f.length - 1] as PartFace;
-    // Centre of the +x end cap: world (2, 0.5, 0.5).
-    const c = proj.project({ x: 2, y: 0.5, z: 0.5 });
-    const xs = cap.points.map((p) => p.x);
-    const ys = cap.points.map((p) => p.y);
-    expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo(c.x, 0);
-    expect((Math.min(...ys) + Math.max(...ys)) / 2).toBeCloseTo(c.y, 0);
-    // A circle of radius 0.5 in the y-z plane under the 2:1 projection spans
-    // x: ±r*32 (from y) and y: (±r*16) from y plus ±r*32 from z.
-    expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(32, 0);
-  });
-  test("lateral surface joins the cap without a gap: hull of faces = silhouette", () => {
-    const b = box(0, 0, 0, 3, 1, 1);
-    const p = prim("shaft", b, { axis: "x" });
-    const sil = partPrimitiveSilhouette(p, proj);
-    const all = partPrimitiveFaces(p, proj).flatMap((f) => f.points);
-    for (const pt of all) {
-      expect(sil.points.some((h) => h.x === pt.x && h.y === pt.y) || inside(sil.points, pt)).toBe(
-        true,
-      );
+    for (const face of f) {
+      for (const p of face.points) {
+        // A point on an end plane x = 0 or x = 2: unproject (y, z) and check the radius.
+        const ok = [0, 2].some((x) => {
+          const y = x - p.x / 32;
+          const z = ((x + y) * 16 - p.y) / 32;
+          return Math.abs(Math.hypot(y - 0.5, z - 0.5) - 0.5) < 0.02;
+        });
+        expect(ok).toBe(true);
+      }
     }
+    // The cap (drawn last) lies entirely on the +x end plane.
+    const cap = f[f.length - 1] as PartFace;
+    for (const p of cap.points) {
+      const y = 2 - p.x / 32;
+      const z = ((2 + y) * 16 - p.y) / 32;
+      expect(Math.abs(Math.hypot(y - 0.5, z - 0.5) - 0.5)).toBeLessThan(0.02);
+    }
+  });
+  test("elliptical sections never repeat a face name (shaft 2 x 2 x 0.2 on x)", () => {
+    const f = partPrimitiveFaces(prim("shaft", box(0, 0, 0, 2, 2, 0.2), { axis: "x" }), proj);
+    expect(new Set(names(f)).size).toBe(f.length);
+    expect(names(f)[names(f).length - 1]).toBe("right");
+  });
+  test("stud-unit x cylinder (2 studs long, 1 wide, 3 plates tall) has unique names", () => {
+    const f = partPrimitiveFaces(prim("cylinder", box(0, 0, 0, 2, 1, 3), { axis: "x" }), proj);
+    expect(new Set(names(f)).size).toBe(f.length);
   });
   test("lateral bands are ordered before the cap so the cap paints on top", () => {
     for (const axis of ["x", "y"] as const) {
@@ -202,94 +212,92 @@ describe("wedge", () => {
     const steep = partPrimitiveFaces(prim("wedge", box(0, 0, 0, 2, 1, 2), { rotate: 270 }), proj);
     expect(names(steep)).toEqual(["left", "right"]);
   });
-  test("a flat wedge (height 0) draws nothing visible but does not throw", () => {
-    expect(() => partPrimitiveFaces(prim("wedge", box(0, 0, 0, 1, 1, 0)), proj)).not.toThrow();
+  test("a flat wedge (height 0) is just its flat top", () => {
+    expect(names(partPrimitiveFaces(prim("wedge", box(0, 0, 0, 1, 1, 0)), proj))).toEqual(["top"]);
+  });
+  test("rotate other than 0/90/180/270 is a clear RangeError", () => {
+    for (const bad of [45, 360, NaN, "90"]) {
+      expect(() =>
+        partPrimitiveFaces(prim("wedge", box(0, 0, 0, 1, 1, 1), { rotate: bad as never }), proj),
+      ).toThrow(/wedge rotate must be 0, 90, 180 or 270/);
+    }
+    expect(() =>
+      partGeometry({
+        kind: "wedge",
+        size: { x: 1, y: 1, z: 1 },
+        tone: "base",
+        rotate: 45 as never,
+      }),
+    ).toThrow(RangeError);
   });
 });
 
 describe("ring", () => {
+  const b = box(0, 0, 0, 1, 1, 1);
   for (const axis of ["x", "y", "z"] as const) {
-    test(`axis ${axis}: back item first (bore, rim), then front (outer, rim)`, () => {
-      const b = box(0, 0, 0, 1, 1, 1);
+    test(`axis ${axis}: back (bore, rim) then front (outer, rim), cap last in each`, () => {
       const f = partPrimitiveFaces(prim("ring", b, { axis }), proj);
-      const halves = f.map((x) => x.half);
-      expect(halves).toEqual(["back", "back", "back", "front", "front", "front"]);
+      expect(f.map((x) => x.half)).toEqual(["back", "back", "back", "front", "front", "front"]);
       const cap = axis === "x" ? "right" : axis === "y" ? "left" : "top";
       expect(f[2]?.face).toBe(cap);
       expect(f[5]?.face).toBe(cap);
-      // Within one item every face name is unique (ids stay unique per half).
-      for (const half of ["back", "front"]) {
-        const n = f.filter((x) => x.half === half).map((x) => x.face);
-        expect(new Set(n).size).toBe(n.length);
-      }
     });
-    test(`axis ${axis}: suffix selects one half; halves concatenate to the whole`, () => {
-      const b = box(0, 0, 0, 1, 1, 1);
-      const whole = partPrimitiveFaces(prim("ring", b, { axis }, "r"), proj);
-      const back = partPrimitiveFaces(prim("ring", b, { axis }, "r.back"), proj);
-      const front = partPrimitiveFaces(prim("ring", b, { axis }, "r.front"), proj);
+    test(`axis ${axis}: the half argument selects a depth item`, () => {
+      const whole = partPrimitiveFaces(prim("ring", b, { axis }), proj);
+      const back = partPrimitiveFaces(prim("ring", b, { axis }), proj, "back");
+      const front = partPrimitiveFaces(prim("ring", b, { axis }), proj, "front");
       expect([...back, ...front]).toEqual(whole);
       expect(back.every((x) => x.half === "back")).toBe(true);
       expect(front.every((x) => x.half === "front")).toBe(true);
     });
   }
-  test("the front half is nearer the viewer than the back half (z ring)", () => {
-    const b = box(0, 0, 0, 1, 1, 0.2);
-    const back = partPrimitiveFaces(prim("ring", b, { axis: "z" }, "r.back"), proj);
-    const front = partPrimitiveFaces(prim("ring", b, { axis: "z" }, "r.front"), proj);
-    const meanY = (fs: PartFace[]): number => {
-      const ps = fs.flatMap((f) => f.points);
-      return ps.reduce((s, p) => s + p.y, 0) / ps.length;
-    };
-    expect(meanY(front)).toBeGreaterThan(meanY(back));
-  });
-  test("the bore is open: no face covers the axis centre line on the top cap", () => {
-    const b = box(0, 0, 0, 1, 1, 0.2);
-    const f = partPrimitiveFaces(prim("ring", b, { axis: "z" }), proj);
-    const centre = proj.project({ x: 0.5, y: 0.5, z: 0.2 });
-    const caps = f.filter((x) => x.face === "top");
-    for (const cap of caps) expect(inside(cap.points, centre)).toBe(false);
+  test("halfOf resolves halves from the geometry's split, ids unchanged", () => {
+    const g = partGeometry({ id: "r", kind: "ring", size: { x: 1, y: 1, z: 0.2 }, tone: "base" });
+    expect(halfOf(g, "r.back")).toBe("back");
+    expect(halfOf(g, "r.front")).toBe("front");
+    expect(halfOf(g, "other")).toBeUndefined();
+    expect(partGeometryFaces(g, proj).map((e) => e.half)).toEqual(["back", "front"]);
   });
 });
 
 describe("tray", () => {
-  const b = box(0, 0, 0, 2, 2, 1);
-  test("back = floor, -x and -y walls; front = +y and +x walls", () => {
-    const f = partPrimitiveFaces(prim("tray", b), proj);
-    expect(names(f)).toEqual([
-      "back:left",
-      "back:right",
-      "back:top", // floor
-      "back:left",
-      "back:right",
-      "back:top", // -x wall
-      "back:left",
-      "back:top", // -y wall
-      "front:left",
-      "front:top", // +y wall
-      "front:left",
-      "front:right",
-      "front:top", // +x wall
+  const size = { x: 2, y: 1.5, z: 0.8 };
+  test("emitted as five boxes; back = floor, wall-nx, wall-ny; front = wall-py, wall-px", () => {
+    const g = partGeometry({ id: "t", kind: "tray", size, tone: "base" });
+    expect(g.primitives.map((p) => `${p.id}:${p.kind}`)).toEqual([
+      "t.floor:box",
+      "t.wall-nx:box",
+      "t.wall-ny:box",
+      "t.wall-py:box",
+      "t.wall-px:box",
     ]);
+    expect(g.split).toEqual({
+      back: ["t.floor", "t.wall-nx", "t.wall-ny"].map((x) => x),
+      front: ["t.wall-py", "t.wall-px"],
+    });
+    expect(g.solid).toBe(false);
   });
-  test("suffix selects a half and halves concatenate to the whole", () => {
-    const whole = partPrimitiveFaces(prim("tray", b, {}, "t"), proj);
-    const back = partPrimitiveFaces(prim("tray", b, {}, "t.back"), proj);
-    const front = partPrimitiveFaces(prim("tray", b, {}, "t.front"), proj);
-    expect([...back, ...front]).toEqual(whole);
+  test("a tray primitive passed directly yields its boxes' faces by half", () => {
+    const t = prim("tray", box(0, 0, 0, 2, 2, 1));
+    const all = partPrimitiveFaces(t, proj);
+    expect([
+      ...partPrimitiveFaces(t, proj, "back"),
+      ...partPrimitiveFaces(t, proj, "front"),
+    ]).toEqual(all);
+    expect(all.filter((f) => f.half === "back").length).toBe(9);
+    expect(all.filter((f) => f.half === "front").length).toBe(6);
   });
-  test("walls and floor tile the box without overlap and stay inside it", () => {
-    const t = trayBoxes(b);
-    const parts = [t.floor, t.wallNX, t.wallNY, t.wallPX, t.wallPY];
-    for (const p of parts) {
+  test("walls and floor stay inside the box and never overlap in volume", () => {
+    const parts = trayParts(box(0, 0, 0, 2, 2, 1));
+    for (const { box: p } of parts) {
       expect(p.origin.x).toBeGreaterThanOrEqual(0);
       expect(p.origin.x + p.size.x).toBeLessThanOrEqual(2 + 1e-9);
       expect(p.origin.z + p.size.z).toBeLessThanOrEqual(1 + 1e-9);
     }
     for (let i = 0; i < parts.length; i++) {
       for (let j = i + 1; j < parts.length; j++) {
-        const a = parts[i] as Box3;
-        const c = parts[j] as Box3;
+        const a = (parts[i] as { box: Box3 }).box;
+        const c = (parts[j] as { box: Box3 }).box;
         const ov = (k: "x" | "y" | "z"): number =>
           Math.min(a.origin[k] + a.size[k], c.origin[k] + c.size[k]) -
           Math.max(a.origin[k], c.origin[k]);
@@ -299,6 +307,206 @@ describe("tray", () => {
   });
   test("rejects a zero-height tray", () => {
     expect(() => partPrimitiveFaces(prim("tray", box(0, 0, 0, 1, 1, 0)), proj)).toThrow(RangeError);
+    expect(() => partGeometry({ kind: "tray", size: { x: 1, y: 1, z: 0 }, tone: "base" })).toThrow(
+      RangeError,
+    );
+  });
+});
+
+describe("each face name appears at most once per primitive", () => {
+  const sizes = [
+    { x: 1, y: 1, z: 1 },
+    { x: 2, y: 2, z: 0.2 },
+    { x: 2, y: 1, z: 3 },
+    { x: 0.5, y: 3, z: 1.5 },
+  ];
+  const kinds: PartPrimitiveKind[] = [
+    "box",
+    "plate",
+    "card",
+    "prism",
+    "wedge",
+    "cylinder",
+    "shaft",
+    "stud",
+    "ring",
+    "tray",
+  ];
+  for (const kind of kinds) {
+    for (const axis of ["x", "y", "z"] as const) {
+      for (const rotate of [0, 90, 180, 270] as const) {
+        test(`${kind} axis ${axis} rotate ${rotate}`, () => {
+          for (const size of sizes) {
+            const g = partGeometry({ kind, size, axis, rotate, tone: "base" });
+            for (const e of partGeometryFaces(g, proj)) {
+              const n = e.faces.map((f) => f.face);
+              expect(new Set(n).size, `${e.primitive.id} ${n.join()}`).toBe(n.length);
+              for (const f of e.faces) expect(signedArea(f.points)).toBeGreaterThan(0);
+            }
+          }
+        });
+      }
+    }
+  }
+});
+
+/** Even-odd point in polygon. */
+function pip(poly: readonly Vec2[], p: Vec2): boolean {
+  let c = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i] as Vec2;
+    const b = poly[j] as Vec2;
+    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) c = !c;
+  }
+  return c;
+}
+
+describe("painter's order against a ray-cast reference (point sampling)", () => {
+  /** Ray through screen point s along the view direction; z = 0 anchor. */
+  const anchor = (s: Vec2): { x: number; y: number } => ({
+    x: (s.x / 32 + s.y / 16) / 2,
+    y: (s.y / 16 - s.x / 32) / 2,
+  });
+
+  /** Last drawn owner at s, or "" if none. */
+  function painted(
+    items: readonly { owner: string; faces: readonly PartFace[] }[],
+    s: Vec2,
+  ): string {
+    let owner = "";
+    for (const it of items) for (const f of it.faces) if (pip(f.points, s)) owner = it.owner;
+    return owner;
+  }
+
+  function agreement(
+    items: readonly { owner: string; faces: readonly PartFace[] }[],
+    truth: (s: Vec2) => string,
+  ): number {
+    const pts = items.flatMap((i) => i.faces.flatMap((f) => f.points));
+    const x0 = Math.min(...pts.map((p) => p.x));
+    const x1 = Math.max(...pts.map((p) => p.x));
+    const y0 = Math.min(...pts.map((p) => p.y));
+    const y1 = Math.max(...pts.map((p) => p.y));
+    let total = 0;
+    let same = 0;
+    for (let x = x0 + 0.37; x < x1; x += 1.1) {
+      for (let y = y0 + 0.41; y < y1; y += 1.1) {
+        const s = { x, y };
+        const t = truth(s);
+        const g = painted(items, s);
+        if (t === "" && g === "") continue;
+        total++;
+        if (t === g) same++;
+      }
+    }
+    return same / total;
+  }
+
+  test("tray with contents: back boxes, contents, front boxes", () => {
+    const tb = box(0, 0, 0, 3, 2, 1);
+    const g = partGeometry({ id: "t", kind: "tray", size: tb.size, tone: "base" });
+    const content = box(0.9, 0.7, 0.2, 1.0, 0.7, 0.5);
+    const order = partGeometryFaces(g, proj);
+    const back = order.filter((e) => e.half === "back");
+    const front = order.filter((e) => e.half === "front");
+    const items = [
+      ...back.map((e) => ({ owner: e.primitive.id, faces: e.faces })),
+      { owner: "content", faces: primitiveFaces("cube", content, proj) },
+      ...front.map((e) => ({ owner: e.primitive.id, faces: e.faces })),
+    ];
+    const solids: [string, Box3][] = [
+      ...g.primitives.map((p) => [p.id, p.box] as [string, Box3]),
+      ["content", content],
+    ];
+    const truth = (s: Vec2): string => {
+      const a = anchor(s);
+      let best = "";
+      let bt = -Infinity;
+      for (const [id, bx] of solids) {
+        // p(t) = (a.x + t, a.y + t, t): slab intersection on each axis.
+        let lo = -Infinity;
+        let hi = Infinity;
+        for (const [o, d, mn, mx] of [
+          [a.x, 1, bx.origin.x, bx.origin.x + bx.size.x],
+          [a.y, 1, bx.origin.y, bx.origin.y + bx.size.y],
+          [0, 1, bx.origin.z, bx.origin.z + bx.size.z],
+        ] as const) {
+          lo = Math.max(lo, mn - o / d);
+          hi = Math.min(hi, mx - o / d);
+        }
+        if (hi - lo > 1e-6 && hi > bt) {
+          bt = hi;
+          best = id;
+        }
+      }
+      return best;
+    };
+    expect(agreement(items, truth)).toBeGreaterThan(0.985);
+  });
+
+  test("z ring with a shaft through the bore: back half, shaft, front half", () => {
+    const rb = box(0, 0, 0.3, 1.6, 1.6, 0.3);
+    const g = partGeometry({ id: "r", kind: "ring", size: rb.size, tone: "base" });
+    const shaftBox = box(0.55, 0.55, 0, 0.5, 0.5, 1.2);
+    const order = partGeometryFaces(g, proj).map((e) => ({
+      half: e.half as Half,
+      faces: e.faces.map((f) => ({
+        ...f,
+        points: f.points.map((p) => ({ x: p.x, y: p.y - 0.3 * 32 })),
+      })),
+    }));
+    // The ring box above starts at z = 0.3: shift its faces up by 0.3 * zScale.
+    const shaft = primitiveFaces("cylinder", shaftBox, proj);
+    const items = [
+      { owner: "ring", faces: order.filter((e) => e.half === "back").flatMap((e) => e.faces) },
+      { owner: "shaft", faces: shaft },
+      { owner: "ring", faces: order.filter((e) => e.half === "front").flatMap((e) => e.faces) },
+    ];
+    // Reference: nearest of (outer cylinder minus bore) and the shaft cylinder along the ray.
+    const circleHit = (
+      a: { x: number; y: number },
+      cx: number,
+      cy: number,
+      r: number,
+      z0: number,
+      z1: number,
+    ): [number, number] | undefined => {
+      // p(t) = (a.x + t, a.y + t, t); circle in xy: quadratic in t.
+      const dx = a.x - cx;
+      const dy = a.y - cy;
+      const A = 2;
+      const B = 2 * (dx + dy);
+      const C = dx * dx + dy * dy - r * r;
+      const disc = B * B - 4 * A * C;
+      if (disc <= 0) return undefined;
+      const lo = Math.max((-B - Math.sqrt(disc)) / (2 * A), z0);
+      const hi = Math.min((-B + Math.sqrt(disc)) / (2 * A), z1);
+      return hi - lo > 1e-6 ? [lo, hi] : undefined;
+    };
+    const truth = (s: Vec2): string => {
+      const a = anchor(s);
+      let best = "";
+      let bt = -Infinity;
+      const consider = (id: string, hi: number): void => {
+        if (hi > bt) {
+          bt = hi;
+          best = id;
+        }
+      };
+      const sh = circleHit(a, 0.8, 0.8, 0.25, 0, 1.2);
+      if (sh) consider("shaft", sh[1]);
+      const outer = circleHit(a, 0.8, 0.8, 0.8, 0.3, 0.6);
+      if (outer) {
+        const inner = circleHit(a, 0.8, 0.8, 0.8 * 0.6, 0.3, 0.6);
+        if (!inner) consider("ring", outer[1]);
+        else {
+          if (inner[0] - outer[0] > 1e-6) consider("ring", inner[0]);
+          if (outer[1] - inner[1] > 1e-6) consider("ring", outer[1]);
+        }
+      }
+      return best;
+    };
+    expect(agreement(items, truth)).toBeGreaterThan(0.97);
   });
 });
 
@@ -347,14 +555,33 @@ describe("partGeometry", () => {
       expect(g.bounds).toEqual(g.depthBox);
     }
   });
-  test("ring and tray split into .back/.front and are not solid", () => {
-    for (const kind of ["ring", "tray"] as const) {
-      const g = partGeometry({ id: "r", kind, size, tone: "base" });
-      expect(g.primitives.map((p) => p.id)).toEqual(["r.back", "r.front"]);
-      expect(g.split).toEqual({ back: ["r.back"], front: ["r.front"] });
-      expect(g.solid).toBe(false);
-      expect(g.primitives.every((p) => /^[a-z0-9_.-]+$/.test(p.id))).toBe(true);
+  test("ring splits into .back/.front and is not solid", () => {
+    const g = partGeometry({ id: "r", kind: "ring", size, tone: "base" });
+    expect(g.primitives.map((p) => p.id)).toEqual(["r.back", "r.front"]);
+    expect(g.split).toEqual({ back: ["r.back"], front: ["r.front"] });
+    expect(g.solid).toBe(false);
+  });
+  test("every primitive id matches the id pattern and is unique", () => {
+    for (const kind of ["ring", "tray", "box"] as const) {
+      const g = partGeometry({ id: "a.b-c_1", kind, size, tone: "base" });
+      const ids = g.primitives.map((p) => p.id);
+      expect(ids.every((i) => /^[a-z0-9_.-]+$/.test(i))).toBe(true);
+      expect(new Set(ids).size).toBe(ids.length);
     }
+  });
+  test("invalid ids and stud id collisions are rejected", () => {
+    for (const id of ["", "A", "a b", "a/b"]) {
+      expect(() => partGeometry({ id, kind: "box", size, tone: "base" })).toThrow(RangeError);
+    }
+    expect(() =>
+      partGeometry({
+        id: "stud-1-1",
+        kind: "box",
+        size: { x: 2, y: 2, z: 1 },
+        tone: "base",
+        studs: { cols: 1, rows: 1 },
+      }),
+    ).toThrow(/collides/);
   });
   test("sprite is not solid and has no split", () => {
     const g = partGeometry({ kind: "sprite", size, tone: "base" });
@@ -384,8 +611,28 @@ describe("partGeometry", () => {
     expect(g.primitives).toHaveLength(1 + 8);
     expect(g.primitives[0]?.kind).toBe("box");
     expect(g.depthBox).toEqual(box(0, 0, 0, 4, 2, 1));
-    expect(g.bounds.size.z).toBeCloseTo(1.25, 9);
+    expect(g.bounds.size.z).toBeCloseTo(1 + STUD_HEIGHT, 9);
     expect(g.solid).toBe(true);
+  });
+  test("studs honour a cell mask (round host) and are rejected on x/y circular kinds", () => {
+    const g = partGeometry({
+      kind: "cylinder",
+      size: { x: 4, y: 4, z: 1 },
+      tone: "base",
+      studs: { cols: 4, rows: 4, cell: (c, r) => (c - 1.5) ** 2 + (r - 1.5) ** 2 <= 2.6 },
+    });
+    expect(g.primitives.length).toBe(1 + 12);
+    for (const axis of ["x", "y"] as const) {
+      expect(() =>
+        partGeometry({
+          kind: "cylinder",
+          axis,
+          size: { x: 4, y: 4, z: 4 },
+          tone: "base",
+          studs: { cols: 1, rows: 1 },
+        }),
+      ).toThrow(/along/);
+    }
   });
   test("studs on a tray, ring, sprite or wedge are rejected", () => {
     for (const kind of ["tray", "ring", "sprite", "wedge"] as const) {
@@ -490,6 +737,65 @@ describe("stud grid property (seeded)", () => {
     const first = studs[0] as PartPrimitive;
     expect(first.box.origin.x).toBeCloseTo(1 + 0.5 - 0.3, 9);
   });
+  test("non-finite hosts and options throw RangeError", () => {
+    const ok = box(0, 0, 0, 4, 4, 1);
+    for (const host of [
+      box(NaN, 0, 0, 4, 4, 1),
+      box(0, 0, 0, Infinity, 4, 1),
+      box(0, 0, 0, 4, 4, NaN),
+      box(0, 0, 0, 0, 4, 1),
+    ]) {
+      expect(() => studGrid({ host, cols: 1, rows: 1, tone: "base" })).toThrow(RangeError);
+    }
+    for (const o of [
+      { pitch: NaN },
+      { diameter: NaN },
+      { height: NaN },
+      { height: -1 },
+      { pitch: Infinity },
+    ]) {
+      expect(() => studGrid({ host: ok, cols: 1, rows: 1, tone: "base", ...o })).toThrow(
+        RangeError,
+      );
+    }
+  });
+  test("§5.1 defaults (4.8 mm / 8 mm pitch, 1.7 mm / 3.2 mm plates)", () => {
+    const [st] = studGrid({ host: box(0, 0, 0, 1, 1, 3), cols: 1, rows: 1, tone: "base" });
+    expect(st?.box.size.x).toBeCloseTo(0.6, 12);
+    expect(st?.box.size.z).toBeCloseTo(1.7 / 3.2, 12);
+    expect(st?.box.origin.z).toBe(3);
+  });
+  test("§5.1: at 8 mm pitch, 4.8 mm diameter, 1.7 mm height no stud overlaps another on screen", () => {
+    // World scale: one stud pitch = 0.5 tile (offsets (±16, 8) and (0, 16) in screen units),
+    // isotropic, so the stud is 0.3 wide and 1.7 / 8 * 0.5 high.
+    const studs = studGrid({
+      host: box(0, 0, 0, 5, 5, 0.5),
+      cols: 6,
+      rows: 6,
+      pitch: 0.5,
+      diameter: 0.3,
+      height: (1.7 / 8) * 0.5,
+      tone: "base",
+    });
+    const rects = studs.map((st) => {
+      const pts = partPrimitiveSilhouette(st, proj).points;
+      const xs = pts.map((q) => q.x);
+      const ys = pts.map((q) => q.y);
+      return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+    });
+    // Spans x within +-6.79 and y within [-6.79, 3.39] of the base centre (design §5.1).
+    const r0 = rects[0] as (typeof rects)[number];
+    expect((r0.x1 - r0.x0) / 2).toBeCloseTo(6.79, 1);
+    expect(r0.y1 - r0.y0).toBeCloseTo(10.18, 1);
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        const a = rects[i] as (typeof rects)[number];
+        const c = rects[j] as (typeof rects)[number];
+        const overlap = a.x0 < c.x1 && c.x0 < a.x1 && a.y0 < c.y1 && c.y0 < a.y1;
+        expect(overlap).toBe(false);
+      }
+    }
+  });
   test("bad grids throw", () => {
     const host = box(0, 0, 0, 2, 2, 1);
     expect(() => studGrid({ host, cols: 3, rows: 1, tone: "base" })).toThrow(RangeError);
@@ -542,21 +848,29 @@ describe("decals", () => {
       proj.project({ x: 1, y: 4, z: 1.5 }),
     ]);
   });
-  test("pixel matrix maps the crop corners onto the face corners (within rounding)", () => {
-    for (const face of ["top", "left", "right"] as const) {
-      const d = decalPlacement(b, face, crop, "stretch", proj);
-      const px = [
-        { x: crop.x, y: crop.y },
-        { x: crop.x + crop.width, y: crop.y },
-        { x: crop.x + crop.width, y: crop.y + crop.height },
-        { x: crop.x, y: crop.y + crop.height },
-      ];
-      px.forEach((p, i) => {
-        const g = applyMatrix(d.matrix, p);
-        expect(Math.abs(g.x - (d.corners[i] as Vec2).x)).toBeLessThan(0.005);
-        expect(Math.abs(g.y - (d.corners[i] as Vec2).y)).toBeLessThan(0.005);
-      });
+  test("emit path: unit matrix on a 1x1 viewBox=crop svg lands the crop on the face", () => {
+    const d = decalPlacement(b, "left", crop, "stretch", proj);
+    expect("matrix" in d).toBe(false);
+    // Crop corner (x, y) -> unit square ((x - crop.x) / w, (y - crop.y) / h) -> screen.
+    const map = (px: number, py: number): Vec2 =>
+      applyMatrix(d.unit, { x: (px - crop.x) / crop.width, y: (py - crop.y) / crop.height });
+    expect(map(crop.x, crop.y)).toEqual(d.faceCorners[0]);
+    expect(map(crop.x + crop.width, crop.y + crop.height)).toEqual(d.faceCorners[2]);
+    for (const v of Object.values(d.unit)) expect(twoDecimals(v)).toBe(true);
+  });
+  test("non-finite crops and boxes throw RangeError", () => {
+    for (const c of [
+      { x: NaN, y: 0, width: 1, height: 1 },
+      { x: 0, y: Infinity, width: 1, height: 1 },
+      { x: 0, y: 0, width: NaN, height: 1 },
+    ]) {
+      expect(() => decalPlacement(b, "top", c, "stretch", proj)).toThrow(RangeError);
+      expect(() => billboardRect(b, c, "contain", proj)).toThrow(RangeError);
     }
+    expect(() => decalPlacement(box(NaN, 0, 0, 1, 1, 1), "top", crop, "stretch", proj)).toThrow(
+      RangeError,
+    );
+    expect(() => billboardRect(box(0, 0, 0, 1, NaN, 1), crop, "contain", proj)).toThrow(RangeError);
   });
   test("contain keeps the crop inside the face; cover covers it and carries a clip", () => {
     const wide: Rect = { x: 0, y: 0, width: 400, height: 100 };
@@ -631,13 +945,12 @@ describe("determinism and snapshots", () => {
     ["tray", prim("tray", box(0, 0, 0, 2, 1.5, 0.5))],
   ];
   for (const [name, p] of cases) {
-    test(`${name}: identical across calls and projections instances`, () => {
-      const a = JSON.stringify(partPrimitiveFaces(p, proj));
-      const b = JSON.stringify(partPrimitiveFaces(p, createProjection()));
-      expect(a).toBe(b);
-      expect(JSON.stringify(partGeometry({ kind: p.kind, size: p.box.size, tone: "base" }))).toBe(
-        JSON.stringify(partGeometry({ kind: p.kind, size: p.box.size, tone: "base" })),
-      );
+    test(`${name}: identical across calls, fresh projections and call order`, () => {
+      const g = partGeometry({ kind: p.kind, size: p.box.size, axis: p.axis, tone: "base" });
+      const first = JSON.stringify(partGeometryFaces(g, createProjection()));
+      partPrimitiveFaces(prim("wedge", box(0, 0, 0, 1, 1, 1), { rotate: 90 }), proj); // unrelated call
+      expect(JSON.stringify(partGeometryFaces(g, createProjection()))).toBe(first);
+      expect(JSON.stringify(partGeometryFaces(g, proj))).toBe(first);
     });
     test(`${name}: snapshot`, () => {
       const faces = partPrimitiveFaces(p, proj).map((f) => ({
@@ -656,7 +969,19 @@ describe("determinism and snapshots", () => {
       billboard: billboardRect(b, { x: 0, y: 0, width: 640, height: 480 }, "contain", proj),
     }).toMatchSnapshot();
   });
-  test("existing primitiveFaces output is untouched by this module", () => {
-    expect(primitiveFaces("cylinder", box(0, 0, 0, 1, 1, 1), proj)[0]?.d).toBeDefined();
+  test("existing primitiveFaces output is pinned (golden hash)", () => {
+    const out: unknown[] = [];
+    for (const kind of ["cube", "slab", "platform", "hex-prism", "cylinder"] as const) {
+      for (const size of [
+        { x: 1, y: 1, z: 1 },
+        { x: 2, y: 1, z: 0.5 },
+        { x: 1.5, y: 3, z: 2 },
+      ]) {
+        out.push(primitiveFaces(kind, { origin: { x: 1, y: 2, z: 0.5 }, size }, proj));
+      }
+    }
+    expect(createHash("sha256").update(JSON.stringify(out)).digest("hex")).toBe(
+      "fd48a5c32e29d0d61ed6cac66fec9e12eeb103aaed1c64bd066c54a6ede82786",
+    );
   });
 });

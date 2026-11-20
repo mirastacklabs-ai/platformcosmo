@@ -24,8 +24,19 @@ export {
   partPrimitiveFaces,
   partPrimitiveSilhouette,
   studGrid,
-  trayBoxes,
+  trayParts,
+  halfOf,
+  partGeometryFaces,
+  STUD_DIAMETER,
+  STUD_HEIGHT,
 } from "./parts.js";
-export type { PartFace, PartGeometrySpec, StudGridOptions } from "./parts.js";
+export type {
+  Half,
+  PartFace,
+  PartGeometrySpec,
+  PartPrimitiveFaces,
+  StudGridOptions,
+  TrayPart,
+} from "./parts.js";
 export { applyMatrix, billboardRect, decalPlacement } from "./decals.js";
 export type { BillboardPlacement, DecalPlacement, Fit, Matrix } from "./decals.js";

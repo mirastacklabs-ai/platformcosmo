@@ -94,14 +94,6 @@ exports[`determinism and snapshots > decal and billboard snapshot 1`] = `
         "y": 48,
       },
     ],
-    "matrix": {
-      "a": 0.05,
-      "b": -0.025,
-      "c": 0,
-      "d": 0.05,
-      "e": 32,
-      "f": 20,
-    },
     "unit": {
       "a": 32,
       "b": -16,
@@ -241,6 +233,12 @@ exports[`determinism and snapshots > tray: snapshot 1`] = `
     "points": "0 -10.24 52.48 16 52.48 26.24 0 0",
   },
   {
+    "face": "right",
+    "half": "back",
+    "n": 4,
+    "points": "52.48 16 58.24 13.12 58.24 23.36 52.48 26.24",
+  },
+  {
     "face": "top",
     "half": "back",
     "n": 4,
@@ -251,6 +249,12 @@ exports[`determinism and snapshots > tray: snapshot 1`] = `
     "half": "front",
     "n": 4,
     "points": "-42.24 10.88 10.24 37.12 10.24 47.36 -42.24 21.12",
+  },
+  {
+    "face": "right",
+    "half": "front",
+    "n": 4,
+    "points": "10.24 37.12 16 34.24 16 44.48 10.24 47.36",
   },
   {
     "face": "top",

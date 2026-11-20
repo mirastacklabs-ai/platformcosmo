@@ -13,26 +13,38 @@ import type {
   Vec3,
 } from "../contracts/index.js";
 import type { SpecColor } from "../schema/types.gen.js";
-import { convexHull, pointsToPath, primitiveFaces } from "./primitives.js";
+import { convexHull, pointsToPath, primitiveFaces, primitiveSilhouette } from "./primitives.js";
 import type { Silhouette } from "./primitives.js";
 import { boxCorners } from "./projection.js";
 
 /**
- * Part primitives (assemblies §5, §9.6). Geometry of the leaf-part solids in the part's local
- * frame, projected to screen space with the same rounding as `primitiveFaces`.
+ * Part primitives (assemblies §5, §9.6). Geometry of the leaf-part solids, projected to screen
+ * space with the same rounding as `primitiveFaces`.
+ *
+ * Inputs are WORLD-space boxes: callers (A2 resolve, E-3 `build`) apply the `AssemblyFrame`
+ * scale and quarter turn first, so `size` is the post-rotation extent (a wedge's `rotate` only
+ * turns its slope inside that box). Callers also validate sizes first: every function here
+ * throws `RangeError` on a non-finite or degenerate input, and the caller turns that into a
+ * diagnostic.
  *
  * Conventions (shared with `primitiveFaces`):
  * - Faces come in painter's order (back to front) and polygons are clockwise on screen.
  * - A face is visible when its outward normal `n` satisfies `n · d > 0`, where
  *   `d = (1, 1, tileWidth / (2 * zScale))` is the direction toward the viewer.
  * - Names follow the dominant normal: `+x` is `right`, `+y` is `left`, up is `top`. A wedge's
- *   slope is always `top`.
- * - Circular primitives along `x`/`y`, rings and trays are drawn by this module; boxes, plates,
- *   cards, prisms and `z` cylinders delegate to `primitiveFaces` (which stays untouched).
- * - `ring` and `tray` are two depth items. `partGeometry` emits them as two `PartPrimitive`s
- *   with ids `<id>.back` and `<id>.front` (the contract's `split` lists primitive ids);
- *   `partPrimitiveFaces` selects the half from that suffix, and draws both (back first) for a
- *   primitive without a suffix.
+ *   slope is always `top`. Within one primitive (and, for splits, one half) each face name
+ *   appears at most once, so `ids.face(id, face, part)` stays unique.
+ * - Circular primitives along `x`/`y` and rings are drawn by this module; boxes, plates, cards,
+ *   prisms and `z` cylinders delegate to `primitiveFaces` (which stays untouched).
+ *
+ * Splits (§9.6). `tray` is emitted by `partGeometry` as five real `box` primitives
+ * (`<id>.floor`, `.wall-nx`, `.wall-ny` in `split.back`; `.wall-px`, `.wall-py` in
+ * `split.front`), so A1-2a certifies each half as ordinary boxes and contents sort between
+ * them. `ring` is emitted as two primitives `<id>.back` / `<id>.front` of kind `ring`. A half
+ * of a ring is not an axis-aligned box, so there is no box to certify: A1-2a orders a ring's
+ * halves with forced edges (`back` before contents before `front`). It finds the half of a
+ * primitive with `halfOf(geometry, primitiveId)` and draws it with
+ * `partPrimitiveFaces(prim, projection, half)` (or `partGeometryFaces`, which does both).
  */
 
 const EPS = 1e-9;
@@ -43,9 +55,11 @@ export const RING_INNER_RATIO = 0.6;
 /** Tray wall (and floor) thickness as a fraction of the smaller footprint side. */
 export const TRAY_WALL_RATIO = 0.12;
 
-/** A projected part face. `half` is set for the two depth items of a split primitive. */
+export type Half = "back" | "front";
+
+/** A projected part face. `half` is set for faces of a split primitive's depth items. */
 export interface PartFace extends ProjectedFace {
-  readonly half?: "back" | "front";
+  readonly half?: Half;
 }
 
 /** Kinds that are circular along an axis. */
@@ -62,6 +76,12 @@ function validate(prim: PartPrimitive): void {
     if (!Number.isFinite(n)) throw new RangeError("box has a non-finite component");
   }
   if (s.x < 0 || s.y < 0 || s.z < 0) throw new RangeError("box size must be >= 0");
+  if (prim.kind === "wedge") {
+    const r = prim.rotate ?? 0;
+    if (r !== 0 && r !== 90 && r !== 180 && r !== 270) {
+      throw new RangeError(`wedge rotate must be 0, 90, 180 or 270 (got ${String(r)})`);
+    }
+  }
   if (prim.kind === "sprite") {
     if (s.x + s.y <= 0) throw new RangeError("sprite box needs a positive footprint");
     return;
@@ -99,7 +119,7 @@ function makeFace(
   face: ProjectedFace["face"],
   points: Vec3[],
   projection: Projection,
-  half?: "back" | "front",
+  half?: Half,
 ): PartFace | undefined {
   const pts = clockwise(points.map((p) => projection.project(p)));
   if (pts.length < 3 || Math.abs(area(pts)) < EPS) return undefined;
@@ -118,12 +138,6 @@ function dot(a: Vec3, b: Vec3): number {
 function faceOf(n: Vec3): ProjectedFace["face"] {
   if (n.z >= Math.max(n.x, n.y) - EPS) return "top";
   return n.x >= n.y ? "right" : "left";
-}
-
-function stripHalf(id: string): { base: string; half?: "back" | "front" } {
-  if (id.endsWith(".back")) return { base: id.slice(0, -5), half: "back" };
-  if (id.endsWith(".front")) return { base: id.slice(0, -6), half: "front" };
-  return { base: id };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -290,67 +304,72 @@ function capName(axis: Axis): ProjectedFace["face"] {
   return axis === "x" ? "right" : axis === "y" ? "left" : "top";
 }
 
-/** Lateral band `[t0, t1]`; `inner` draws the bore (normals flipped, radius scaled). */
-function lateralBand(
+/**
+ * Lateral surface over `[t0, t1]` as two bands split at the middle; `inner` draws the bore
+ * (normals flipped, radius scaled by `k`). Bands that resolve to the same face name (elliptical
+ * sections) merge into one, so a name never repeats within a primitive.
+ */
+function lateralBands(
   c: Circ,
   t0: number,
   t1: number,
   k: number,
   inner: boolean,
   projection: Projection,
-  half?: "back" | "front",
-): PartFace | undefined {
-  const mid = circNormal(c, (t0 + t1) / 2);
-  const n = inner ? { x: -mid.x, y: -mid.y, z: -mid.z } : mid;
-  const pts = [...arc(c, t0, t1, k, c.lo), ...arc(c, t1, t0, k, c.hi)];
-  return makeFace(faceOf(n), pts, projection, half);
+  half?: Half,
+): PartFace[] {
+  const mid = (t0 + t1) / 2;
+  const nameOf = (t: number): ProjectedFace["face"] => {
+    const m = circNormal(c, t);
+    return faceOf(inner ? { x: -m.x, y: -m.y, z: -m.z } : m);
+  };
+  const spans: [number, number][] =
+    nameOf((t0 + mid) / 2) === nameOf((mid + t1) / 2)
+      ? [[t0, t1]]
+      : [
+          [t0, mid],
+          [mid, t1],
+        ];
+  const out: PartFace[] = [];
+  for (const [a, b] of spans) {
+    const pts = [...arc(c, a, b, k, c.lo), ...arc(c, b, a, k, c.hi)];
+    const f = makeFace(nameOf((a + b) / 2), pts, projection, half);
+    if (f) out.push(f);
+  }
+  return out;
 }
 
 function solidCircular(prim: PartPrimitive, projection: Projection): PartFace[] {
   const c = circOf(prim.box, prim.axis ?? "z");
   const phi = visibleCentre(c, projection);
-  const out: PartFace[] = [];
-  for (const [a, b] of [
-    [phi - Math.PI / 2, phi],
-    [phi, phi + Math.PI / 2],
-  ] as const) {
-    const f = lateralBand(c, a, b, 1, false, projection);
-    if (f) out.push(f);
-  }
+  const out = lateralBands(c, phi - Math.PI / 2, phi + Math.PI / 2, 1, false, projection);
   const cap = makeFace(capName(c.axis), arc(c, 0, 2 * Math.PI - ARC_STEP, 1, c.hi), projection);
   if (cap) out.push(cap);
   return out;
 }
 
-function ringFaces(
-  prim: PartPrimitive,
-  projection: Projection,
-  half?: "back" | "front",
-): PartFace[] {
+function ringFaces(prim: PartPrimitive, projection: Projection, half?: Half): PartFace[] {
   const c = circOf(prim.box, prim.axis ?? "z");
   const phi = visibleCentre(c, projection);
   const h = Math.PI / 2;
   const out: PartFace[] = [];
-  const push = (f: PartFace | undefined): void => {
-    if (f) out.push(f);
-  };
-  const cap = (t0: number, t1: number, which: "back" | "front"): PartFace | undefined =>
-    makeFace(
+  const cap = (t0: number, t1: number, which: Half): void => {
+    const f = makeFace(
       capName(c.axis),
       [...arc(c, t0, t1, 1, c.hi), ...arc(c, t1, t0, RING_INNER_RATIO, c.hi)],
       projection,
       which,
     );
+    if (f) out.push(f);
+  };
   if (half !== "front") {
     // Back item: the bore's far half, seen through the hole, then the back half of the rim.
-    push(lateralBand(c, phi + h, phi + 2 * h, RING_INNER_RATIO, true, projection, "back"));
-    push(lateralBand(c, phi + 2 * h, phi + 3 * h, RING_INNER_RATIO, true, projection, "back"));
-    push(cap(phi + h, phi + 3 * h, "back"));
+    out.push(...lateralBands(c, phi + h, phi + 3 * h, RING_INNER_RATIO, true, projection, "back"));
+    cap(phi + h, phi + 3 * h, "back");
   }
   if (half !== "back") {
-    push(lateralBand(c, phi - h, phi, 1, false, projection, "front"));
-    push(lateralBand(c, phi, phi + h, 1, false, projection, "front"));
-    push(cap(phi - h, phi + h, "front"));
+    out.push(...lateralBands(c, phi - h, phi + h, 1, false, projection, "front"));
+    cap(phi - h, phi + h, "front");
   }
   return out;
 }
@@ -359,61 +378,34 @@ function ringFaces(
 // Tray
 // ---------------------------------------------------------------------------------------------
 
-interface TrayBoxes {
-  readonly floor: Box3;
-  readonly wallNX: Box3;
-  readonly wallNY: Box3;
-  readonly wallPX: Box3;
-  readonly wallPY: Box3;
+export interface TrayPart {
+  /** `floor`, `wall-nx`, `wall-ny`, `wall-px` or `wall-py`. */
+  readonly id: string;
+  readonly box: Box3;
+  readonly half: Half;
 }
 
-/** Floor plus four walls: the x walls span the full depth, the y walls sit between them. */
-export function trayBoxes(box: Box3): TrayBoxes {
+/**
+ * Floor plus four walls as boxes, back to front. The x walls span the full depth, the y walls
+ * sit between them (no overlap). Back: floor, -x wall, -y wall. Front: +y wall, +x wall.
+ */
+export function trayParts(box: Box3): TrayPart[] {
   const { origin: o, size: s } = box;
   const wall = Math.min(TRAY_WALL_RATIO * Math.min(s.x, s.y), s.z / 2);
-  const floor = Math.min(wall, s.z / 2);
   const b = (x: number, y: number, z: number, sx: number, sy: number, sz: number): Box3 => ({
     origin: { x, y, z },
     size: { x: sx, y: sy, z: sz },
   });
-  const zw = o.z + floor;
-  const hw = s.z - floor;
+  const zw = o.z + wall;
+  const hw = s.z - wall;
   const inner = s.x - 2 * wall;
-  return {
-    floor: b(o.x, o.y, o.z, s.x, s.y, floor),
-    wallNX: b(o.x, o.y, zw, wall, s.y, hw),
-    wallNY: b(o.x + wall, o.y, zw, inner, wall, hw),
-    wallPX: b(o.x + s.x - wall, o.y, zw, wall, s.y, hw),
-    wallPY: b(o.x + wall, o.y + s.y - wall, zw, inner, wall, hw),
-  };
-}
-
-function trayFaces(
-  prim: PartPrimitive,
-  projection: Projection,
-  half?: "back" | "front",
-): PartFace[] {
-  const t = trayBoxes(prim.box);
-  const out: PartFace[] = [];
-  const add = (
-    box: Box3,
-    names: readonly ProjectedFace["face"][],
-    which: "back" | "front",
-  ): void => {
-    for (const f of primitiveFaces("cube", box, projection)) {
-      if (names.includes(f.face)) out.push({ ...f, half: which });
-    }
-  };
-  if (half !== "front") {
-    add(t.floor, ["left", "right", "top"], "back");
-    add(t.wallNX, ["left", "right", "top"], "back"); // inner face (+x), end face (+y), rim
-    add(t.wallNY, ["left", "top"], "back"); // inner face (+y), rim
-  }
-  if (half !== "back") {
-    add(t.wallPY, ["left", "top"], "front"); // outer face (+y), rim
-    add(t.wallPX, ["left", "right", "top"], "front"); // outer face (+x), end face (+y), rim
-  }
-  return out;
+  return [
+    { id: "floor", box: b(o.x, o.y, o.z, s.x, s.y, wall), half: "back" },
+    { id: "wall-nx", box: b(o.x, o.y, zw, wall, s.y, hw), half: "back" },
+    { id: "wall-ny", box: b(o.x + wall, o.y, zw, inner, wall, hw), half: "back" },
+    { id: "wall-py", box: b(o.x + wall, o.y + s.y - wall, zw, inner, wall, hw), half: "front" },
+    { id: "wall-px", box: b(o.x + s.x - wall, o.y, zw, wall, s.y, hw), half: "front" },
+  ];
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -421,12 +413,18 @@ function trayFaces(
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Visible faces of one part primitive in painter's order. `sprite` has no faces (see
- * `partPrimitiveSilhouette`). Throws `RangeError` for a non-finite or degenerate box.
+ * Visible faces of one part primitive in painter's order. `half` selects a depth item of a
+ * `ring` or `tray` (default: both, back first; ignored by other kinds). A `tray` passed here
+ * directly yields the faces of its five boxes (see `trayParts`) with `half` set. `sprite` has no
+ * faces (see `partPrimitiveSilhouette`). Throws `RangeError` for a non-finite or degenerate box
+ * or an invalid wedge `rotate`.
  */
-export function partPrimitiveFaces(prim: PartPrimitive, projection: Projection): PartFace[] {
+export function partPrimitiveFaces(
+  prim: PartPrimitive,
+  projection: Projection,
+  half?: Half,
+): PartFace[] {
   validate(prim);
-  const { half } = stripHalf(prim.id);
   switch (prim.kind) {
     case "box":
     case "plate":
@@ -444,7 +442,11 @@ export function partPrimitiveFaces(prim: PartPrimitive, projection: Projection):
     case "ring":
       return ringFaces(prim, projection, half);
     case "tray":
-      return trayFaces(prim, projection, half);
+      return trayParts(prim.box)
+        .filter((p) => half === undefined || p.half === half)
+        .flatMap((p) =>
+          primitiveFaces("cube", p.box, projection).map((f) => ({ ...f, half: p.half })),
+        );
     case "sprite":
       return [];
   }
@@ -453,6 +455,12 @@ export function partPrimitiveFaces(prim: PartPrimitive, projection: Projection):
 /** Screen outline of the whole primitive (sprite: the box's projected hexagon). */
 export function partPrimitiveSilhouette(prim: PartPrimitive, projection: Projection): Silhouette {
   validate(prim);
+  if (
+    (prim.kind === "cylinder" || prim.kind === "shaft" || prim.kind === "stud") &&
+    (prim.axis ?? "z") === "z"
+  ) {
+    return primitiveSilhouette("cylinder", prim.box, projection);
+  }
   const faces = partPrimitiveFaces(prim, projection);
   const pts =
     faces.length > 0
@@ -462,54 +470,96 @@ export function partPrimitiveSilhouette(prim: PartPrimitive, projection: Project
   return { points: hull, d: pointsToPath(hull) };
 }
 
+/** The depth item (`back` or `front`) a primitive belongs to, from `geometry.split`. */
+export function halfOf(geometry: PartGeometry, primitiveId: string): Half | undefined {
+  if (geometry.split?.back.includes(primitiveId)) return "back";
+  if (geometry.split?.front.includes(primitiveId)) return "front";
+  return undefined;
+}
+
+export interface PartPrimitiveFaces {
+  readonly primitive: PartPrimitive;
+  readonly half?: Half;
+  readonly faces: PartFace[];
+}
+
+/** Faces of every primitive of a geometry, in `primitives` order, with the half resolved. */
+export function partGeometryFaces(
+  geometry: PartGeometry,
+  projection: Projection,
+): PartPrimitiveFaces[] {
+  return geometry.primitives.map((primitive) => {
+    const half = halfOf(geometry, primitive.id);
+    const faces = partPrimitiveFaces(primitive, projection, half);
+    return half ? { primitive, half, faces } : { primitive, faces };
+  });
+}
+
 // ---------------------------------------------------------------------------------------------
 // Studs
 // ---------------------------------------------------------------------------------------------
+
+/** §5.1 defaults, in stud units (x, y: 8 mm studs; z: 3.2 mm plates). */
+export const STUD_DIAMETER = 4.8 / 8;
+export const STUD_HEIGHT = 1.7 / 3.2;
 
 export interface StudGridOptions {
   /** Host box; studs stand on its top face. */
   readonly host: Box3;
   readonly cols: number;
   readonly rows: number;
-  /** Centre distance, default 1. */
+  /** Centre distance in x and y, default 1 (one stud, 8 mm). */
   readonly pitch?: number;
-  /** Default `0.6 * pitch`; must be < pitch so studs never touch. */
+  /** Default `STUD_DIAMETER * pitch` (4.8 mm of an 8 mm pitch); must be < pitch. */
   readonly diameter?: number;
-  /** Default `0.25 * pitch`. */
+  /** Stud height as a z value in the host's z units; default `STUD_HEIGHT` (1.7 mm in plates). */
   readonly height?: number;
+  /** Keep only cells for which this returns true (round and prism hosts); zero-based. */
+  readonly cell?: (col: number, row: number) => boolean;
   readonly tone: PartTone;
   readonly color?: SpecColor;
-  /** Id prefix, default `stud`; ids are `<prefix>-<col>-<row>`. */
+  /** Id prefix, default `stud`; ids are `<prefix>-<col>-<row>` (one-based). */
   readonly idPrefix?: string;
 }
+
+const finite = (n: number): boolean => Number.isFinite(n);
 
 /**
  * A cols x rows grid of studs centred on the host's top face, ordered back to front
  * (ascending `col + row`, then `col`), so painter's order holds for studs that overlap on
- * screen. Throws when the grid or the stud does not fit.
+ * screen. Throws `RangeError` when any input is non-finite or non-positive, or the grid does
+ * not fit.
  */
 export function studGrid(opts: StudGridOptions): PartPrimitive[] {
   const pitch = opts.pitch ?? 1;
-  const d = opts.diameter ?? 0.6 * pitch;
-  const h = opts.height ?? 0.25 * pitch;
+  const d = opts.diameter ?? STUD_DIAMETER * pitch;
+  const h = opts.height ?? STUD_HEIGHT;
   const { cols, rows, host } = opts;
+  const { origin: o, size: s } = host;
+  if (![o.x, o.y, o.z, s.x, s.y, s.z].every(finite) || s.x <= 0 || s.y <= 0 || s.z < 0) {
+    throw new RangeError("stud host box must be finite with size x, y > 0");
+  }
   if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1) {
     throw new RangeError("stud grid needs integer cols and rows >= 1");
   }
-  if (!(pitch > 0) || !(d > 0) || !(h > 0) || d >= pitch) {
-    throw new RangeError("stud pitch, diameter and height must be > 0 with diameter < pitch");
+  if (![pitch, d, h].every(finite) || !(pitch > 0) || !(d > 0) || !(h > 0) || d >= pitch) {
+    throw new RangeError(
+      "stud pitch, diameter and height must be finite and > 0, with diameter < pitch",
+    );
   }
   const w = cols * pitch;
   const l = rows * pitch;
-  if (w > host.size.x + EPS || l > host.size.y + EPS) {
+  if (w > s.x + EPS || l > s.y + EPS) {
     throw new RangeError("stud grid does not fit on the host top face");
   }
-  const x0 = host.origin.x + (host.size.x - w) / 2;
-  const y0 = host.origin.y + (host.size.y - l) / 2;
-  const z = host.origin.z + host.size.z;
+  const x0 = o.x + (s.x - w) / 2;
+  const y0 = o.y + (s.y - l) / 2;
+  const z = o.z + s.z;
   const prefix = opts.idPrefix ?? "stud";
   const cells: [number, number][] = [];
-  for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) cells.push([i, j]);
+  for (let i = 0; i < cols; i++) {
+    for (let j = 0; j < rows; j++) if (!opts.cell || opts.cell(i, j)) cells.push([i, j]);
+  }
   cells.sort((p, q) => p[0] + p[1] - (q[0] + q[1]) || p[0] - q[0]);
   return cells.map(([i, j]) => ({
     id: `${prefix}-${i + 1}-${j + 1}`,
@@ -529,10 +579,10 @@ export function studGrid(opts: StudGridOptions): PartPrimitive[] {
 // ---------------------------------------------------------------------------------------------
 
 export interface PartGeometrySpec {
-  /** Primitive id (`^[a-z0-9_.-]+$`), default `main`. */
+  /** Primitive id, `^[a-z0-9_.-]+$`, default `main`. */
   readonly id?: string;
   readonly kind: PartPrimitiveKind;
-  /** Extent in the part's local units; the box origin is `(0, 0, 0)`. */
+  /** World-space extent (post-rotation); the box origin is `(0, 0, 0)`. */
   readonly size: Vec3;
   /** Default `z` (circular kinds only). */
   readonly axis?: Axis;
@@ -540,7 +590,10 @@ export interface PartGeometrySpec {
   readonly tone: PartTone;
   readonly color?: SpecColor;
   /** Optional stud grid on the top face of the body (outside `depthBox`). */
-  readonly studs?: Pick<StudGridOptions, "cols" | "rows" | "pitch" | "diameter" | "height">;
+  readonly studs?: Pick<
+    StudGridOptions,
+    "cols" | "rows" | "pitch" | "diameter" | "height" | "cell"
+  >;
   readonly images?: readonly PartImagePlacement[];
 }
 
@@ -565,27 +618,54 @@ function unionBox(boxes: readonly Box3[]): Box3 {
   };
 }
 
+const ID_RE = /^[a-z0-9_.-]+$/;
+
 /**
- * Geometry of a single-primitive leaf part in its own frame. `ring` and `tray` become two
- * primitives (`<id>.back`, `<id>.front`) and fill `split`; they and `sprite` are not `solid`.
- * Studs extend `bounds` but not `depthBox`.
+ * Geometry of a single-primitive leaf part. `ring` becomes two primitives (`<id>.back`,
+ * `<id>.front`) and `tray` five boxes (see the header); both fill `split` and, like `sprite`,
+ * are not `solid`. Studs (z-axis bodies only) extend `bounds` but not `depthBox`. Throws
+ * `RangeError` for an invalid id, size, rotate, or an id collision between body and studs.
  */
 export function partGeometry(spec: PartGeometrySpec): PartGeometry {
   const id = spec.id ?? "main";
+  if (!ID_RE.test(id)) throw new RangeError(`invalid primitive id "${id}" (^[a-z0-9_.-]+$)`);
   const box: Box3 = { origin: { x: 0, y: 0, z: 0 }, size: spec.size };
   const base = {
-    box,
     ...(CIRCULAR_KINDS.has(spec.kind) ? { axis: spec.axis ?? "z" } : {}),
     ...(spec.kind === "wedge" ? { rotate: spec.rotate ?? 0 } : {}),
     tone: spec.tone,
     ...(spec.color !== undefined ? { color: spec.color } : {}),
   };
-  const mk = (pid: string): PartPrimitive => ({ id: pid, kind: spec.kind, ...base });
+  const mk = (pid: string): PartPrimitive => ({ id: pid, kind: spec.kind, box, ...base });
   validate(mk(id));
-  const split = spec.kind === "ring" || spec.kind === "tray";
-  const body = split ? [mk(`${id}.back`), mk(`${id}.front`)] : [mk(id)];
-  if (spec.studs && (split || spec.kind === "sprite" || spec.kind === "wedge")) {
-    throw new RangeError(`studs are not supported on ${spec.kind}`);
+  let body: PartPrimitive[];
+  let split: { back: string[]; front: string[] } | undefined;
+  if (spec.kind === "ring") {
+    body = [mk(`${id}.back`), mk(`${id}.front`)];
+    split = { back: [`${id}.back`], front: [`${id}.front`] };
+  } else if (spec.kind === "tray") {
+    const parts = trayParts(box);
+    body = parts.map((p) => ({
+      id: `${id}.${p.id}`,
+      kind: "box" as const,
+      box: p.box,
+      tone: spec.tone,
+      ...(spec.color !== undefined ? { color: spec.color } : {}),
+    }));
+    split = {
+      back: parts.filter((p) => p.half === "back").map((p) => `${id}.${p.id}`),
+      front: parts.filter((p) => p.half === "front").map((p) => `${id}.${p.id}`),
+    };
+  } else {
+    body = [mk(id)];
+  }
+  if (spec.studs) {
+    const offAxis = CIRCULAR_KINDS.has(spec.kind) && (spec.axis ?? "z") !== "z";
+    if (split || spec.kind === "sprite" || spec.kind === "wedge" || offAxis) {
+      throw new RangeError(
+        `studs are not supported on ${spec.kind}${offAxis ? ` along ${String(spec.axis)}` : ""}`,
+      );
+    }
   }
   const studs = spec.studs
     ? studGrid({
@@ -595,13 +675,16 @@ export function partGeometry(spec: PartGeometrySpec): PartGeometry {
         ...(spec.color !== undefined ? { color: spec.color } : {}),
       })
     : [];
-  const bounds = unionBox([box, ...studs.map((s) => s.box)]);
+  const taken = new Set(body.map((p) => p.id));
+  for (const st of studs) {
+    if (taken.has(st.id)) throw new RangeError(`stud id "${st.id}" collides with the body id`);
+  }
   return {
     primitives: [...body, ...studs],
-    bounds,
+    bounds: unionBox([box, ...studs.map((st) => st.box)]),
     depthBox: box,
     solid: !(split || spec.kind === "sprite"),
-    ...(split ? { split: { back: [`${id}.back`], front: [`${id}.front`] } } : {}),
+    ...(split ? { split } : {}),
     ...(spec.images ? { images: spec.images } : {}),
   };
 }

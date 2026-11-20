@@ -10,6 +10,16 @@ import { round2 } from "./num.js";
  *   u along -y, v down (both read left to right as seen on screen); `top`: the image origin is
  *   the diamond's top vertex, u along +x, v along +y.
  * - Billboards stay upright and unskewed in screen space.
+ *
+ * Inputs are world-space boxes (after the `AssemblyFrame` scale and quarter turn; `size` is the
+ * post-rotation extent). Callers validate first; non-finite or degenerate input throws
+ * `RangeError`, which the caller turns into a diagnostic.
+ *
+ * Emit path (§11.3): everything here follows the 2-decimal rule. Draw a decal as
+ * `<g transform="matrix(unit)"><svg width="1" height="1" viewBox="<crop>"
+ * preserveAspectRatio="none">…image…</svg></g>`: the nested svg maps the crop rectangle onto the
+ * unit square (so the crop offset is applied once, by the viewBox) and `unit` maps that square
+ * onto the face parallelogram. No pixel-space matrix is exposed on purpose.
  */
 
 /** SVG `matrix(a b c d e f)`: `x' = a x + c y + e`, `y' = b x + d y + f`. */
@@ -32,18 +42,25 @@ export interface DecalPlacement {
   readonly faceCorners: Quad;
   /** Where the fitted image lands (= `faceCorners` for `stretch`, inside for `contain`, covering for `cover`). */
   readonly corners: Quad;
-  /** Maps crop pixels to screen. Coefficients rounded to 8 decimals (corners within 0.005). */
-  readonly matrix: Matrix;
-  /** Maps the unit square to `corners`. Exact (coordinates rounded to 2 decimals). */
+  /** Maps the unit square to `corners`. Exact (every number rounded to 2 decimals). */
   readonly unit: Matrix;
   /** Clip polygon (the face parallelogram) when the image overflows it (`cover`); else absent. */
   readonly clip?: readonly Vec2[];
 }
 
-const round8 = (n: number): number => {
-  const r = Math.round(n * 1e8) / 1e8;
-  return r === 0 ? 0 : r;
-};
+function assertBox(box: Box3): void {
+  const { origin: o, size: z } = box;
+  if (![o.x, o.y, o.z, z.x, z.y, z.z].every(Number.isFinite) || z.x < 0 || z.y < 0 || z.z < 0) {
+    throw new RangeError("box must be finite with non-negative size");
+  }
+}
+
+function assertCrop(crop: Rect): void {
+  if (![crop.x, crop.y, crop.width, crop.height].every(Number.isFinite)) {
+    throw new RangeError("crop must be finite");
+  }
+  if (!(crop.width > 0) || !(crop.height > 0)) throw new RangeError("crop must be non-empty");
+}
 
 interface FaceFrame {
   readonly origin: Vec3;
@@ -102,9 +119,10 @@ export function decalPlacement(
   fit: Fit,
   projection: Projection,
 ): DecalPlacement {
+  assertBox(box);
   const fr = faceFrame(box, face);
   if (!(fr.w > 0) || !(fr.h > 0)) throw new RangeError(`decal face "${face}" has zero area`);
-  if (!(crop.width > 0) || !(crop.height > 0)) throw new RangeError("decal crop must be non-empty");
+  assertCrop(crop);
   // Fitted rectangle in face (u, v) fractions.
   let u0 = 0;
   let v0 = 0;
@@ -127,18 +145,6 @@ export function decalPlacement(
   const corners: Quad = [P(u0, v0), P(u1, v0), P(u1, v1), P(u0, v1)];
   const faceCorners: Quad = [P(0, 0), P(1, 0), P(1, 1), P(0, 1)];
   const [p00, p10, , p01] = corners;
-  const ux = (p10.x - p00.x) / crop.width;
-  const uy = (p10.y - p00.y) / crop.width;
-  const vx = (p01.x - p00.x) / crop.height;
-  const vy = (p01.y - p00.y) / crop.height;
-  const matrix: Matrix = {
-    a: round8(ux),
-    b: round8(uy),
-    c: round8(vx),
-    d: round8(vy),
-    e: round8(p00.x - ux * crop.x - vx * crop.y),
-    f: round8(p00.y - uy * crop.x - vy * crop.y),
-  };
   const unit: Matrix = {
     a: round2(p10.x - p00.x),
     b: round2(p10.y - p00.y),
@@ -151,7 +157,6 @@ export function decalPlacement(
     face,
     faceCorners,
     corners,
-    matrix,
     unit,
     ...(fit === "cover" ? { clip: [...faceCorners] } : {}),
   };
@@ -180,24 +185,24 @@ export function billboardRect(
   fit: Fit,
   projection: Projection,
 ): BillboardPlacement {
+  assertBox(box);
   const sil = projectBoxBounds(projection, box);
   if (!(sil.width > 0) || !(sil.height > 0)) {
     throw new RangeError("billboard box has no screen area");
   }
-  if (!(crop.width > 0) || !(crop.height > 0)) {
-    throw new RangeError("billboard crop must be non-empty");
-  }
+  assertCrop(crop);
   if (fit === "stretch") return { rect: sil };
   const sx = sil.width / crop.width;
   const sy = sil.height / crop.height;
   const s = fit === "contain" ? Math.min(sx, sy) : Math.max(sx, sy);
-  const width = crop.width * s;
-  const height = crop.height * s;
+  const width = round2(crop.width * s);
+  const height = round2(crop.height * s);
+  const bottom = sil.y + sil.height;
   const rect: Rect = {
     x: round2(sil.x + (sil.width - width) / 2),
-    y: round2(sil.y + sil.height - height),
-    width: round2(width),
-    height: round2(height),
+    y: round2(bottom - height),
+    width,
+    height,
   };
   return fit === "cover" ? { rect, clip: sil } : { rect };
 }
