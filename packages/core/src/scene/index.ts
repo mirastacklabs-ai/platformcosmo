@@ -30,7 +30,7 @@ import { RouteLanes, routeEdge, type Rect } from "../routing/router.js";
 import { labelFontSizeFor } from "../text/index.js";
 import { particleCount, PARTICLE_LIMIT } from "../schema/semantic.js";
 import type { PlatformCosmoSpec, SpecFlow, SpecNode } from "../schema/types.gen.js";
-import { buildFigureScene } from "./boards.js";
+import { boardOverlapDiagnostics, buildFigureScene, figureFocusIds } from "./boards.js";
 import { NODE_TYPES, PRIMITIVE_HEIGHT } from "./categories.js";
 import { NODE_HEIGHT, footprintOf } from "./sizes.js";
 
@@ -522,6 +522,9 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
   for (const g of groups) focusSource.set(g.id, g.box);
   for (const k of [...focusSource.keys()].sort()) focusTargets[k] = focusSource.get(k)!;
 
+  // Figure ids that can take a camera focus: boards get geometry below, once the other scene
+  // content has fixed where they stand (they need the base image's size).
+  const figureFocus = figureFocusIds(spec, context.images);
   const rackSpecs = new Map((spec.racks ?? []).map((r) => [r.id, r]));
   const timeline: SceneStep[] = [];
   const stepOwnFlows: SceneFlow[] = [];
@@ -555,7 +558,7 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
       stepOwnFlows.push(...list);
     }
     let focus: string | undefined = s.focus;
-    if (focus !== undefined && !Object.hasOwn(focusTargets, focus)) {
+    if (focus !== undefined && !Object.hasOwn(focusTargets, focus) && !figureFocus.has(focus)) {
       diagnostics.push({
         severity: "warning",
         code: "semantic/unknown-focus",
@@ -643,16 +646,37 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
     ...edges.flatMap((e) => e.path.map((p) => ({ origin: p, size: { x: 0, y: 0, z: 0 } }))),
   ]);
 
-  // Figures (schema 1.2.0, A2-F): boards sit +x of everything else, one row. Their diagnostics
-  // belong to `validate`; the scene only carries the resolved content.
+  // Figures (schema 1.2.0): boards sit +x of everything else, one row. Their own diagnostics
+  // belong to `validate`; the scene carries the resolved content and, once the base image is
+  // known, the board's box in `bounds` and `focusTargets`.
   const figureScene = buildFigureScene(spec, {
     origin: {
       x: bounds.size.x > 0 ? r2(bounds.origin.x + bounds.size.x + DC_GAP) : 0,
       y: bounds.origin.y,
       z: 0,
     },
-    isFocusTarget: (id) => Object.hasOwn(focusTargets, id),
+    isFocusTarget: (id) => Object.hasOwn(focusTargets, id) || figureFocus.has(id),
+    ...(context.images ? { images: context.images } : {}),
   });
+  let outBounds = bounds;
+  if (figureScene !== undefined && figureScene.boxes.size > 0) {
+    // An explicit `pos` can land on other content: warn (automatic placement stands beyond it).
+    diagnostics.push(
+      ...boardOverlapDiagnostics(
+        figureScene,
+        new Map<string, Box3>(
+          [...allObjects, ...allGroups]
+            .filter((o) => !o.id.includes("/"))
+            .map((o) => [o.id, o.box]),
+        ),
+      ),
+    );
+    const hadContent = bounds.size.x > 0 || bounds.size.y > 0 || bounds.size.z > 0;
+    outBounds = unionBox([...(hadContent ? [bounds] : []), ...figureScene.boxes.values()]);
+    for (const [id, box] of figureScene.boxes) focusSource.set(id, box);
+    for (const k of Object.keys(focusTargets)) delete focusTargets[k];
+    for (const k of [...focusSource.keys()].sort()) focusTargets[k] = focusSource.get(k)!;
+  }
 
   const outDiagnostics = diagnostics.sort(
     (a, b) =>
@@ -679,7 +703,7 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
     legend,
     timeline,
     focusTargets,
-    bounds,
+    bounds: outBounds,
     diagnostics: outDiagnostics,
     ...(figureScene === undefined ? {} : { assemblies: figureScene.assemblies }),
   };

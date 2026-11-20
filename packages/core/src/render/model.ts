@@ -4,6 +4,7 @@ import type {
   EdgePath,
   FontMode,
   IconResolver,
+  ImageAssetResolver,
   Layer,
   ObjectAnchor,
   Rect,
@@ -17,6 +18,8 @@ import type {
   Vec3,
 } from "../contracts/index.js";
 import { depthOrder, orderGroups } from "../depth/index.js";
+import type { PlatformCosmoSpec } from "../schema/types.gen.js";
+import { attachBoards, buildBoards } from "./boards/index.js";
 import { createIds, iconDef } from "../emit/index.js";
 import { h } from "../emit/xml.js";
 import {
@@ -47,6 +50,9 @@ export interface ModelInputs {
   readonly font: FontMode;
   readonly prefix: string;
   readonly icons?: IconResolver;
+  /** Schema 1.2.0: the spec and prepared images, for figure panels (the scene carries ids only). */
+  readonly spec?: PlatformCosmoSpec;
+  readonly images?: ImageAssetResolver;
 }
 
 export interface BuiltModel {
@@ -691,6 +697,36 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     return h("g", { id: ids.edge(e.id) }, ...kids);
   }
 
+  // ---- Figure boards (schema 1.2.0) ------------------------------------------------------
+  // Absent for every 1.1 scene (no `assemblies`), so their layers and view box are untouched.
+  const boardsBuild = buildBoards({
+    scene,
+    spec: inputs.spec,
+    images: inputs.images,
+    projection,
+    ids,
+    prefix: P,
+    labelSize,
+    fs,
+    text: (o) =>
+      textEl({
+        ...(o.id === undefined ? {} : { id: o.id }),
+        x: o.x,
+        y: o.y,
+        size: o.size,
+        ...(o.anchor === undefined ? {} : { anchor: o.anchor }),
+        cls: o.cls,
+        ...(o.bold === true ? { bold: true } : {}),
+        content: o.content,
+      }),
+    fit: (text, size, bold, maxWidth) => fit(text, size, bold, maxWidth),
+  });
+  if (boardsBuild) {
+    layers.background.push(...boardsBuild.defs);
+    layers.objects.push(...boardsBuild.objects);
+    extents.push(...boardsBuild.extents);
+  }
+
   // ---- Viewbox, overlays ---------------------------------------------------------------
   const pad = Math.max(0, scene.canvas.padding); // pixels (schema: canvas.padding)
   let vb: Rect =
@@ -731,9 +767,12 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   });
   const tilesW = tiles.reduce((s, t) => s + t.width + 8, 8);
 
+  const creditsH = boardsBuild && boardsBuild.creditsLine !== "" ? round2(16 * fs) : 0;
   const topExtra = tiles.length > 0 ? metricH + 14 : 0;
   const bottomExtra =
-    (captionSteps.length > 0 ? captionH + 12 : 0) + (legend.length > 0 ? legendH + 8 : 0);
+    (captionSteps.length > 0 ? captionH + 12 : 0) +
+    (legend.length > 0 ? legendH + 8 : 0) +
+    creditsH;
   vb = { x: vb.x, y: vb.y - topExtra, width: vb.width, height: vb.height + topExtra + bottomExtra };
   if (tilesW > vb.width) vb = { ...vb, x: vb.x - (tilesW - vb.width) / 2, width: tilesW };
   const ratio = aspectRatio(scene.canvas.aspect);
@@ -798,6 +837,26 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
 
   let captionRect: Rect | undefined;
   let bottom = vb.y + vb.height - 8;
+  // Credits line (§11.6): pinned like the legend, at the very bottom.
+  if (boardsBuild && creditsH > 0) {
+    const size = round2(10 * fs);
+    const text = fit(boardsBuild.creditsLine, size, false, vb.width - 24, MONO);
+    layers.overlay.push(
+      h(
+        "g",
+        { id: boardsBuild.model.creditsId as string },
+        textEl({
+          x: round2(vb.x + 12),
+          y: round2(bottom - 3 * fs),
+          size,
+          cls: "t-secondary",
+          mono: true,
+          content: text,
+        }),
+      ),
+    );
+    bottom -= creditsH;
+  }
   if (captionSteps.length > 0) {
     const maxW = vb.width - 24;
     const texts = captionSteps.map((s) =>
@@ -883,7 +942,10 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       height: 2 * vb.height,
     }),
   );
-  if (scene.canvas.grid) {
+  // A scene of figure panels only has no floor to draw a grid on.
+  const boardsOnly =
+    boardsBuild !== undefined && scene.objects.length === 0 && scene.groups.length === 0;
+  if (scene.canvas.grid && !boardsOnly) {
     const b = scene.bounds;
     const gx0 = Math.floor(b.origin.x - 1);
     const gx1 = Math.ceil(b.origin.x + b.size.x + 1);
@@ -907,6 +969,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   }
 
   layers.labels.push(...arrowNodes, ...labelNodes);
+  if (boardsBuild) layers.labels.push(...boardsBuild.labels);
 
   // ---- Focus rects, glyph coverage -----------------------------------------------------
   const focusRects: Record<string, Rect> = {};
@@ -918,6 +981,10 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       width: round2(r.width + 2 * MARGIN_FOCUS),
       height: round2(r.height + 2 * MARGIN_FOCUS + labelSize + 6),
     };
+  }
+  // A figure's focus rect covers its panel, moving sprites and labels, not just the world box.
+  if (boardsBuild) {
+    for (const [id, r] of Object.entries(boardsBuild.focus)) focusRects[id] = r;
   }
   const missing = [
     ...new Set([
@@ -951,6 +1018,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     font: inputs.font,
     fontAssets: fontAssets(),
   };
+  if (boardsBuild) attachBoards(model, boardsBuild.model);
   registry.set(model, inputs);
   return { model, diagnostics };
 }

@@ -2,6 +2,7 @@ import type {
   AnimationLayer,
   EmitFn,
   EmitOptions,
+  ImageAsset,
   Layer,
   RenderModel,
   SvgElement,
@@ -26,7 +27,9 @@ import {
   themeVars,
   varDiff,
 } from "./styles.js";
-import { cdata, h, raw, serialize } from "./xml.js";
+import { boardsOf } from "../render/boards/types.js";
+import { createIds } from "./ids.js";
+import { cdata, escapeAttr, h, raw, serialize } from "./xml.js";
 
 export { createIds, cssEscapeId } from "./ids.js";
 export { themeVars } from "./styles.js";
@@ -38,6 +41,102 @@ export { serialize, h, raw, escapeText, escapeAttr, cdata } from "./xml.js";
  * Emit hoists each one (deduplicated by ref) into `<defs>` as a `<symbol>`.
  */
 export const ICON_DEF_TAG = "pc-icon-def";
+
+/**
+ * Placeholder `{ tag, attrs: { hash } }` the model builder uses for an image asset (schema
+ * 1.2.0). Emit hoists each one, once per hash, into `<defs>` as an `<image>` (raster) or a
+ * `<symbol>` (SVG), reading the asset from the model's boards data and base64-encoding the
+ * bytes itself (§11.3).
+ */
+export const IMAGE_DEF_TAG = "pc-image-def";
+
+/** The only `data:` href the emitter writes (§11.3); anything else is refused. */
+export const DATA_HREF_RE = /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+=*$/;
+
+/** Throws unless `href` is a PNG or JPEG data URI of standard base64 (§11.3). */
+export function assertDataHref(href: string): void {
+  if (!DATA_HREF_RE.test(href)) throw new Error("data: href is not a base64 PNG or JPEG data URI");
+}
+
+function base64Of(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(bin);
+}
+
+/**
+ * Affine matrix that turns the stored pixels of an EXIF-oriented image (stored `w`×`h`) upright
+ * (§11.2): the `<image>` in `<defs>` carries it, so every use, crop and decal sees the upright
+ * picture. Orientation 1 (and anything else) is the identity.
+ */
+export function orientationMatrix(orientation: number, w: number, h: number): string | undefined {
+  switch (orientation) {
+    case 2:
+      return `matrix(-1 0 0 1 ${w} 0)`;
+    case 3:
+      return `matrix(-1 0 0 -1 ${w} ${h})`;
+    case 4:
+      return `matrix(1 0 0 -1 0 ${h})`;
+    case 5:
+      return "matrix(0 1 1 0 0 0)";
+    case 6:
+      return `matrix(0 1 -1 0 ${h} 0)`;
+    case 7:
+      return `matrix(0 -1 -1 0 ${h} ${w})`;
+    case 8:
+      return `matrix(0 -1 1 0 0 ${w})`;
+    default:
+      return undefined;
+  }
+}
+
+/** `<image>` (raster) or `<symbol>` (SVG) of an asset, in `<defs>`, under the id of its hash. */
+function imageDefOf(asset: ImageAsset, id: string): SvgNode {
+  if (asset.format === "svg") {
+    const svg = asset.svg;
+    if (!svg || UNSAFE_ICON.test(svg.body))
+      throw new Error("image: SVG body is not sanitizer output");
+    const body = svg.body.replaceAll("__PCID__-", `${id}_`).replaceAll("__PCID__", id);
+    return h("symbol", { id, viewBox: svg.viewBox }, raw(body));
+  }
+  if (asset.mime !== "image/png" && asset.mime !== "image/jpeg") {
+    throw new Error(`image: ${asset.mime} cannot be embedded`);
+  }
+  const swap = asset.orientation >= 5;
+  const w = swap ? asset.height : asset.width;
+  const hh = swap ? asset.width : asset.height;
+  if (!Number.isInteger(w) || !Number.isInteger(hh) || w <= 0 || hh <= 0) {
+    throw new Error("image: invalid size");
+  }
+  const href = `data:${asset.mime};base64,${base64Of(asset.data)}`;
+  assertDataHref(href);
+  const t = orientationMatrix(asset.orientation, w, hh);
+  return raw(
+    `<image id="${escapeAttr(id)}" href="${href}" width="${w}" height="${hh}" preserveAspectRatio="none"${t === undefined ? "" : ` transform="${t}"`}/>`,
+  );
+}
+
+/** Animation attribute overrides (`AnimationLayer.attrs`): only these, with these values. */
+const TRANSLATE_RE = /^translate\(-?\d+(?:\.\d+)? -?\d+(?:\.\d+)?\)$/;
+function checkedAttr(name: string, value: string | number): string | number {
+  if (name === "transform" && typeof value === "string" && TRANSLATE_RE.test(value)) return value;
+  if (name === "visibility" && (value === "hidden" || value === "visible")) return value;
+  if (name === "opacity" && typeof value === "number" && value >= 0 && value <= 1) return value;
+  throw new Error(`animation attribute ${name} is not allowed`);
+}
+
+/** Refuses any `data:` value in an element attribute: the emitter writes its own (§11.3). */
+function refuseDataUris(node: SvgNode): void {
+  walk(node, (el) => {
+    for (const [k, v] of Object.entries(el.attrs ?? {})) {
+      if (typeof v === "string" && /data\s*:/i.test(v)) {
+        throw new Error(`data: URIs are only emitted for image assets in <defs> (attribute ${k})`);
+      }
+    }
+  });
+}
 
 const LAYERS: readonly Layer[] = [
   "background",
@@ -148,7 +247,18 @@ export const emit: EmitFn = (
 
   // 1. Layer content (model + animation), icon defs hoisted out.
   const symbols = new Map<string, SvgElement>();
+  // Image assets (§11.3): one `<image>`/`<symbol>` per hash, from the bytes the model carries.
+  const imageDefs = new Map<string, SvgNode>();
+  const boardAssets = boardsOf(model)?.assets;
   const hoist: Mapper = (el) => {
+    if (el.tag === IMAGE_DEF_TAG) {
+      const hash = String(el.attrs?.hash ?? "");
+      const asset = boardAssets?.get(hash);
+      if (asset === undefined) throw new Error("image placeholder has no asset");
+      if (!imageDefs.has(hash))
+        imageDefs.set(hash, imageDefOf(asset, createIds(prefix).image(hash)));
+      return null;
+    }
     if (el.tag !== ICON_DEF_TAG) return el;
     const ref = String(el.attrs?.ref ?? "");
     if (!symbols.has(ref)) symbols.set(ref, iconSymbol(el, ids));
@@ -156,7 +266,18 @@ export const emit: EmitFn = (
   };
   const noIcons: Mapper = (el) => {
     if (el.tag === ICON_DEF_TAG) throw new Error("animation output must not contain icon defs");
+    if (el.tag === IMAGE_DEF_TAG) throw new Error("animation output must not contain image defs");
     return el;
+  };
+  // Attribute overrides by element id (frame and step outputs, resvg has no CSS animation).
+  const overrides = animation.attrs;
+  const override: Mapper = (el) => {
+    const id = el.attrs?.id;
+    const set = overrides !== undefined && typeof id === "string" ? overrides[id] : undefined;
+    if (set === undefined) return el;
+    const attrs: Record<string, string | number> = { ...el.attrs };
+    for (const [k, v] of Object.entries(set)) attrs[k] = checkedAttr(k, v);
+    return { ...el, attrs };
   };
   const layerNodes = new Map<Layer, SvgNode[]>();
   for (const layer of LAYERS) {
@@ -166,11 +287,19 @@ export const emit: EmitFn = (
     const extra = (animation.layers[layer] ?? [])
       .map((n) => mapTree(n, noIcons))
       .filter((n): n is SvgNode => n !== null);
-    layerNodes.set(layer, [...own, ...extra]);
+    const nodes = [...own, ...extra];
+    nodes.forEach(refuseDataUris);
+    layerNodes.set(
+      layer,
+      overrides === undefined
+        ? nodes
+        : nodes.map((n) => mapTree(n, override)).filter((n): n is SvgNode => n !== null),
+    );
   }
   const animDefs = animation.defs
     .map((n) => mapTree(n, noIcons))
     .filter((n): n is SvgNode => n !== null);
+  animDefs.forEach(refuseDataUris);
 
   const vars = themeVars(model.theme);
 
@@ -335,6 +464,7 @@ export const emit: EmitFn = (
   // 5. Document.
   const defs: SvgNode[] = [];
   for (const ref of [...symbols.keys()].sort()) defs.push(symbols.get(ref) as SvgElement);
+  for (const hash of [...imageDefs.keys()].sort()) defs.push(imageDefs.get(hash) as SvgNode);
   for (const e of model.scene.edges) {
     const p = model.edgePaths[e.id];
     if (e.hidden && p) defs.push(h("path", { id: ids.edgePath(e.id), d: p.d }));
@@ -342,9 +472,11 @@ export const emit: EmitFn = (
   defs.push(...defsExtra);
 
   const title = model.scene.meta.title ?? "PlatformCosmo diagram";
+  const credits = boardsOf(model)?.desc ?? "";
   const desc =
-    model.scene.meta.description ??
-    `Isometric architecture diagram with ${model.scene.objects.length} objects.`;
+    (model.scene.meta.description ??
+      `Isometric architecture diagram with ${model.scene.objects.length} objects.`) +
+    (credits === "" ? "" : ` ${credits}`);
   const camera = h(
     "g",
     { id: ids.camera() },

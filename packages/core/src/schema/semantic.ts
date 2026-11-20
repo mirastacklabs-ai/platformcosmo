@@ -181,6 +181,8 @@ export function semanticDiagnostics(
     const k = ids.get(ep)?.kind;
     return k === "group" || k === "row" || k === "aisle";
   };
+  /** A figure id is a camera focus target (R-1): the panel is framed with its moving sprites. */
+  const isFigure = (ep: string): boolean => ids.get(ep)?.kind === "figure";
   const unknownObject = (path: string, ep: string, what: string, allowAreas = false): void => {
     const slash = ep.indexOf("/");
     let message = `Unknown ${what} ${q(ep)}`;
@@ -348,7 +350,9 @@ export function semanticDiagnostics(
   checkFlows(spec.flows ?? [], "/flows");
   // Images, figures and figure actions (A2-F); these run alongside the guard. Focus ids that
   // zoom are the ones the check below accepts, as in the scene.
-  out.push(...figureDiagnostics(spec, undefined, (id) => isObject(id) || isAreaRef(id)));
+  out.push(
+    ...figureDiagnostics(spec, undefined, (id) => isObject(id) || isAreaRef(id) || isFigure(id)),
+  );
   (spec.steps ?? []).forEach((s, si) => {
     const base = `/steps/${si}`;
     for (const key of Object.keys(s.set ?? {})) {
@@ -364,7 +368,7 @@ export function semanticDiagnostics(
           { id: key },
         );
     }
-    if (s.focus !== undefined && !isObject(s.focus) && !isAreaRef(s.focus)) {
+    if (s.focus !== undefined && !isObject(s.focus) && !isAreaRef(s.focus) && !isFigure(s.focus)) {
       unknownObject(`${base}/focus`, s.focus, "focus target", true);
     }
     checkFlows(s.flows ?? [], `${base}/flows`);

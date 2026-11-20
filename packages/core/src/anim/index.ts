@@ -13,6 +13,8 @@ import type {
   SceneObject,
   SvgElement,
 } from "../contracts/index.js";
+import { boardsOf } from "../render/boards/types.js";
+import { boardsFrame, boardsLoop, boardsStepEnd, hasBoardMotion } from "./boards.js";
 import { Keyframes, el, stopsFor, t4 } from "./css.js";
 import { controlCss, controlIds, controlNodes, interactiveScript } from "./interactive.js";
 import {
@@ -193,11 +195,15 @@ function frameLayer(
     model.scene.timeline.map((s) => zoomFor(model, s)),
     t,
   );
+  // Figure boards: the exact pose and fades at this time, as attributes (no CSS in frames).
+  const bm = boardsOf(model);
+  const attrs = bm ? boardsFrame(bm, t, speed) : undefined;
   return {
     css: join(colors.css(), staticStepCss(model, k)),
     defs: [],
     layers: wrap(model, groups),
     ...(viewBox ? { viewBox } : {}),
+    ...(attrs ? { attrs } : {}),
     duration: 0,
   };
 }
@@ -229,6 +235,9 @@ function stepLayer(
     groups.length > 0
       ? `@media (prefers-reduced-motion:reduce){\n${model.ids.sel(particlesId(model.ids.prefix))}{display:none}\n}`
       : "";
+  // Figure boards: the pose at the end of the step (its closing hold), as attributes.
+  const bm = boardsOf(model);
+  const attrs = bm && count > 0 ? boardsStepEnd(bm, k + 1) : undefined;
   return {
     css: join(
       colors.css(),
@@ -241,6 +250,7 @@ function stepLayer(
     defs: [],
     layers: wrap(model, groups),
     ...(zoom ? { viewBox: zoom.viewBox } : {}),
+    ...(attrs ? { attrs } : {}),
     duration: groups.length > 0 ? traversalSeconds(speed) : 0,
   };
 }
@@ -280,6 +290,11 @@ function loopLayer(
       }
     });
   }
+  // Figure boards: sprite and fade tracks (CSS in both motion modes, D32). Specs without
+  // figure actions have none, and keep the 1.1 reduced-motion rule.
+  const bm = boardsOf(model);
+  const boardCss = hasBoardMotion(bm) ? boardsLoop(bm, ids, kf, total) : undefined;
+  const poseMotion = boardCss !== undefined && boardCss.rules.length > 0;
   const flowGroups: SvgElement[] = [];
   const particleRules: string[] = [];
   for (const { flow, steps } of flowById.values()) {
@@ -349,7 +364,8 @@ function loopLayer(
       for (const k of ns) toggle(ids.sel(ids.metricValue(m.id, k)), (i) => shown[i] === k);
     }
 
-    reduced.push(staticStepCss(model, 0));
+    // With figure motion the reduced rule keeps the step-end state animations (below).
+    if (!poseMotion) reduced.push(staticStepCss(model, 0));
   }
 
   // Camera zoom (D27): the loop rests on the full overview (0% = overview), eases into step 1's
@@ -357,12 +373,14 @@ function loopLayer(
   // every step starts at its own view; the loop ends by easing back out to the overview.
   // Everything in the overlay layer (caption box, metric tiles, legend, interactive controls) sits
   // inside the camera group, so it gets the inverse transform on the same curve to stay put.
+  if (boardCss) rules.push(...boardCss.rules);
   const zooms = tl.map((s) => zoomFor(model, s));
   const cam = ids.sel(ids.camera());
   const pinned = [
     ids.sel(ids.caption()),
     ...model.scene.metrics.map((m) => ids.sel(ids.metric(m.id))),
     legendSelector(ids),
+    ...(bm?.creditsId !== undefined ? [ids.sel(bm.creditsId)] : []),
     ...(interactive ? [ids.sel(controlIds(ids.prefix, ids.root()).group)] : []),
   ];
   const pinSel = pinned.join(",");
@@ -374,13 +392,19 @@ function loopLayer(
       `${cam}{transform-origin:0 0;${loopAnim(kf.add(keyframes(cameraTransform)), EASE)}}`,
       `${pinSel}{transform-origin:0 0;${loopAnim(kf.add(keyframes(inverseCameraTransform)), EASE)}}`,
     );
-    // Reduced motion rests on the overview.
-    reduced.push(`${cam}{transform:none}`, `${pinSel}{transform:none}`);
+    // Reduced motion rests on the overview (with figure motion the camera animation must be
+    // switched off explicitly: an animation beats a plain `transform`).
+    const off = poseMotion ? "animation:none;" : "";
+    reduced.push(`${cam}{${off}transform:none}`, `${pinSel}{${off}transform:none}`);
   }
 
   // Reduced motion: no CSS animation (static first frame), particles hidden (SMIL cannot be paused by CSS).
+  // Specs with figure motion instead show discrete per-step poses (each step its end pose, no
+  // tween) and keep their step-end captions, states and metrics (§12).
   const root = ids.sel(ids.root());
-  const motionOff = [`${root} *{animation:none!important}`, ...reduced];
+  const motionOff = poseMotion
+    ? [...(boardCss as { reduced: readonly string[] }).reduced, ...reduced]
+    : [`${root} *{animation:none!important}`, ...reduced];
   if (flowGroups.length > 0) {
     motionOff.push(`${ids.sel(particlesId(ids.prefix))}{display:none}`);
   }
@@ -398,9 +422,12 @@ function loopLayer(
     const cid = controlIds(ids.prefix, ids.root());
     layers.overlay = [controlNodes(ids.prefix, cid, model.viewBox)];
     controlCssText = controlCss(ids.prefix);
-    const targets = win.starts.map((s, i) =>
-      i === 0 && zooms[0] ? transitionSeconds(win.durations[0] ?? 0) : s,
-    );
+    // Step pauses at the settled time of steps that have actions (§7.5), else at the start.
+    const targets = win.starts.map((s, i) => {
+      const settled = bm?.settled[i];
+      if (settled !== undefined) return settled / speed;
+      return i === 0 && zooms[0] ? transitionSeconds(win.durations[0] ?? 0) : s;
+    });
     script = interactiveScript(
       cid,
       win.starts,

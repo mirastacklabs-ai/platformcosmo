@@ -687,16 +687,28 @@ describe("action targets and the guard (tracks §0)", () => {
     expect(d.map((x) => x.path)).toContain("/steps/0/assembly/2/implode");
   });
 
-  test("validate keeps the guard error and adds the figure checks", () => {
+  test("validate (phase1a lifted) reports the figure checks, with no guard error for figures", () => {
     const r = validate({
       ...spec,
       steps: [{ assembly: [{ explode: "heat-sink", to: 9 }] }],
     });
     expect(r.valid).toBe(false);
     const errors = codes(r.diagnostics.filter((d) => d.severity === "error"));
-    expect(errors).toContain("assembly/unsupported@/figures");
-    expect(errors).toContain("assembly/unsupported@/steps/0/assembly/0");
     expect(errors).toContain("assembly/stage-out-of-range@/steps/0/assembly/0/to");
+    for (const gone of ["/figures", "/images", "/steps/0/assembly/0"]) {
+      expect(errors).not.toContain(`assembly/unsupported@${gone}`);
+    }
+  });
+
+  test("validate with phase1a lifted keeps the guard error and adds unknown-target for the rest", () => {
+    const r = validate({
+      ...spec,
+      steps: [{ assembly: [{ explode: "heat-sink" }, { explode: "box" }] }],
+    });
+    const errors = codes(r.diagnostics.filter((d) => d.severity === "error"));
+    expect(errors).toContain("assembly/unsupported@/steps/0/assembly/1");
+    expect(errors).toContain("assembly/unknown-target@/steps/0/assembly/1/explode");
+    expect(errors.filter((e) => e.includes("/steps/0/assembly/0"))).toEqual([]);
   });
 });
 
@@ -830,15 +842,15 @@ describe("design examples", () => {
     expect(lifted.length).toBeGreaterThan(0);
   });
 
-  test("validate still rejects it only through the guard and its own checks", () => {
+  test("the heat-sink example validates cleanly once phase1a is lifted (R-1)", () => {
     const r = validate(heatSink);
     expect(r.diagnostics.filter((d) => d.code.startsWith("schema/"))).toEqual([]);
-    expect(codes(r.diagnostics.filter((d) => d.severity === "error"))).toEqual([
-      "assembly/unsupported@/figures",
-      "assembly/unsupported@/images",
-      "assembly/unsupported@/steps/1/assembly/0",
-      "assembly/unsupported@/steps/2/assembly/0",
-    ]);
+    expect(r.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(r.valid).toBe(true);
+    // the 7.3 story still needs assemblies and racks: guarded, and its targets unknown
+    const story = validate(hallToSink);
+    expect(story.valid).toBe(false);
+    expect(story.diagnostics.some((d) => d.code === "assembly/unsupported")).toBe(true);
   });
 
   test("the heat-sink example resolves to the expected SceneFlatBoard, plan and credits", () => {
