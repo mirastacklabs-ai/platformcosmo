@@ -65,6 +65,8 @@ export interface Ctx {
   err(text: string): void;
   /** Global `--packs-dir`. */
   packsDir?: string | undefined;
+  /** `pcosmo assets`: the directory explicit input and output paths are confined to. */
+  assetsRoot?: string | undefined;
 }
 
 /** Exit codes: 0 ok, 1 spec/build problems, 2 usage, 3 internal or I/O failure. */

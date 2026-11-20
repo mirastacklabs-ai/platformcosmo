@@ -66,7 +66,8 @@ Commands:
                                            report.json and the overlays are written (--figure-id id, --src-dir fig/,
                                            --label text, --strict, --show-exclusions, provenance:
                                            --source-document --source-page --source-figure
-                                           --attribution --license --source-url)
+                                           --attribution --license --source-url,
+                                           or --source-json <file> (what the skill uses))
   check <manifest.json> -d <dir>           Re-run the quality gate on the outputs in <dir>
                                            (reads <dir>/fragment.json and its PNGs; --strict)
   shrink <img> --max-px 1024 -o out.png    Downscale (PNG) or pass a JPEG through (--to-png)
@@ -74,11 +75,13 @@ Commands:
 Options:
   --json         Print a machine-readable result (sorted keys, same input gives the same bytes)
   -o <file>      Output file (inside the working directory)
+  --root <dir>   Directory inputs and outputs may live in (default: the working directory)
   -d <dir>       Output directory (inside the working directory; created if missing)
   -h, --help     Show this help
 
-PCOSMO_ASSETS_ROOT: when set, every input and output path must resolve inside that directory
-(the Claude Code plugin launcher sets it to the working directory).
+Confinement: every input and output path must resolve inside the working directory. --root <dir>
+(any command) allows another directory on purpose. When PCOSMO_ASSETS_ROOT is set (the Claude Code
+plugin launcher sets it to the working directory) it is the outer bound and --root cannot leave it.
 
 Manifest: pcosmo assets schema (also schema/figure-manifest.v1.json) (shipped with the package). Source file names in a manifest
 are relative to the manifest's directory and may not contain '..'.
@@ -180,7 +183,10 @@ function readDiag(r: Extract<SafeRead, { ok: false }>, what: string): Diagnostic
 const shown = (ctx: Ctx, path: string): string =>
   relFromCwd(resolve(ctx.deps.cwd), resolve(ctx.deps.cwd, path)).slice(0, 160);
 
-const assetsRoot = (ctx: Ctx): string | undefined => ctx.deps.env.PCOSMO_ASSETS_ROOT;
+const assetsRoot = (ctx: Ctx): string => ctx.assetsRoot ?? resolve(ctx.deps.cwd);
+const outsideRoot = (ctx: Ctx): string =>
+  `it is outside the allowed directory ${relFromCwd(resolve(ctx.deps.cwd), assetsRoot(ctx))}`;
+const ROOT_HINT = "pass --root <dir> to allow another directory";
 
 /** An explicit input: confined by PCOSMO_ASSETS_ROOT when set, then read through the path guard. */
 async function readIn(ctx: Ctx, path: string, maxBytes: number): Promise<SafeRead> {
@@ -189,8 +195,8 @@ async function readIn(ctx: Ctx, path: string, maxBytes: number): Promise<SafeRea
     return {
       ok: false,
       code: "image/unsafe-path",
-      message: "it is outside PCOSMO_ASSETS_ROOT",
-      suggestion: "work inside the directory the plugin was started in",
+      message: outsideRoot(ctx),
+      suggestion: ROOT_HINT,
     };
   }
   return readExplicitFile(ctx.deps.cwd, path, maxBytes);
@@ -285,8 +291,9 @@ async function writeFiles(
   diags: Diagnostic[],
 ): Promise<Written[]> {
   const cwd = resolve(ctx.deps.cwd);
+  const root = assetsRoot(ctx);
   const abs = resolve(cwd, dirTarget);
-  const rel = relative(cwd, abs);
+  const rel = relative(root, abs);
   const label = relFromCwd(cwd, abs);
   const refuse = (why: string): Written[] => {
     diags.push({
@@ -294,21 +301,21 @@ async function writeFiles(
       code: "asset/unsafe-path",
       path: "",
       message: `refusing to write to ${label.slice(0, 160)}: ${why}`,
-      suggestion: "write below the working directory, without symbolic links",
+      suggestion: `write below ${relFromCwd(cwd, root)} without symbolic links, or ${ROOT_HINT}`,
     });
     return [];
   };
   if (dirTarget.includes("\0")) return refuse("the path is not valid");
   if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    return refuse("it is outside the working directory");
+    return refuse(outsideRoot(ctx));
   }
-  if (!(await insideAssetsRoot(assetsRoot(ctx), abs))) {
-    return refuse("it is outside PCOSMO_ASSETS_ROOT");
+  if (!(await insideAssetsRoot(root, abs))) {
+    return refuse(outsideRoot(ctx));
   }
-  const r = await writeSet(cwd, rel.split(sep).join("/"), files, {}, label);
+  const r = await writeSet(root, rel.split(sep).join("/"), files, {}, label);
   if (!r.ok) return refuse(r.message);
   return r.written.map((w) => ({
-    name: rel === "" ? w.name : `${rel.split(sep).join("/")}/${w.name}`,
+    name: relFromCwd(cwd, join(abs, w.name)),
     bytes: w.bytes,
   }));
 }
@@ -398,7 +405,8 @@ async function doctor(ctx: Ctx, args: string[]): Promise<number> {
     }
   }
   const payload = {
-    assetsRoot: ctx.deps.env.PCOSMO_ASSETS_ROOT ?? null,
+    assetsRoot: assetsRoot(ctx),
+    assetsRootEnv: ctx.deps.env.PCOSMO_ASSETS_ROOT ?? null,
     node: process.version,
     platform: process.platform,
     noFollow: HAS_NOFOLLOW,
@@ -422,7 +430,7 @@ async function doctor(ctx: Ctx, args: string[]): Promise<number> {
     `renderer (resvg-wasm): ${payload.renderer}`,
     `symlink refusal at open (O_NOFOLLOW): ${HAS_NOFOLLOW ? "yes" : "no (checked after open instead)"}`,
     `swap detection after open: ${payload.readGuard === "proc-fd" ? "/proc/self/fd path comparison (Linux)" : "directories writable by other users are refused (no /proc here); a rename race by the directory's owner stays possible"}`,
-    `PCOSMO_ASSETS_ROOT: ${payload.assetsRoot ?? "not set (explicit paths are not confined)"}`,
+    `allowed directory for inputs and outputs: ${payload.assetsRoot}${payload.assetsRootEnv === null ? "" : ` (bounded by PCOSMO_ASSETS_ROOT=${payload.assetsRootEnv})`}`,
     ...Object.entries(tools).map(([n, t]) => `${n}: ${t.found ? t.path : "not found (optional)"}`),
     `limits: ${MAX_PIXELS} px per source, ${MANIFEST_LIMITS.parts} parts, ${MAX_MULTIPLY_ADDS} multiply-adds, ${ASSET_LIMITS.maxBytes} bytes per file`,
   ];
@@ -661,6 +669,7 @@ const FIGURE_OPTIONS = {
   attribution: { type: "string" },
   license: { type: "string" },
   "source-url": { type: "string" },
+  "source-json": { type: "string" },
 } as const;
 
 function sourceInfo(p: Parsed): FigureSourceInfo | undefined {
@@ -686,17 +695,77 @@ function sourceInfo(p: Parsed): FigureSourceInfo | undefined {
   return Object.keys(info).length === 0 ? undefined : info;
 }
 
+const SOURCE_JSON_CAPS = {
+  document: 500,
+  figure: 200,
+  label: 200,
+  attribution: 500,
+  license: 200,
+  url: 2048,
+} as const;
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+/**
+ * `--source-json <file>`: provenance read from a JSON file inside the root, so text taken from a
+ * document never has to appear on a command line. Strings only (page: a positive integer), with
+ * length caps and no control characters.
+ */
+function parseSourceJson(
+  v: unknown,
+  diags: Diagnostic[],
+): { source: FigureSourceInfo; label?: string } | undefined {
+  const fail = (m: string): undefined => {
+    diags.push(bad("source-json", m));
+    return undefined;
+  };
+  if (!isObj(v)) return fail("the source file must be a JSON object");
+  const out: { -readonly [K in keyof FigureSourceInfo]: FigureSourceInfo[K] } = {};
+  let label: string | undefined;
+  for (const [k, val] of Object.entries(v)) {
+    if (k === "page") {
+      if (typeof val !== "number" || !Number.isInteger(val) || val < 1 || val > 100000) {
+        return fail("page must be an integer from 1 to 100000");
+      }
+      out.page = val;
+      continue;
+    }
+    if (!Object.hasOwn(SOURCE_JSON_CAPS, k)) {
+      return fail(
+        `unknown key "${k.slice(0, 40)}" (allowed: document, page, figure, label, attribution, license, url)`,
+      );
+    }
+    const cap = SOURCE_JSON_CAPS[k as keyof typeof SOURCE_JSON_CAPS];
+    if (typeof val !== "string") return fail(`${k} must be a string`);
+    if (val.length > cap) return fail(`${k} is longer than ${cap} characters`);
+    if (CONTROL.test(val)) return fail(`${k} contains control characters`);
+    if (k === "label") label = val;
+    else (out as Record<string, unknown>)[k] = val;
+  }
+  return { source: out, ...(label === undefined ? {} : { label }) };
+}
+
 async function figureCmd(ctx: Ctx, args: string[]): Promise<number> {
   const p = parse(args, FIGURE_OPTIONS);
   const [file] = oneInput(p, "assets figure", 1, "one manifest file");
   const dir = needed(p, "out-dir", "assets figure");
   const json = flag(p, "json");
-  const source = sourceInfo(p);
+  const flagSource = sourceInfo(p);
   const figureId = str(p, "figure-id");
   const srcDir = str(p, "src-dir");
-  const label = str(p, "label");
   const strict = flag(p, "strict");
   const diags: Diagnostic[] = [];
+  let source = flagSource;
+  let label = str(p, "label");
+  const sourceFile = str(p, "source-json");
+  if (sourceFile !== undefined) {
+    const sj = await loadJson(ctx, sourceFile, "source-json", diags);
+    const parsed = sj === undefined ? undefined : parseSourceJson(sj, diags);
+    if (!parsed) return finish(ctx, json, "figure", diags, {}, [], []);
+    // flags given explicitly win over the file
+    source = { ...parsed.source, ...flagSource };
+    label ??= parsed.label;
+  }
 
   const manifest = await loadJson(ctx, file!, "manifest", diags);
   const sources =
@@ -782,7 +851,7 @@ async function checkCmd(ctx: Ctx, args: string[]): Promise<number> {
   if (!(await insideAssetsRoot(assetsRoot(ctx), root))) {
     diags.push(
       readDiag(
-        { ok: false, code: "image/unsafe-path", message: "it is outside PCOSMO_ASSETS_ROOT" },
+        { ok: false, code: "image/unsafe-path", message: outsideRoot(ctx), suggestion: ROOT_HINT },
         shown(ctx, dir),
       ),
     );
@@ -897,5 +966,31 @@ export async function assetsCommand(ctx: Ctx, args: string[]): Promise<number> {
   if (sub === undefined) throw new UsageError("assets needs a command");
   const run = Object.hasOwn(SUBCOMMANDS, sub) ? SUBCOMMANDS[sub] : undefined;
   if (!run) throw new UsageError(`unknown assets command "${sub}"`);
-  return run(ctx, rest);
+  // --root <dir> (any command): where inputs and outputs may live. Default: the working directory.
+  const args2: string[] = [];
+  let rootArg: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i]!;
+    if (a === "--root") {
+      rootArg = rest[++i];
+      if (rootArg === undefined || rootArg === "") throw new UsageError("--root needs a directory");
+    } else if (a.startsWith("--root=")) {
+      rootArg = a.slice(7);
+      if (rootArg === "") throw new UsageError("--root needs a directory");
+    } else args2.push(a);
+  }
+  const cwd = resolve(ctx.deps.cwd);
+  const eff = rootArg === undefined ? cwd : resolve(cwd, rootArg);
+  const outer = ctx.deps.env.PCOSMO_ASSETS_ROOT;
+  if (outer !== undefined && outer !== "" && !(await insideAssetsRoot(outer, eff))) {
+    const diag: Diagnostic = {
+      severity: "error",
+      code: "asset/unsafe-path",
+      path: "",
+      message: `the allowed directory ${relFromCwd(cwd, eff)} is outside PCOSMO_ASSETS_ROOT`,
+      suggestion: "PCOSMO_ASSETS_ROOT is the outer bound; --root cannot leave it",
+    };
+    return finish(ctx, rest.includes("--json"), sub, [diag], {}, [], []);
+  }
+  return run({ ...ctx, assetsRoot: eff }, args2);
 }
