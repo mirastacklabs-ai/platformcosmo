@@ -15,6 +15,7 @@ import type { DcPack, Diagnostic, PartShapeDef, PartShapeRegistry } from "../con
 import { planFigureSteps, resolveFigure, stepViews, type ResolvedFigure } from "../scene/boards.js";
 import { UNRENDERED, type GuardGroup } from "./unsupported.js";
 import { globMatch } from "./glob.js";
+import { LevelMachine, checkLevel, type LevelAction, type LevelFail } from "./assembly-levels.js";
 import { closest, didYouMean, q } from "./suggest.js";
 import {
   AssemblyModel,
@@ -27,7 +28,6 @@ import {
   selects,
   type Flat,
   type ParsedSelector,
-  type ProgInfo,
   type TNode,
   type Walk,
 } from "./assembly-tree.js";
@@ -1115,8 +1115,8 @@ function checkStoryboards(c: Check): void {
 
 function checkSteps(c: Check): void {
   const { spec, model, kinds } = c;
-  const levels = new Map<string, number>();
-  const exploded = new Map<string, string>();
+  const machine = new LevelMachine();
+  const levels = machine.levels;
 
   /** `focus` / `set` path: assembly roots and deep rack paths resolve over the expanded tree. */
   const checkPath = (path: string, at: string, what: string): void => {
@@ -1187,7 +1187,7 @@ function checkSteps(c: Check): void {
         return;
       }
       if (w.opaque && w.node.progs.length === 0) return; // parts come from the DC pack
-      assemblyAction(c, a, kind, target, w.node, asm, segs.length === 1, at, levels, exploded);
+      assemblyAction(c, a, kind, target, w.node, asm, segs.length === 1, at, machine);
     });
   });
 }
@@ -1220,9 +1220,55 @@ function actionGated(
   return pathGate;
 }
 
+/** Reports a failed level check (range, direction) as the diagnostics of §18. */
+function levelFail(
+  c: Check,
+  fail: LevelFail,
+  kind: ActionKind,
+  target: string,
+  at: string,
+  unit: "stage" | "step" | "frame",
+): void {
+  if (fail.type === "range") {
+    const toPath =
+      fail.via === "to" ? `${at}/to` : fail.via === "advance" ? `${at}/advance` : `${at}/${kind}`;
+    c.out.push(
+      mk(
+        "error",
+        "assembly/stage-out-of-range",
+        toPath,
+        `${q(target)} has ${fail.count} ${unit}${fail.count === 1 ? "" : "s"}; ${
+          fail.via === "default" && kind === "build"
+            ? `building from ${fail.cur} reaches ${fail.to}`
+            : `"to": ${fail.to}`
+        } is out of range`,
+        `Use a value from 0 to ${fail.count}`,
+        { to: fail.to, count: fail.count, unit },
+      ),
+    );
+  } else if (fail.type === "direction") {
+    const toPath =
+      fail.via === "to" ? `${at}/to` : fail.via === "advance" ? `${at}/advance` : `${at}/${kind}`;
+    const fix = { explode: "implode", implode: "explode", build: "unbuild", unbuild: "build" }[
+      kind
+    ];
+    const dir = kind === "explode" || kind === "build" ? "backwards" : "forwards";
+    c.out.push(
+      mk(
+        "error",
+        fail.code,
+        toPath,
+        `${q(target)} is at ${unit} ${fail.cur}; ${kind} to ${fail.to} would go ${dir}`,
+        `Use "${fix}" to reach ${unit} ${fail.to}`,
+        { from: fail.cur, to: fail.to },
+      ),
+    );
+  }
+}
+
 /**
- * Level arithmetic shared by every action kind (§7.2): the target level, its range, direction
- * and no-op checks. Undefined when the action is invalid (reported) and must not move the level.
+ * Level arithmetic of a storyboard action (frames; the shared machine handles programs).
+ * Undefined when the action is invalid (reported) and must not move the level.
  */
 function advance(
   c: Check,
@@ -1234,58 +1280,12 @@ function advance(
   at: string,
   unit: "stage" | "step" | "frame",
 ): number | undefined {
-  const spec = a as unknown as { to?: number; advance?: number };
-  let to: number;
-  let toPath = `${at}/${kind}`;
-  if (spec.to !== undefined) {
-    to = spec.to;
-    toPath = `${at}/to`;
-  } else if (kind === "explode") to = n;
-  else if (kind === "implode" || kind === "unbuild") to = 0;
-  else if (spec.advance !== undefined) {
-    to = cur + spec.advance;
-    toPath = `${at}/advance`;
-  } else to = cur + 1;
-  if (to > n) {
-    c.out.push(
-      mk(
-        "error",
-        "assembly/stage-out-of-range",
-        toPath,
-        `${q(target)} has ${n} ${unit}${n === 1 ? "" : "s"}; ${
-          spec.to === undefined && kind === "build"
-            ? `building from ${cur} reaches ${to}`
-            : `"to": ${to}`
-        } is out of range`,
-        `Use a value from 0 to ${n}`,
-        { to, count: n, unit },
-      ),
-    );
+  const r = checkLevel(kind, a as unknown as LevelAction, n, cur);
+  if (r.fail !== undefined) {
+    levelFail(c, r.fail, kind, target, at, unit);
     return undefined;
   }
-  const code =
-    (kind === "explode" && to < cur && "assembly/explode-backwards") ||
-    (kind === "implode" && to > cur && "assembly/implode-forwards") ||
-    (kind === "build" && to < cur && "assembly/build-backwards") ||
-    (kind === "unbuild" && to > cur && "assembly/unbuild-forwards");
-  if (code) {
-    const fix = { explode: "implode", implode: "explode", build: "unbuild", unbuild: "build" }[
-      kind
-    ];
-    const dir = kind === "explode" || kind === "build" ? "backwards" : "forwards";
-    c.out.push(
-      mk(
-        "error",
-        code,
-        toPath,
-        `${q(target)} is at ${unit} ${cur}; ${kind} to ${to} would go ${dir}`,
-        `Use "${fix}" to reach ${unit} ${to}`,
-        { from: cur, to },
-      ),
-    );
-    return undefined;
-  }
-  if (to === cur) {
+  if (r.to === cur) {
     c.out.push(
       mk(
         "info",
@@ -1297,7 +1297,7 @@ function advance(
       ),
     );
   }
-  return to;
+  return r.to;
 }
 
 function assemblyAction(
@@ -1309,98 +1309,76 @@ function assemblyAction(
   asm: SpecAssembly | undefined,
   isRoot: boolean,
   at: string,
-  levels: Map<string, number>,
-  exploded: Map<string, string>,
+  machine: LevelMachine,
 ): void {
   const want = kind === "explode" || kind === "implode" ? "explode" : "build";
-  const named = (a as { program?: string }).program;
-  const ofKind = node.progs.filter((p) => p.kind === want);
-  const dflt = ofKind.find((p) => p.id === node.defaultProg) ?? ofKind[0];
-  let prog: ProgInfo | undefined;
-  if (named !== undefined) {
-    prog = node.progs.find((p) => p.id === named);
-    if (prog === undefined || prog.kind !== want) {
-      c.out.push(
-        mk(
-          "error",
-          "assembly/unknown-program",
-          `${at}/program`,
-          prog === undefined
-            ? `${q(target)} has no program ${q(named)}`
-            : `Program ${q(named)} of ${q(target)} is ${article(prog.kind)} ${prog.kind} program, but ${kind} needs ${article(want)} ${want} program`,
-          didYouMean(
-            named,
-            ofKind.map((p) => p.id),
-          ) ??
-            (ofKind.length > 0
-              ? `${upper(want)} programs: ${ofKind.map((p) => p.id).join(", ")}`
-              : `${q(target)} has no ${want} programs`),
-          { id: named },
-        ),
-      );
-      return;
-    }
-  } else {
-    if (dflt === undefined) {
-      c.out.push(
-        mk(
-          "error",
-          "assembly/unknown-program",
-          `${at}/${kind}`,
-          `Cannot ${kind} ${q(target)}: it has no ${want} program`,
-          node.kind === "rack"
-            ? "Racks have explode programs only"
-            : `Add ${article(want)} ${want} program to "programs"`,
-          { id: target },
-        ),
-      );
-      return;
-    }
-    // An implode reverses the program that exploded the target (schema: "default the one that
-    // exploded it"), else the default program.
-    const last = kind === "implode" ? exploded.get(target) : undefined;
-    prog = ofKind.find((p) => p.id === last) ?? dflt;
-  }
-  const key = `${target}\u0000${prog.id}`;
-  let cur = levels.get(key);
-  if (cur === undefined) {
-    // Timeline start (§7.2): `pose: exploded` shows the default explode program fully exploded;
-    // a build program's timeline starts at level `k - advance` of its first action (`k` = its
-    // `to`; usually 0, and 0 when only one of the two is given); an unbuild starts from the
-    // finished model unless `pose: empty`.
-    if (want === "explode")
-      cur = isRoot && asm?.pose === "exploded" && prog === dflt ? prog.count : 0;
-    else if (kind === "build") {
-      const spec = a as { to?: number; advance?: number };
-      cur = spec.to !== undefined && spec.advance !== undefined ? spec.to - spec.advance : 0;
-      if (cur < 0) {
+  const r = machine.apply(a as unknown as LevelAction, kind, target, node, asm?.pose, isRoot);
+  if (!r.ok) {
+    const f = r.fail;
+    if (f.type === "program") {
+      const named = f.named as string;
+      if (f.why === "named") {
         c.out.push(
           mk(
             "error",
-            "assembly/stage-out-of-range",
-            `${at}/advance`,
-            `${q(target)}: "advance": ${spec.advance} is more than "to": ${spec.to}, so the timeline would start below step 0`,
-            `Use "advance" of at most ${spec.to}`,
-            { to: spec.to, advance: spec.advance },
+            "assembly/unknown-program",
+            `${at}/program`,
+            f.found === undefined
+              ? `${q(target)} has no program ${q(named)}`
+              : `Program ${q(named)} of ${q(target)} is ${article(f.found.kind)} ${f.found.kind} program, but ${kind} needs ${article(want)} ${want} program`,
+            didYouMean(
+              named,
+              f.ofKind.map((p) => p.id),
+            ) ??
+              (f.ofKind.length > 0
+                ? `${upper(want)} programs: ${f.ofKind.map((p) => p.id).join(", ")}`
+                : `${q(target)} has no ${want} programs`),
+            { id: named },
           ),
         );
-        return;
+      } else {
+        c.out.push(
+          mk(
+            "error",
+            "assembly/unknown-program",
+            `${at}/${kind}`,
+            `Cannot ${kind} ${q(target)}: it has no ${want} program`,
+            node.kind === "rack"
+              ? "Racks have explode programs only"
+              : `Add ${article(want)} ${want} program to "programs"`,
+            { id: target },
+          ),
+        );
       }
-    } else cur = asm?.pose === "empty" ? 0 : prog.count;
+    } else if (f.type === "start") {
+      c.out.push(
+        mk(
+          "error",
+          "assembly/stage-out-of-range",
+          `${at}/advance`,
+          `${q(target)}: "advance": ${f.advance} is more than "to": ${f.to}, so the timeline would start below step 0`,
+          `Use "advance" of at most ${f.to}`,
+          { to: f.to, advance: f.advance },
+        ),
+      );
+    } else {
+      levelFail(c, f, kind, target, at, want === "explode" ? "stage" : "step");
+    }
+    return;
   }
-  const to = advance(
-    c,
-    a,
-    kind,
-    target,
-    prog.count,
-    cur,
-    at,
-    want === "explode" ? "stage" : "step",
-  );
-  if (to === undefined) return;
-  levels.set(key, to);
-  if (kind === "explode") exploded.set(target, prog.id);
+  if (r.noop) {
+    const unit = want === "explode" ? "stage" : "step";
+    c.out.push(
+      mk(
+        "info",
+        "assembly/no-op-action",
+        at,
+        `${kind} of ${q(target)} does not change its ${unit} (already at ${r.from})`,
+        undefined,
+        { level: r.from },
+      ),
+    );
+  }
 }
 
 function storyboardAction(
@@ -1469,3 +1447,6 @@ function storyboardAction(
   );
   if (to !== undefined) levels.set(key, to);
 }
+
+export { LevelMachine, checkLevel, targetLevel } from "./assembly-levels.js";
+export type { LevelAction, LevelFail, LevelKind, Applied, AccessStep } from "./assembly-levels.js";

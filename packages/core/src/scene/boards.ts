@@ -775,6 +775,9 @@ function planPass(
       start: Math.floor(action.start * scale * 10000) / 10000,
       length: Math.floor(natural * scale * 10000) / 10000,
       scale,
+      ...(action.accessLength === undefined
+        ? {}
+        : { accessLength: Math.floor(action.accessLength * scale * 10000) / 10000 }),
     }));
     const poses: Record<string, readonly ProgramLevel[]> = {};
     for (const id of sortedFigs)

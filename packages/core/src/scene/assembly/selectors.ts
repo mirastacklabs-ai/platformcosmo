@@ -28,6 +28,8 @@ export interface Work {
 
 export const WORK_CAP = 40_000_000;
 
+const isText = (s: unknown): s is string => typeof s === "string";
+
 /** Selectors per stage list (the schema's `maxItems`); more are ignored. */
 export const MAX_SELECTORS = 64;
 
@@ -142,13 +144,13 @@ export class OwnerSelectors {
     except: readonly string[] | undefined,
   ): { readonly movers: readonly Item[]; readonly selected: readonly Item[] } | undefined {
     const sel = new Set<Item>();
-    for (const s of parts.slice(0, MAX_SELECTORS)) {
+    for (const s of parts.filter(isText).slice(0, MAX_SELECTORS)) {
       const m = this.match(s);
       if (m === undefined) return undefined;
       for (const it of m) sel.add(it);
     }
     const drop = new Set<Item>();
-    for (const s of (except ?? []).slice(0, MAX_SELECTORS)) {
+    for (const s of (except ?? []).filter(isText).slice(0, MAX_SELECTORS)) {
       const m = this.match(s);
       if (m === undefined) return undefined;
       for (const it of m) drop.add(it);

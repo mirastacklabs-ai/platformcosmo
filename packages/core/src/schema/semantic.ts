@@ -3,7 +3,8 @@ import { DEFAULT_RACK_U, SLOT_HEIGHT_U, footprintOf } from "../scene/sizes.js";
 import type { PlatformCosmoSpec, SpecFlow } from "./types.gen.js";
 import { closest, didYouMean, q } from "./suggest.js";
 import { assemblyDiagnostics, figureDiagnostics, isAssemblyPath } from "./assembly-semantic.js";
-import { unsupportedDiagnostics } from "./unsupported.js";
+import { UNRENDERED, unsupportedDiagnostics } from "./unsupported.js";
+import { assemblyPlanDiagnostics } from "../scene/assembly/plan.js";
 
 /** Σ over every flow of ceil(rate × 2); shared formula with Track B (no path lengths needed). */
 export const PARTICLE_LIMIT = 2000;
@@ -393,6 +394,17 @@ export function semanticDiagnostics(
   // Assembly checks (A2-1) name more targets than the figure planner does, so where both report
   // the same code at the same path the assembly check's did-you-mean wins.
   const assembly = assemblyDiagnostics(spec, undefined, ctx);
+  // Compression of the joint step plan (assemblies and figures share one window computation, so
+  // only this check knows the real motion windows); the scene does not report it again. Skipped
+  // while the guard still refuses assembly actions.
+  if (!UNRENDERED.phase1b) {
+    assembly.push(
+      ...assemblyPlanDiagnostics(spec, {
+        ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
+        isFocusTarget: (id) => isObject(id) || isAreaRef(id) || isAssemblyPath(spec, id),
+      }),
+    );
+  }
   const taken = new Set(assembly.map((d) => `${d.path}\0${d.code}`));
   out.push(...assembly);
   out.push(

@@ -9,7 +9,7 @@ import type {
   SceneGraph,
 } from "../src/index.js";
 import { buildScene } from "../src/index.js";
-import { assemblyDiagnostics } from "../src/schema/assembly-semantic.js";
+import { assemblyDiagnostics, isAssemblyPath } from "../src/schema/assembly-semantic.js";
 import { AssemblyModel, parseSelector, selects } from "../src/schema/assembly-tree.js";
 import type { TNode } from "../src/schema/assembly-tree.js";
 import type { PlatformCosmoSpec } from "../src/schema/types.gen.js";
@@ -17,7 +17,7 @@ import { buildAssemblies, assemblyNodes } from "../src/scene/assembly/tree.js";
 import { BEZIER, REVERSED_EASING, fitDuration, mirrorBezier } from "../src/scene/boards.js";
 import { OwnerSelectors, indexOwner, makeWork } from "../src/scene/assembly/selectors.js";
 import { programSegment } from "../src/scene/assembly/timing.js";
-import { AssemblyPrograms } from "../src/scene/assembly/plan.js";
+import { AssemblyPrograms, assemblyPlanDiagnostics } from "../src/scene/assembly/plan.js";
 import { transitionSeconds } from "../src/anim/timeline.js";
 
 // A2-3: explode programs and the step plan (docs/design/assemblies.md §6, §7, §8.3, §10).
@@ -25,7 +25,12 @@ import { transitionSeconds } from "../src/anim/timeline.js";
 type Obj = Record<string, unknown>;
 const spec = (o: Obj): PlatformCosmoSpec =>
   ({ meta: { version: "1" }, ...o }) as unknown as PlatformCosmoSpec;
-const scene = (s: PlatformCosmoSpec): SceneGraph => buildScene(s, {});
+const specOf = new WeakMap<SceneGraph, PlatformCosmoSpec>();
+const scene = (s: PlatformCosmoSpec): SceneGraph => {
+  const g = buildScene(s, {});
+  specOf.set(g, s);
+  return g;
+};
 const asmOf = (g: SceneGraph, id = "a"): SceneAssembly => {
   const a = g.assemblies?.assemblies.find((x) => x.id === id);
   expect(a, `assembly ${id}`).toBeDefined();
@@ -244,14 +249,14 @@ describe("directions (§6.2)", () => {
       box("px", [8, 4, 1], [1, 1, 1]), // c = (3.5, -0.5): +x
       box("py", [4, 8, 1], [1, 1, 1]), // c = (-0.5, 3.5): +y
       box("tie", [8, 8, 1], [1, 1, 1]), // |cx| = |cy|: prefers y
-      box("tie2", [1, 1, 1], [1, 1, 1]), // c = (-3.5, -3.5): y, negative
+      box("tie2", [1, 1, 1], [1, 1, 1]), // c = (-3.5, -3.5): the visible-first order picks -x
       box("mx", [0.5, 4, 1], [1, 1, 1]), // c = (-4, -0.5): -x
       box("mid", [4.5, 4.5, 1], [1, 1, 1]), // c = 0: up
     ];
     near(dir(parts, "px", "out"), [2, 0, 0]);
     near(dir(parts, "py", "out"), [0, 2, 0]);
     near(dir(parts, "tie", "out"), [0, 2, 0]);
-    near(dir(parts, "tie2", "out"), [0, -2, 0]);
+    near(dir(parts, "tie2", "out"), [-2, 0, 0]);
     near(dir(parts, "mx", "out"), [-2, 0, 0]);
     near(dir(parts, "mid", "out"), [0, 0, 2]);
   });
@@ -900,7 +905,12 @@ describe("the step plan: levels, defaults, cursor (§7.2)", () => {
 });
 
 describe("step windows, compression and loop closure (§7.3, §7.4)", () => {
-  const compressedOf = (g: SceneGraph): Diagnostic[] => codes(g.diagnostics, "assembly/compressed");
+  // validation reports compression (through the same plan); the scene never repeats it
+  const compressedOf = (g: SceneGraph): Diagnostic[] => {
+    expect(codes(g.diagnostics, "assembly/compressed")).toEqual([]);
+    const sp = specOf.get(g) as PlatformCosmoSpec;
+    return assemblyPlanDiagnostics(sp, { isFocusTarget: (id) => isAssemblyPath(sp, id) });
+  };
 
   test("compression is uniform and never overruns the window (floor)", () => {
     // need 1.46 s; a 1 s step has a 0.8 s window (hold 0.2): scale floor(0.8/1.46)
@@ -1095,12 +1105,14 @@ describe("implicit access for nested targets (§8.3)", () => {
       program: "internals",
       from: 0,
       to: 1,
-      implied: [{ program: "pull", level: 1 }],
+      implied: [{ program: "pull", level: 1, only: ["a/srv"] }],
+      accessLength: 2,
     });
-    // access (2 s) then the target's own program (1 s)
+    // access (the drawer's own 2 s move) then the target's own program (1 s)
     expect(s1!.actions[0]!.length).toBe(3);
+    // the parent's program stays at level 0: only the drawer is open
     expect(s1!.poses.a).toEqual([
-      { program: "pull", level: 1 },
+      { program: "pull", level: 0, only: ["a/srv"] },
       { program: "srv/internals", level: 1 },
     ]);
     // reversal: the target returns, then the access move is undone
@@ -1108,7 +1120,8 @@ describe("implicit access for nested targets (§8.3)", () => {
       kind: "implode",
       from: 1,
       to: 0,
-      implied: [{ program: "pull", level: 0 }],
+      implied: [{ program: "pull", level: 0, only: ["a/srv"] }],
+      accessLength: 2,
     });
     expect(s2!.actions[0]!.length).toBe(3);
     expect(s2!.poses.a).toEqual([

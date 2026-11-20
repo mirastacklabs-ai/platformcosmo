@@ -37,9 +37,17 @@ import type {
   ResolvedStage,
   SceneAssemblies,
   SceneAssembly,
+  PartShapePack,
+  PartShapeRegistry,
   SceneAssemblyNode,
 } from "../../contracts/index.js";
-import { AssemblyModel, type ProgInfo, type TNode } from "../../schema/assembly-tree.js";
+import { LevelMachine, type AccessStep } from "../../schema/assembly-levels.js";
+import {
+  AssemblyModel,
+  parseSelector,
+  type ProgInfo,
+  type TNode,
+} from "../../schema/assembly-tree.js";
 import type {
   PlatformCosmoSpec,
   SpecAssembly,
@@ -50,6 +58,8 @@ import type {
 import { createProjection, projectBoxBounds } from "../../geometry/index.js";
 import {
   planFigureSteps,
+  resolveFigure,
+  stepViews,
   type ForeignAction,
   type PlanOptions,
   type ResolvedFigure,
@@ -63,6 +73,7 @@ import {
 } from "./directions.js";
 import { parseDistance, programDistances, type LeafBox, type Mover } from "./distances.js";
 import { frameMap, rnd, unionBoxes } from "./frame.js";
+import { buildAssemblies } from "./tree.js";
 import {
   OwnerSelectors,
   indexOwner,
@@ -97,12 +108,17 @@ const mk = (
   ...(params === undefined ? {} : { params }),
 });
 
+/** Node visits the reach sweep may spend (separate from program resolution). */
+const SWEEP_CAP = 20_000_000;
+
 /** Reach growth above this multiple of the rest area is reported (§10). */
 const GROWTH = 4;
 
 const KEYS = ["explode", "implode", "build", "unbuild"] as const;
 const actionKey = (a: SpecAssemblyAction): (typeof KEYS)[number] =>
   KEYS.find((k) => k in a) as (typeof KEYS)[number];
+const usesRole = (sels: readonly unknown[]): boolean =>
+  sels.some((x) => typeof x === "string" && parseSelector(x).kind === "role");
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 /** `ProgramLevel.program` of a program owned by `ownerRel` (empty: the assembly root). */
@@ -148,6 +164,8 @@ interface Resolved {
   /** By `<ownerRel>\0<program id>`. */
   readonly programs: ReadonlyMap<string, ResolvedProgramInfo>;
   readonly nodes: ReadonlyMap<string, SceneAssemblyNode>;
+  /** Programs that could not be resolved (budget or malformed): `<ownerRel>\0<id>`. */
+  readonly unresolved: ReadonlySet<string>;
 }
 
 /** One assembly's simulated action sequence. */
@@ -164,12 +182,16 @@ interface Simulated {
 
 export interface AssemblyProgramsOptions {
   readonly work?: Work;
+  /** Budget of the reach sweep (default `SWEEP_CAP`). */
+  readonly sweepWork?: Work;
 }
 
 export class AssemblyPrograms {
   readonly diagnostics: Diagnostic[] = [];
   private readonly model: AssemblyModel;
   private readonly work: Work;
+  /** Reach has its own budget, so a big program cannot starve it (and vice versa). */
+  private readonly sweepWork: Work;
   private readonly resolved = new Map<string, Resolved | null>();
   private readonly simulated = new Map<string, Simulated>();
   private readonly reaches = new Map<string, Box3 | undefined>();
@@ -182,6 +204,7 @@ export class AssemblyPrograms {
   ) {
     this.model = new AssemblyModel(spec);
     this.work = opts.work ?? makeWork();
+    this.sweepWork = opts.sweepWork ?? makeWork(SWEEP_CAP);
   }
 
   private budgetWarning(): void {
@@ -245,12 +268,17 @@ export class AssemblyPrograms {
     collect(asm.root, tree, "");
 
     const programs = new Map<string, ResolvedProgramInfo>();
+    const unresolved = new Set<string>();
     const indexes = new Map<string, { index: OwnerIndex; sel: OwnerSelectors }>();
     for (const rel of [...owners.keys()].sort(cmp)) {
       const owner = owners.get(rel) as OwnerInfo;
       for (const info of owner.explodes) {
+        const pk = `${rel}\0${info.id}`;
         const spec = atPointer(this.spec, info.ptr) as SpecExplodeProgram | undefined;
-        if (spec === undefined || !Array.isArray(spec.stages)) continue;
+        if (spec === undefined || !Array.isArray(spec.stages)) {
+          unresolved.add(pk);
+          continue;
+        }
         let ix = indexes.get(rel);
         if (ix === undefined) {
           const index = indexOwner(owner.node, this.work);
@@ -259,14 +287,17 @@ export class AssemblyPrograms {
         }
         if (!ix.index.complete) {
           this.budgetWarning();
+          unresolved.add(pk);
           continue;
         }
-        const r = this.resolveExplode(asm, owner, spec, ix.index, ix.sel);
-        if (r === undefined) this.budgetWarning();
-        else programs.set(`${rel}\0${info.id}`, r);
+        const r = this.resolveExplode(asm, owner, spec, info.ptr, ix.index, ix.sel);
+        if (r === undefined) {
+          this.budgetWarning();
+          unresolved.add(pk);
+        } else programs.set(pk, r);
       }
     }
-    const out: Resolved = { asm, spec: specAsm, owners, programs, nodes };
+    const out: Resolved = { asm, spec: specAsm, owners, programs, nodes, unresolved };
     this.resolved.set(asm.id, out);
     return out;
   }
@@ -275,6 +306,7 @@ export class AssemblyPrograms {
     asm: SceneAssembly,
     owner: OwnerInfo,
     prog: SpecExplodeProgram,
+    ptr: string,
     index: OwnerIndex,
     sel: OwnerSelectors,
   ): ResolvedProgramInfo | undefined {
@@ -289,7 +321,13 @@ export class AssemblyPrograms {
       typeof prog.gap === "number" && Number.isFinite(prog.gap) && prog.gap >= 0
         ? prog.gap
         : 0.1 * size;
-    const dctx: DirectionContext = { frame: asm.frame, owner: owner.node };
+    const degraded = { count: 0 };
+    const dctx: DirectionContext = {
+      frame: asm.frame,
+      owner: owner.node,
+      cache: new Map(),
+      degraded,
+    };
 
     interface Staged {
       readonly spec: SpecStage;
@@ -297,6 +335,7 @@ export class AssemblyPrograms {
       readonly selected: Set<string>;
     }
     const moved = new Set<Item>();
+    const byRole = new Set<Item>(); // claimed by a stage that selects through a role
     const staged: Staged[] = [];
     const all: Mover[] = [];
     const stages = prog.stages.slice(0, 32);
@@ -304,13 +343,29 @@ export class AssemblyPrograms {
       // a schema-invalid stage (not an object) is an empty stage: validation reports it
       const st: SpecStage =
         raw !== null && typeof raw === "object" ? raw : ({ parts: [] } as unknown as SpecStage);
-      const r = sel.stage(
-        Array.isArray(st.parts) ? st.parts : [],
-        Array.isArray(st.except) ? st.except : undefined,
-      );
+      const parts: readonly unknown[] = Array.isArray(st.parts) ? st.parts : [];
+      const except: readonly unknown[] = Array.isArray(st.except) ? st.except : [];
+      const sels = [...parts, ...except];
+      const r = sel.stage(parts as string[], except as string[]);
       if (r === undefined) return undefined;
       const fresh = r.movers.filter((it) => !moved.has(it));
+      const again = r.selected.filter((it) => moved.has(it));
+      if (again.length > 0 && (usesRole(sels) || again.some((it) => byRole.has(it)))) {
+        // The validator sees explicit roles only; the scene also matches inferred and shape
+        // roles, so a part can be selected twice here without validation having said so.
+        this.diagnostics.push(
+          mk(
+            "info",
+            "assembly/moved-twice",
+            `${ptr}/stages/${staged.length}/parts`,
+            `Stage ${staged.length + 1} selects ${JSON.stringify(again[0]?.rel)}, which an earlier stage already moves (through an inferred or shape role); it moves once`,
+            "Narrow the selector, or set the part's role explicitly",
+            { path: again[0]?.rel, stage: staged.length + 1 },
+          ),
+        );
+      }
       for (const it of r.selected) moved.add(it);
+      if (usesRole(sels)) for (const it of r.selected) byRole.add(it);
       const movers: Mover[] = [];
       for (const it of fresh) {
         const ov =
@@ -335,6 +390,19 @@ export class AssemblyPrograms {
       }
       all.push(...movers);
       staged.push({ spec: st, movers, selected: new Set(r.selected.map((it) => it.rel)) });
+    }
+
+    if (degraded.count > 0) {
+      this.diagnostics.push(
+        mk(
+          "warning",
+          "budget/time",
+          ptr,
+          `${degraded.count} part${degraded.count === 1 ? "" : "s"} of ${JSON.stringify(owner.node.path)} sit among more than 400 siblings: the sibling-contact scan was skipped for them (their mate and inserts still apply), so "away" falls back to "out"`,
+          "Group the parts into sub-assemblies, or set explicit directions",
+          { count: degraded.count },
+        ),
+      );
     }
 
     // static leaves, with the movers above each (itself and ancestors)
@@ -427,45 +495,86 @@ export class AssemblyPrograms {
 
   // ---- the level machine ------------------------------------------------------------------
 
-  /** Actions, poses and used programs of one assembly (levels are per assembly). */
+  /**
+   * Actions, poses and used programs of one assembly (levels are per assembly). The levels come
+   * from the machine shared with validation (`schema/assembly-levels.ts`); this adds the
+   * program lengths, implicit access and the poses.
+   */
   private simulate(asm: SceneAssembly): Simulated | undefined {
     const memo = this.simulated.get(asm.id);
     if (memo !== undefined) return memo;
     const res = this.resolve(asm);
     if (res === undefined) return undefined;
-    const spec = this.spec;
-    const levels = new Map<string, number>();
+    const machine = new LevelMachine();
     const used = new Set<string>();
-    const progKey = (rel: string, id: string): string => `${rel}\0${id}`;
-    const allProgs: { key: string; q: string; count: number }[] = [];
+    const targetOf = (rel: string): string => (rel === "" ? asm.id : `${asm.id}/${rel}`);
+    const levelKey = (rel: string, id: string): string => `${targetOf(rel)}\u0000${id}`;
+    const allProgs: { key: string; q: string }[] = [];
     for (const rel of [...res.owners.keys()].sort(cmp)) {
       for (const p of (res.owners.get(rel) as OwnerInfo).explodes) {
-        allProgs.push({ key: progKey(rel, p.id), q: qualifiedProgram(rel, p.id), count: p.count });
+        allProgs.push({ key: levelKey(rel, p.id), q: qualifiedProgram(rel, p.id) });
       }
     }
     allProgs.sort((a, b) => cmp(a.q, b.q));
     // base pose: `pose: exploded` shows the root's default explode program fully exploded
     const root = res.owners.get("");
     if (res.spec.pose === "exploded" && root?.dflt !== undefined) {
-      levels.set(progKey("", root.dflt.id), root.dflt.count);
-      used.add(progKey("", root.dflt.id));
+      machine.levels.set(levelKey("", root.dflt.id), root.dflt.count);
+      used.add(`\u0000${root.dflt.id}`);
     }
     const snapshot = (): ProgramLevel[] =>
-      allProgs.map((p) => ({ program: p.q, level: levels.get(p.key) ?? 0 }));
+      allProgs.map((p) => {
+        const only = machine.opened.get(p.key);
+        return {
+          program: p.q,
+          level: machine.levels.get(p.key) ?? 0,
+          ...(only === undefined || only.size === 0 ? {} : { only: [...only].sort() }),
+        };
+      });
     const base = snapshot();
 
     const diagnostics: Diagnostic[] = [];
     const actions = new Map<string, ForeignAction>();
     const poses: (readonly ProgramLevel[])[] = [];
-    const exploded = new Map<string, string>(); // target -> program id that exploded it
-    const access = new Map<string, { key: string; q: string; prior: number }[]>();
 
     const segLen = (rel: string, id: string, from: number, to: number): number => {
-      const r = res.programs.get(progKey(rel, id));
+      const r = res.programs.get(`${rel}\u0000${id}`);
       return r === undefined ? 0 : programSegment(r.program, from, to).length;
     };
+    /** Duration of the one move of `path` in stage `stage` (the access move). */
+    const moveLen = (rel: string, id: string, stage: number, path: string): number => {
+      const st = res.programs.get(`${rel}\u0000${id}`)?.program.stages[stage - 1];
+      return st?.moves.find((m) => m.path === path)?.duration ?? 0;
+    };
+    /** The access moves of a target through each ancestor's default program (§8.3). */
+    const accessSteps = (segs: readonly string[]): AccessStep[] => {
+      const out: AccessStep[] = [];
+      for (let j = 1; j < segs.length; j++) {
+        const orel = segs.slice(1, j).join("/");
+        const o = res.owners.get(orel);
+        if (o?.dflt === undefined) continue;
+        const info = res.programs.get(`${orel}\u0000${o.dflt.id}`);
+        if (info === undefined) continue;
+        const below = segs.slice(j);
+        const chain = below.map((_, m) => below.slice(0, m + 1).join("/"));
+        for (let si = 0; si < info.selected.length; si++) {
+          const hit = chain.find((c) => (info.selected[si] as ReadonlySet<string>).has(c));
+          if (hit === undefined) continue;
+          out.push({
+            key: levelKey(orel, o.dflt.id),
+            program: qualifiedProgram(orel, o.dflt.id),
+            owner: orel,
+            id: o.dflt.id,
+            stage: si + 1,
+            path: `${targetOf(orel)}/${hit}`,
+          });
+          break;
+        }
+      }
+      return out;
+    };
 
-    (spec.steps ?? []).forEach((step, si) => {
+    (this.spec.steps ?? []).forEach((step, si) => {
       (step.assembly ?? []).forEach((a, ai) => {
         const kind = actionKey(a);
         if (kind !== "explode" && kind !== "implode") return; // build programs: A2-6
@@ -473,91 +582,82 @@ export class AssemblyPrograms {
         if (typeof target !== "string") return;
         const segs = target.split("/");
         if (segs[0] !== asm.id) return;
-        const node = res.nodes.get(target);
         const rel = segs.slice(1).join("/");
         const owner = res.owners.get(rel);
-        if (node === undefined || owner === undefined || owner.explodes.length === 0) return;
-        const named = (a as { program?: string }).program;
-        let prog: ProgInfo | undefined;
-        if (named !== undefined) prog = owner.explodes.find((p) => p.id === named);
-        else {
-          const last = kind === "implode" ? exploded.get(target) : undefined;
-          prog = owner.explodes.find((p) => p.id === last) ?? owner.dflt;
-        }
-        if (prog === undefined) return;
-        const key = progKey(rel, prog.id);
-        const n = prog.count;
-        const cur = levels.get(key) ?? 0;
-        const spec_ = a as { to?: number };
-        const to = spec_.to ?? (kind === "explode" ? n : 0);
-        if (!Number.isInteger(to) || to < 0 || to > n) return;
-        if ((kind === "explode" && to < cur) || (kind === "implode" && to > cur)) return;
-        levels.set(key, to);
-        used.add(key);
-        if (kind === "explode") exploded.set(target, prog.id);
-
-        const own = to === cur ? 0 : segLen(rel, prog.id, cur, to);
-        const implied: ProgramLevel[] = [];
-        let extra = 0;
+        if (!res.nodes.has(target) || owner === undefined) return;
         const at = `/steps/${si}/assembly/${ai}/${kind}`;
-        if (kind === "explode" && segs.length >= 2) {
-          const prior: { key: string; q: string; prior: number }[] = [];
-          for (let j = 1; j < segs.length; j++) {
-            const orel = segs.slice(1, j).join("/");
-            const o = res.owners.get(orel);
-            if (o?.dflt === undefined) continue;
-            const info = res.programs.get(progKey(orel, o.dflt.id));
-            if (info === undefined) continue;
-            const below = segs.slice(j);
-            const chain = below.map((_, m) => below.slice(0, m + 1).join("/"));
-            const stage = info.selected.findIndex((s) => chain.some((c) => s.has(c))) + 1;
-            const lk = progKey(orel, o.dflt.id);
-            const at0 = levels.get(lk) ?? 0;
-            if (stage === 0 || at0 >= stage) continue;
-            const q = qualifiedProgram(orel, o.dflt.id);
-            implied.push({ program: q, level: stage });
-            prior.push({ key: lk, q, prior: at0 });
-            extra += segLen(orel, o.dflt.id, at0, stage);
-            levels.set(lk, stage);
-            used.add(lk);
+        const node = {
+          progs: owner.tnode.progs,
+          ...(owner.tnode.defaultProg === undefined
+            ? {}
+            : { defaultProg: owner.tnode.defaultProg }),
+        };
+        const r = machine.apply(
+          a as { to?: number; program?: string },
+          kind,
+          target,
+          node,
+          res.spec.pose,
+          rel === "",
+        );
+        if (!r.ok) return; // invalid: validation reports it
+        used.add(`${rel}\u0000${r.prog.id}`);
+        if (!res.programs.has(`${rel}\u0000${r.prog.id}`)) {
+          // not resolved (budget or malformed): reported, never planned with a zero length
+          diagnostics.push(
+            mk(
+              "warning",
+              "budget/time",
+              at,
+              `Action on ${JSON.stringify(target)} skipped: program ${JSON.stringify(r.prog.id)} could not be resolved`,
+              "Use fewer or broader selectors, or fewer parts",
+              { target, program: r.prog.id },
+            ),
+          );
+          return;
+        }
+        const own = r.noop ? 0 : segLen(rel, r.prog.id, r.from, r.to);
+        const implied: ProgramLevel[] = [];
+        let access = 0;
+        if (!r.noop && kind === "explode" && segs.length >= 2) {
+          for (const s of machine.open(target, accessSteps(segs))) {
+            implied.push({ program: s.program, level: s.stage, only: [s.path] });
+            used.add(`${s.owner}\u0000${s.id}`);
+            access += moveLen(s.owner, s.id, s.stage, s.path);
             diagnostics.push(
               mk(
                 "info",
                 "assembly/implicit-access",
                 at,
-                `Exploding ${JSON.stringify(target)} first moves it out through ${JSON.stringify(
-                  orel === "" ? asm.id : `${asm.id}/${orel}`,
-                )} stage ${stage} (program ${JSON.stringify(o.dflt.id)})`,
-                `Add an explicit explode of ${JSON.stringify(orel === "" ? asm.id : `${asm.id}/${orel}`)} to "to": ${stage} before this action to control it`,
-                { target, program: q, level: stage },
+                `Exploding ${JSON.stringify(target)} first moves ${JSON.stringify(s.path)} out through ${JSON.stringify(targetOf(s.owner))} stage ${s.stage} (program ${JSON.stringify(s.id)})`,
+                `Add an explicit explode of ${JSON.stringify(targetOf(s.owner))} to control it`,
+                { target, program: s.program, level: s.stage },
               ),
             );
           }
-          if (prior.length > 0) access.set(target, prior);
-        } else if (kind === "implode" && to === 0) {
-          const prior = access.get(target);
-          if (prior !== undefined) {
-            access.delete(target);
-            for (const p of prior) {
-              const cur2 = levels.get(p.key) ?? 0;
-              implied.push({ program: p.q, level: p.prior });
-              const owner2 = p.q.includes("/") ? p.q.slice(0, p.q.lastIndexOf("/")) : "";
-              extra += segLen(owner2, p.q.slice(p.q.lastIndexOf("/") + 1), p.prior, cur2);
-              levels.set(p.key, p.prior);
-            }
+        } else if (!r.noop && kind === "implode" && r.to === 0) {
+          for (const s of machine.close(target)) {
+            implied.push({
+              program: s.program,
+              level: machine.levels.get(levelKey(s.owner, s.id)) ?? 0,
+              only: [s.path],
+            });
+            access += moveLen(s.owner, s.id, s.stage, s.path);
           }
         }
+        const natural = r4(own + access);
         actions.set(`${si}:${ai}`, {
-          natural: r4(own + extra),
+          natural,
           action: {
             target,
             kind,
-            program: prog.id,
-            from: cur,
-            to,
+            program: r.prog.id,
+            from: r.from,
+            to: r.to,
             start: 0,
-            length: r4(own + extra),
+            length: natural,
             scale: 1,
+            ...(implied.length === 0 ? {} : { accessLength: r4(access) }),
             implied,
           },
         });
@@ -573,8 +673,8 @@ export class AssemblyPrograms {
 
   /**
    * The `reach` hook of `buildAssemblies`: rest bounds plus the swept box of every leaf some
-   * played program moves (offset intervals add along the chain of owners; programs of one owner
-   * are alternatives, so their hull is taken). World space, the unlifted frame of `probe`.
+   * played program moves (offset intervals of every played program add, along the chain of owners and
+   * between programs of one owner, which can be exploded together). World space, the unlifted frame of `probe`.
    */
   reach = (probe: SceneAssembly): Box3 | undefined => {
     if (this.reaches.has(probe.id)) return this.reaches.get(probe.id);
@@ -589,97 +689,101 @@ export class AssemblyPrograms {
     if (res === undefined || sim === undefined || sim.used.size === 0) return undefined;
     type Iv = [number, number, number, number, number, number];
     const total = new Map<string, Iv>();
-    const byOwner = new Map<string, Map<string, Iv>>();
-    for (const key of [...sim.used].sort()) {
-      const r = res.programs.get(key);
-      if (r === undefined) continue;
-      const ownerRel = key.slice(0, key.indexOf("\0"));
-      const per = new Map<string, Iv>();
-      for (const st of r.program.stages) {
-        for (const m of st.moves) {
-          const node = res.nodes.get(m.path);
-          if (node === undefined) continue;
-          const o = m.offset;
-          let leaves = this.leafMemo.get(node);
-          if (leaves === undefined) {
-            leaves = leavesOf(node);
-            this.leafMemo.set(node, leaves);
-          }
-          if (!spend(this.work, leaves.length + 1)) {
-            this.budgetWarning();
-            return undefined;
-          }
-          for (const l of leaves) {
-            const iv = per.get(l.path) ?? [0, 0, 0, 0, 0, 0];
-            iv[0] += Math.min(0, o.x);
-            iv[1] += Math.max(0, o.x);
-            iv[2] += Math.min(0, o.y);
-            iv[3] += Math.max(0, o.y);
-            iv[4] += Math.min(0, o.z);
-            iv[5] += Math.max(0, o.z);
-            per.set(l.path, iv);
+    const used = [...sim.used].sort().filter((k) => res.programs.has(k));
+    // Cheap bound: the sum of |offset| of every move of every played program, on every axis
+    // (any leaf's displacement is at most that, in either direction).
+    const bound = (): Box3 | undefined => {
+      let sx = 0;
+      let sy = 0;
+      let sz = 0;
+      for (const key of used) {
+        for (const st of (res.programs.get(key) as ResolvedProgramInfo).program.stages) {
+          for (const m of st.moves) {
+            sx += Math.abs(m.offset.x);
+            sy += Math.abs(m.offset.y);
+            sz += Math.abs(m.offset.z);
           }
         }
       }
-      // alternatives within one owner: hull
-      const hull = byOwner.get(ownerRel) ?? new Map<string, Iv>();
-      for (const [p, iv] of per) {
-        const h = hull.get(p);
-        hull.set(
-          p,
-          h === undefined
-            ? iv
-            : [
-                Math.min(h[0], iv[0]),
-                Math.max(h[1], iv[1]),
-                Math.min(h[2], iv[2]),
-                Math.max(h[3], iv[3]),
-                Math.min(h[4], iv[4]),
-                Math.max(h[5], iv[5]),
-              ],
-        );
+      if (used.length === 0) return undefined;
+      const r = probe.restBounds;
+      return {
+        origin: { x: rnd(r.origin.x - sx), y: rnd(r.origin.y - sy), z: rnd(r.origin.z - sz) },
+        size: { x: rnd(r.size.x + 2 * sx), y: rnd(r.size.y + 2 * sy), z: rnd(r.size.z + 2 * sz) },
+      };
+    };
+    let reach: Box3 | undefined;
+    let exact = true;
+    sweep: {
+      // Programs of one owner can be exploded together (two programs, both at their last
+      // stage), so their offsets ADD, like those of nested owners.
+      for (const key of used) {
+        const r = res.programs.get(key) as ResolvedProgramInfo;
+        for (const st of r.program.stages) {
+          for (const m of st.moves) {
+            const node = res.nodes.get(m.path);
+            if (node === undefined) continue;
+            let leaves = this.leafMemo.get(node);
+            if (leaves === undefined) {
+              leaves = leavesOf(node);
+              this.leafMemo.set(node, leaves);
+            }
+            if (!spend(this.sweepWork, leaves.length + 1)) {
+              exact = false;
+              break sweep;
+            }
+            const o = m.offset;
+            for (const l of leaves) {
+              const iv = total.get(l.path) ?? [0, 0, 0, 0, 0, 0];
+              iv[0] += Math.min(0, o.x);
+              iv[1] += Math.max(0, o.x);
+              iv[2] += Math.min(0, o.y);
+              iv[3] += Math.max(0, o.y);
+              iv[4] += Math.min(0, o.z);
+              iv[5] += Math.max(0, o.z);
+              total.set(l.path, iv);
+            }
+          }
+        }
       }
-      byOwner.set(ownerRel, hull);
     }
-    for (const hull of byOwner.values()) {
-      for (const [p, iv] of hull) {
-        const t = total.get(p) ?? [0, 0, 0, 0, 0, 0];
-        for (let k = 0; k < 6; k++) t[k] = (t[k] as number) + (iv[k] as number);
-        total.set(p, t);
+    if (!exact) {
+      this.budgetWarning();
+      reach = bound();
+    } else {
+      const map = frameMap(probe.frame, probe.root.local);
+      const boxes: Box3[] = [];
+      for (const p of [...total.keys()].sort()) {
+        const leaf = res.nodes.get(p);
+        if (leaf === undefined) continue;
+        const iv = total.get(p) as Iv;
+        const g = leaf.geometry;
+        const b =
+          g === undefined
+            ? leaf.world
+            : map.box({
+                origin: {
+                  x: leaf.local.origin.x + g.bounds.origin.x,
+                  y: leaf.local.origin.y + g.bounds.origin.y,
+                  z: leaf.local.origin.z + g.bounds.origin.z,
+                },
+                size: g.bounds.size,
+              });
+        boxes.push({
+          origin: {
+            x: rnd(b.origin.x + iv[0]),
+            y: rnd(b.origin.y + iv[2]),
+            z: rnd(b.origin.z + iv[4]),
+          },
+          size: {
+            x: rnd(b.size.x + iv[1] - iv[0]),
+            y: rnd(b.size.y + iv[3] - iv[2]),
+            z: rnd(b.size.z + iv[5] - iv[4]),
+          },
+        });
       }
+      reach = unionBoxes(boxes);
     }
-    const map = frameMap(probe.frame, probe.root.local);
-    const boxes: Box3[] = [];
-    for (const p of [...total.keys()].sort()) {
-      const leaf = res.nodes.get(p);
-      if (leaf === undefined) continue;
-      const iv = total.get(p) as Iv;
-      const g = leaf.geometry;
-      const b =
-        g === undefined
-          ? leaf.world
-          : map.box({
-              origin: {
-                x: leaf.local.origin.x + g.bounds.origin.x,
-                y: leaf.local.origin.y + g.bounds.origin.y,
-                z: leaf.local.origin.z + g.bounds.origin.z,
-              },
-              size: g.bounds.size,
-            });
-      boxes.push({
-        origin: {
-          x: rnd(b.origin.x + iv[0]),
-          y: rnd(b.origin.y + iv[2]),
-          z: rnd(b.origin.z + iv[4]),
-        },
-        size: {
-          x: rnd(b.size.x + iv[1] - iv[0]),
-          y: rnd(b.size.y + iv[3] - iv[2]),
-          z: rnd(b.size.z + iv[5] - iv[4]),
-        },
-      });
-    }
-    const reach = unionBoxes(boxes);
     if (reach !== undefined) {
       const proj = createProjection();
       const area = (b: Box3): number => {
@@ -732,7 +836,7 @@ export class AssemblyPrograms {
     figures: ReadonlyMap<string, ResolvedFigure>,
     views: readonly (string | undefined)[],
     opts: PlanOptions = {},
-  ): { plan: AssemblyStepPlan[]; diagnostics: Diagnostic[] } {
+  ): { plan: AssemblyStepPlan[]; diagnostics: Diagnostic[]; compression: Diagnostic[] } {
     const sims = new Map<string, Simulated>();
     const diagnostics: Diagnostic[] = [];
     for (const a of assemblies) {
@@ -769,8 +873,9 @@ export class AssemblyPrograms {
       for (const k of Object.keys(poses).sort()) sorted[k] = poses[k] as readonly ProgramLevel[];
       return { ...p, poses: sorted };
     });
-    diagnostics.push(...planned.diagnostics.filter((d) => d.code === "assembly/compressed"));
-    return { plan, diagnostics };
+    // Compression is reported by validation (`assemblyPlanDiagnostics`), never twice.
+    const compression = planned.diagnostics.filter((d) => d.code === "assembly/compressed");
+    return { plan, diagnostics, compression };
   }
 }
 
@@ -795,4 +900,44 @@ const leavesOf = (n: SceneAssemblyNode): SceneAssemblyNode[] =>
 
 function worldCentre(b: Box3): [number, number, number] {
   return [b.origin.x + b.size.x / 2, b.origin.y + b.size.y / 2, b.origin.z + b.size.z / 2];
+}
+
+// ---------------------------------------------------------------------------------------------
+// Validation entry point
+// ---------------------------------------------------------------------------------------------
+
+export interface AssemblyPlanContext {
+  readonly parts?: PartShapeRegistry;
+  readonly dcShapes?: PartShapePack;
+  /** Which `steps[].focus` ids zoom the camera (the scene's rule). */
+  readonly isFocusTarget: (id: string) => boolean;
+  readonly gated?: PlanOptions["gated"];
+}
+
+/**
+ * `assembly/compressed` of the whole step plan (assemblies and figures through one step loop),
+ * for `validate`: the scene computes the same plan with the same helpers but does not report it,
+ * so a diagnostic never appears twice. Empty without assemblies or steps.
+ */
+export function assemblyPlanDiagnostics(
+  spec: PlatformCosmoSpec,
+  ctx: AssemblyPlanContext,
+): Diagnostic[] {
+  if ((spec.assemblies?.length ?? 0) === 0 || (spec.steps?.length ?? 0) === 0) return [];
+  const programs = new AssemblyPrograms(spec);
+  const built = programs.attach(
+    buildAssemblies(spec, {
+      reach: programs.reach,
+      ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
+      ...(ctx.dcShapes === undefined ? {} : { dcShapes: ctx.dcShapes }),
+    }),
+  );
+  const figures = new Map<string, ResolvedFigure>();
+  (spec.figures ?? []).forEach((f, i) => {
+    const { figure } = resolveFigure(f, i);
+    if (!figures.has(figure.id)) figures.set(figure.id, figure);
+  });
+  const views = stepViews(spec, ctx.isFocusTarget);
+  return programs.plan(built.assemblies, figures, views, ctx.gated ? { gated: ctx.gated } : {})
+    .compression;
 }

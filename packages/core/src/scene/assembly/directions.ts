@@ -195,6 +195,10 @@ export interface DirectionContext {
   readonly frame: AssemblyFrame;
   /** The program owner (its centre anchors `out`, `radial`, `axis`). */
   readonly owner: SceneAssemblyNode;
+  /** Per-program memo of path-indexed children (optional; built on demand). */
+  readonly cache?: Map<SceneAssemblyNode, Map<string, SceneAssemblyNode>>;
+  /** Counts parts whose full sibling scan was skipped (groups over `INFER_CAP`). */
+  readonly degraded?: { count: number };
 }
 
 /** `out` (§6.2): the horizontal axis with the larger |c|, signed; ties +y, then +x; c = 0: up. */
@@ -202,8 +206,12 @@ function outward(c: readonly [number, number, number]): Dir {
   const ax = Math.abs(c[0]);
   const ay = Math.abs(c[1]);
   if (ax <= EPS && ay <= EPS) return UP;
-  if (ax > ay + EPS) return [c[0] > 0 ? 1 : -1, 0, 0];
-  return [0, c[1] >= 0 ? 1 : -1, 0];
+  const dx: Dir = [c[0] > 0 ? 1 : -1, 0, 0];
+  const dy: Dir = [0, c[1] >= 0 ? 1 : -1, 0];
+  if (ax > ay + EPS) return dx;
+  if (ay > ax + EPS) return dy;
+  // a tie: the visible-first order decides, in every quadrant (+y, +x, -x, -y)
+  return rank(dx) < rank(dy) ? dx : dy;
 }
 
 const SIMPLE: Readonly<Record<string, Dir>> = {
@@ -259,29 +267,72 @@ export function resolveDirection(
     case "drawer":
       return localFront(ctx.frame);
     default:
-      return away(item, ctx.owner, box);
+      return away(item, ctx, box);
   }
 }
 
 /**
- * `away` (§6.2): leave the mate, else the largest touching sibling, else the enclosure, else
- * (interpenetration, an interpretation: the doc says `out`) the axis of least penetration of
- * the sibling it overlaps most, else `out`.
+ * The outward normal of the face of `s` that `p` crosses (a part inserted into a solid leaves
+ * the way it entered), or undefined when it crosses none. Ties: the tie order.
  */
-function away(item: Item, owner: SceneAssemblyNode, box: LBox): Dir {
+function entryNormal(p: LBox, s: LBox): Dir | undefined {
+  let first: Dir | undefined;
+  for (const d of PRIORITY) {
+    const { axis, sign } = axisOf(d) as { axis: 0 | 1 | 2; sign: 1 | -1 };
+    const plane = sign > 0 ? hi(s)[axis] : lo(s)[axis];
+    if (!(lo(p)[axis] < plane - EPS && hi(p)[axis] > plane + EPS)) continue;
+    // the face it enters: the part's footprint lies inside the face
+    const inFace = [0, 1, 2].every(
+      (v) => v === axis || (lo(p)[v]! >= lo(s)[v]! - EPS && hi(p)[v]! <= hi(s)[v]! + EPS),
+    );
+    if (inFace) return d;
+    first ??= d;
+  }
+  return first;
+}
+
+/** Path-indexed children of a parent, built once per parent per program. */
+function childrenByPath(
+  ctx: DirectionContext,
+  parent: SceneAssemblyNode,
+): Map<string, SceneAssemblyNode> {
+  const cache = ctx.cache;
+  let m = cache?.get(parent);
+  if (m === undefined) {
+    m = new Map(parent.children.map((c) => [c.path, c]));
+    cache?.set(parent, m);
+  }
+  return m;
+}
+
+/**
+ * `away` (§6.2): a part with `inserts` leaves through the entry face it crossed; else it leaves
+ * its mate (explicit or inferred `mates`); else the largest touching sibling, else the
+ * enclosure, else (interpenetration, an interpretation: the doc says `out`) the axis of least
+ * penetration of the sibling it overlaps most, else `out`. The mate and `inserts` checks are
+ * always made; only the full sibling scan is skipped in groups over `INFER_CAP` siblings
+ * (`ctx.degraded` counts them).
+ */
+function away(item: Item, ctx: DirectionContext, box: LBox): Dir {
+  const owner = ctx.owner;
   const parent = item.parent?.node ?? owner;
-  const sibs = parent.children.filter((s) => s !== item.node);
-  if (sibs.length <= INFER_CAP) {
-    const mate =
-      item.node.mates === undefined ? undefined : sibs.find((s) => s.path === item.node.mates);
-    if (mate !== undefined) {
-      const hit = contactAway(box, toLBox(mate.local));
-      if (hit !== undefined) return hit.dir;
-    }
+  const byPath = childrenByPath(ctx, parent);
+  const ins = item.node.inserts === undefined ? undefined : byPath.get(item.node.inserts);
+  if (ins !== undefined) {
+    const n = entryNormal(box, toLBox(ins.local));
+    if (n !== undefined) return n;
+  }
+  const mate = item.node.mates === undefined ? undefined : byPath.get(item.node.mates);
+  if (mate !== undefined && mate !== item.node) {
+    const hit = contactAway(box, toLBox(mate.local));
+    if (hit !== undefined) return hit.dir;
+  }
+  if (parent.children.length - 1 <= INFER_CAP) {
     let best: { area: number; dir: Dir } | undefined;
     let enclosing: LBox | undefined;
     let pushed: { volume: number; dir: Dir } | undefined;
-    for (const s of sibs) {
+    for (const s of parent.children) {
+      if (s === item.node) continue;
       const sb = toLBox(s.local);
       const push = pushOut(box, sb);
       if (push !== undefined && (pushed === undefined || push.volume > pushed.volume + EPS)) {
@@ -296,7 +347,7 @@ function away(item: Item, owner: SceneAssemblyNode, box: LBox): Dir {
     if (best !== undefined) return best.dir;
     if (enclosing !== undefined) return shortestExit(box, enclosing);
     if (pushed !== undefined) return pushed.dir;
-  }
+  } else if (ctx.degraded !== undefined) ctx.degraded.count++;
   const pc = centre(box);
   const oc = centre(toLBox(owner.local));
   return outward([pc[0] - oc[0], pc[1] - oc[1], pc[2] - oc[2]]);
