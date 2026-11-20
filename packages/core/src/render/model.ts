@@ -730,7 +730,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
 
   // ---- Assemblies (schema 1.2.0) -----------------------------------------------------------
   // Absent for every 1.1 scene (no `assemblies`), so their layers and view box are untouched.
-  const asmBuild = buildAssemblyRender({
+  const asmResult = buildAssemblyRender({
     scene,
     spec: inputs.spec,
     images: inputs.images,
@@ -753,11 +753,12 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     nudge: (box, placedBoxes) => nudgeLabel(box, placedBoxes),
     focusMargin: { side: MARGIN_FOCUS, bottom: labelSize + 6 },
   });
+  if (asmResult) diagnostics.push(...asmResult.diagnostics);
+  const asmBuild = asmResult !== undefined && "model" in asmResult ? asmResult : undefined;
   if (asmBuild) {
     layers.background.push(...asmBuild.defs);
     layers.objects.push(...asmBuild.objects);
     extents.push(...asmBuild.extents);
-    diagnostics.push(...asmBuild.diagnostics);
   }
 
   // ---- Viewbox, overlays ---------------------------------------------------------------

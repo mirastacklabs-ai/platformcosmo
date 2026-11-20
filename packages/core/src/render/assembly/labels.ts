@@ -33,7 +33,16 @@ import { fmt, projectBoxBounds, unionRects } from "../../geometry/index.js";
 import { measureText } from "../../text/index.js";
 import type { StageRun } from "./loop.js";
 import { r4 } from "./loop.js";
-import { MoveIndex, offsetTrack, plain, round2, screenOf } from "./tracks.js";
+import {
+  MoveIndex,
+  evalOffset,
+  evalOpacity,
+  offsetTrack,
+  plain,
+  round2,
+  screenOf,
+  translateOf,
+} from "./tracks.js";
 import type { WorldLeaf } from "./world.js";
 
 const GAP = 18;
@@ -86,6 +95,8 @@ export interface LabelOutput {
   readonly tracks: LabelTrack[];
   readonly extents: Rect[];
   readonly elements: number;
+  /** Top-face labels by leaf path: drawn INSIDE the part group, after its faces (shared depth). */
+  readonly top: ReadonlyMap<string, SvgElement>;
 }
 
 interface NodeInfo {
@@ -142,6 +153,7 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
   const P = ctx.prefix;
   const nodes: SvgNode[] = [];
   const tracks: LabelTrack[] = [];
+  const topLabels = new Map<string, SvgElement>();
   const extents: Rect[] = [];
   let elements = 0;
 
@@ -182,7 +194,7 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     readonly t1?: number;
   }
   const events = new Map<string, Event[]>();
-  const firstShow = new Map<string, { t: number; details: boolean }>();
+  const firstShow = new Map<string, { t: number; details: boolean; leaders: boolean }>();
   const addEvent = (path: string, e: Event): void => {
     const l = events.get(path);
     if (l === undefined) events.set(path, [e]);
@@ -200,9 +212,13 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       addEvent(mv.path, { t: r4(mv.t1 - dur * FADE_FRACTION), kind: "in", t1: mv.t1 });
       const prev = firstShow.get(mv.path);
       if (prev === undefined || mv.t1 < prev.t) {
-        firstShow.set(mv.path, { t: mv.t1, details: run.stage.details });
+        firstShow.set(mv.path, {
+          t: mv.t1,
+          details: run.stage.details,
+          leaders: run.stage.leaders,
+        });
       } else if (run.stage.details && !prev.details) {
-        firstShow.set(mv.path, { t: prev.t, details: true });
+        firstShow.set(mv.path, { ...prev, details: true });
       }
     }
   }
@@ -212,15 +228,18 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
   const lineH = size * 1.25;
   for (const path of [...firstShow.keys()].sort()) {
     const inf = info.get(path) as NodeInfo;
-    const show = firstShow.get(path) as { t: number; details: boolean };
-    const runWith = runs.find((r) => r.kind === "explode" && r.moves.some((m) => m.path === path));
-    const leaders = runWith?.stage.leaders !== false;
+    const show = firstShow.get(path) as { t: number; details: boolean; leaders: boolean };
+    const leaders = show.leaders;
     // text lines
     const lines = [inf.label, ...(show.details ? inf.detail : [])].map((s, i) =>
-      ctx.fit(s, i === 0 ? size : size - 1, false, 150 * ctx.fs),
+      ctx.fit(s, i === 0 ? size : size - 1, i === 0, 150 * ctx.fs),
     );
     const w =
-      Math.max(...lines.map((s, i) => measureText(s, i === 0 ? size : size - 1, "regular"))) +
+      Math.max(
+        ...lines.map((s, i) =>
+          measureText(s, i === 0 ? size : size - 1, i === 0 ? "bold" : "regular"),
+        ),
+      ) +
       8 * ctx.fs;
     const hgt = lines.length * lineH + 4;
     // node box at the pose where the label shows
@@ -249,6 +268,7 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     const sy = mv.y;
     const r = (n: number): number => Number(fmt(n));
     const kids: SvgNode[] = [];
+    let leaderRect: Rect | undefined;
     if (leaders) {
       const cl = closest(bb, box);
       kids.push(
@@ -257,12 +277,12 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
           d: `M${fmt(cl.a.x - sx)} ${fmt(cl.a.y - sy)}L${fmt(cl.b.x - sx)} ${fmt(cl.b.y - sy)}`,
         }),
       );
-      extents.push({
+      leaderRect = {
         x: Math.min(cl.a.x, cl.b.x),
         y: Math.min(cl.a.y, cl.b.y),
         width: Math.abs(cl.a.x - cl.b.x),
         height: Math.abs(cl.a.y - cl.b.y),
-      });
+      };
     }
     kids.push(
       h("rect", {
@@ -320,7 +340,30 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     }
     const motion = offsetTrack(plain(index.chain(path)), ctx.loop, projection);
     tracks.push({ id, path, kind: "leader", motion, opacity: keys, initial: 0 });
-    nodes.push(h("g", { id, class: `${P}-plabel` }, ...kids));
+    // the label's boxes over its visible window: the part's track moves them (§10)
+    const rest = [box, ...(leaderRect === undefined ? [] : [leaderRect])].map((q) => ({
+      ...q,
+      x: q.x - sx,
+      y: q.y - sy,
+    }));
+    const stamps = [...new Set([...motion.map((k) => k.t), ...keys.map((k) => k.t)])];
+    for (const t of stamps) {
+      const seen =
+        evalOpacity(keys, t) > 0 ||
+        evalOpacity(keys, t + 1e-3) > 0 ||
+        evalOpacity(keys, t - 1e-3) > 0;
+      if (!seen) continue;
+      const o = evalOffset(motion, t);
+      for (const q of rest) extents.push({ ...q, x: q.x + o.x, y: q.y + o.y });
+    }
+    const tf = translateOf(evalOffset(motion, 0));
+    nodes.push(
+      h(
+        "g",
+        { id, class: `${P}-plabel`, opacity: 0, ...(tf === undefined ? {} : { transform: tf }) },
+        ...kids,
+      ),
+    );
     elements += 2 + kids.length;
   }
 
@@ -341,7 +384,6 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     if (text === "" || faceW * 0.8 < fs2 * 2) continue;
     const id = `${ids.partLabel(l.path)}__top`;
     const chain = index.chain(l.path);
-    const motion = offsetTrack(plain(chain), ctx.loop, projection);
     // visible while the leaf is at its base pose: hidden between a move's start and the time
     // its displacement is back to the base value
     const opacity = restOpacity(chain, ctx.loop, (t) =>
@@ -351,14 +393,19 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       id,
       path: l.path,
       kind: "top",
-      motion,
+      motion: [],
       opacity,
       initial: opacity[0]?.opacity ?? 1,
     });
-    nodes.push(
+    topLabels.set(
+      l.path,
       h(
         "g",
-        { id, class: `${P}-plabel` },
+        {
+          id,
+          class: `${P}-plabel`,
+          ...((opacity[0]?.opacity ?? 1) < 1 ? { opacity: opacity[0]?.opacity ?? 1 } : {}),
+        },
         ctx.text({
           x: round2(top.x),
           y: round2(top.y + fs2 / 3),
@@ -372,7 +419,7 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     elements += 2;
     extents.push({ x: top.x - faceW / 2, y: top.y - fs2, width: faceW, height: fs2 * 2 });
   }
-  return { nodes, tracks, extents, elements };
+  return { nodes, tracks, extents, elements, top: topLabels };
 }
 
 /** Opacity 1 while the displacement equals its t = 0 value, 0 otherwise (step changes). */

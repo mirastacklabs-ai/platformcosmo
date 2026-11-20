@@ -565,8 +565,11 @@ export interface TrackKey {
   readonly t: number;
   /** Screen translation relative to rest, user units (already projected). */
   readonly offset: Vec2;
-  /** Easing of the segment that STARTS at this key; `step` = hold until the next key. */
-  readonly easing: SpecEasing | "step";
+  /**
+   * Easing of the segment that STARTS at this key; `step` = hold until the next key; a 4-tuple is
+   * a CSS `cubic-bezier(x1, y1, x2, y2)` (the camera's curve of the loop closure, §7.4).
+   */
+  readonly easing: SpecEasing | "step" | readonly [number, number, number, number];
 }
 
 /** Visibility key (copy swaps, enclosure hiding, build appearance): always a step change. */
@@ -613,14 +616,46 @@ export interface PartTrack {
   readonly opacity: readonly OpacityKey[];
 }
 
-/** Pose of every motion group at one time (frame mode, per-step outputs, static). */
+/**
+ * FULL pose of every wrapper at one time (frame mode, per-step outputs, static, and the DOM's own
+ * attributes at t = 0). Every registered id is listed: attribute overrides must write the whole
+ * state, because the DOM carries the t = 0 pose as attributes and an omitted id would keep it.
+ */
 export interface AssemblyFrameState {
-  /** `partHost` / `partMotion` id → SVG `transform` value (`translate(x y)`), only when non-zero. */
+  /** Every `partHost` / `partMotion` / label group id → `translate(x y)` (`translate(0 0)` included). */
   readonly transforms: Readonly<Record<string, string>>;
   /** `partVisible` ids hidden at this time (unused copies, enclosed or not-yet-built parts). */
   readonly hidden: readonly string[];
-  /** `partFade` ids with opacity < 1, rounded to 2 decimals. */
+  /** Every `partFade` / static fade / label group id → opacity 0..1 (1 included), 2 decimals. */
   readonly opacity: Readonly<Record<string, number>>;
+  /** `partVisible` ids visible at this time (the complement of `hidden`, so overrides are total). */
+  readonly visible: readonly string[];
+}
+
+/** Label group (leader or top-face label) of a part and its tracks. */
+export interface AssemblyLabelTrack {
+  readonly id: string;
+  /** Total screen translation of the node the label rides. */
+  readonly motion: readonly TrackKey[];
+  readonly opacity: readonly OpacityKey[];
+}
+
+/** A non-assembly object wrapped in `ids.fadeWrap` because a stage fades `others`. */
+export interface AssemblyStaticFade {
+  readonly key: string;
+  readonly id: string;
+  readonly opacity: readonly OpacityKey[];
+}
+
+export interface AssemblyStepClock {
+  /** 1-based. */
+  readonly step: number;
+  readonly start: number;
+  readonly duration: number;
+  /** Motion window opens. */
+  readonly open: number;
+  /** Closing hold ends: the END pose of the step is shown here. */
+  readonly end: number;
 }
 
 /** What A1 adds to `RenderModel` for 1.2.0 content (`RenderModel.assembly`). */
@@ -634,8 +669,22 @@ export interface AssemblyRenderModel {
   readonly tracks: readonly PartTrack[];
   /** Loop length at speed 1 (= sum of step durations), or 0 without steps. */
   readonly loop: number;
-  /** Per step (1-based index − 1): time at which the step's motion has settled (§7.5). */
-  readonly settled: readonly number[];
+  /** Per step (1-based index − 1): when its actions have settled (§7.5); undefined without actions. */
+  readonly settled: readonly (number | undefined)[];
+  /** Label groups, sorted by id. */
+  readonly labelTracks: readonly AssemblyLabelTrack[];
+  /** Statics wrapped in a fade group (only when a stage fades `others`). */
+  readonly staticFades: readonly AssemblyStaticFade[];
+  /** Image assets used by decals and billboards, by hash (the emitter encodes them). */
+  readonly assets: ReadonlyMap<string, ImageAsset>;
+  /** One entry per timeline step. */
+  readonly clock: readonly AssemblyStepClock[];
+  /** Fast return of the loop closure (§7.4), when some program ends away from its base level. */
+  readonly closure?: { readonly t0: number; readonly t1: number };
+  /** Approximate depth time ranges (`assembly/depth-approx`). */
+  readonly approximate: readonly { readonly t0: number; readonly t1: number }[];
+  /** Union of the swept screen boxes of every leaf (reach bounds, §10). */
+  readonly reach: Rect | undefined;
   /**
    * Focus rect of an id at the END pose of a step (assembly, sub-assembly or part focus);
    * B uses it instead of `RenderModel.focusRects` when present (§7.4).

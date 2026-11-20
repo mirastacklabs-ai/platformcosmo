@@ -306,8 +306,7 @@ export const emit: EmitFn = (
   const imageDefs = new Map<string, SvgNode>();
   const boardAssets = boardsOf(model)?.assets;
   // Assembly decals and billboards (A1-3) carry their assets on the assembly model.
-  const asmAssets = (model.assembly as { assets?: ReadonlyMap<string, ImageAsset> } | undefined)
-    ?.assets;
+  const asmAssets = model.assembly?.assets;
   const hoist: Mapper = (el) => {
     if (el.tag === IMAGE_DEF_TAG) {
       const hash = String(el.attrs?.hash ?? "");

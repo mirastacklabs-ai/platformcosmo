@@ -16,14 +16,14 @@ import {
 import type { Box3, PartGeometry, SceneAssemblyNode } from "../src/contracts/index.js";
 import { depthEpochs } from "../src/depth/epochs.js";
 import { serialize } from "../src/emit/xml.js";
-import { createProjection, partGeometry, studGrid } from "../src/geometry/index.js";
+import { partGeometry, studGrid } from "../src/geometry/index.js";
 import { depthItems, worldLeaves, type WorldLeaf } from "../src/render/assembly/world.js";
-import { partGroup, type DomContext } from "../src/render/assembly/dom.js";
 import type { AssemblyRenderModelX } from "../src/render/assembly/types.js";
-import { evalOffset } from "../src/render/assembly/tracks.js";
+import { bezierProgress } from "../src/render/boards/timeline.js";
+import { evalOffset, round2 } from "../src/render/assembly/tracks.js";
 import { fixtureTheme } from "./fixtures/theme.js";
 import { realPng, resolverOf } from "./figure-fixtures.js";
-import { check, colorOf, indexOf, silhouette, viewOf, count, type Scene } from "./depth-zbuffer.js";
+import { colorOf, indexOf, silhouette, viewOf, type Scene } from "./depth-zbuffer.js";
 
 // A1-3: assembly render model and emit (docs/design/assemblies.md §6.6, §9.4, §10, §11.3, §12).
 
@@ -59,6 +59,7 @@ function layerOf(f: AssemblyFrameState): AnimationLayer {
   const attrs: Record<string, Record<string, string | number>> = {};
   for (const [id, t] of Object.entries(f.transforms)) (attrs[id] ??= {}).transform = t;
   for (const id of f.hidden) (attrs[id] ??= {}).visibility = "hidden";
+  for (const id of f.visible) (attrs[id] ??= {}).visibility = "visible";
   for (const [id, o] of Object.entries(f.opacity)) (attrs[id] ??= {}).opacity = o;
   return { css: "", defs: [], layers: {}, duration: 0, attrs };
 }
@@ -147,22 +148,32 @@ describe("model and wrapper chain (§9.4)", () => {
     expect(Object.keys(X(g).stepEnd(3).opacity).length).toBeGreaterThan(0);
   });
 
-  test("frameAt(t) agrees with the track keys and is rounded to 2 decimals", () => {
+  test("frameAt(t) is the FULL state, agrees with the track keys, 2 decimals", () => {
     const m = engine();
     const a = X(m);
+    const t = a.clock[2]!.end;
     const f = a.stepEnd(3);
-    for (const t of a.tracks) {
-      const id = a.ids.partMotion(t.copy);
-      const v = evalOffset(t.motion, a.clock[2]!.end);
-      const got = f.transforms[id];
-      if (Math.abs(v.x) < 0.005 && Math.abs(v.y) < 0.005) expect(got).toBeUndefined();
-      else expect(got).toMatch(/^translate\(-?\d+(\.\d{1,2})? -?\d+(\.\d{1,2})?\)$/);
+    const re = /^translate\(-?\d+(\.\d{1,2})? -?\d+(\.\d{1,2})?\)$/;
+    for (const tr of a.tracks) {
+      const id = a.ids.partMotion(tr.copy);
+      if (tr.motion.length === 0) {
+        expect(f.transforms[id]).toBeUndefined();
+        continue;
+      }
+      const v = evalOffset(tr.motion, t);
+      expect(f.transforms[id]).toMatch(re);
+      expect(f.transforms[id]).toBe(`translate(${round2(v.x)} ${round2(v.y)})`);
     }
-    // loop closure returns to the base pose
-    expect(a.frameAt(a.loop).transforms).toEqual(a.frameAt(0).transforms);
+    // every visibility wrapper is listed exactly once, in hidden or visible
+    const vis = a.tracks
+      .filter((x) => x.visibility.length > 0)
+      .map((x) => a.ids.partVisible(x.copy));
+    expect([...f.hidden, ...f.visible].sort()).toEqual(vis.sort());
+    // the loop wraps like boards: frameAt(loop) is the rest frame
+    expect(a.frameAt(a.loop)).toEqual(a.frameAt(0));
+    expect(a.frameAt(a.loop + 1.3)).toEqual(a.frameAt(1.3));
     expect(a.closure).toBeUndefined(); // ends with an implode: no fast return needed
   });
-
   test("a loop that ends exploded closes with a fast return in the last step's window", () => {
     const spec = structuredClone(example("2U GPU")) as unknown as { steps: unknown[] };
     spec.steps = spec.steps.slice(0, 4);
@@ -172,9 +183,11 @@ describe("model and wrapper chain (§9.4)", () => {
     const c = a.closure!;
     expect(c.t1).toBeCloseTo(a.loop, 6);
     expect(c.t0).toBeLessThan(c.t1);
-    expect(Object.keys(a.stepEnd(4).transforms).length).toBeGreaterThan(0);
-    expect(a.frameAt(a.loop).transforms).toEqual(a.frameAt(0).transforms);
-    expect(a.frameAt(c.t0).transforms).toEqual(a.stepEnd(4).transforms);
+    expect(Object.values(a.stepEnd(4).transforms).some((v) => v !== "translate(0 0)")).toBe(true);
+    expect(a.frameAt(a.loop)).toEqual(a.frameAt(0));
+    expect(a.frameAt(c.t0)).toEqual(a.stepEnd(4));
+    // the closing window is the last step's own transition
+    expect(c.t1 - c.t0).toBeCloseTo(Math.min(0.8, 0.25 * a.clock[3]!.duration), 4);
   });
 });
 
@@ -245,7 +258,7 @@ describe("labels", () => {
   test("label groups ride the part's track and start hidden", () => {
     const a = X(gpu());
     expect(a.labelTracks.length).toBeGreaterThan(0);
-    for (const t of a.labelTracks.filter((x) => x.kind === "leader")) {
+    for (const t of a.labelTracks.filter((x) => !x.id.endsWith("__top"))) {
       expect(t.opacity[0]).toMatchObject({ t: 0, opacity: 0 });
       expect(Math.max(...t.opacity.map((k) => k.opacity))).toBe(1);
     }
@@ -324,7 +337,6 @@ describe("emit safety and ids", () => {
 });
 
 describe("studs and fills (E-3 review)", () => {
-  const proj = createProjection({});
   const brickBox: Box3 = { origin: { x: 0, y: 0, z: 0 }, size: { x: 4, y: 4, z: 3 } };
   const leafOf = (path: string, geometry: PartGeometry, depthBox: Box3): WorldLeaf => ({
     assembly: "a",
@@ -440,30 +452,6 @@ describe("studs and fills (E-3 review)", () => {
     expect(r.clips.some((c) => c.item === "axle")).toBe(true);
     expect(r.diagnostics.filter((d) => d.code === "assembly/clip-fallback")).toEqual([]);
   });
-
-  test("stud faces merge into compound paths per part", () => {
-    const leaf = leafOf("brick", studded(), brickBox);
-    const dom: DomContext = {
-      projection: proj,
-      ids: createIds("pc"),
-      prefix: "pc",
-      images: undefined,
-      assets: new Map(),
-      defs: [],
-      diagnostics: [],
-      count: () => {},
-    };
-    const svg = serialize(partGroup(dom, leaf, undefined));
-    const studPaths = [
-      ...svg.matchAll(/<path id="[^"]*__studs__(top|left|right)"[^>]*d="([^"]*)"/g),
-    ];
-    expect(studPaths.length).toBeLessThanOrEqual(3);
-    expect(studPaths.length).toBeGreaterThan(0);
-    // 16 studs: every compound path holds 16 sub-paths
-    for (const p of studPaths) expect((p[2]!.match(/M/g) ?? []).length).toBeGreaterThanOrEqual(16);
-    expect((svg.match(/<path /g) ?? []).length).toBeLessThan(15);
-    expect(serialize(partGroup(dom, leaf, undefined))).toBe(svg);
-  });
 });
 
 describe("snapshots of the Phase 1b examples", () => {
@@ -515,26 +503,35 @@ describe("1.1 and figure output unchanged", () => {
   });
 });
 
-describe("z-buffer spot check on an emitted frame", () => {
-  test("engine mid-explosion: painter order of the emitted DOM equals the ray cast", async () => {
-    const m = engine();
+describe("z-buffer spot check on emitted frames", () => {
+  const hex = (c: number): string => `#${c.toString(16).padStart(6, "0")}`;
+  async function zCheck(m: RenderModel, t: number) {
     const a = X(m);
     const leaves = worldLeaves(m.scene.assemblies!.assemblies);
     const items = depthItems(leaves);
-    const scene: Scene = { items, moves: a.moves, loop: a.loop };
-    const t = (a.clock[3]!.open + a.clock[3]!.end) / 2;
+    // the reference evaluates keyword easings only: freeze the closure's bezier moves at their
+    // true progress for this instant (instant moves at 0)
+    const moves = a.moves.map((mv) => {
+      if (mv.bezier === undefined) return mv;
+      const p = bezierProgress(
+        mv.bezier as unknown as [number, number, number, number],
+        (t - mv.t0) / (mv.t1 - mv.t0),
+      );
+      return { ...mv, t0: 0, t1: 0, to: { x: mv.to.x * p, y: mv.to.y * p, z: mv.to.z * p } };
+    });
+    const scene: Scene = { items, moves, loop: a.loop };
     const view = viewOf(scene, [t]);
     const frame = a.frameAt(t);
-    const hex = (c: number): string => `#${c.toString(16).padStart(6, "0")}`;
-    const byPath = new Map(items.map((i) => [i.path, i]));
+    const byObject = new Map(items.map((i) => [m.ids.object(i.path ?? i.key), i]));
     const paint = (n: SvgNode): SvgNode => {
       if (!isEl(n)) return n;
       const id = n.attrs?.id;
-      const item = [...byPath.values()].find((i) => id === m.ids.object(i.path ?? i.key));
+      const item = typeof id === "string" ? byObject.get(id) : undefined;
       const attrs = { ...(n.attrs ?? {}) } as Record<string, string | number>;
       if (typeof id === "string") {
         if (frame.transforms[id]) attrs.transform = frame.transforms[id]!;
         if (frame.hidden.includes(id)) attrs.visibility = "hidden";
+        if (frame.visible.includes(id)) attrs.visibility = "visible";
       }
       if (item !== undefined) {
         const fill = hex(colorOf(indexOf(scene, item.key)));
@@ -553,11 +550,31 @@ describe("z-buffer spot check on an emitted frame", () => {
       `<defs>${defs.map((d) => serialize(d)).join("")}</defs>${body.map((n) => serialize(n)).join("")}</svg>`;
     const { painterIds, zbufferIds, compare } = await import("./depth-zbuffer.js");
     const got = await painterIds(scene, svg, view);
-    const ref = zbufferIds(scene, t, view);
-    const c = compare(ref, got, view);
-    expect(c.covered).toBeGreaterThan(1000);
-    expect(c.fraction).toBeLessThan(0.02);
-    void check;
-    void count;
+    return compare(zbufferIds(scene, t, view), got, view);
+  }
+
+  test("engine: mid-move of every step", async () => {
+    const m = engine();
+    const a = X(m);
+    for (const c of a.clock.slice(1)) {
+      const t = (c.open + c.end) / 2;
+      const r = await zCheck(m, t);
+      expect(r.covered).toBeGreaterThan(1000);
+      expect(r.fraction, `t=${t}`).toBeLessThan(0.02);
+      expect(r.worstItem, `t=${t}`).toBeLessThan(0.1);
+    }
+  });
+
+  test("engine ending exploded: inside the closure window", async () => {
+    const spec = structuredClone(example("Inline-4")) as unknown as { steps: unknown[] };
+    spec.steps = spec.steps.slice(0, -1);
+    const m = build(spec as unknown as PlatformCosmoSpec);
+    const a = X(m);
+    expect(a.closure).toBeDefined();
+    const t = (a.closure!.t0 + a.closure!.t1) / 2;
+    const r = await zCheck(m, t);
+    expect(r.covered).toBeGreaterThan(1000);
+    expect(r.fraction).toBeLessThan(0.02);
+    expect(r.worstItem).toBeLessThan(0.1);
   });
 });

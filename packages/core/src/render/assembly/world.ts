@@ -55,6 +55,18 @@ const swap = (a: "x" | "y" | "z"): "x" | "y" | "z" => (a === "x" ? "y" : a === "
 const turnRotate = (r: QuarterTurn | undefined, q: number): QuarterTurn =>
   ((((r ?? 0) / 90 + q) % 4) * 90) as QuarterTurn;
 
+/**
+ * Every primitive of a split geometry belongs to a depth item: primitives listed in neither half
+ * go to `back` (they would otherwise be drawn by no item).
+ */
+export function normalizeSplit(g: PartGeometry): PartGeometry {
+  const s = g.split;
+  if (s === undefined) return g;
+  const listed = new Set([...s.back, ...s.front]);
+  const extra = g.primitives.filter((p) => !listed.has(p.id)).map((p) => p.id);
+  return extra.length === 0 ? g : { ...g, split: { back: [...s.back, ...extra], front: s.front } };
+}
+
 /** Leaves of every assembly in world space, assembly order then tree order. */
 export function worldLeaves(assemblies: readonly SceneAssembly[]): WorldLeaf[] {
   const out: WorldLeaf[] = [];
@@ -79,13 +91,15 @@ export function worldLeaves(assemblies: readonly SceneAssembly[]): WorldLeaf[] {
         ...(p.kind === "wedge" ? { rotate: turnRotate(p.rotate, q) } : {}),
       }));
       const images = turnImages(g.images, q);
-      const geometry: PartGeometry = reassignSplit({
-        ...g,
-        primitives,
-        bounds: lift(g.bounds),
-        depthBox: node.world,
-        ...(images === undefined ? {} : { images }),
-      });
+      const geometry: PartGeometry = normalizeSplit(
+        reassignSplit({
+          ...g,
+          primitives,
+          bounds: lift(g.bounds),
+          depthBox: node.world,
+          ...(images === undefined ? {} : { images }),
+        }),
+      );
       out.push({ assembly: asm.id, node, path: node.path, geometry, depthBox: node.world });
     }
   }

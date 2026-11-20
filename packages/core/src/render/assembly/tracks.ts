@@ -7,32 +7,82 @@
  *
  * Motion. A leaf's displacement is the sum of the moves of itself and its ancestors; the screen
  * is linear in it, so its track is the projected sum. Between two consecutive boundaries (every
- * move start and end) the sum is EXACT when all active moves share one window and easing (each
- * term is `from + (to - from) * e(u)` with the same `e`): that segment keeps the move's easing.
- * Otherwise (a boundary of another move falls inside a window, or different easings overlap) the
- * segment is sampled in `SUBSTEPS` linear pieces evaluated exactly at their ends, so the key
- * values are on the true path and the error is bounded by the curve's bend within one piece.
+ * move start and end, and every extra time such as an epoch start) the sum is EXACT when all
+ * active moves share one window and curve (each term is `from + (to - from) * e(u)` with the same
+ * `e`): that segment keeps the move's easing. Otherwise the segment is split recursively at its
+ * midpoint until the chord is within `TOLERANCE_PX` of the true path (at most 2^7 pieces), the
+ * key values being exact evaluations.
  */
-import type { OpacityKey, TrackKey, Vec2, Vec3, VisibilityKey } from "../../contracts/index.js";
+import type {
+  OpacityKey,
+  Projection,
+  TrackKey,
+  Vec2,
+  Vec3,
+  VisibilityKey,
+} from "../../contracts/index.js";
 import { easeProgress, moveOffsetAt, movesPath, type LoopMove } from "../../depth/epochs.js";
-import type { Projection } from "../../contracts/index.js";
+import type { SpecEasing } from "../../schema/types.gen.js";
+import { bezierProgress } from "../boards/timeline.js";
 import { r4 } from "./loop.js";
 
 const EPS = 1e-9;
-/** Pieces of a segment whose active moves do not share one curve. */
-export const SUBSTEPS = 8;
+/** Largest chord error (user units) of a sampled concurrent-curve segment. */
+export const TOLERANCE_PX = 0.25;
+const MAX_SPLIT = 7;
+
+/** A loop move that plays a CSS cubic-bezier (the camera curve of the closure); depth sees `easing`. */
+export interface BezierMove extends LoopMove {
+  readonly bezier?: readonly [number, number, number, number];
+}
+
+type KeyEasing = TrackKey["easing"];
+
+/** Progress of a key's easing at linear time `x` (clamped to 0..1). */
+export function keyProgress(easing: KeyEasing, x: number): number {
+  if (typeof easing !== "string") {
+    return bezierProgress(easing as unknown as [number, number, number, number], x);
+  }
+  if (easing === "linear" || easing === "step") return Math.min(1, Math.max(0, x));
+  return easeProgress(easing as SpecEasing, x);
+}
+
+/** Contribution of one move at `t` (exact curve, also for bezier moves). */
+export function moveOffset(m: BezierMove, t: number): Vec3 {
+  if (m.bezier === undefined) return moveOffsetAt(m, t);
+  const p =
+    t >= m.t1
+      ? 1
+      : t <= m.t0
+        ? 0
+        : bezierProgress(
+            m.bezier as unknown as [number, number, number, number],
+            (t - m.t0) / (m.t1 - m.t0),
+          );
+  return {
+    x: m.from.x + (m.to.x - m.from.x) * p,
+    y: m.from.y + (m.to.y - m.from.y) * p,
+    z: m.from.z + (m.to.z - m.from.z) * p,
+  };
+}
+
+const sameCurve = (a: BezierMove, b: BezierMove): boolean =>
+  a.easing === b.easing &&
+  (a.bezier === undefined
+    ? b.bezier === undefined
+    : b.bezier !== undefined && a.bezier.every((v, i) => v === (b.bezier as readonly number[])[i]));
 
 export const round2 = (v: number): number => Math.round(v * 100) / 100 + 0;
 
 export interface SignedMove {
-  readonly m: LoopMove;
+  readonly m: BezierMove;
   readonly sign: 1 | -1;
 }
 
 /** Moves by node path, for chain lookups (the node and its ancestors). */
 export class MoveIndex {
-  private readonly byPath = new Map<string, LoopMove[]>();
-  constructor(readonly moves: readonly LoopMove[]) {
+  private readonly byPath = new Map<string, BezierMove[]>();
+  constructor(readonly moves: readonly BezierMove[]) {
     for (const m of moves) {
       const l = this.byPath.get(m.path);
       if (l === undefined) this.byPath.set(m.path, [m]);
@@ -41,8 +91,8 @@ export class MoveIndex {
   }
 
   /** Moves of `path` and of its ancestors, ancestors first. */
-  chain(path: string): LoopMove[] {
-    const out: LoopMove[] = [];
+  chain(path: string): BezierMove[] {
+    const out: BezierMove[] = [];
     let at = -1;
     for (;;) {
       at = path.indexOf("/", at + 1);
@@ -59,7 +109,7 @@ export class MoveIndex {
     let y = 0;
     let z = 0;
     for (const m of this.chain(path)) {
-      const o = moveOffsetAt(m, t);
+      const o = moveOffset(m, t);
       x += o.x;
       y += o.y;
       z += o.z;
@@ -69,7 +119,7 @@ export class MoveIndex {
 }
 
 /** Signed moves of `a` relative to `b`: moves both share (common ancestors) cancel. */
-export function relativeMoves(a: readonly LoopMove[], b: readonly LoopMove[]): SignedMove[] {
+export function relativeMoves(a: readonly BezierMove[], b: readonly BezierMove[]): SignedMove[] {
   const inB = new Set(b);
   const inA = new Set(a);
   return [
@@ -78,15 +128,15 @@ export function relativeMoves(a: readonly LoopMove[], b: readonly LoopMove[]): S
   ];
 }
 
-export const plain = (moves: readonly LoopMove[]): SignedMove[] =>
+export const plain = (moves: readonly BezierMove[]): SignedMove[] =>
   moves.map((m): SignedMove => ({ m, sign: 1 }));
 
-function valueAt(sm: readonly SignedMove[], t: number): Vec3 {
+export function valueAt(sm: readonly SignedMove[], t: number): Vec3 {
   let x = 0;
   let y = 0;
   let z = 0;
   for (const { m, sign } of sm) {
-    const o = moveOffsetAt(m, t);
+    const o = moveOffset(m, t);
     x += sign * o.x;
     y += sign * o.y;
     z += sign * o.z;
@@ -101,9 +151,14 @@ export function screenOf(projection: Projection, v: Vec3): Vec2 {
   return { x: p.x - o.x, y: p.y - o.y };
 }
 
-/** Boundary times of a set of moves inside [0, loop], sorted, unique, always with 0 and loop. */
-export function boundaries(sm: readonly SignedMove[], loop: number): number[] {
+/** Boundary times of a set of moves (plus `extra`) inside [0, loop], sorted, unique, with 0 and loop. */
+export function boundaries(
+  sm: readonly SignedMove[],
+  loop: number,
+  extra: readonly number[] = [],
+): number[] {
   const set = new Set<number>([0, r4(loop)]);
+  for (const t of extra) if (t > EPS && t < loop - EPS) set.add(r4(t));
   for (const { m } of sm) {
     for (const t of [m.t0, m.t1]) if (t > EPS && t < loop - EPS) set.add(r4(t));
   }
@@ -112,17 +167,20 @@ export function boundaries(sm: readonly SignedMove[], loop: number): number[] {
 
 /**
  * Translation keys of a signed move set; empty when the group never leaves the origin. First key
- * at t = 0, last at `loop` (one key at 0 when `loop` is 0 and the group is displaced).
+ * at t = 0, last at `loop` (one key at 0 when `loop` is 0 and the group is displaced). `extra`
+ * adds boundaries (epoch starts: a key at every instant the DOM swaps).
  */
 export function offsetTrack(
   sm: readonly SignedMove[],
   loop: number,
   projection: Projection,
+  extra: readonly number[] = [],
 ): TrackKey[] {
   if (sm.length === 0) return [];
-  const times = boundaries(sm, loop);
+  const times = boundaries(sm, loop, extra);
+  const raw = (t: number): Vec2 => screenOf(projection, valueAt(sm, t));
   const at = (t: number): Vec2 => {
-    const s = screenOf(projection, valueAt(sm, t));
+    const s = raw(t);
     return { x: round2(s.x), y: round2(s.y) };
   };
   const keys: TrackKey[] = [];
@@ -144,22 +202,37 @@ export function offsetTrack(
         ({ m }) =>
           Math.abs(m.t0 - first.t0) < 1e-6 &&
           Math.abs(m.t1 - first.t1) < 1e-6 &&
-          m.easing === first.easing,
+          sameCurve(m, first),
       );
     if (active.length === 0) push({ t: a, offset: at(a), easing: "linear" });
-    else if (exact) push({ t: a, offset: at(a), easing: first.easing });
+    else if (exact) push({ t: a, offset: at(a), easing: first.bezier ?? first.easing });
     else {
-      for (let k = 0; k < SUBSTEPS; k++) {
-        const ta = r4(a + ((b - a) * k) / SUBSTEPS);
-        push({ t: ta, offset: at(ta), easing: "linear" });
-      }
+      const cuts: number[] = [a];
+      const split = (x0: number, x1: number, depth: number): void => {
+        const mid = (x0 + x1) / 2;
+        const p0 = raw(x0);
+        const p1 = raw(x1);
+        // an S-curve can cross its chord at the midpoint: test the quarter points too
+        let err = 0;
+        for (const f of [0.25, 0.5, 0.75]) {
+          const pm = raw(x0 + (x1 - x0) * f);
+          err = Math.max(
+            err,
+            Math.hypot(pm.x - (p0.x + (p1.x - p0.x) * f), pm.y - (p0.y + (p1.y - p0.y) * f)),
+          );
+        }
+        if (depth < MAX_SPLIT && err > TOLERANCE_PX && x1 - x0 > 2e-4) {
+          split(x0, mid, depth + 1);
+          cuts.push(mid);
+          split(mid, x1, depth + 1);
+        }
+      };
+      split(a, b, 0);
+      for (const ta of cuts) push({ t: r4(ta), offset: at(ta), easing: "linear" });
     }
   }
-  push({
-    t: times[times.length - 1] as number,
-    offset: at(times[times.length - 1] as number),
-    easing: "linear",
-  });
+  const end = times[times.length - 1] as number;
+  push({ t: end, offset: at(end), easing: "linear" });
   if (keys.every((k) => k.offset.x === 0 && k.offset.y === 0)) return [];
   return keys;
 }
@@ -174,10 +247,7 @@ export function evalOffset(keys: readonly TrackKey[], t: number): Vec2 {
     const b = keys[i + 1] as TrackKey;
     if (t < b.t - EPS) {
       if (a.easing === "step") return a.offset;
-      const u =
-        a.easing === "linear"
-          ? (t - a.t) / (b.t - a.t)
-          : easeProgress(a.easing, (t - a.t) / (b.t - a.t));
+      const u = keyProgress(a.easing, (t - a.t) / (b.t - a.t));
       return {
         x: a.offset.x + (b.offset.x - a.offset.x) * u,
         y: a.offset.y + (b.offset.y - a.offset.y) * u,
@@ -185,6 +255,11 @@ export function evalOffset(keys: readonly TrackKey[], t: number): Vec2 {
     }
   }
   return (keys[keys.length - 1] as TrackKey).offset;
+}
+
+/** `translate(x y)` value (2 decimals), always: full state, `translate(0 0)` included. */
+export function translateFull(v: Vec2): string {
+  return `translate(${round2(v.x)} ${round2(v.y)})`;
 }
 
 /** `translate(x y)` value (2 decimals), or undefined at the origin. */
@@ -280,10 +355,7 @@ export function evalOpacity(keys: readonly OpacityKey[], t: number): number {
     const b = keys[i + 1] as OpacityKey;
     if (t < b.t - EPS) {
       if (a.easing === "step") return a.opacity;
-      const u =
-        a.easing === "linear"
-          ? (t - a.t) / (b.t - a.t)
-          : easeProgress(a.easing, (t - a.t) / (b.t - a.t));
+      const u = keyProgress(a.easing, (t - a.t) / (b.t - a.t));
       return a.opacity + (b.opacity - a.opacity) * u;
     }
   }

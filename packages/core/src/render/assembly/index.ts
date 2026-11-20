@@ -59,6 +59,7 @@ import {
   plain,
   relativeMoves,
   round2,
+  translateFull,
   translateOf,
   visibilityTrack,
   windowsTrack,
@@ -142,7 +143,9 @@ function swept(box: Box3, chain: ReturnType<MoveIndex["chain"]>, ta: number, tb:
   };
 }
 
-export function buildAssemblyRender(ctx: AssemblyRenderContext): AssemblyBuild | undefined {
+export function buildAssemblyRender(
+  ctx: AssemblyRenderContext,
+): AssemblyBuild | { readonly diagnostics: Diagnostic[] } | undefined {
   const { scene, projection, ids } = ctx;
   const assemblies = scene.assemblies?.assemblies ?? [];
   if (assemblies.length === 0) return undefined;
@@ -161,7 +164,7 @@ export function buildAssemblyRender(ctx: AssemblyRenderContext): AssemblyBuild |
       suggestion: "Use fewer parts (fewer `count` repeats, simpler `use` templates)",
       params: { parts: leafCount, limit: MAX_LEAVES },
     });
-    return undefined;
+    return { diagnostics };
   }
 
   const leaves = worldLeaves(assemblies);
@@ -233,10 +236,37 @@ export function buildAssemblyRender(ctx: AssemblyRenderContext): AssemblyBuild |
     if (run.stage.fade === "others") staticWindows.push(w);
   }
 
+  let elements = 0;
+
+  // ---- labels ------------------------------------------------------------------------------
+  const labels = buildLabels({
+    projection,
+    prefix: ctx.prefix,
+    ids,
+    labelSize: ctx.labelSize,
+    fs: ctx.fs,
+    text: ctx.text,
+    fit: ctx.fit,
+    nudge: ctx.nudge,
+    assemblies,
+    labelMode: (id) => specAsm.get(id)?.labels ?? "exploded",
+    leaves,
+    index,
+    runs: loopBuild.runs,
+    loop: total,
+    ...(loopBuild.closure === undefined ? {} : { closure: loopBuild.closure }),
+  });
+  elements += labels.elements;
+  const labelTracks = [...labels.tracks].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
   // ---- tracks and wrappers per item -------------------------------------------------------
   const registered: Registered[] = [];
+  // a key at every instant the DOM swaps (epoch starts) and at approximate edges
+  const extraTimes = [
+    ...result.epochs.map((e) => e.t0),
+    ...result.approximate.flatMap((a) => [a.t0, a.t1]),
+  ];
   const tracks: PartTrack[] = [];
-  let elements = 0;
   const domCtx: DomContext = {
     projection,
     ids,
@@ -263,7 +293,8 @@ export function buildAssemblyRender(ctx: AssemblyRenderContext): AssemblyBuild |
       }
       const id = ids.fadeWrap(key);
       staticFades.push({ key, id, opacity });
-      objects.push(h("g", { id }, st.node));
+      const o0 = round2(evalOpacity(opacity, 0));
+      objects.push(h("g", { id, ...(o0 < 1 ? { opacity: o0 } : {}) }, st.node));
       elements += 1;
       continue;
     }
@@ -278,10 +309,10 @@ export function buildAssemblyRender(ctx: AssemblyRenderContext): AssemblyBuild |
     if (clip !== undefined) {
       const solidPath = pathOf.get(clip.solid);
       const solidChain = solidPath === undefined ? [] : index.chain(solidPath);
-      host = offsetTrack(plain(solidChain), total, projection);
-      motion = offsetTrack(relativeMoves(chain, solidChain), total, projection);
+      host = offsetTrack(plain(solidChain), total, projection, extraTimes);
+      motion = offsetTrack(relativeMoves(chain, solidChain), total, projection, extraTimes);
     } else {
-      motion = offsetTrack(plain(chain), total, projection);
+      motion = offsetTrack(plain(chain), total, projection, extraTimes);
     }
     const visibility = visibilityTrack(
       result.epochs.map((e, i) => ({ t0: e.t0, visible: (epochSets[i] as Set<string>).has(key) })),
@@ -295,7 +326,8 @@ export function buildAssemblyRender(ctx: AssemblyRenderContext): AssemblyBuild |
     if (clip !== undefined) {
       if (host.length > 0) {
         const hid = ids.partHost(key);
-        w.host = { id: hid };
+        const tf = translateOf(evalOffset(host, 0));
+        w.host = { id: hid, ...(tf === undefined ? {} : { transform: tf }) };
         reg.host = hid;
       }
       domCtx.defs.push(clipDef(domCtx, clip.clip, clip.prism));
@@ -303,43 +335,26 @@ export function buildAssemblyRender(ctx: AssemblyRenderContext): AssemblyBuild |
     }
     if (motion.length > 0) {
       const mid = ids.partMotion(key);
-      w.motion = { id: mid };
+      const tf = translateOf(evalOffset(motion, 0));
+      w.motion = { id: mid, ...(tf === undefined ? {} : { transform: tf }) };
       reg.motion = mid;
     }
     if (visibility.length > 0) {
       const vid = ids.partVisible(key);
-      w.visible = { id: vid };
+      w.visible = { id: vid, hidden: !evalVisible(visibility, 0) };
       reg.visible = vid;
     }
     if (opacity.length > 0) {
       const fid = ids.partFade(key);
-      w.fade = { id: fid };
+      w.fade = { id: fid, opacity: round2(evalOpacity(opacity, 0)) };
       reg.fade = fid;
     }
     registered.push(reg);
-    objects.push(wrap(partGroup(domCtx, leaf, half), w, domCtx));
+    const top = labels.top.get(path);
+    objects.push(
+      wrap(partGroup(domCtx, leaf, half, top === undefined ? {} : { extra: [top] }), w, domCtx),
+    );
   }
-
-  // ---- labels ------------------------------------------------------------------------------
-  const labels = buildLabels({
-    projection,
-    prefix: ctx.prefix,
-    ids,
-    labelSize: ctx.labelSize,
-    fs: ctx.fs,
-    text: ctx.text,
-    fit: ctx.fit,
-    nudge: ctx.nudge,
-    assemblies,
-    labelMode: (id) => specAsm.get(id)?.labels ?? "exploded",
-    leaves,
-    index,
-    runs: loopBuild.runs,
-    loop: total,
-    ...(loopBuild.closure === undefined ? {} : { closure: loopBuild.closure }),
-  });
-  elements += labels.elements;
-  const labelTracks = [...labels.tracks].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   // ---- reach bounds (§10): swept boxes of every phase -------------------------------------
   const extents: Rect[] = [...labels.extents];
@@ -384,46 +399,41 @@ export function buildAssemblyRender(ctx: AssemblyRenderContext): AssemblyBuild |
   if (reach !== undefined) extents.push(reach);
 
   // ---- frame states ------------------------------------------------------------------------
-  const frameAt = (t0: number): AssemblyFrameState => {
-    const t = Math.max(0, Math.min(total, t0));
+  const stateAt = (t: number): AssemblyFrameState => {
     const transforms: Record<string, string> = {};
     const hidden: string[] = [];
+    const visible: string[] = [];
     const opacity: Record<string, number> = {};
     for (const r of registered) {
-      if (r.host !== undefined) {
-        const v = translateOf(evalOffset(r.track.host, t));
-        if (v !== undefined) transforms[r.host] = v;
-      }
+      if (r.host !== undefined) transforms[r.host] = translateFull(evalOffset(r.track.host, t));
       if (r.motion !== undefined) {
-        const v = translateOf(evalOffset(r.track.motion, t));
-        if (v !== undefined) transforms[r.motion] = v;
+        transforms[r.motion] = translateFull(evalOffset(r.track.motion, t));
       }
-      if (r.visible !== undefined && !evalVisible(r.track.visibility, t)) hidden.push(r.visible);
-      if (r.fade !== undefined) {
-        const o = round2(evalOpacity(r.track.opacity, t));
-        if (o < 1) opacity[r.fade] = o;
+      if (r.visible !== undefined) {
+        (evalVisible(r.track.visibility, t) ? visible : hidden).push(r.visible);
       }
+      if (r.fade !== undefined) opacity[r.fade] = round2(evalOpacity(r.track.opacity, t));
     }
-    for (const s of staticFades) {
-      const o = round2(evalOpacity(s.opacity, t));
-      if (o < 1) opacity[s.id] = o;
-    }
+    for (const s of staticFades) opacity[s.id] = round2(evalOpacity(s.opacity, t));
     for (const lt of labelTracks) {
-      const v = translateOf(evalOffset(lt.motion, t));
-      if (v !== undefined) transforms[lt.id] = v;
-      const o = round2(evalOpacity(lt.opacity, t));
-      if (o < 1) opacity[lt.id] = o;
+      if (lt.motion.length > 0) transforms[lt.id] = translateFull(evalOffset(lt.motion, t));
+      opacity[lt.id] = round2(evalOpacity(lt.opacity, t));
     }
     hidden.sort();
+    visible.sort();
     const sortedT: Record<string, string> = {};
     for (const k of Object.keys(transforms).sort()) sortedT[k] = transforms[k] as string;
     const sortedO: Record<string, number> = {};
     for (const k of Object.keys(opacity).sort()) sortedO[k] = opacity[k] as number;
-    return { transforms: sortedT, hidden, opacity: sortedO };
+    return { transforms: sortedT, hidden, visible, opacity: sortedO };
   };
+  // the loop repeats: any time wraps (as boards do)
+  const frameAt = (t: number): AssemblyFrameState =>
+    stateAt(total > 0 ? ((t % total) + total) % total : 0);
+  // the END of a step is read where its closing hold ends, which may be the loop's end: no wrap
   const stepEnd = (step: number): AssemblyFrameState => {
     const c = clock[step - 1];
-    return frameAt(c === undefined ? 0 : c.end);
+    return stateAt(c === undefined ? 0 : Math.min(c.end, total));
   };
 
   // ---- focus rects at the END pose (§7.4) -------------------------------------------------

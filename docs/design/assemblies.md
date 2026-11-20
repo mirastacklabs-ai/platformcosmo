@@ -539,6 +539,10 @@ omitted. Both copies sit at the same place when they swap, so the
 swap is invisible except for the occlusion change it is meant to cause. Copies ≤ 0.5 × items
 (beyond: epochs merged, `budget/depth-copies` warning). Frame, static and per-step outputs use
 the same DOM with static visibility for their time, so every output agrees with the animation.
+The DOM itself carries the rest frame (`frameAt(0)`) as attributes (hidden, translated and dimmed
+wrappers), so a bare emit shows the rest pose; frame and step overrides write the FULL state of
+every registered wrapper (`AssemblyFrameState` lists every id, `translate(0 0)` and opacity 1
+included). CSS animations override presentation attributes, so loop mode is unaffected.
 Phase 1b ships without copies (epochs that would need one are merged and marked approximate);
 copies land in Phase 3 ([tracks](./assemblies-tracks.md)).
 

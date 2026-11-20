@@ -20,7 +20,10 @@ import type {
   ResolvedStage,
   SceneAssembly,
 } from "../../contracts/index.js";
-import type { LoopMove } from "../../depth/epochs.js";
+import type { BezierMove } from "./tracks.js";
+
+/** The camera's curve (`anim/index.ts` EASE): the loop closure's fast return plays it (§7.4). */
+export const CLOSURE_BEZIER = [0.4, 0, 0.2, 1] as const;
 import { REVERSED_EASING } from "../../scene/boards.js";
 import { programSegment } from "../../scene/assembly/timing.js";
 import type { StepTime } from "../boards/timeline.js";
@@ -45,12 +48,12 @@ export interface StageRun {
 }
 
 export interface LoopBuild {
-  readonly moves: LoopMove[];
+  readonly moves: BezierMove[];
   readonly runs: StageRun[];
   /** Closing window of the last step, when some program returns to its base level. */
   readonly closure?: { readonly t0: number; readonly t1: number };
   /** Per step (0-based): when its assembly motion settles (§7.5); the step start without actions. */
-  readonly settled: number[];
+  readonly settled: (number | undefined)[];
 }
 
 const eps = 1e-9;
@@ -84,7 +87,7 @@ export function buildLoop(
   total: number,
   closeLast: boolean,
 ): LoopBuild {
-  const moves: LoopMove[] = [];
+  const moves: BezierMove[] = [];
   const runs: StageRun[] = [];
   const byId = new Map(assemblies.map((a) => [a.id, a]));
   const zero = { x: 0, y: 0, z: 0 };
@@ -108,7 +111,7 @@ export function buildLoop(
     }
   }
 
-  const settled: number[] = [];
+  const settled: (number | undefined)[] = [];
   plan.forEach((sp, si) => {
     const st = times[si];
     if (st === undefined) return;
@@ -188,7 +191,11 @@ export function buildLoop(
       }
       end = Math.max(end, segStart + a.length);
     }
-    settled.push(sp.actions.length > 0 ? r4(Math.min(end, st.end)) : st.start);
+    settled.push(
+      sp.actions.some((a) => byId.has(a.target.split("/")[0] as string))
+        ? r4(Math.min(end, st.end))
+        : undefined,
+    );
   });
 
   // Loop closure (§7.4): every program back to its base level, all moves together.
@@ -216,6 +223,7 @@ export function buildLoop(
               from: zero,
               to: { x: sign * o.x + 0, y: sign * o.y + 0, z: sign * o.z + 0 },
               easing: "ease-in-out",
+              bezier: CLOSURE_BEZIER,
             });
           }
         }
@@ -229,6 +237,7 @@ export function buildLoop(
             from: zero,
             to: neg(hit.move.offset),
             easing: "ease-in-out",
+            bezier: CLOSURE_BEZIER,
           });
         }
       }

@@ -41,6 +41,7 @@ import {
   partPrimitiveSilhouette,
   pointsToPath,
 } from "../../geometry/index.js";
+import { copySuffix } from "../../emit/ids.js";
 import { imageDef } from "../boards/images.js";
 import type { WorldLeaf } from "./world.js";
 
@@ -59,7 +60,7 @@ export interface DomContext {
 }
 
 const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/;
-const PALETTE = /^palette:([a-z]+)$/;
+const PALETTE = /^(palette|flow):([a-z]+)$/;
 
 /** A validated `fill` value for a spec color; undefined when it is not a plain color. */
 export function fillOf(color: SpecColor | undefined): string | undefined {
@@ -67,13 +68,28 @@ export function fillOf(color: SpecColor | undefined): string | undefined {
   const c = String(color).toLowerCase();
   if (HEX.test(c)) return c;
   const m = PALETTE.exec(c);
-  return m === null ? undefined : `var(--pc-palette-${m[1] as string})`;
+  return m === null
+    ? undefined
+    : `var(--pc-${m[1] === "palette" ? "palette" : "flows"}-${m[2] as string})`;
 }
 
 const SHADE: Readonly<Record<string, number>> = { top: 0, left: 0.16, right: 0.3 };
 
-function facesOf(ctx: DomContext, leaf: WorldLeaf, half: "back" | "front" | undefined): SvgNode[] {
+/** FNV-1a, 6 hex digits: tells stud groups of different colors apart in ids. */
+function hash6(s: string): string {
+  let x = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) x = Math.imul(x ^ s.charCodeAt(i), 0x01000193) >>> 0;
+  return x.toString(16).padStart(8, "0").slice(0, 6);
+}
+
+function facesOf(
+  ctx: DomContext,
+  leaf: WorldLeaf,
+  half: "back" | "front" | undefined,
+  copy: number,
+): SvgNode[] {
   const { ids, prefix: P } = ctx;
+  const sfx = copySuffix(copy);
   const out: SvgNode[] = [];
   let groups;
   try {
@@ -89,12 +105,43 @@ function facesOf(ctx: DomContext, leaf: WorldLeaf, half: "back" | "front" | unde
     });
     return out;
   }
-  // Studs: one compound path per (tone, color, face) for the whole part, not one per stud.
-  const studs = new Map<string, { cls: string; fill?: string; face: string; ds: string[] }>();
+  // Studs: a run of consecutive stud primitives becomes one compound path per (tone, color,
+  // face), flushed where the run's first stud stood, so the primitives' painter order holds.
+  type Run = { cls: string; fill?: string; face: string; tone: string; ds: string[] };
+  let studs = new Map<string, Run>();
+  let runs = 0;
+  const flushStuds = (): void => {
+    if (studs.size === 0) return;
+    const kids: SvgNode[] = [];
+    for (const k of [...studs.keys()].sort()) {
+      const e = studs.get(k) as Run;
+      const d = e.ds.join("");
+      const id = `${ids.face(leaf.path, e.face as "top")}__studs-${e.tone}${
+        e.fill === undefined ? "" : `-${hash6(e.fill)}`
+      }${runs > 0 ? `-r${runs}` : ""}${sfx}`;
+      kids.push(
+        h("path", {
+          id,
+          class: e.cls,
+          d,
+          ...(e.fill === undefined ? {} : { style: `fill:${e.fill}` }),
+        }),
+      );
+      const shade = SHADE[e.face] ?? 0;
+      if (e.fill !== undefined && shade > 0) {
+        kids.push(h("path", { d, fill: "#000000", "fill-opacity": shade, stroke: "none" }));
+      }
+    }
+    out.push(h("g", null, ...kids));
+    studs = new Map();
+    runs++;
+  };
   for (const g of groups) {
     if (half !== undefined && g.half !== half) continue;
     const prim: PartPrimitive = g.primitive;
-    const fill = fillOf(prim.color);
+    // `led` follows the state (CSS), never a spec color
+    const fill = prim.tone === "led" ? undefined : fillOf(prim.color);
+    if (prim.kind !== "stud") flushStuds();
     const kids: SvgNode[] = [];
     for (const f of g.faces) {
       const d = faceToPath(f);
@@ -102,14 +149,20 @@ function facesOf(ctx: DomContext, leaf: WorldLeaf, half: "back" | "front" | unde
       if (prim.kind === "stud") {
         const k = `${prim.tone}|${fill ?? ""}|${f.face}`;
         const e = studs.get(k);
-        if (e === undefined)
-          studs.set(k, { cls, ...(fill === undefined ? {} : { fill }), face: f.face, ds: [d] });
-        else e.ds.push(d);
+        if (e === undefined) {
+          studs.set(k, {
+            cls,
+            ...(fill === undefined ? {} : { fill }),
+            face: f.face,
+            tone: prim.tone,
+            ds: [d],
+          });
+        } else e.ds.push(d);
         continue;
       }
       kids.push(
         h("path", {
-          id: ids.face(leaf.path, f.face, prim.id),
+          id: `${ids.face(leaf.path, f.face, prim.id)}${sfx}`,
           class: cls,
           d,
           ...(fill === undefined ? {} : { style: `fill:${fill}` }),
@@ -122,26 +175,7 @@ function facesOf(ctx: DomContext, leaf: WorldLeaf, half: "back" | "front" | unde
     }
     if (kids.length > 0) out.push(h("g", null, ...kids));
   }
-  const sideKids: SvgNode[] = [];
-  let n = 0;
-  for (const k of [...studs.keys()].sort()) {
-    const e = studs.get(k) as { cls: string; fill?: string; face: string; ds: string[] };
-    const d = e.ds.join("");
-    sideKids.push(
-      h("path", {
-        id: ids.face(leaf.path, e.face as "top", n === 0 ? "studs" : `studs-${n}`),
-        class: e.cls,
-        d,
-        ...(e.fill === undefined ? {} : { style: `fill:${e.fill}` }),
-      }),
-    );
-    const shade = SHADE[e.face] ?? 0;
-    if (e.fill !== undefined && shade > 0) {
-      sideKids.push(h("path", { d, fill: "#000000", "fill-opacity": shade, stroke: "none" }));
-    }
-    n++;
-  }
-  if (sideKids.length > 0) out.push(h("g", null, ...sideKids));
+  flushStuds();
   return out;
 }
 
@@ -259,20 +293,27 @@ function imageNode(
   }
 }
 
-/** The object-like group of one item: state class, faces, images, overlay. */
+/**
+ * The object-like group of one item: state class, faces, images, `extra` (top-face labels, drawn
+ * after the faces so they share the part's depth and wrappers), overlay. Every id of copy `k >= 1`
+ * gets `__c<k>` (§9.4).
+ */
 export function partGroup(
   ctx: DomContext,
   leaf: WorldLeaf,
   half: "back" | "front" | undefined,
+  opts: { readonly copy?: number; readonly extra?: readonly SvgNode[] } = {},
 ): SvgElement {
   const { ids, prefix: P } = ctx;
-  const suffix = half === "front" ? "__front" : "";
-  const kids: SvgNode[] = facesOf(ctx, leaf, half);
+  const copy = opts.copy ?? 0;
+  const suffix = `${half === "front" ? "__front" : ""}${copySuffix(copy)}`;
+  const kids: SvgNode[] = facesOf(ctx, leaf, half, copy);
   if (half === undefined || half === "front") {
     (leaf.geometry.images ?? []).forEach((im, i) => {
       const n = imageNode(ctx, leaf, im, i);
       if (n !== undefined) kids.push(n);
     });
+    kids.push(...(opts.extra ?? []));
   }
   const pts = leaf.geometry.primitives
     .filter((p) => half === undefined || halfOf2(leaf, p.id) === half)
@@ -317,23 +358,50 @@ export function clipDef(ctx: DomContext, id: string, prism: Box3): SvgElement {
   );
 }
 
-/** Which wrappers exist (ids); the DOM is neutral, poses come from tracks or `frameAt`. */
+/** Which wrappers exist and their t = 0 state (the DOM is the rest frame: defaults are omitted). */
 export interface Wrappers {
-  readonly host?: { readonly id: string };
+  readonly host?: { readonly id: string; readonly transform?: string };
   readonly clip?: string;
-  readonly motion?: { readonly id: string };
-  readonly visible?: { readonly id: string };
-  readonly fade?: { readonly id: string };
+  readonly motion?: { readonly id: string; readonly transform?: string };
+  readonly visible?: { readonly id: string; readonly hidden: boolean };
+  readonly fade?: { readonly id: string; readonly opacity: number };
 }
 
 /** The wrapper chain around `inner`, outermost first as in §9.4. Tracks decide what exists. */
 export function wrap(inner: SvgElement, w: Wrappers, ctx: DomContext): SvgElement {
   let node: SvgElement = inner;
-  if (w.fade !== undefined) node = h("g", { id: w.fade.id }, node);
-  if (w.visible !== undefined) node = h("g", { id: w.visible.id }, node);
-  if (w.motion !== undefined) node = h("g", { id: w.motion.id }, node);
+  if (w.fade !== undefined) {
+    node = h(
+      "g",
+      { id: w.fade.id, ...(w.fade.opacity < 1 ? { opacity: w.fade.opacity } : {}) },
+      node,
+    );
+  }
+  if (w.visible !== undefined) {
+    node = h(
+      "g",
+      { id: w.visible.id, ...(w.visible.hidden ? { visibility: "hidden" } : {}) },
+      node,
+    );
+  }
+  if (w.motion !== undefined) {
+    node = h(
+      "g",
+      {
+        id: w.motion.id,
+        ...(w.motion.transform === undefined ? {} : { transform: w.motion.transform }),
+      },
+      node,
+    );
+  }
   if (w.clip !== undefined) node = h("g", { "clip-path": `url(#${w.clip})` }, node);
-  if (w.host !== undefined) node = h("g", { id: w.host.id }, node);
+  if (w.host !== undefined) {
+    node = h(
+      "g",
+      { id: w.host.id, ...(w.host.transform === undefined ? {} : { transform: w.host.transform }) },
+      node,
+    );
+  }
   ctx.count([w.fade, w.visible, w.motion, w.clip, w.host].filter((x) => x !== undefined).length);
   return node;
 }
