@@ -384,19 +384,20 @@ describe("actions: levels, plan and compression", () => {
       severity: "info",
       code: "assembly/compressed",
       path: "/steps/0/assembly",
-      suggestion: 'Set "duration": 3 on this step',
+      suggestion: 'Set "duration": 4 on this step',
     });
-    // window = 2 - 0.2 = 1.8; scale = 1.8 / 2.6
+    // the step ends exploded (away from the base pose), so it reserves a closing window even
+    // without a camera move (7.3): tr = 0.5, window = 2 - 0.5 - 0.2 = 1.3; scale = 1.3 / 2.6
     const a = info.plan[0]!.actions[0]!;
-    expect(a.scale).toBe(0.6923); // floor of 0.69230769
-    expect(a.length).toBe(1.7999); // floored, so it never overruns 1.8
+    expect(a.scale).toBe(0.5);
+    expect(a.length).toBe(1.3); // never overruns the window
     expect(a.start).toBe(0);
 
     const warn = plan(mk({ stages: TWO_STAGES }, steps(1)));
     expect(warn.diagnostics[0]).toMatchObject({ severity: "warning", code: "assembly/compressed" });
-    expect(warn.plan[0]!.actions[0]!.scale).toBe(0.3076);
+    expect(warn.plan[0]!.actions[0]!.scale).toBe(0.2115);
 
-    const exact = plan(mk({ stages: TWO_STAGES }, steps(2.8)));
+    const exact = plan(mk({ stages: TWO_STAGES }, steps(4))); // 4 - 0.8 - 0.2 = 3.0 >= 2.6
     expect(exact.diagnostics).toEqual([]);
     expect(exact.plan[0]!.actions[0]!.scale).toBe(1);
   });
@@ -416,10 +417,10 @@ describe("actions: levels, plan and compression", () => {
       { duration: 2, assembly: [{ explode: "f", to: 1 }, { explode: "f" }] },
     ]);
     const a = plan(spec).plan[0]!.actions;
-    // natural: [0, 1.5], [1.5, 0.6]: need 2.1 > 1.8 -> scale 0.8571
+    // natural: [0, 1.5], [1.5, 0.6]: need 2.1 > 1.3 (closing window reserved) -> scale 0.6190
     expect(a.map((x) => [x.start, x.length])).toEqual([
-      [0, 1.2856],
-      [1.2856, 0.5142],
+      [0, 0.9285],
+      [0.9285, 0.3714],
     ]);
   });
 
@@ -502,8 +503,8 @@ describe("step views, suggestions and the same-view rule", () => {
     const withGhost = mk({ stages: TWO_STAGES }, steps, { nodes: [{ id: "n", type: "server" }] });
     const a = validate(withGhost).diagnostics.filter((d) => d.code === "assembly/compressed");
     const b = buildScene(withGhost, {}).assemblies!.plan[0]!.actions[0]!;
-    expect(a[0]?.params?.window).toBe(1.8); // no lead, no closing transition: ghost is no view
-    expect(b.scale).toBe(0.6923);
+    expect(a[0]?.params?.window).toBe(1.3); // no lead, no camera transition (ghost is no view), but the closing window of 7.3
+    expect(b.scale).toBe(0.5);
   });
 
   test("suggested durations remove the compression (property loop)", () => {
@@ -687,16 +688,28 @@ describe("action targets and the guard (tracks §0)", () => {
     expect(d.map((x) => x.path)).toContain("/steps/0/assembly/2/implode");
   });
 
-  test("validate keeps the guard error and adds the figure checks", () => {
+  test("validate (phase1a lifted) reports the figure checks, with no guard error for figures", () => {
     const r = validate({
       ...spec,
       steps: [{ assembly: [{ explode: "heat-sink", to: 9 }] }],
     });
     expect(r.valid).toBe(false);
     const errors = codes(r.diagnostics.filter((d) => d.severity === "error"));
-    expect(errors).toContain("assembly/unsupported@/figures");
-    expect(errors).toContain("assembly/unsupported@/steps/0/assembly/0");
     expect(errors).toContain("assembly/stage-out-of-range@/steps/0/assembly/0/to");
+    for (const gone of ["/figures", "/images", "/steps/0/assembly/0"]) {
+      expect(errors).not.toContain(`assembly/unsupported@${gone}`);
+    }
+  });
+
+  test("validate with phase1a lifted keeps the guard error and adds unknown-target for the rest", () => {
+    const r = validate({
+      ...spec,
+      steps: [{ assembly: [{ explode: "heat-sink" }, { explode: "box" }] }],
+    });
+    const errors = codes(r.diagnostics.filter((d) => d.severity === "error"));
+    expect(errors).toContain("assembly/unsupported@/steps/0/assembly/1");
+    expect(errors).toContain("assembly/unknown-target@/steps/0/assembly/1/explode");
+    expect(errors.filter((e) => e.includes("/steps/0/assembly/0"))).toEqual([]);
   });
 });
 
@@ -830,15 +843,15 @@ describe("design examples", () => {
     expect(lifted.length).toBeGreaterThan(0);
   });
 
-  test("validate still rejects it only through the guard and its own checks", () => {
+  test("the heat-sink example validates cleanly once phase1a is lifted (R-1)", () => {
     const r = validate(heatSink);
     expect(r.diagnostics.filter((d) => d.code.startsWith("schema/"))).toEqual([]);
-    expect(codes(r.diagnostics.filter((d) => d.severity === "error"))).toEqual([
-      "assembly/unsupported@/figures",
-      "assembly/unsupported@/images",
-      "assembly/unsupported@/steps/1/assembly/0",
-      "assembly/unsupported@/steps/2/assembly/0",
-    ]);
+    expect(r.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(r.valid).toBe(true);
+    // the 7.3 story still needs assemblies and racks: guarded, and its targets unknown
+    const story = validate(hallToSink);
+    expect(story.valid).toBe(false);
+    expect(story.diagnostics.some((d) => d.code === "assembly/unsupported")).toBe(true);
   });
 
   test("the heat-sink example resolves to the expected SceneFlatBoard, plan and credits", () => {

@@ -142,7 +142,12 @@ existing `PrimitiveKind` union is untouched so its exhaustive maps stay source-c
 `camshaft`, `piston`, `rod`, `valve`, `oil-pan`, `intake`, `exhaust`, `timing-belt`) and
 `brick:` (stud grid, §5.1). A shape's `build` returns `PartGeometry` (primitives in its local
 frame, `bounds`, `depthBox`, `solid`, optional `split`). Shapes are generic and vendor-neutral
-(no trade dress, no trademarks).
+(no trade dress, no trademarks, no vendor names); standards-body interface and form-factor names
+(M.2, E1.S, OCP 3.0, PCIe, NVMe, CRPS) may be used descriptively in ids, labels and docs.
+`hw:` shapes have one canonical orientation (x width, y depth, z height, mm), devices with a
+front put it at +y, and `depthBox` is the solid core (fingers, ears, handles, sockets and
+connectors are drawn but excluded, like brick studs). Use the part's `rotate` to turn a shape;
+`hw:e1s` also takes `params.orientation` (`flat` | `upright`).
 
 ### 5.1 Stud-grid bricks (`@platformcosmo/parts-brick`, Track E)
 
@@ -316,6 +321,7 @@ Step `i` spans `[T_i, T_i + d_i]`. Its **motion window** opens at `m_i = T_i + l
 transitions sit at the end of the previous step, D27) and closes at
 `c_i = T_i + d_i − tr_i − 0.2` where `tr_i = min(0.8, 0.25·d_i)` is the closing camera
 transition (0 when the next view is the same) and 0.2 s is a hold so the settled pose is seen.
+For the last step `tr_n` also applies when the end pose of any program differs from its base pose and no camera transition follows (the loop closure of §7.4 needs that window). All times use the output clock: `tr` and `lead` are `min(0.8, 0.25·d/speed)` seconds of output, i.e. that many times `speed` loop seconds.
 If the step's actions need `L_i > c_i − m_i`, all of them are compressed uniformly by
 `scale = (c_i − m_i)/L_i` (`ResolvedAction.scale`), with `assembly/compressed` (info; warning
 below 0.5) whose suggestion gives the duration that fits: `"duration": D`, the smallest whole
@@ -333,7 +339,7 @@ number of seconds with `D − lead(D) − tr(D) − 0.2 ≥ L_i`, where `lead(D)
   back to the overview) every program returns to its base level: explode levels by a fast
   implode (all moves reversed together, no stagger, compressed into `tr_n`); build levels by
   fades (parts present at rest but not at the end fade in, others out). Ending with an
-  explicit implode step avoids the fast return; the skill does that.
+  explicit implode step avoids the fast return; the skill does that. When the last step is not zoomed the window `tr_n = min(0.8, 0.25·d_n)` is still reserved at its end for the fast return, so the loop restart never snaps.
 - **Focus on assemblies**: `focus` on an assembly, sub-assembly or part frames its box at the
   END pose of the step (`AssemblyRenderModel.focusRect(step, id)`), so an exploded unit fits
   the zoom; B uses it instead of `RenderModel.focusRects` when present.
@@ -482,11 +488,13 @@ only one move is active.
    over the loop, ≤ 64 per transition; beyond: merged, approximate).
 
 **Cycles.** Edges have three strengths: forced (enclosure, `inserts`, face-exit rules of §9.5),
-certified (step 2) and heuristic (centre depth). A cycle is broken deterministically: never a
-forced edge; first drop heuristic edges, then certified ones, each time the edge whose endpoints
-have the smallest centre-depth difference (ties by the item keys); the existing Kahn release
-rule (lowest depth key, then id) then emits the order. Every broken certified edge is reported
-as `assembly/depth-cycle` (info) and marks the epoch `approximate`.
+certified (step 2) and heuristic (centre depth). A cycle is broken deterministically: first drop
+heuristic edges, then certified ones, each time the edge whose endpoints have the smallest
+centre-depth difference (ties by the item keys); a forced edge is dropped only when a cycle has
+nothing else left (no single interval can form one, but forced edges of different intervals can
+close a cycle in the one DOM order of Phase 1b), by the same rule. The existing Kahn release
+rule (lowest depth key, then id) then emits the order. Every broken certified or forced edge is
+reported as `assembly/depth-cycle` (info) and marks the epoch `approximate`.
 
 ### 9.4 One DOM for all epochs: duplicate copies
 
@@ -540,6 +548,13 @@ Containment is **closed** with a tolerance `ε = 1e-6` world units: `a ⊆ b` wh
 of `a` lies inside or on `b` (flush faces count, so camshafts flush with a cover's ends are
 inside it).
 
+Every rule of this section reasons about the faces of a solid's `depthBox`, so only solids that
+**fill** their box take part: one `box`, `plate` or `card` primitive whose box is the
+`depthBox`. A cylinder, shaft, wedge, prism or multi-primitive solid leaves empty box corners
+where a crossing leaf can be visible in front of it, so it never encloses, hides, clips or
+orders by the hidden-face rule; it is ordered by separation or bisection only (approximate where
+those cannot decide).
+
 - **Enclosed** leaf: its `depthBox` lies inside a `solid` leaf's `depthBox`, or inside the
   **union of touching solids** (solids whose boxes share a face, merged into connected blocks;
   a valve inside a head casting plus the valve cover above it is enclosed by their union) →
@@ -548,7 +563,16 @@ inside it).
   the halves, §9.6).
 - **Inserted** leaf (`inserts`, or inferred when the leaf crosses exactly one face plane of
   exactly one solid block and its footprint ⊥ that face lies inside the face): a seated
-  relation, not a collision. The inside portion is clipped at the **entry face**: entry face
+  relation, not a collision. A **block** is a set of touching solids that do not move relative
+  to each other (in the loop, for a static clip); its face planes are its exterior faces. A leaf
+  that crosses exactly one exterior face plane of a block (a seam pin across two halves, a pin
+  through two stacked members, a head bolt through cover and casting) is clipped at the
+  **block's** exit face: the part of the leaf below that plane lies inside the union of the
+  members and the part beyond it meets no member; the clip solid is the member that carries the
+  face, and the leaf is drawn after every member it interpenetrates (forced). When no single
+  block face qualifies (a leaf crossing faces of two different blocks, or several faces of one),
+  the leaf is hidden while it crosses (`assembly/clip-fallback`), never left to the static
+  heuristic. The inside portion is clipped at the **entry face**: entry face
   visible (`+x`, `+y`, `+z`): forced edge leaf after the solid, with the static footprint-prism
   clip below; hidden (`−x`, `−y`, `−z`): forced edge leaf before the solid, no clip. Inserted
   leaves keep the relation while both move together (a head and its valves) and while the leaf
@@ -565,7 +589,13 @@ inside it).
   is static **in the solid's frame**: `clipPathUnits="userSpaceOnUse"` on the clip wrapper
   inside `partHost`, which carries the solid's track (none when the solid is static), with the
   leaf's motion relative to the solid inside it (§9.4). Exact for convex prisms along `u`
-  (boxes, cylinders, shafts).
+  (boxes, cylinders, shafts). The proof covers side-face points and needs the leaf's own `+u`
+  face at or beyond the face plane (`p.max_u ≥ e.max_u`): a `+u` face still below the plane
+  projects inside the prism and would show through. While `p.max_u ≤ e.max_u` the leaf lies
+  inside `e` (its footprint is inside the face and it never passes the hidden `−u` face), so
+  the enclosure rule takes precedence: it is hidden, and the clip applies only while it crosses.
+  The instants where `p.max_u(t) = e.max_u(t)` are epoch boundaries, like presence changes, so
+  both sides certify.
 - **Validity of a static clip.** The clip is one fixed region for the whole loop, so a copy may
   be clipped only if its motion relative to the solid has **no component ⊥ `u` at any time in
   the loop** (only motion along `u`, the axis that leaves through the clipped face). Then its
@@ -579,6 +609,10 @@ inside it).
 - Regression fixture: the engine example (§19.3) exercises all three: valves inserted in the
   casting and enclosed by casting ∪ cover at rest, camshafts flush in the cover, pistons
   crossing the block deck.
+- **Note for A1-3 (Phase 1b):** a drawer that moves inside the loop (the built-in `drawers`
+  program, §19.4) is approximate until copies (A1-2b): an open device at rest is behind the
+  device above it, and its internals lifted on the pulled drawer are in front of it, which no
+  single DOM order satisfies (reported as `assembly/depth-approx` with `copy: true`).
 
 ### 9.6 Split items
 
@@ -831,54 +865,55 @@ and explains it:
 New codes (namespaced like existing ones; unknown ids and refs carry did-you-mean
 suggestions):
 
-| Code                                                                                                            | Severity                                          | When                                                                                       |
-| --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `assembly/unsupported`                                                                                          | error                                             | 1.2.0 field not rendered by this build yet (merge guard, until its phase lands)            |
-| `assembly/no-op-action`                                                                                         | info                                              | action that does not change the level                                                      |
-| `assembly/transit-collision`                                                                                    | warning                                           | leaves interpenetrate during a transition                                                  |
-| `assembly/below-ground`                                                                                         | error                                             | rack or slot move below the floor                                                          |
-| `assembly/depth-cycle`                                                                                          | info                                              | a certified depth edge was dropped to break a cycle                                        |
-| `image/exif-ignored`                                                                                            | info                                              | malformed EXIF block; orientation 1 assumed                                                |
-| `assembly/unknown-target`                                                                                       | error                                             | action, focus, `set`, `overrides`, `mates`, `inserts`, `use`, `closeup` matches nothing    |
-| `assembly/unknown-program`                                                                                      | error                                             | program id not found on the target (action, `program`, `subBuild`) or of the wrong kind    |
-| `assembly/selector-empty`                                                                                       | warning                                           | selector matches no part                                                                   |
-| `assembly/moved-twice`                                                                                          | error (info in the scene, through inferred roles) | a node moved by two stages of one program                                                  |
-| `assembly/stage-out-of-range`                                                                                   | error                                             | `to` beyond the program's stages or steps                                                  |
-| `assembly/build-backwards`                                                                                      | error                                             | `build` to a lower level                                                                   |
-| `assembly/unbuild-forwards`                                                                                     | error                                             | `unbuild` to a higher level (use `build`)                                                  |
-| `assembly/explode-backwards`                                                                                    | error                                             | `explode` of a figure, assembly, rack or slot to a lower stage (use `implode`)             |
-| `assembly/implode-forwards`                                                                                     | error                                             | `implode` of a figure, assembly, rack or slot to a higher stage (use `explode`)            |
-| `assembly/figure-no-build`                                                                                      | error                                             | build or unbuild on a figure (figures explode and implode)                                 |
-| `assembly/part-not-staged`                                                                                      | info                                              | a figure part that no stage moves (it stays seated)                                        |
-| `assembly/build-path-blocked`                                                                                   | warning                                           | `above` origin blocked                                                                     |
-| `assembly/collision`                                                                                            | warning                                           | interpenetrating leaves in a final pose                                                    |
-| `assembly/compressed`                                                                                           | info / warning (< 0.5)                            | actions compressed to fit the step (reported by validation, from the plan the scene uses)  |
-| `assembly/implicit-access`                                                                                      | info                                              | access move prepended (§8.3)                                                               |
-| `assembly/depth-approx`                                                                                         | info                                              | an epoch could not be certified                                                            |
-| `assembly/clip-fallback`                                                                                        | info                                              | enclosed part hidden until clear                                                           |
-| `assembly/bounds-growth`                                                                                        | info                                              | reach bounds > 4× rest                                                                     |
-| `assembly/size-mismatch`                                                                                        | warning                                           | template or close-up does not fit at true scale                                            |
-| `assembly/reserved-id`                                                                                          | error                                             | slot id `frame` on a rack in assembly mode; any part id `closeup` (reserved segment)       |
-| `semantic/reserved-id`                                                                                          | warning                                           | a 1.1 id `closeup` (still valid; rename before adding close-ups)                           |
-| `assembly/too-deep`                                                                                             | error                                             | path longer than 8 segments (also through `use` and `closeup` templates)                   |
-| `assembly/template-cycle`                                                                                       | error                                             | assemblies reference each other through `use` or `closeup` in a cycle                      |
-| `assembly/use-ignored`                                                                                          | warning                                           | `use` is ignored because `parts` is set                                                    |
-| `assembly/diagnostics-capped`                                                                                   | info                                              | a program reported more than 50 warnings; the rest are omitted                             |
-| `assembly/view-needs-assembly-only`                                                                             | error                                             | `view` with nodes or DC content                                                            |
-| `assembly/storyboard-no-explode`                                                                                | error                                             | explode on a storyboard                                                                    |
-| `assembly/edge-to-part`                                                                                         | error                                             | edge, flow or cable endpoint is a part path                                                |
-| `assembly/unknown-shape`                                                                                        | error                                             | `pack:id` shape not installed                                                              |
-| `assembly/shape-params`                                                                                         | error                                             | unknown or invalid `params` for a shape                                                    |
-| `assembly/duplicate-part`                                                                                       | error                                             | sibling ids collide (also after `count` expansion)                                         |
-| `brick/off-grid`                                                                                                | warning                                           | non-integer stud or plate position                                                         |
-| `image/not-found`, `image/unsafe-path`                                                                          | error                                             | CLI path resolution (did-you-mean over files in the directory)                             |
-| `image/format`, `image/format-mismatch`                                                                         | error                                             | not PNG, JPEG or SVG by magic bytes (WebP: convert to PNG or JPEG) / differ from extension |
-| `image/too-large`, `image/too-many`                                                                             | error                                             | §11.4 caps                                                                                 |
-| `image/animated`                                                                                                | error                                             | APNG                                                                                       |
-| `image/sanitized`                                                                                               | info / warning (active content removed)           | SVG elements removed by the sanitizer                                                      |
-| `image/icc-ignored`, `image/cmyk`                                                                               | info / warning                                    | colour handling                                                                            |
-| `image/unknown`                                                                                                 | error                                             | part references an image id not in `images`                                                |
-| `budget/assembly-parts`, `budget/depth-copies`, `budget/views`, `budget/levels`, `budget/images`, `budget/time` | warning / error                                   | §13                                                                                        |
+| Code                                                                                                            | Severity                                | When                                                                                       |
+| --------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `assembly/unsupported`                                                                                          | error                                   | 1.2.0 field not rendered by this build yet (merge guard, until its phase lands)            |
+| `assembly/no-op-action`                                                                                         | info                                    | action that does not change the level                                                      |
+| `assembly/transit-collision`                                                                                    | warning                                 | leaves interpenetrate during a transition                                                  |
+| `assembly/below-ground`                                                                                         | error                                   | rack or slot move below the floor                                                          |
+| `assembly/depth-cycle`                                                                                          | info                                    | a certified (or, in an all-forced cycle, forced) depth edge was dropped to break a cycle   |
+| `image/exif-ignored`                                                                                            | info                                    | malformed EXIF block; orientation 1 assumed                                                |
+| `assembly/unknown-target`                                                                                       | error                                   | action, focus, `set`, `overrides`, `mates`, `inserts`, `use`, `closeup` matches nothing    |
+| `assembly/unknown-program`                                                                                      | error                                   | program id not found on the target (action, `program`, `subBuild`) or of the wrong kind    |
+| `assembly/selector-empty`                                                                                       | warning                                 | selector matches no part                                                                   |
+| `assembly/moved-twice`                                                                                          | error                                   | a node moved by two stages of one program                                                  |
+| `assembly/stage-out-of-range`                                                                                   | error                                   | `to` beyond the program's stages or steps                                                  |
+| `assembly/build-backwards`                                                                                      | error                                   | `build` to a lower level                                                                   |
+| `assembly/unbuild-forwards`                                                                                     | error                                   | `unbuild` to a higher level (use `build`)                                                  |
+| `assembly/explode-backwards`                                                                                    | error                                   | `explode` of a figure, assembly, rack or slot to a lower stage (use `implode`)             |
+| `assembly/implode-forwards`                                                                                     | error                                   | `implode` of a figure, assembly, rack or slot to a higher stage (use `explode`)            |
+| `assembly/figure-no-build`                                                                                      | error                                   | build or unbuild on a figure (figures explode and implode)                                 |
+| `assembly/part-not-staged`                                                                                      | info                                    | a figure part that no stage moves (it stays seated)                                        |
+| `assembly/build-path-blocked`                                                                                   | warning                                 | `above` origin blocked                                                                     |
+| `assembly/collision`                                                                                            | warning                                 | interpenetrating leaves in a final pose                                                    |
+| `assembly/compressed`                                                                                           | info / warning (< 0.5)                  | actions compressed to fit the step                                                         |
+| `assembly/implicit-access`                                                                                      | info                                    | access move prepended (§8.3)                                                               |
+| `assembly/depth-approx`                                                                                         | info                                    | an epoch could not be certified                                                            |
+| `assembly/clip-fallback`                                                                                        | info                                    | enclosed part hidden until clear                                                           |
+| `assembly/depth-input`                                                                                          | error                                   | internal: invalid depth-order input (non-finite box, move or loop); that input is ignored  |
+| `assembly/bounds-growth`                                                                                        | info                                    | reach bounds > 4× rest                                                                     |
+| `assembly/size-mismatch`                                                                                        | warning                                 | template or close-up does not fit at true scale                                            |
+| `assembly/reserved-id`                                                                                          | error                                   | slot id `frame` on a rack in assembly mode; any part id `closeup` (reserved segment)       |
+| `semantic/reserved-id`                                                                                          | warning                                 | a 1.1 id `closeup` (still valid; rename before adding close-ups)                           |
+| `assembly/too-deep`                                                                                             | error                                   | path longer than 8 segments (also through `use` and `closeup` templates)                   |
+| `assembly/template-cycle`                                                                                       | error                                   | assemblies reference each other through `use` or `closeup` in a cycle                      |
+| `assembly/use-ignored`                                                                                          | warning                                 | `use` is ignored because `parts` is set                                                    |
+| `assembly/diagnostics-capped`                                                                                   | info                                    | a program reported more than 50 warnings; the rest are omitted                             |
+| `assembly/view-needs-assembly-only`                                                                             | error                                   | `view` with nodes or DC content                                                            |
+| `assembly/storyboard-no-explode`                                                                                | error                                   | explode on a storyboard                                                                    |
+| `assembly/edge-to-part`                                                                                         | error                                   | edge, flow or cable endpoint is a part path                                                |
+| `assembly/unknown-shape`                                                                                        | error                                   | `pack:id` shape not installed                                                              |
+| `assembly/shape-params`                                                                                         | error                                   | unknown or invalid `params` for a shape                                                    |
+| `assembly/duplicate-part`                                                                                       | error                                   | sibling ids collide (also after `count` expansion)                                         |
+| `brick/off-grid`                                                                                                | warning                                 | non-integer stud or plate position                                                         |
+| `image/not-found`, `image/unsafe-path`                                                                          | error                                   | CLI path resolution (did-you-mean over files in the directory)                             |
+| `image/format`, `image/format-mismatch`                                                                         | error                                   | not PNG, JPEG or SVG by magic bytes (WebP: convert to PNG or JPEG) / differ from extension |
+| `image/too-large`, `image/too-many`                                                                             | error                                   | §11.4 caps                                                                                 |
+| `image/animated`                                                                                                | error                                   | APNG                                                                                       |
+| `image/sanitized`                                                                                               | info / warning (active content removed) | SVG elements removed by the sanitizer                                                      |
+| `image/icc-ignored`, `image/cmyk`                                                                               | info / warning                          | colour handling                                                                            |
+| `image/unknown`                                                                                                 | error                                   | part references an image id not in `images`                                                |
+| `budget/assembly-parts`, `budget/depth-copies`, `budget/views`, `budget/levels`, `budget/images`, `budget/time` | warning / error                         | §13                                                                                        |
 
 ## 19. Examples
 
@@ -1064,7 +1099,8 @@ All examples validate against `schema/v1.json` (checked when this design was wri
           "count": 8,
           "at": [175, 410, 7],
           "pitch": [11, 0, 0],
-          "size": [7, 133, 31],
+          "rotate": 90,
+          "size": [133, 7, 31],
           "label": "DIMM"
         },
         {
@@ -1074,7 +1110,8 @@ All examples validate against `schema/v1.json` (checked when this design was wri
           "count": 4,
           "at": [370, 410, 7],
           "pitch": [11, 0, 0],
-          "size": [7, 133, 31],
+          "rotate": 90,
+          "size": [133, 7, 31],
           "label": "DIMM"
         },
         {
@@ -1082,9 +1119,10 @@ All examples validate against `schema/v1.json` (checked when this design was wri
           "type": "nvme",
           "shape": "hw:e1s",
           "count": 8,
-          "at": [20, 700, 7],
+          "at": [20, 632, 7],
           "pitch": [14, 0, 0],
-          "size": [10, 45, 60],
+          "params": { "orientation": "upright" },
+          "size": [10, 118, 34],
           "label": "E1.S NVMe"
         }
       ],
@@ -1355,7 +1393,7 @@ pistons, head, camshafts, valve cover, so the cover (moved first) ends highest.
           "id": "board",
           "shape": "hw:board",
           "at": [10, 260, 0],
-          "size": [418, 400, 3],
+          "size": [418, 400, 12],
           "label": "Motherboard"
         },
         {
@@ -1375,7 +1413,8 @@ pistons, head, camshafts, valve cover, so the cover (moved first) ends highest.
           "count": 8,
           "at": [175, 410, 3],
           "pitch": [11, 0, 0],
-          "size": [7, 133, 31],
+          "rotate": 90,
+          "size": [133, 7, 31],
           "label": "DIMM"
         },
         {

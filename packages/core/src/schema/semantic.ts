@@ -213,6 +213,8 @@ export function semanticDiagnostics(
     const k = ids.get(ep)?.kind;
     return k === "group" || k === "row" || k === "aisle";
   };
+  /** A figure id is a camera focus target (R-1): the panel is framed with its moving sprites. */
+  const isFigure = (ep: string): boolean => ids.get(ep)?.kind === "figure";
   const unknownObject = (path: string, ep: string, what: string, allowAreas = false): void => {
     const slash = ep.indexOf("/");
     let message = `Unknown ${what} ${q(ep)}`;
@@ -408,9 +410,11 @@ export function semanticDiagnostics(
   const taken = new Set(assembly.map((d) => `${d.path}\0${d.code}`));
   out.push(...assembly);
   out.push(
-    ...figureDiagnostics(spec, undefined, (id) => isObject(id) || isAreaRef(id)).filter(
-      (d) => !taken.has(`${d.path}\0${d.code}`),
-    ),
+    ...figureDiagnostics(
+      spec,
+      undefined,
+      (id) => isObject(id) || isAreaRef(id) || isFigure(id),
+    ).filter((d) => !taken.has(`${d.path}\0${d.code}`)),
   );
   (spec.steps ?? []).forEach((s, si) => {
     const base = `/steps/${si}`;
@@ -433,6 +437,7 @@ export function semanticDiagnostics(
       s.focus !== undefined &&
       !isObject(s.focus) &&
       !isAreaRef(s.focus) &&
+      !isFigure(s.focus) &&
       !isAssemblyPath(spec, s.focus)
     ) {
       unknownObject(`${base}/focus`, s.focus, "focus target", true);
