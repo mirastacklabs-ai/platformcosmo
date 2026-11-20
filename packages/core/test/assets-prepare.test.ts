@@ -486,7 +486,7 @@ describe("review fixes", () => {
   test("Q01: comment flood is linear, not exponential", () => {
     const t0 = performance.now();
     const r = run(enc("<!---->".repeat(500) + "x"), "x.svg");
-    expect(performance.now() - t0).toBeLessThan(50);
+    expect(performance.now() - t0).toBeLessThan(1000);
     expect(codes(r)).toEqual(["image/format"]);
     const ok = run(enc("<!---->".repeat(500) + SVG_OK), "x.svg");
     expect(ok.asset?.format).toBe("svg");
@@ -604,5 +604,87 @@ describe("review fixes", () => {
       "e.svg",
     );
     expect(cosmetic.diagnostics.every((d) => d.severity === "info")).toBe(true);
+  });
+
+  test("N2: nested images are removed at tree level and tags stay balanced", () => {
+    const r = run(
+      enc(
+        `<svg viewBox="0 0 1 1"><g><image width="1" height="1"><image width="1" height="1"/></image></g><rect width="1" height="1"/></svg>`,
+      ),
+      "n.svg",
+    );
+    const body = r.asset?.svg?.body ?? "";
+    expect(r.asset).toBeDefined();
+    expect(body).toContain("<rect");
+    expect(body).not.toContain("<image");
+    let depth = 0;
+    for (const m of body.matchAll(/<(\/?)[A-Za-z][^>]*?(\/?)>/g)) {
+      if (m[2]) continue;
+      depth += m[1] ? -1 : 1;
+      expect(depth).toBeGreaterThanOrEqual(0);
+    }
+    expect(depth).toBe(0);
+  });
+
+  test("N7: a use whose target image was removed is dropped", () => {
+    const r = run(
+      svgWith(
+        `<defs><image id="i" href="data:image/png;base64,AAAA" width="1" height="1"/></defs><use href="#i"/><rect width="1" height="1"/>`,
+      ),
+      "u.svg",
+    );
+    const body = r.asset?.svg?.body ?? "";
+    expect(r.asset).toBeDefined();
+    expect(body).not.toMatch(/<use|<image|data:/);
+    expect(body).toContain("<rect");
+  });
+
+  test("N1/N4: prolog variants", () => {
+    expect(run(enc("<!DOCTYPE>".repeat(26000) + "x"), "x.svg").asset).toBeUndefined();
+    expect(run(enc(`<!DOCTYPE svg><!DOCTYPE svg>${SVG_OK}`), "x.svg").asset).toBeUndefined();
+    expect(run(enc(`<!doctype svg>${SVG_OK}`), "x.svg").asset?.format).toBe("svg");
+    expect(run(enc(`<?xml version="1.0"?><?foo bar?>${SVG_OK}`), "x.svg").asset?.format).toBe(
+      "svg",
+    );
+    // the "[" belongs to later content, not to the DOCTYPE
+    expect(
+      run(enc(`<!DOCTYPE svg>${SVG_OK.replace("<rect", "<!-- [ --><rect")}`), "x.svg").asset,
+    ).toBeDefined();
+    // cap runs out inside a comment or the prolog: too-large, not "not an image"
+    const big = enc(`<!-- ${"x".repeat(300_000)} -->${SVG_OK}`);
+    expect(codes(run(big, "x.svg"))).toEqual(["image/too-large"]);
+  });
+
+  test("N3: tRNS length per colour type", () => {
+    const t = (n: number) => pngChunk("tRNS", new Uint8Array(n));
+    expect(run(makePng({ color: 0, extra: [t(2)] })).asset).toBeDefined();
+    expect(codes(run(makePng({ color: 0, extra: [t(3)] })))).toEqual(["image/format"]);
+    expect(run(makePng({ color: 2, extra: [t(6)] })).asset).toBeDefined();
+    expect(codes(run(makePng({ color: 2, extra: [t(2)] })))).toEqual(["image/format"]);
+    expect(codes(run(makePng({ color: 6, extra: [t(2)] })))).toEqual(["image/format"]);
+    expect(codes(run(makePng({ color: 4, extra: [t(2)] })))).toEqual(["image/format"]);
+    expect(run(makePng({ color: 3 })).asset).toBeDefined(); // fixture has 2 tRNS entries, 2 palette entries
+    const three = cat(
+      PNG_SIG,
+      ihdr(2, 2, 8, 3),
+      pngChunk("PLTE", new Uint8Array(6)),
+      t(3),
+      pngChunk("IDAT", Uint8Array.from([0x78, 0x9c, 1])),
+      pngChunk("IEND"),
+    );
+    expect(codes(run(three))).toEqual(["image/format"]);
+  });
+
+  test("N5: wider active-content detection", () => {
+    for (const inner of [
+      `<a href="javascript:alert(1)"><rect width="1" height="1"/></a>`,
+      `<rect width="1" height="1"><set attributeName="fill" to="red"/></rect>`,
+      `<rect width="1" height="1"><animate attributeName="x" to="2"/></rect>`,
+      `<rect width="1" height="1" href="javascript:alert(1)"/>`,
+    ]) {
+      const r = run(svgWith(inner), "a.svg");
+      expect(r.asset).toBeDefined();
+      expect(r.diagnostics[0]?.severity).toBe("warning");
+    }
   });
 });

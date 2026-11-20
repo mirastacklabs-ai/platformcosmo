@@ -115,7 +115,13 @@ describe("fuzz", () => {
       enc(
         `<svg viewBox="0 0 1 1">${'<image href="data:image/png;base64,AAAA"/>'.repeat(3000)}</svg>`,
       ), // Q02
-      enc(`<svg viewBox="0 0 1 1">${"<image>".repeat(3000)}</svg>`),
+      enc(
+        `<svg viewBox="0 0 1 1"><g><image width="1" height="1"><image width="1" height="1"/></image></g><rect width="1" height="1"/></svg>`,
+      ), // N2
+      enc("<!DOCTYPE>".repeat(26000) + "x"), // N1
+      enc(
+        `<svg viewBox="0 0 1 1"><style>rect{fill:red}</style>${'<image href="data:image/png;base64,AAAA" width="1" height="1"/><rect width="1" height="1"/>'.repeat(1900)}</svg>`,
+      ), // N6 large body
       enc(`<svg viewBox="0 0 1 1"><rect/></svg>`.repeat(100)), // Q03/Q05 shape
       enc(`<!-- ${"x".repeat(200_000)} -->` + SVG_OK), // Q05
       makeJpeg({ meta: Array.from({ length: 3000 }, () => JPEG_METADATA.com) }),

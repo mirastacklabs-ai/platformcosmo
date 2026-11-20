@@ -1,7 +1,9 @@
 /**
- * JPEG validation and metadata stripping (§11.2). No decoding: markers are walked, SOF0/1/2
- * dimensions read, EXIF orientation parsed from APP1 before it is dropped. Everything except
- * APP1..APP15 (APP14 Adobe kept) and COM is copied byte for byte.
+ * JPEG validation and metadata stripping (§11.2). No decoding: markers are walked against an
+ * allow-list, SOF0/1/2 dimensions read (8-bit only), EXIF orientation parsed from APP1 before it
+ * is dropped. Kept: SOF0/1/2, DHT, DQT, DRI, SOS and its scan data, APP14 Adobe, EOI (all copied
+ * byte for byte) and APP0 JFIF (rewritten without thumbnail). Dropped: every other APPn and COM.
+ * Any other marker is rejected.
  */
 import type { RasterFail, RasterOk } from "./prepare.js";
 

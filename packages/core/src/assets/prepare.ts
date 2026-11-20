@@ -13,7 +13,7 @@ import type {
 import { sha256 } from "../icons/integrity.js";
 import { cleanJpeg, isJpeg } from "./jpeg.js";
 import { cleanPng, isPng } from "./png.js";
-import { cleanSvg, isActiveRemoval, looksLikeSvg } from "./svg.js";
+import { cleanSvg, isActiveRemoval, sniffSvg } from "./svg.js";
 
 /** Successful raster parse (internal, shared by png.ts and jpeg.ts). */
 export interface RasterOk {
@@ -180,7 +180,7 @@ function prepare(
   let format: ImageFormat;
   if (isPng(bytes)) format = "png";
   else if (isJpeg(bytes)) format = "jpeg";
-  else if (looksLikeSvg(bytes, limits.maxSvgBytes)) format = "svg";
+  else if (sniffSvg(bytes, limits.maxSvgBytes) !== "no") format = "svg";
   else {
     const other = otherFormat(bytes);
     return err(

@@ -55,6 +55,7 @@ export function cleanPng(bytes: Uint8Array): RasterOk | RasterFail {
   let first = true;
   let sawIdat = false;
   let sawTrns = false;
+  let palette = 0;
   let sawPlte = false;
   let sawIend = false;
   let afterIdat = false;
@@ -101,9 +102,17 @@ export function cleanPng(bytes: Uint8Array): RasterOk | RasterFail {
         if (sawPlte || sawIdat) return fail("PNG PLTE is duplicated or after IDAT");
         if (len % 3 !== 0 || len === 0 || len > 768) return fail("PNG PLTE has an invalid length");
         sawPlte = true;
+        palette = len / 3;
       }
       if (type === "tRNS") {
         if (sawTrns || sawIdat) return fail("PNG tRNS is duplicated or after IDAT");
+        const okLen =
+          colorType === 0
+            ? len === 2
+            : colorType === 2
+              ? len === 6
+              : colorType === 3 && sawPlte && len >= 1 && len <= palette;
+        if (!okLen) return fail("PNG tRNS is not valid for this colour type");
         sawTrns = true;
       }
       if (type === "IEND") {
