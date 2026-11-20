@@ -47,6 +47,10 @@ export {
   DEFAULT_TILE_WIDTH,
   partGeometryFaces,
   partPrimitiveFaces,
+  partPrimitiveSilhouette,
+  studGrid,
+  STUD_DIAMETER,
+  STUD_HEIGHT,
   halfOf,
 } from "./geometry/index.js";
 export type { Half, PartFace, PartPrimitiveFaces } from "./geometry/index.js";

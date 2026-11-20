@@ -146,6 +146,12 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/parts-brick:
+    dependencies:
+      '@platformcosmo/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/themes:
     dependencies:
       '@platformcosmo/core':
