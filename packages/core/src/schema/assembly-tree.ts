@@ -11,6 +11,7 @@
  */
 import type { Diagnostic } from "../contracts/index.js";
 import type { PlatformCosmoSpec, SpecAssembly, SpecPart, SpecProgram } from "./types.gen.js";
+import { globMatch } from "./glob.js";
 import { q } from "./suggest.js";
 
 /** Longest path in segments (§13). */
@@ -20,6 +21,8 @@ export const LEAF_ERROR = 2000;
 export const LEAF_WARN = 500;
 /** Nodes one expanded tree may hold; sub-assemblies add at most `MAX_DEPTH` nodes per leaf. */
 export const NODE_CAP = 20_000;
+/** Selector-list entries (`Flat`) allocated across all owners of one validation run. */
+export const FLAT_CAP = 200_000;
 const SAT = 1_000_000_000;
 const sat = (n: number): number => (n > SAT ? SAT : n);
 
@@ -122,8 +125,11 @@ export class AssemblyModel {
   private readonly building = new Set<number>();
   private readonly reported = new Set<string>();
   private readonly closeups = new Map<string, TNode>();
-  private readonly flats = new Map<TNode, Flat[]>();
+  private readonly flats = new Map<TNode, { list: Flat[]; complete: boolean }>();
   private nodeBudget = NODE_CAP * 4;
+  private flatBudget = FLAT_CAP;
+  /** A validation work cap was hit (tree nodes or selector lists): later checks were skipped. */
+  capped = false;
 
   constructor(readonly spec: PlatformCosmoSpec) {
     this.assemblies = spec.assemblies ?? [];
@@ -196,7 +202,9 @@ export class AssemblyModel {
     const memo = this.trees.get(i);
     if (memo !== undefined) return memo ?? undefined;
     const a = this.assemblies[i];
-    if (a === undefined || this.building.has(i) || !this.fits(i) || this.nodeBudget <= 0) {
+    if (a === undefined || this.building.has(i) || !this.fits(i)) return undefined;
+    if (this.nodeBudget <= 0) {
+      this.capped = true;
       return undefined;
     }
     this.building.add(i);
@@ -214,6 +222,16 @@ export class AssemblyModel {
     };
     this.expand(a.parts, `/assemblies/${i}/parts`, root, 1);
     this.building.delete(i);
+    if (this.nodeBudget < 0) {
+      // Out of node budget mid-expansion: a partial tree would give false "matches no part" and
+      // "unknown target" results, so the assembly has no tree at all.
+      this.capped = true;
+      this.trees.set(i, null);
+      for (const key of [...this.firstDef.keys()]) {
+        if (key.startsWith(`/assemblies/${i}/`)) this.firstDef.delete(key);
+      }
+      return undefined;
+    }
     this.trees.set(i, root);
     return root;
   }
@@ -223,7 +241,7 @@ export class AssemblyModel {
     parts.forEach((p, k) => {
       const ptr = `${base}/${k}`;
       const n = p.count ?? 1;
-      for (let c = 1; c <= n; c++) {
+      for (let c = 1; c <= n && this.nodeBudget >= 0; c++) {
         const id = n > 1 ? `${p.id}-${c}` : p.id;
         const first = seen.get(id);
         if (first !== undefined) {
@@ -350,10 +368,13 @@ export class AssemblyModel {
     return root;
   }
 
-  /** Stages of an assembly's default explode program (`program`, else the first explode one). */
+  /**
+   * Length of a template's default program (§8.2): the stages of `program`, or its steps when
+   * that is a build program; without `program`, the first explode program's stages.
+   */
   defaultExplodeStages(root: TNode): number {
-    const explode = root.progs.filter((p) => p.kind === "explode");
-    const pick = explode.find((p) => p.id === root.defaultProg) ?? explode[0];
+    const named = root.progs.find((p) => p.id === root.defaultProg);
+    const pick = named ?? root.progs.find((p) => p.kind === "explode");
     return pick === undefined ? 0 : pick.count;
   }
 
@@ -447,44 +468,49 @@ export class AssemblyModel {
 
   // ---- selectors (§6.1) -------------------------------------------------------------------
 
-  /** Depth-first spec order, paths relative to the owner (`head/valve-1`), at most `NODE_CAP`. */
+  /**
+   * Depth-first spec order, paths relative to the owner (`head/valve-1`). Bounded: at most
+   * `NODE_CAP` entries per owner and `FLAT_CAP` across owners; an incomplete list is reported
+   * by `complete`, and callers then skip their emptiness checks.
+   */
   flat(owner: TNode): readonly Flat[] {
+    return this.flatInfo(owner).list;
+  }
+
+  /** Whether `flat(owner)` lists every descendant (no cap was hit). */
+  complete(owner: TNode): boolean {
+    return this.flatInfo(owner).complete;
+  }
+
+  private flatInfo(owner: TNode): { list: Flat[]; complete: boolean } {
     const memo = this.flats.get(owner);
     if (memo !== undefined) return memo;
-    const out: Flat[] = [];
+    const list: Flat[] = [];
+    let complete = true;
     const visit = (n: TNode, segs: readonly string[]): void => {
       for (const c of n.children) {
-        if (out.length >= NODE_CAP) return;
+        if (!complete) return;
+        if (list.length >= NODE_CAP || this.flatBudget <= 0) {
+          complete = false;
+          this.capped = true;
+          return;
+        }
+        this.flatBudget--;
         const s = [...segs, c.id];
-        out.push({ path: s.join("/"), segs: s, node: c });
+        list.push({ path: s.join("/"), segs: s, node: c });
         visit(c, s);
       }
     };
     visit(owner, []);
-    this.flats.set(owner, out);
-    return out;
+    const info = { list, complete };
+    this.flats.set(owner, info);
+    return info;
   }
 }
 
 // ---------------------------------------------------------------------------------------------
 // Selector matching
 // ---------------------------------------------------------------------------------------------
-
-const reCache = new Map<string, RegExp>();
-export const globRe = (glob: string): RegExp => {
-  let re = reCache.get(glob);
-  if (re === undefined) {
-    re = new RegExp(
-      `^${glob
-        .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-        .replace(/\*+/g, "[a-z0-9-]*")
-        .replace(/\?/g, "[a-z0-9-]")}$`,
-    );
-    // Selector globs are a-z0-9-*? only (schema pattern), so the cache stays small.
-    if (reCache.size < 4096) reCache.set(glob, re);
-  }
-  return re;
-};
 
 export const SELECTOR_KINDS = ["tag", "type", "role"] as const;
 export const ROLES = ["body", "cover", "fastener", "internal", "cable", "shell"] as const;
@@ -515,33 +541,56 @@ export function parseSelector(sel: string): ParsedSelector {
 export type TypeOf = (n: TNode) => string | undefined;
 
 function termMatches(p: ParsedSelector, node: TNode, typeOf: TypeOf): boolean {
-  const re = globRe(p.glob);
   switch (p.kind) {
     case undefined:
-      return re.test(node.id);
+      return globMatch(p.glob, node.id);
     case "tag":
-      return node.tags.some((t) => re.test(t));
+      return node.tags.some((t) => globMatch(p.glob, t));
     case "type": {
       const t = typeOf(node);
-      return t !== undefined && re.test(t);
+      return t !== undefined && globMatch(p.glob, t);
     }
     default:
-      return node.role !== undefined && re.test(node.role);
+      return node.role !== undefined && globMatch(p.glob, node.role);
   }
+}
+
+/**
+ * Layered reachability of the scopes over `segs[0..end)` as a bit set: bit `s` is set when the
+ * scopes consume exactly the first `s` segments (`**` consumes any number, including none).
+ * One integer per scope layer, so the work is O(scopes x segments) however many `**` there
+ * are (a naive recursion is exponential in the number of `**` scopes) and nothing allocates.
+ * Paths have at most 8 segments, so `end <= 8` fits the 9 bits. `visit` sees every layer and
+ * may stop early.
+ */
+function scopeStates(
+  scopes: readonly string[],
+  segs: readonly string[],
+  end: number,
+  visit?: (states: number) => boolean,
+): number {
+  const full = (1 << (end + 1)) - 1;
+  let cur = 1; // bit 0: nothing consumed yet
+  if (visit?.(cur) === true) return cur;
+  for (const pat of scopes) {
+    if (pat === "**") {
+      // every position at or after the first reachable one
+      cur = cur === 0 ? 0 : full & ~((cur & -cur) - 1);
+    } else {
+      let next = 0;
+      for (let s = 0; s < end; s++) {
+        if ((cur & (1 << s)) !== 0 && globMatch(pat, segs[s] as string)) next |= 1 << (s + 1);
+      }
+      cur = next;
+    }
+    if (visit?.(cur) === true) return cur;
+  }
+  return cur;
 }
 
 /** Do `scopes` match exactly the first `end` segments of `segs`? */
 function scopesMatch(scopes: readonly string[], segs: readonly string[], end: number): boolean {
-  const go = (p: number, s: number): boolean => {
-    if (p === scopes.length) return s === end;
-    const pat = scopes[p] as string;
-    if (pat === "**") {
-      for (let k = s; k <= end; k++) if (go(p + 1, k)) return true;
-      return false;
-    }
-    return s < end && globRe(pat).test(segs[s] as string) && go(p + 1, s + 1);
-  };
-  return go(0, 0);
+  return (scopeStates(scopes, segs, end) & (1 << end)) !== 0;
 }
 
 /** Does selector `p` select the node at `f` (the selector is evaluated against the owner)? */
@@ -549,24 +598,17 @@ export function selects(p: ParsedSelector, f: Flat, typeOf: TypeOf): boolean {
   const last = f.segs.length - 1;
   if (p.term === "**") {
     // every descendant below the scopes: at least one segment remains for the term
-    for (let k = 0; k <= last; k++) if (scopesMatch(p.scopes, f.segs, k)) return true;
-    return false;
+    return scopeStates(p.scopes, f.segs, last) !== 0;
   }
   return termMatches(p, f.node, typeOf) && scopesMatch(p.scopes, f.segs, last);
 }
 
+/** Do the scopes consume the whole node path at some point (the rest of the selector is below)? */
 function scopesPrefixMatch(scopes: readonly string[], segs: readonly string[]): boolean {
-  const go = (p: number, s: number): boolean => {
-    if (s === segs.length) return true; // the node is consumed; the rest of the selector is below it
-    if (p === scopes.length) return false;
-    const pat = scopes[p] as string;
-    if (pat === "**") {
-      for (let k = s; k <= segs.length; k++) if (go(p + 1, k)) return true;
-      return false;
-    }
-    return globRe(pat).test(segs[s] as string) && go(p + 1, s + 1);
-  };
-  return go(0, 0);
+  const end = segs.length;
+  let hit = false;
+  scopeStates(scopes, segs, end, (st) => (hit = (st & (1 << end)) !== 0));
+  return hit;
 }
 
 /**

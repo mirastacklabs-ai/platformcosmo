@@ -14,6 +14,7 @@
 import type { DcPack, Diagnostic, PartShapeDef, PartShapeRegistry } from "../contracts/index.js";
 import { planFigureSteps, resolveFigure, stepViews, type ResolvedFigure } from "../scene/boards.js";
 import { UNRENDERED, type GuardGroup } from "./unsupported.js";
+import { globMatch } from "./glob.js";
 import { closest, didYouMean, q } from "./suggest.js";
 import {
   AssemblyModel,
@@ -21,7 +22,6 @@ import {
   LEAF_WARN,
   MAX_DEPTH,
   ROLES,
-  globRe,
   parseSelector,
   reachesOpaque,
   selects,
@@ -134,6 +134,8 @@ const PACK_REF = /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/;
 const WORK_CAP = 2_000_000;
 /** Candidate comparisons allowed per call for did-you-mean searches over parts and paths. */
 const HINT_BUDGET = 100_000;
+/** Warnings and infos one program may report before a summary replaces the rest. */
+const PROGRAM_DIAG_CAP = 50;
 /** Candidates per did-you-mean search (bounded edit distance, PLAN section 5). */
 const CANDIDATE_CAP = 1024;
 
@@ -163,8 +165,19 @@ const actionTarget = (a: SpecAssemblyAction): string =>
 const article = (word: string): string => (/^[aeiou]/.test(word) ? "an" : "a");
 const upper = (s: string): string => `${s[0]!.toUpperCase()}${s.slice(1)}`;
 
-/** Whether the spec has any schema 1.2.0 content (the guard's `has12`). */
+const contentMemo = new WeakMap<object, boolean>();
+
+/** Whether the spec has any schema 1.2.0 content (the guard's `has12`); computed once per spec. */
 export function hasAssemblyContent(spec: PlatformCosmoSpec): boolean {
+  let has = contentMemo.get(spec);
+  if (has === undefined) {
+    has = computeContent(spec);
+    contentMemo.set(spec, has);
+  }
+  return has;
+}
+
+function computeContent(spec: PlatformCosmoSpec): boolean {
   return (
     spec.assemblies !== undefined ||
     spec.images !== undefined ||
@@ -210,7 +223,10 @@ interface Check {
   readonly kinds: ReadonlyMap<string, RootKind>;
   work: number;
   hints: number;
-  workReported: boolean;
+  /** Selector matches by owner and selector text. */
+  readonly matches: Map<TNode, Map<string, { paths: readonly string[]; hint?: string | null }>>;
+  /** Sorted installed shape refs, built once on first use. */
+  known?: readonly string[];
 }
 
 /** Candidates for a did-you-mean search, bounded (deterministic: the first ones in order). */
@@ -227,6 +243,21 @@ function near(c: Check, input: string, candidates: readonly string[]): string | 
   if (c.hints < list.length) return undefined;
   c.hints -= list.length;
   return closest(input, list);
+}
+
+/** Charges `n` units of scan work; false (and `capped`) once the run's work cap is spent. */
+function charge(c: Check, n: number): boolean {
+  c.work += n;
+  if (c.work > WORK_CAP) {
+    c.model.capped = true;
+    return false;
+  }
+  return true;
+}
+
+/** A path walk charged to the work cap; undefined when the cap is spent (check skipped). */
+function walkOf(c: Check, from: TNode, segs: readonly string[]): Walk | undefined {
+  return charge(c, 16 * segs.length) ? c.model.walk(from, segs) : undefined;
 }
 
 /**
@@ -249,15 +280,18 @@ export function assemblyDiagnostics(
   const out: Diagnostic[] = [];
   const model = new AssemblyModel(spec);
   const kinds = new Map<string, RootKind>();
+  // An id declared in two lists resolves as the merge guard resolves it (unsupported.ts): racks,
+  // then assemblies, figures and storyboards override one another in that order; ids of the 1.1
+  // object lists never override a 1.2.0 kind.
   const declare = (list: readonly { readonly id?: string }[] | undefined, k: RootKind): void => {
-    for (const it of list ?? []) if (it.id !== undefined && !kinds.has(it.id)) kinds.set(it.id, k);
+    for (const it of list ?? []) if (it.id !== undefined) kinds.set(it.id, k);
   };
-  declare(spec.assemblies, "assembly");
-  declare(spec.racks, "rack");
-  declare(spec.storyboards, "storyboard");
-  declare(spec.figures, "figure");
   for (const list of [spec.nodes, spec.groups, spec.equipment, spec.rows, spec.aisles, spec.cables])
     declare(list, "other");
+  declare(spec.racks, "rack");
+  declare(spec.assemblies, "assembly");
+  declare(spec.figures, "figure");
+  declare(spec.storyboards, "storyboard");
   const c: Check = {
     spec,
     groups,
@@ -268,7 +302,7 @@ export function assemblyDiagnostics(
     kinds,
     work: 0,
     hints: HINT_BUDGET,
-    workReported: false,
+    matches: new Map(),
   };
 
   checkCycles(c);
@@ -278,6 +312,17 @@ export function assemblyDiagnostics(
   checkStoryboards(c);
   checkSteps(c);
   out.push(...model.diagnostics);
+  if (model.capped) {
+    out.push(
+      mk(
+        "warning",
+        "budget/time",
+        "/assemblies",
+        "Validation reached its work limit; later selector checks (selector-empty, moved-twice) and reference checks were skipped",
+        "Use fewer or broader selectors, or fewer parts",
+      ),
+    );
+  }
   return out;
 }
 
@@ -349,6 +394,37 @@ function checkBudget(c: Check): void {
       if (t !== undefined) total += model.metrics(t).leaves;
     }
   }
+  // Templates drawn only as close-ups count too: budgets count every level (§8.4, §13).
+  const counted = new Set<number>();
+  model.assemblies.forEach((a, i) => {
+    if (a.template !== true) counted.add(i);
+  });
+  for (const r of spec.racks ?? []) {
+    for (const s of r.slots ?? []) {
+      const t = s.assembly === undefined ? undefined : model.byId.get(s.assembly);
+      if (t !== undefined) counted.add(t);
+    }
+  }
+  const refs: (string | undefined)[] = [];
+  model.assemblies.forEach((a, i) => {
+    refs.push(a.closeup);
+    const walk = (parts: readonly SpecPart[], level: number): void => {
+      for (const p of parts) {
+        refs.push(p.closeup);
+        if (p.parts !== undefined && level < MAX_DEPTH - 1) walk(p.parts, level + 1);
+      }
+    };
+    walk(a.parts, 1);
+    void i;
+  });
+  for (const r of spec.racks ?? []) for (const s of r.slots ?? []) refs.push(s.closeup);
+  for (const id of refs) {
+    const t = id === undefined ? undefined : model.byId.get(id);
+    if (t !== undefined && !counted.has(t)) {
+      counted.add(t);
+      total += model.metrics(t).leaves;
+    }
+  }
   if (total <= LEAF_WARN) return;
   const error = total > LEAF_ERROR;
   const shown = total >= 1e9 ? "over a billion" : String(total);
@@ -386,7 +462,9 @@ function pathHint(c: Check, w: Failed, segs: readonly string[], skip: number): s
   const join = (mid: string): string => [...segs.slice(skip, w.at), mid, ...rest].join("/");
   const hit = near(c, seg, own);
   if (hit !== undefined) return `Did you mean "${join(hit)}"?`;
-  const flat = c.model.flat(w.parent).filter((f) => f.segs.length >= 2);
+  const all = c.model.flat(w.parent);
+  if (!charge(c, all.length)) return `Check the part ids under ${q(owner)}`;
+  const flat = all.filter((f) => f.segs.length >= 2);
   const exact = flat.find((f) => f.node.id === seg);
   if (exact !== undefined) return `Did you mean "${join(exact.path)}"?`;
   const deep = near(c, seg, [...new Set(flat.map((f) => f.node.id))]);
@@ -500,6 +578,19 @@ function checkTemplateDepth(c: Check, path: string, ai: number, prefix: number, 
 
 // ---- parts ---------------------------------------------------------------------------------------
 
+const hintOf = (m: string | undefined): string | undefined =>
+  m === undefined ? undefined : `Did you mean "${m}"?`;
+
+function knownShapes(c: Check): readonly string[] {
+  const dc = c.ctx.dc?.shapes;
+  return [
+    ...new Set([
+      ...(c.ctx.parts?.list() ?? []),
+      ...(dc?.shapes.map((s) => `${dc.id}:${s.id}`) ?? []),
+    ]),
+  ].sort();
+}
+
 function shapeLookup(c: Check, ref: string): PartShapeDef | undefined | "unchecked" {
   const registry = c.ctx.parts;
   const def = registry?.get(ref);
@@ -545,19 +636,14 @@ function checkShape(c: Check, p: SpecPart, ptr: string): void {
   const def = shapeLookup(c, shape);
   if (def === "unchecked") return; // no pack registry wired: nothing to check against
   if (def === undefined) {
-    const dc = c.ctx.dc?.shapes;
-    const known = [
-      ...(c.ctx.parts?.list() ?? []),
-      ...(dc?.shapes.map((s) => `${dc.id}:${s.id}`) ?? []),
-    ];
+    c.known ??= knownShapes(c);
     c.out.push(
       mk(
         "error",
         "assembly/unknown-shape",
         `${ptr}/shape`,
         `Shape ${q(shape)} is not installed`,
-        didYouMean(shape, cap([...new Set(known)].sort())) ??
-          "Install the pack that provides it, or use a primitive",
+        hintOf(near(c, shape, c.known)) ?? "Install the pack that provides it, or use a primitive",
         { shape },
       ),
     );
@@ -632,9 +718,23 @@ function checkParts(c: Check, parts: readonly SpecPart[], base: string, level: n
         unknownImage(c, typeof image === "string" ? `${ptr}/image` : `${ptr}/image/ref`, ref);
       }
     }
-    if (p.parts === undefined && p.use !== undefined) {
+    if (p.use !== undefined) {
+      if (p.parts !== undefined) {
+        c.out.push(
+          mk(
+            "warning",
+            "assembly/use-ignored",
+            `${ptr}/use`,
+            '"use" is ignored because "parts" is set',
+            'Remove "use", or remove "parts" to instance the template',
+            { id: p.use },
+          ),
+        );
+      }
       const t = checkRef(c, `${ptr}/use`, p.use, "template", ["assembly"]);
-      if (t !== undefined) checkTemplateDepth(c, `${ptr}/use`, t, 1 + level, p.use);
+      if (t !== undefined && p.parts === undefined) {
+        checkTemplateDepth(c, `${ptr}/use`, t, 1 + level, p.use);
+      }
     }
     if (p.closeup !== undefined) {
       const t = checkRef(c, `${ptr}/closeup`, p.closeup, "close-up", CLOSEUP_KINDS);
@@ -645,8 +745,10 @@ function checkParts(c: Check, parts: readonly SpecPart[], base: string, level: n
       const ref = p[key];
       if (ref === undefined || here === undefined) continue;
       const segs = [here.parent.id, ...ref.split("/")];
-      const w = c.model.walk(here.parent, segs);
-      if (!w.ok) c.out.push(unresolved(c, `${ptr}/${key}`, `"${key}" part`, ref, w, segs, 1));
+      const w = walkOf(c, here.parent, segs);
+      if (w !== undefined && !w.ok) {
+        c.out.push(unresolved(c, `${ptr}/${key}`, `"${key}" part`, ref, w, segs, 1));
+      }
     }
     if (p.parts !== undefined) {
       if (level >= MAX_DEPTH - 1) {
@@ -680,44 +782,52 @@ function typeOfFn(c: Check): (n: TNode) => string | undefined {
 /** Evaluates one selector against the owner's expanded tree; reports an empty match. */
 function evalSelector(c: Check, owner: TNode, sel: string, path: string): readonly string[] {
   const flat = c.model.flat(owner);
-  c.work += flat.length + 1;
-  if (c.work > WORK_CAP) {
-    if (!c.workReported) {
-      c.workReported = true;
-      c.out.push(
-        mk(
-          "warning",
-          "budget/time",
-          path,
-          "Too many selectors to check against this many parts; the remaining selectors were not checked",
-          "Use fewer or broader selectors, or fewer parts",
-        ),
-      );
-    }
-    return [];
-  }
+  // A selector scans the owner's whole list: charged up front. An incomplete list (a cap was
+  // hit while it was built) or a spent work cap skips the check rather than guess.
+  if (!c.model.complete(owner)) return [];
   const p = parseSelector(sel);
   const typeOf = typeOfFn(c);
-  const paths = flat.filter((f) => selects(p, f, typeOf)).map((f) => f.path);
+  // The same selector text is often repeated across stages: matched once per owner.
+  let cache = c.matches.get(owner);
+  if (cache === undefined) c.matches.set(owner, (cache = new Map()));
+  let entry = cache.get(sel);
+  if (entry === undefined) {
+    if (!charge(c, flat.length * (1 + p.scopes.length))) return [];
+    entry = { paths: flat.filter((f) => selects(p, f, typeOf)).map((f) => f.path) };
+    cache.set(sel, entry);
+  }
+  const paths = entry.paths;
   if (paths.length > 0) return paths;
 
   // Empty match. Not reported when the answer depends on what this validator cannot see:
   // opaque DC parts, inferred roles, or pack shapes whose default type is not known.
   if (reachesOpaque(p, flat)) return paths;
-  if (p.kind === "role" && ROLES.some((r) => globRe(p.glob).test(r))) return paths;
-  if (
-    p.kind === "type" &&
-    flat.some((f) => typeOf(f.node) === undefined && f.node.shape?.includes(":") === true)
-  ) {
-    return paths;
+  if (p.kind === "role" && ROLES.some((r) => globMatch(p.glob, r))) return paths;
+  if (p.kind === "type") {
+    // only the nodes this selector's scopes can reach matter
+    const reach: ParsedSelector = { scopes: p.scopes, term: "*", glob: "*" };
+    const unknown = flat.some(
+      (f) =>
+        typeOf(f.node) === undefined &&
+        f.node.shape?.includes(":") === true &&
+        selects(reach, f, typeOf),
+    );
+    if (unknown) return paths;
   }
+  // The hint scans the owner's list several times: charged, computed once per owner and selector.
+  const hintFor = (e: { hint?: string | null }): string | undefined => {
+    if (e.hint === undefined) {
+      e.hint = charge(c, flat.length * 4) ? (selectorHint(c, sel, p, flat, typeOf) ?? null) : null;
+    }
+    return e.hint ?? undefined;
+  };
   c.out.push(
     mk(
       "warning",
       "assembly/selector-empty",
       path,
       `Selector ${q(sel)} matches no part of ${q(owner.id)}`,
-      selectorHint(c, sel, p, flat, typeOf),
+      hintFor(entry),
       { selector: sel },
     ),
   );
@@ -787,8 +897,29 @@ function checkPrograms(
 ): void {
   (programs ?? []).forEach((prog, k) => {
     const pp = `${base}/${k}`;
+    const start = c.out.length;
     if ("steps" in prog) buildProgram(c, owner, prog, pp);
     else explodeProgram(c, owner, prog, pp);
+    // One program cannot flood the report: errors always stay, warnings and infos stop at the cap.
+    const mine = c.out.splice(start);
+    let soft = 0;
+    let dropped = 0;
+    for (const d of mine) {
+      if (d.severity !== "error" && ++soft > PROGRAM_DIAG_CAP) dropped++;
+      else c.out.push(d);
+    }
+    if (dropped > 0) {
+      c.out.push(
+        mk(
+          "info",
+          "assembly/diagnostics-capped",
+          pp,
+          `${dropped} more warning${dropped === 1 ? "" : "s"} in this program are not shown (limit ${PROGRAM_DIAG_CAP})`,
+          "Fix the first selectors and validate again",
+          { dropped, limit: PROGRAM_DIAG_CAP },
+        ),
+      );
+    }
   });
 }
 
@@ -799,7 +930,6 @@ const listPaths = (paths: readonly string[]): string =>
     .join(", ")}${paths.length > 3 ? ` and ${paths.length - 3} more` : ""}`;
 
 function explodeProgram(c: Check, owner: TNode, prog: SpecExplodeProgram, pp: string): void {
-  const flat = c.model.flat(owner);
   const movedBy = new Map<string, number>();
   prog.stages.forEach((st, j) => {
     const sp = `${pp}/stages/${j}`;
@@ -811,7 +941,8 @@ function explodeProgram(c: Check, owner: TNode, prog: SpecExplodeProgram, pp: st
     (st.except ?? []).forEach((s, i) => {
       for (const p of evalSelector(c, owner, s, `${sp}/except/${i}`)) except.add(p);
     });
-    const moved = flat.filter((f) => sel.has(f.path) && !except.has(f.path)).map((f) => f.path);
+    // no scan of the owner's list: only the selected paths are visited
+    const moved = sel.size === 0 ? [] : [...sel].filter((p) => !except.has(p));
     const twice = moved.filter((p) => movedBy.has(p));
     if (twice.length > 0) {
       const first = movedBy.get(twice[0] as string) as number;
@@ -829,8 +960,8 @@ function explodeProgram(c: Check, owner: TNode, prog: SpecExplodeProgram, pp: st
     for (const p of moved) if (!movedBy.has(p)) movedBy.set(p, j);
     for (const key of Object.keys(st.overrides ?? {})) {
       const segs = [owner.id, ...key.split("/")];
-      const w = c.model.walk(owner, segs);
-      if (!w.ok) {
+      const w = walkOf(c, owner, segs);
+      if (w !== undefined && !w.ok) {
         c.out.push(
           unresolved(c, `${sp}/overrides/${ptrKey(key)}`, "override part", key, w, segs, 1),
         );
@@ -840,7 +971,6 @@ function explodeProgram(c: Check, owner: TNode, prog: SpecExplodeProgram, pp: st
 }
 
 function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string): void {
-  const flat = c.model.flat(owner);
   const addedBy = new Map<string, number>();
   const { spec } = c;
   const mixed =
@@ -858,7 +988,7 @@ function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string
     st.add.forEach((s, i) => {
       for (const p of evalSelector(c, owner, s, `${sp}/add/${i}`)) sel.add(p);
     });
-    const added = flat.filter((f) => sel.has(f.path)).map((f) => f.path);
+    const added = [...sel];
     const twice = added.filter((p) => addedBy.has(p));
     if (twice.length > 0) {
       const first = addedBy.get(twice[0] as string) as number;
@@ -887,7 +1017,8 @@ function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string
     }
     if (st.subBuild === undefined) return;
     const segs = [owner.id, ...st.subBuild.split("/")];
-    const w = c.model.walk(owner, segs);
+    const w = walkOf(c, owner, segs);
+    if (w === undefined) return;
     if (!w.ok) {
       c.out.push(unresolved(c, `${sp}/subBuild`, "sub-assembly", st.subBuild, w, segs, 1));
     } else if (!w.opaque && !w.node.group) {
@@ -999,8 +1130,8 @@ function checkSteps(c: Check): void {
     }
     const node = model.root(root);
     if (node === undefined) return; // over budget: reported as budget/assembly-parts
-    const w = model.walk(node, segs);
-    if (!w.ok) c.out.push(unresolved(c, at, what, path, w, segs));
+    const w = walkOf(c, node, segs);
+    if (w !== undefined && !w.ok) c.out.push(unresolved(c, at, what, path, w, segs));
   };
 
   (spec.steps ?? []).forEach((step, si) => {
@@ -1049,7 +1180,8 @@ function checkSteps(c: Check): void {
       }
       const rootNode = model.root(root);
       if (rootNode === undefined) return;
-      const w = model.walk(rootNode, segs);
+      const w = walkOf(c, rootNode, segs);
+      if (w === undefined) return;
       if (!w.ok) {
         c.out.push(unresolved(c, `${at}/${kind}`, `${kind} target`, target, w, segs));
         return;
@@ -1233,11 +1365,28 @@ function assemblyAction(
   let cur = levels.get(key);
   if (cur === undefined) {
     // Timeline start (§7.2): `pose: exploded` shows the default explode program fully exploded;
-    // a first build action starts at level 0; an unbuild starts from the finished model unless
-    // `pose: empty`.
+    // a build program's timeline starts at level `k - advance` of its first action (`k` = its
+    // `to`; usually 0, and 0 when only one of the two is given); an unbuild starts from the
+    // finished model unless `pose: empty`.
     if (want === "explode")
       cur = isRoot && asm?.pose === "exploded" && prog === dflt ? prog.count : 0;
-    else cur = kind === "build" || asm?.pose === "empty" ? 0 : prog.count;
+    else if (kind === "build") {
+      const spec = a as { to?: number; advance?: number };
+      cur = spec.to !== undefined && spec.advance !== undefined ? spec.to - spec.advance : 0;
+      if (cur < 0) {
+        c.out.push(
+          mk(
+            "error",
+            "assembly/stage-out-of-range",
+            `${at}/advance`,
+            `${q(target)}: "advance": ${spec.advance} is more than "to": ${spec.to}, so the timeline would start below step 0`,
+            `Use "advance" of at most ${spec.to}`,
+            { to: spec.to, advance: spec.advance },
+          ),
+        );
+        return;
+      }
+    } else cur = asm?.pose === "empty" ? 0 : prog.count;
   }
   const to = advance(
     c,

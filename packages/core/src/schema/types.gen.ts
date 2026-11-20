@@ -391,7 +391,7 @@ export interface SpecBuildAction {
 build: SpecPartPath
 program?: SpecId
 /**
- * Build step (or storyboard frame) to reach; default the last.
+ * Build step (or storyboard frame) to reach; default: advance by one step (see advance).
  */
 to?: number
 /**
@@ -723,7 +723,7 @@ color?: SpecColor
 image?: SpecPartImage
 state?: SpecState
 /**
- * Repeat the part count times; copies get ids <id>-1 ... <id>-n and are offset by pitch.
+ * Repeat the part count times; when count is above 1 copies get ids <id>-1 ... <id>-n (count 1 keeps the id) and are offset by pitch.
  */
 count?: number
 pitch?: SpecVec3

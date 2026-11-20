@@ -203,9 +203,9 @@ export function semanticDiagnostics(
     const k = ids.get(ep)?.kind;
     return k === "node" || k === "rack" || k === "equipment";
   };
-  // Edge and flow endpoints may also name a whole assembly, storyboard or figure (never a part).
-  const isBoard = (k: Kind | undefined): boolean =>
-    k === "assembly" || k === "storyboard" || k === "figure";
+  // Edge and flow endpoints may also name a whole assembly (never a part). Figures and
+  // storyboards stay errors here, as they were (their renderers define their endpoints).
+  const isBoard = (k: Kind | undefined): boolean => k === "assembly";
   const isEndpoint = (ep: string): boolean =>
     isObject(ep) || (!ep.includes("/") && isBoard(ids.get(ep)?.kind));
   const isAreaRef = (ep: string): boolean => {
