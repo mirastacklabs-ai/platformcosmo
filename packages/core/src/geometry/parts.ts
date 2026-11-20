@@ -408,6 +408,43 @@ export function trayParts(box: Box3): TrayPart[] {
   ];
 }
 
+/**
+ * Reassigns the `box` primitives of a split geometry (a `tray` built by a pack shape, or turned
+ * by a quarter turn) to the `back` and `front` depth items from their CURRENT boxes: the floor
+ * (lowest, spanning the part) and every wall on the -x or -y side go to `back`, the +x and +y
+ * walls to `front` (as `trayParts`). Primitives of other kinds (ring halves) keep their
+ * assignment. Returns `geometry` unchanged without a split. Pure; never throws.
+ */
+export function reassignSplit(geometry: PartGeometry): PartGeometry {
+  const split = geometry.split;
+  if (split === undefined) return geometry;
+  const ids = new Set([...split.back, ...split.front]);
+  const b = geometry.bounds;
+  const cx = b.origin.x + b.size.x / 2;
+  const cy = b.origin.y + b.size.y / 2;
+  const tol = 1e-9;
+  const back: string[] = [];
+  const front: string[] = [];
+  const known = new Set<string>();
+  for (const p of geometry.primitives) {
+    if (!ids.has(p.id)) continue;
+    known.add(p.id);
+    const keep = p.kind !== "box";
+    let half: Half;
+    if (keep) half = halfOf(geometry, p.id) ?? "back";
+    else {
+      const px = p.box.origin.x + p.box.size.x / 2;
+      const py = p.box.origin.y + p.box.size.y / 2;
+      half = px > cx + tol || py > cy + tol ? "front" : "back";
+    }
+    (half === "back" ? back : front).push(p.id);
+  }
+  // ids not backed by a primitive keep their listing
+  for (const id of split.back) if (!known.has(id)) back.push(id);
+  for (const id of split.front) if (!known.has(id)) front.push(id);
+  return { ...geometry, split: { back, front } };
+}
+
 // ---------------------------------------------------------------------------------------------
 // Public per-primitive API
 // ---------------------------------------------------------------------------------------------
