@@ -24,6 +24,7 @@
   },
   "files": [
     "dist",
+    "schema",
     "LICENSE",
     "NOTICE"
   ],
@@ -54,6 +55,8 @@
     "@platformcosmo/themes": "workspace:*"
   },
   "devDependencies": {
+    "@platformcosmo/assets": "workspace:*",
+    "ajv": "^8.20.0",
     "esbuild": "0.28.2"
   }
 }

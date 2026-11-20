@@ -63,6 +63,12 @@ The same spec and options always produce byte-identical files.
 
 `pcosmo migrate <spec>` migrates a spec to the current format major. Only major 1 exists, so it confirms the version.
 
+## assets
+
+`pcosmo assets doctor | crop | cutout | locate | align | figure | check | shrink` are offline, deterministic image operations for turning a drawn figure into sprites and a spec fragment (`images[]` and `figures[]`). `pcosmo assets figure <manifest.json> -d out/` writes `base.png`, `sprite-N.png`, `report.json` and `fragment.json` and exits 1 when the quality gate finds errors; `--show-exclusions` also writes `exclusions-<state>.png`; `pcosmo assets check <manifest.json> -d out/` re-runs the gate on those outputs. The manifest format is `schema/figure-manifest.v1.json`. Input files must be plain files (symbolic links, FIFOs and devices are refused with `image/unsafe-path`); outputs are written only below the working directory. Run `pcosmo assets --help` for every flag.
+
+`pcosmo build` and `pcosmo validate` read the files a spec's `images[]` names (relative to the spec's directory, no `..`, no symbolic links) and report `image/not-found`, `image/unsafe-path` or `image/too-large` instead of rendering.
+
 ## Environment
 
 | Variable             | Effect                                                               |
