@@ -61,9 +61,13 @@ JSON summary with `--json`. Outputs are written as a set: every file is created 
 directory inside `-d` (`O_CREAT|O_EXCL|O_NOFOLLOW`, regular file, one link) and then renamed over its
 final name, so a hard link, FIFO or symlink at an output name is replaced, never written through, a
 refusal never leaves a partial set, and nothing this call did not write is deleted (leftovers of an
-earlier run, such as `sprite-N.png`, are reported as `asset/stale-output`). With `PCOSMO_ASSETS_ROOT`
-set (the Claude Code plugin launcher sets it to the working directory) every input and output path
-must resolve inside it. Inputs are untrusted (§4.6, §14).
+earlier run, such as `sprite-N.png`, are reported as `asset/stale-output`). Every explicit input and output path is confined to the working directory by default;
+`--root <dir>` (any command) widens it on purpose. `PCOSMO_ASSETS_ROOT`, when set (the Claude Code
+plugin launcher sets it to the working directory), is the outer bound: the effective root must lie
+inside it and `--root` cannot leave it. `assets doctor` prints the effective root. `assets figure`
+reads provenance either from flags or from `--source-json <file>` (document, page, figure, label,
+attribution, license, url; strings only, length-capped, no control characters), which the skill
+uses so that text from a document never appears on a command line. Inputs are untrusted (§4.6, §14).
 
 | Command                                                                                                               | Does                                                                                                                                                                                                                                                                                                                           |
 | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
