@@ -64,6 +64,7 @@ function check(s: PartShapeDef, g: PartGeometry, size = s.defaultSize): void {
     for (const k of ["x", "y", "z"] as const) expect(p.box.size[k]).toBeGreaterThan(0);
   }
   expect(inside(g.depthBox, g.bounds, 1e-9), `${s.id} depthBox within bounds`).toBe(true);
+  expect(g.depthBox.size.x * g.depthBox.size.y * g.depthBox.size.z).toBeGreaterThan(0);
   // bounds is exactly the union of the primitives
   const lo = (k: "x" | "y" | "z") => Math.min(...g.primitives.map((p) => p.box.origin[k]));
   const hi = (k: "x" | "y" | "z") =>
@@ -119,7 +120,10 @@ describe.each(hwShapes.map((s) => [s.id, s] as const))("hw:%s", (_id, s) => {
     for (const v of variants(s)) {
       const r = s.readParams(v);
       expect(r.diagnostics).toEqual([]);
-      check(s, s.build(r.params, ctxFor(s)));
+      // Upright E1.S swaps x and z of its default size.
+      const d = s.defaultSize;
+      const size = v["orientation"] === "upright" ? { x: d.z, y: d.y, z: d.x } : d;
+      check(s, s.build(r.params, ctxFor(s)), size);
     }
   });
 
@@ -243,7 +247,7 @@ describe("readParams", () => {
     expect(d?.message.length).toBeLessThan(300);
   });
 
-  test("params with no declared options report an empty known list correctly", () => {
+  test("a typo of each shape's first param gets a did-you-mean", () => {
     for (const s of hwShapes) {
       const first = [...(paramSpecsOf(s.id) as ReadonlyMap<string, ParamSpec>).keys()][0] as string;
       const typo = `${first}s`;
