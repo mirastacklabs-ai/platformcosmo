@@ -137,6 +137,8 @@ const actionKey = (a: SpecAssemblyAction): (typeof KEYS)[number] =>
 const usesRole = (sels: readonly unknown[]): boolean =>
   sels.some((x) => typeof x === "string" && parseSelector(x).kind === "role");
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+/** A plain object (the DC pack plans raw specs: steps, actions and overrides may be anything). */
+const isRec = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
 /** `ProgramLevel.program` of a program owned by `ownerRel` (empty: the assembly root). */
 export const qualifiedProgram = (ownerRel: string, id: string): string =>
@@ -488,7 +490,7 @@ export class AssemblyPrograms {
       const movers: Mover[] = [];
       for (const it of fresh) {
         const ov =
-          st.overrides !== undefined && Object.hasOwn(st.overrides, it.rel)
+          isRec(st.overrides) && Object.hasOwn(st.overrides, it.rel)
             ? st.overrides[it.rel]
             : undefined;
         const dir = ov?.direction ?? st.direction;
@@ -563,7 +565,7 @@ export class AssemblyPrograms {
       };
       const ovr = (m: Mover): number | undefined => {
         const o =
-          st.overrides !== undefined && Object.hasOwn(st.overrides, m.rel)
+          isRec(st.overrides) && Object.hasOwn(st.overrides, m.rel)
             ? st.overrides[m.rel]
             : undefined;
         return typeof o?.order === "number" ? o.order : undefined;
@@ -571,7 +573,7 @@ export class AssemblyPrograms {
       const ranked = rankMovers(s.movers, keys, st.order ?? "spec", ovr);
       const moves: PartMove[] = ranked.map((m, r) => {
         const o =
-          st.overrides !== undefined && Object.hasOwn(st.overrides, m.rel)
+          isRec(st.overrides) && Object.hasOwn(st.overrides, m.rel)
             ? st.overrides[m.rel]
             : undefined;
         const d = dist.distance.get(m.rel) ?? 0;
@@ -721,7 +723,9 @@ export class AssemblyPrograms {
     };
 
     (this.spec.steps ?? []).forEach((step, si) => {
-      (step.assembly ?? []).forEach((a, ai) => {
+      const list: unknown = isRec(step) ? step.assembly : undefined;
+      (Array.isArray(list) ? (list as SpecAssemblyAction[]) : []).forEach((a, ai) => {
+        if (!isRec(a)) return; // a schema-invalid action: validation reports it
         const kind = actionKey(a);
         const target = (a as unknown as Record<string, string>)[kind] as string;
         if (typeof target !== "string") return;
@@ -998,7 +1002,12 @@ export class AssemblyPrograms {
           mk(
             "info",
             "assembly/bounds-growth",
-            `/assemblies/${this.specIndex(probe.id) ?? 0}`,
+            probe.source === "dc"
+              ? `/racks/${Math.max(
+                  0,
+                  (this.spec.racks ?? []).findIndex((r) => r?.id === probe.id),
+                )}`
+              : `/assemblies/${this.specIndex(probe.id) ?? 0}`,
             `Assembly ${JSON.stringify(probe.id)} needs more than ${GROWTH}x its assembled area to explode`,
             "Use smaller distances, or fade the other parts",
             { assembly: probe.id },
@@ -1186,7 +1195,7 @@ export function assemblyPlanDiagnostics(
         ...shared,
       }).assemblies;
     } catch {
-      racks = []; // the DC pack failed: `closeupDiagnostics` and the render report it
+      racks = []; // the DC pack failed: `closeupDiagnostics` (validate) and the render report it
     }
   }
   const built = programs.attach(buildAssemblies(spec, { reach: programs.reach, ...shared }));

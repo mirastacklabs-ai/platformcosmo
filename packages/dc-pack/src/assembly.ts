@@ -968,18 +968,31 @@ export function buildRackAssembly(
   // programs, base pose and reach: core's planner over the rack tree (the scene's shared one, or
   // one of the pack's own for a direct call, whose diagnostics are then this call's)
   const synthetic = syntheticPrograms(slots, rackId);
-  remember(spec, rackId, synthetic);
   const own = shared === undefined ? makePlanner(spec) : undefined;
   const planner: DcAssemblyPlanner = shared ?? (own as AssemblyPrograms);
   planner.registerSynthetic(rackId, lookupOf(synthetic));
-  const attached = planner.attach({
-    assemblies: [bare],
-    boards: [],
-    plan: [],
-    images: [],
-    credits: [],
-  }).assemblies[0] as SceneAssembly;
-  const swept = planner.reach(bare);
+  let attached: SceneAssembly;
+  let swept: Box3 | undefined;
+  try {
+    attached = planner.attach({
+      assemblies: [bare],
+      boards: [],
+      plan: [],
+      images: [],
+      credits: [],
+    }).assemblies[0] as SceneAssembly;
+    swept = planner.reach(bare);
+  } catch (e) {
+    // the planner is total on valid specs; a raw spec it cannot read gives no assembly
+    diagnostics.push(
+      err(
+        "render/internal-error",
+        base,
+        `Rack "${rackId}" could not be planned: ${e instanceof Error ? e.message : String(e)}`,
+      ),
+    );
+    return { diagnostics };
+  }
   if (own !== undefined) diagnostics.push(...own.diagnostics);
 
   const customIds = customProgramIds(rack);
@@ -997,12 +1010,14 @@ export function buildRackAssembly(
   const reach = unionOf(swept === undefined ? [restBounds] : [restBounds, swept]) ?? restBounds;
   const defaultProgram = customIds[0] ?? "drawers";
   const assembly: SceneAssembly = { ...attached, defaultProgram, reachBounds: reach };
+  remember(spec, rackId, synthetic);
   return { assembly, diagnostics };
 }
 
 /**
  * Synthetic programs of every rack `buildAssembly` built, by spec and then by RACK ID (not by the
  * returned object: the scene copies assemblies, e.g. to add `loopStart`), for `assemblyPlanner`.
+ * The last build of a rack wins (another `templates` argument can give other fit factors).
  */
 const SYNTHETIC = new WeakMap<PlatformCosmoSpec, Map<string, Synthetic>>();
 

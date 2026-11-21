@@ -126,6 +126,61 @@ describe("the scene draws a targeted rack as its assembly (R03)", () => {
     expect(codes(scene(s).diagnostics, "assembly/below-ground")).toHaveLength(1);
   });
 
+  it("validate (closeupDiagnostics) reports the same below-ground for a rack without internals", () => {
+    const s = spec({
+      racks: [
+        {
+          id: "r1",
+          programs: [
+            { id: "sink", stages: [{ parts: ["srv"], direction: "down", distance: 500 }] },
+          ],
+          slots: [{ id: "srv", at: 1, type: "server-2u" }],
+        },
+      ],
+      steps: [{ assembly: [{ explode: "r1" }] }],
+    });
+    const v = codes(closeupDiagnostics(s, { dc: dcPack }), "assembly/below-ground");
+    expect(v.map((d) => d.path)).toEqual(["/racks/0/programs/0"]);
+    expect(codes(scene(s).diagnostics, "assembly/below-ground")).toEqual(v);
+  });
+
+  it("a rack's reach growth points at the rack", () => {
+    const s = spec({
+      racks: [
+        {
+          id: "r1",
+          programs: [{ id: "fly", stages: [{ parts: ["srv"], direction: "up", distance: 20000 }] }],
+          slots: [{ id: "srv", at: 1, type: "server-2u" }],
+        },
+      ],
+      steps: [{ assembly: [{ explode: "r1" }] }],
+    });
+    expect(codes(scene(s).diagnostics, "assembly/bounds-growth").map((d) => d.path)).toEqual([
+      "/racks/0",
+    ]);
+  });
+
+  it("raw input never throws: bad steps, actions and overrides", () => {
+    const s = spec({
+      racks: [
+        {
+          id: "r1",
+          programs: [
+            { id: "p", stages: [{ parts: ["srv"], direction: "up", overrides: null }, null] },
+          ],
+          slots: [{ id: "srv", at: 1, type: "server-2u" }],
+        },
+      ],
+      steps: [null, { assembly: "x" }, { assembly: [null, 5, "explode", { explode: "r1" }] }],
+    });
+    // (the 1.1 hall layout reads steps for flows: it gets the clean spec)
+    const frag = dcPack.buildScene({ ...s, steps: [] });
+    expect(() => dcPack.buildAssembly!(s, "r1", frag, {})).not.toThrow();
+    const r = dcPack.buildAssembly!(s, "r1", frag, {});
+    expect(r.diagnostics.map((d) => [d.code, d.message])).toEqual([]);
+    expect(r.assembly).toBeDefined();
+  });
+
   it("a spec whose racks no action targets keeps every 1.1 object byte for byte", () => {
     const plain = spec({
       racks: [{ id: "r1", slots: [{ id: "srv", at: 1, type: "server-2u" }] }],

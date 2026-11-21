@@ -377,7 +377,7 @@ function builtRackTrees(
       if (t !== undefined) out.set(ri, t);
     }
   } catch {
-    out.clear(); // the DC pack failed: `closeupDiagnostics` and the render report it
+    out.clear(); // the DC pack failed: `closeupDiagnostics` (validate) and the render report it
   }
   return out;
 }

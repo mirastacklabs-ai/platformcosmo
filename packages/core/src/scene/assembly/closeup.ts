@@ -421,6 +421,13 @@ const CHECK_CODES: ReadonlySet<string> = new Set([
   "budget/levels",
 ]);
 
+/** Codes of a rack in assembly mode that only building it finds (§8.1, §8.2, §13), plus the above. */
+const RACK_CODES: ReadonlySet<string> = new Set([
+  ...CHECK_CODES,
+  "assembly/below-ground",
+  "budget/assembly-parts",
+]);
+
 /** @internal Used by the CLI's `validate`; not public API. */
 export interface CloseupCheckContext extends Pick<AssemblyBuildOptions, "parts"> {
   /**
@@ -456,13 +463,15 @@ function hasCloseup(spec: PlatformCosmoSpec): boolean {
 
 /**
  * The size and depth diagnostics of close-ups (`assembly/size-mismatch`, `assembly/closeup-turned`,
- * `assembly/too-deep`, `budget/levels`) and of slot internals, for `pcosmo validate`: the scene
+ * `assembly/too-deep`, `budget/levels`) and of the racks in assembly mode (slot internals'
+ * `assembly/size-mismatch`, `assembly/below-ground`, the rack's `budget/assembly-parts`), for
+ * `pcosmo validate`: the scene
  * computes them with the same code and the same single planner (the targeted racks first, then
  * the spec assemblies, then the close-up instances, slot close-ups included), but validation of the
  * spec alone does not build it. Call it only for a spec without errors; it never throws (an
  * internal failure is one `render/internal-error` per section, the other sections' results are
- * kept). Sorted by (path, code); empty, and no work, when the spec has no `closeup` and no slot
- * `assembly` on a targeted rack.
+ * kept). Sorted by (path, code); empty, and no work, when the spec has no `closeup` and no rack
+ * a step action targets.
  * @internal
  */
 export function closeupDiagnostics(
@@ -472,11 +481,10 @@ export function closeupDiagnostics(
   const out: Diagnostic[] = [];
   const dc = ctx.dc;
   const targeted = new Set(dc?.buildAssembly === undefined ? [] : targetedRacks(spec));
-  const internals = (spec.racks ?? []).some(
-    (r) => targeted.has(r.id) && (r.slots ?? []).some((sl) => sl.assembly !== undefined),
-  );
   const slotCloseups = dc?.slotHosts !== undefined && hasSlotCloseups(spec);
-  const needDc = dc !== undefined && (internals || slotCloseups);
+  // every targeted rack: what only the built rack can show (internals that do not fit, a move
+  // below the floor, the rack's part budget) fails `build`, so `validate` reports it too
+  const needDc = dc !== undefined && (targeted.size > 0 || slotCloseups);
   const closeups = hasCloseup(spec) || slotCloseups;
   if (!needDc && !closeups) return out;
   const shared = {
@@ -489,7 +497,7 @@ export function closeupDiagnostics(
   if (needDc) {
     try {
       racks = buildRackAssemblies(spec, dc, dc.buildScene(spec), { planner: programs, ...shared });
-      out.push(...racks.diagnostics.filter((d) => CHECK_CODES.has(d.code)));
+      out.push(...racks.diagnostics.filter((d) => RACK_CODES.has(d.code)));
     } catch (e) {
       out.push(internalError("slot internals", e));
       racks = undefined;

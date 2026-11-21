@@ -863,9 +863,12 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
       rackIds.size === 0
         ? allObjects
         : allObjects.filter((o) => {
+            if (o.source !== "dc") return true;
             const slash = o.id.indexOf("/");
-            const root = slash < 0 ? o.id.replace(/_front$/, "") : o.id.slice(0, slash);
-            return !(o.source === "dc" && rackIds.has(root));
+            if (slash > 0) return !rackIds.has(o.id.slice(0, slash));
+            return (
+              !rackIds.has(o.id) && !(o.id.endsWith("_front") && rackIds.has(o.id.slice(0, -6)))
+            );
           }),
     groups: allGroups,
     edges,
