@@ -52,7 +52,7 @@ const tile = (parts: unknown[], programs: unknown[], extra: Obj = {}): Obj => ({
   programs,
   ...extra,
 });
-const OPEN = { phase1a: false, phase1b: false, phase2: false, phase3: false };
+const OPEN = { phase1a: false, phase1b: false, phase2: false, storyboards: false, phase3: false };
 const vec = (m: { offset: { x: number; y: number; z: number } }): number[] => [
   m.offset.x,
   m.offset.y,

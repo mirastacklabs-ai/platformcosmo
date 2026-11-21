@@ -358,6 +358,35 @@ export function clipDef(ctx: DomContext, id: string, prism: Box3): SvgElement {
   );
 }
 
+/**
+ * A depth copy of a part group (§9.4): a deep copy in which every `id` gets `suffix` (`__c<k>`).
+ * References stay as they are: they point into `<defs>` (images, image clips), which every copy
+ * shares.
+ */
+export function withIdSuffix(node: SvgElement, suffix: string, ctx: DomContext): SvgElement {
+  let n = 0;
+  const copy = (e: SvgElement): SvgElement => {
+    n++;
+    const id = e.attrs?.["id"];
+    return {
+      tag: e.tag,
+      ...(e.attrs === undefined
+        ? {}
+        : { attrs: typeof id === "string" ? { ...e.attrs, id: `${id}${suffix}` } : e.attrs }),
+      ...(e.children === undefined
+        ? {}
+        : {
+            children: e.children.map((c) =>
+              typeof c === "object" && "tag" in c ? copy(c as SvgElement) : c,
+            ),
+          }),
+    };
+  };
+  const out = copy(node);
+  ctx.count(n);
+  return out;
+}
+
 /** Which wrappers exist and their t = 0 state (the DOM is the rest frame: defaults are omitted). */
 export interface Wrappers {
   readonly host?: { readonly id: string; readonly transform?: string };

@@ -30,6 +30,7 @@
  */
 import type {
   AssemblyUnits,
+  DcPack,
   AssetSource,
   Box3,
   Diagnostic,
@@ -37,14 +38,21 @@ import type {
   QuarterTurn,
   SceneAssemblies,
   SceneAssembly,
+  SceneAssemblyNode,
   Vec3,
 } from "../../contracts/index.js";
 import { AssemblyModel, LEAF_ERROR, MAX_DEPTH } from "../../schema/assembly-tree.js";
-import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
+import { sortDiagnostics } from "../../schema/diagnose.js";
+import type { PlatformCosmoSpec, SpecPart } from "../../schema/types.gen.js";
 import { unitMm } from "./frame.js";
 import { levelLimit, levelOverflow, type Level, type LevelKind } from "./levels.js";
-import type { AssemblyPrograms } from "./plan.js";
-import { assemblyNodes, buildTemplateInstance, type AssemblyBuildOptions } from "./tree.js";
+import { AssemblyPrograms } from "./plan.js";
+import {
+  assemblyNodes,
+  buildAssemblies,
+  buildTemplateInstance,
+  type AssemblyBuildOptions,
+} from "./tree.js";
 
 /** Oversize above which a close-up is shrunk and reported (§8.5). */
 export const SIZE_TOLERANCE = 0.1;
@@ -111,7 +119,38 @@ const isPhysical = (u: AssemblyUnits): boolean => u === "mm" || u === "cm" || u 
 const r1 = (v: number): number => Math.round(v * 10) / 10;
 const SIDES: readonly FrontSide[] = ["+x", "+y", "-x", "-y"];
 
+/**
+ * JSON pointer of the spec field `closeup` of the node at `rel` (path segments below the
+ * assembly root; none: the assembly's own `closeup`). A segment is a part id, or `<id>-<n>` of a
+ * counted part; a node that comes from a `use` template is not in this assembly's parts, so the
+ * assembly pointer `base` itself is the fallback.
+ */
+function closeupPointer(spec: PlatformCosmoSpec, base: string, rel: readonly string[]): string {
+  if (base === "") return "";
+  const root = (spec.assemblies ?? [])[Number(base.slice("/assemblies/".length))];
+  if (root === undefined) return base;
+  if (rel.length === 0) return `${base}/closeup`;
+  let list: readonly SpecPart[] | undefined = root.parts;
+  let at = base;
+  for (const seg of rel) {
+    const k: number = (list ?? []).findIndex((p) => p.id === seg || counted(p, seg));
+    if (k < 0) return base;
+    at = `${at}/parts/${k}`;
+    list = list?.[k]?.parts;
+  }
+  return `${at}/closeup`;
+}
+
+/** `seg` is an instance id (`<id>-<n>`, n in 1..count) of the counted part `p`. */
+function counted(p: SpecPart, seg: string): boolean {
+  const n = p.count ?? 1;
+  if (n < 2 || !seg.startsWith(`${p.id}-`)) return false;
+  const k = Number(seg.slice(p.id.length + 1));
+  return Number.isInteger(k) && k >= 1 && k <= n && String(k) === seg.slice(p.id.length + 1);
+}
+
 function hostsOf(
+  spec: PlatformCosmoSpec,
   a: SceneAssembly,
   templateId: string,
   parent: string | undefined,
@@ -124,6 +163,7 @@ function hostsOf(
   const out: Pending[] = [];
   for (const n of assemblyNodes(a)) {
     if (n.closeup === undefined) continue;
+    const rel = n.path === a.root.path ? [] : n.path.slice(a.root.path.length + 1).split("/");
     const s = n.local.size;
     // local axes turn with the host assembly's own rotate: the interior in WORLD axes
     const ix = (odd ? s.y * mm.y : s.x * mm.x) as number;
@@ -134,7 +174,7 @@ function hostsOf(
       box: n.world,
       ...(physical ? { interiorMm: { x: ix, y: iy, z: s.z * mm.z } } : {}),
       front: a.frame.front,
-      ptr,
+      ptr: closeupPointer(spec, ptr, rel),
       ...(parent === undefined ? {} : { parent }),
       chain: [...chain, templateId],
     });
@@ -219,7 +259,9 @@ export function buildCloseups(
   let frontier: Pending[] = [];
   for (const a of base) {
     const i = model.byId.get(a.id);
-    frontier.push(...hostsOf(a, a.id, undefined, [], i === undefined ? "" : `/assemblies/${i}`));
+    frontier.push(
+      ...hostsOf(spec, a, a.id, undefined, [], i === undefined ? "" : `/assemblies/${i}`),
+    );
   }
   for (const h of opts.hosts ?? []) {
     frontier.push({
@@ -379,10 +421,127 @@ export function buildCloseups(
         fit: f?.fit ?? 1,
         ...(f === undefined ? {} : { mismatch: f.dev }),
       });
-      next.push(...hostsOf(assembly, h.ref, path, h.chain, `/assemblies/${built.index}`));
+      next.push(...hostsOf(spec, assembly, h.ref, path, h.chain, `/assemblies/${built.index}`));
     }
     frontier = next.sort((p, q) => cmp(p.host, q.host));
   }
   levels.sort((p, q) => cmp(p.path, q.path));
   return { levels, images: [...images].sort(), credits, diagnostics };
+}
+
+/** The codes `closeupDiagnostics` reports (the size and depth checks of §8.5). */
+const CHECK_CODES: ReadonlySet<string> = new Set([
+  "assembly/size-mismatch",
+  "assembly/closeup-turned",
+  "assembly/too-deep",
+  "budget/levels",
+]);
+
+/** @internal Used by the CLI's `validate` and `build`; not public API. */
+export interface CloseupCheckContext extends Pick<AssemblyBuildOptions, "parts"> {
+  /** DC pack: reports `assembly/size-mismatch` of `racks[].slots[].assembly` (§8.2). */
+  readonly dc?: DcPack;
+  /**
+   * Check close-ups (default true). `render` already reports those through the scene, so
+   * `build` passes false and asks only for the slot internals, which the scene does not build.
+   */
+  readonly closeups?: boolean;
+}
+
+const internalError = (what: string, e: unknown): Diagnostic => ({
+  severity: "error",
+  code: "render/internal-error",
+  path: "",
+  message: `Unexpected error while checking ${what}: ${e instanceof Error ? e.message : String(e)}`,
+});
+
+/** Does any assembly or part of the raw spec name a `closeup`? (cheap pre-check, iterative.) */
+function hasCloseup(spec: PlatformCosmoSpec): boolean {
+  const todo: (readonly { closeup?: string; parts?: readonly unknown[] }[])[] = [
+    (spec.assemblies ?? []) as never,
+  ];
+  let seen = 0;
+  while (todo.length > 0 && seen < 100_000) {
+    for (const x of todo.pop()!) {
+      seen++;
+      if (x.closeup !== undefined) return true;
+      if (Array.isArray(x.parts)) todo.push(x.parts as never);
+    }
+  }
+  return false;
+}
+
+/**
+ * The size and depth diagnostics of close-ups (`assembly/size-mismatch`, `assembly/closeup-turned`,
+ * `assembly/too-deep`, `budget/levels`) and of slot internals, for `pcosmo validate` and `build`:
+ * the scene computes the close-up ones with the same code, but validation of the spec alone does
+ * not build it. Call it only for a spec without errors; it never throws (an internal failure is
+ * one `render/internal-error` per section, the other section's result is kept). Sorted by
+ * (path, code); empty, and no work, when the spec has no `closeup` and no slot `assembly`.
+ * @internal
+ */
+export function closeupDiagnostics(
+  spec: PlatformCosmoSpec,
+  ctx: CloseupCheckContext = {},
+): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  if (ctx.closeups !== false && hasCloseup(spec)) {
+    try {
+      const programs = new AssemblyPrograms(spec);
+      const built = programs.attach(
+        buildAssemblies(spec, {
+          reach: programs.reach,
+          ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
+          ...(ctx.dc?.shapes === undefined ? {} : { dcShapes: ctx.dc.shapes }),
+        }),
+      );
+      if (built.assemblies.some((a) => assemblyNodes(a).some((n) => n.closeup !== undefined))) {
+        const c = buildCloseups(spec, built.assemblies, {
+          programs,
+          ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
+          ...(ctx.dc?.shapes === undefined ? {} : { dcShapes: ctx.dc.shapes }),
+        });
+        out.push(...c.diagnostics.filter((d) => CHECK_CODES.has(d.code)));
+      }
+    } catch (e) {
+      out.push(internalError("close-ups", e));
+    }
+  }
+  const dc = ctx.dc;
+  const withSlots = (spec.racks ?? []).filter((r) =>
+    (r.slots ?? []).some((sl) => sl.assembly !== undefined),
+  );
+  if (dc?.buildAssembly !== undefined && withSlots.length > 0) {
+    // Slot internals (§8.2): the DC pack builds the rack in assembly mode (only racks a step
+    // action targets) and reports `assembly/size-mismatch` of each slot template.
+    try {
+      const frag = dc.buildScene(spec);
+      const model = new AssemblyModel(spec);
+      const templates: Record<string, SceneAssemblyNode> = {};
+      const tids = new Set(
+        withSlots.flatMap((r) => (r.slots ?? []).flatMap((sl) => sl.assembly ?? [])),
+      );
+      for (const id of [...tids].sort(cmp)) {
+        // a true-scale instance of the template alone, as `buildCloseups` builds one (unknown,
+        // oversized or cyclic templates are reported by validation and get no instance)
+        const t = buildTemplateInstance(spec, model, id, id, {
+          lift: false,
+          ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
+          ...(dc.shapes === undefined ? {} : { dcShapes: dc.shapes }),
+          leafBudget: LEAF_ERROR,
+        });
+        if (t !== undefined) templates[id] = t.assembly.root;
+      }
+      for (const r of withSlots) {
+        out.push(
+          ...dc
+            .buildAssembly(spec, r.id, frag, templates)
+            .diagnostics.filter((d) => CHECK_CODES.has(d.code)),
+        );
+      }
+    } catch (e) {
+      out.push(internalError("slot internals", e));
+    }
+  }
+  return sortDiagnostics(out);
 }

@@ -31,6 +31,9 @@ import { MIRRORED, checkSlots } from "./scene.js";
 import { registry } from "./registry.js";
 import { depthSort } from "./sort.js";
 import { U_MM } from "./units.js";
+
+/** Oversize above which a slot template warns (assemblies 8.5; the template is shrunk either way). */
+const SIZE_TOLERANCE = 0.1;
 import { partKind, tileToMm, unitMm } from "./shapes.js";
 import { AssemblyPrograms, reassignSplit } from "@platformcosmo/core";
 import type {
@@ -827,7 +830,7 @@ export function buildRackAssembly(
               message: `The template "${tid.slice(0, 64)}" has no parts to place inside the ${s.spec.type}; only the lid has a program.`,
               params: { template: tid.slice(0, 64), parts: 0 },
             });
-          } else if (fit.factor < 1 - 1e-9) {
+          } else if (1 / fit.factor - 1 > SIZE_TOLERANCE + 1e-9) {
             diagnostics.push({
               severity: "warning",
               code: "assembly/size-mismatch",

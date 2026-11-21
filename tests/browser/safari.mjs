@@ -424,6 +424,45 @@ try {
           // Safari may move a particle by a sub-pixel between seeks: identical bytes are not
           // required, only a record of whether they happen to be.
           rec(file, mode, "time control repeats (0.5 s twice)", "info", `identical: ${a === c}`);
+          // A1-2b depth copies: one copy visible on both sides of each swap, frames that agree.
+          const swaps = INFO?.copies?.[file]?.swaps ?? [];
+          if (swaps.length > 0) {
+            const bad = [];
+            let worst = 0;
+            for (const { t, ids } of swaps) {
+              const frames = [];
+              for (const x of [t - 1 / 60, t, t + 1 / 60]) {
+                frames.push(await at(x));
+                const shown = await exec(
+                  `const m = arguments[0], list = arguments[1];
+                   const doc = m === 'object' ? document.getElementById('el').contentDocument : document;
+                   return list.filter((id) => doc.defaultView.getComputedStyle(doc.getElementById(id)).visibility === 'visible').length;`,
+                  [mode, ids],
+                );
+                if (shown !== 1) bad.push(`t=${x.toFixed(4)}: ${shown} copies visible`);
+              }
+              for (const [p, q] of [
+                [0, 1],
+                [1, 2],
+              ]) {
+                const d = frames[p] === frames[q] ? 0 : pixelDiff(frames[p], frames[q]);
+                if (typeof d !== "number") bad.push(`t=${t}: ${d}`);
+                else {
+                  worst = Math.max(worst, d);
+                  if (d >= 0.005) bad.push(`t=${t}: ${(d * 100).toFixed(3)}% of pixels change`);
+                }
+              }
+            }
+            rec(
+              file,
+              mode,
+              `depth copies: one copy visible and no flicker at ${swaps.length} swap(s)`,
+              bad.length === 0 ? "pass" : "fail",
+              bad.length
+                ? bad.join("; ")
+                : `largest change: ${(worst * 100).toFixed(3)}% of pixels`,
+            );
+          }
         }
         rec(file, mode, "animates", animated ? "pass" : "fail", animated ? "" : "static in Safari");
         const inkShare = inkOf(first);

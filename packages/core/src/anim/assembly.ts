@@ -25,6 +25,7 @@ import type {
   TrackKey,
   VisibilityKey,
 } from "../contracts/index.js";
+import { parseCopyKey } from "../depth/copies.js";
 import { placementAttr, placementAt, type PlacementKey } from "../render/assembly/groups.js";
 import type { AssemblyRenderModelX } from "../render/assembly/types.js";
 import { keyProgress, round2, stepEndTime } from "../render/assembly/tracks.js";
@@ -289,69 +290,116 @@ const matrixError = (a: MatrixKey, k: MatrixKey, b: MatrixKey): number => {
 
 const cache = new WeakMap<AssemblyRenderModel, Map<number, AssemblyAnim>>();
 
-/** Everything the assembly layer animates, for an output `speed`. */
-export function assemblyAnim(am: AssemblyRenderModel, speed: number): AssemblyAnim {
+/**
+ * The first `max` props, whole groups only (in first-appearance order, stopping at the first group
+ * that does not fit): the wrappers of all copies of one item form one group (§9.4), so a cut never
+ * animates one copy and leaves a sibling at the rest pose.
+ */
+export function cutProps<P>(props: readonly P[], groups: readonly string[], max: number): P[] {
+  if (props.length <= max) return [...props];
+  const count = new Map<string, number>();
+  for (const g of groups) count.set(g, (count.get(g) ?? 0) + 1);
+  const keep = new Set<string>();
+  let n = 0;
+  for (const [g, c] of count) {
+    if (n + c > max) break;
+    keep.add(g);
+    n += c;
+  }
+  return props.filter((_, i) => keep.has(groups[i] as string));
+}
+
+/**
+ * Everything the assembly layer animates, for an output `speed`. `maxProps` (default `MAX_PROPS`)
+ * exists for tests; only the default is cached.
+ */
+export function assemblyAnim(
+  am: AssemblyRenderModel,
+  speed: number,
+  maxProps: number = MAX_PROPS,
+): AssemblyAnim {
   const s = speed > 0 && Number.isFinite(speed) ? speed : 1;
   const bySpeed = cache.get(am) ?? new Map<number, AssemblyAnim>();
-  cache.set(am, bySpeed);
-  const hit = bySpeed.get(s);
+  if (maxProps === MAX_PROPS) cache.set(am, bySpeed);
+  const hit = maxProps === MAX_PROPS ? bySpeed.get(s) : undefined;
   if (hit !== undefined) return hit;
   const warp = warpFor(am, s);
   const protect = protectedTimes(am);
   const props: AssemblyProp[] = [];
+  /** Per prop: its cut group (the item for every copy's wrappers, else the element id). */
+  const groups: string[] = [];
+  let group = "";
   let overKeys = 0;
   const move = (id: string, keys: readonly TrackKey[]): void => {
     if (keys.length === 0) return;
     const t = thin(prune([...keys], sameOffset), protect, moveError);
     if (!t.ok) overKeys++;
     props.push({ kind: "transform", id, keys: retime(t.keys, warp) });
+    groups.push(group);
   };
   const fade = (id: string, keys: readonly OpacityKey[]): void => {
     if (keys.length === 0) return;
     const t = thin(prune([...keys], sameOpacity), protect, fadeError);
     if (!t.ok) overKeys++;
     props.push({ kind: "opacity", id, keys: retime(t.keys, warp) });
+    groups.push(group);
   };
-  for (const m of modelsOf(am)) {
+  // every model the layer draws: the main scene, each quarter-turn view and each close-up level
+  // (B-3), each under its own ids; a model's copies are grouped per model and item for the cut
+  modelsOf(am).forEach((m, mi) => {
     for (const t of m.tracks) {
-      // the wrappers exist exactly for the tracks that have keys (A1-3 `Registered`)
-      move(m.ids.partHost(t.copy), t.host);
-      move(m.ids.partMotion(t.copy), t.motion);
+      // one track per copy (`item` or `item__c<k>`, §9.4); the wrappers exist exactly for the
+      // tracks that have keys (A1-3 `Registered`)
+      const { item, copy } = parseCopyKey(t.copy);
+      group = `i:${mi}:${item}`;
+      move(m.ids.partHost(item, copy), t.host);
+      move(m.ids.partMotion(item, copy), t.motion);
       if (t.visibility.length > 0) {
         props.push({
           kind: "visibility",
-          id: m.ids.partVisible(t.copy),
+          id: m.ids.partVisible(item, copy),
           keys: retime(t.visibility, warp),
         });
+        groups.push(group);
       }
-      fade(m.ids.partFade(t.copy), t.opacity);
+      fade(m.ids.partFade(item, copy), t.opacity);
     }
-    for (const f of m.staticFades) fade(f.id, f.opacity);
+    for (const f of m.staticFades) {
+      group = `s:${f.id}`;
+      fade(f.id, f.opacity);
+    }
     for (const l of m.labelTracks) {
-      move(l.id, l.motion);
-      fade(l.id, l.opacity);
+      // a top-face label rides inside its part: every copy has one (`copyIds`)
+      group = `l:${l.id}`;
+      for (const id of m.ids.copyIds(l.id)) {
+        move(id, l.motion);
+        fade(id, l.opacity);
+      }
     }
-  }
+  });
   // view and level groups: cross-fades and the level placements (B-3)
   for (const g of (am as AssemblyRenderModelX).groups ?? []) {
+    group = `g:${g.id}`;
     fade(g.id, g.opacity);
     if (g.placement !== undefined && g.placement.length > 0) {
       const keys = g.placement.map((k): MatrixKey => ({ ...k, easing: "linear" }));
       const t = thin(prune(keys, sameMatrix), protect, matrixError);
       if (!t.ok) overKeys++;
       props.push({ kind: "matrix", id: g.id, keys: retime(t.keys, warp) });
+      groups.push(group);
     }
   }
+  const kept = cutProps(props, groups, maxProps);
   const anim: AssemblyAnim = {
     loop: am.loop,
-    props: props.slice(0, MAX_PROPS),
+    props: kept,
     warp,
     starts: am.clock.map((c) => c.start),
     ends: am.clock.map((c) => warp(Math.min(c.end, am.loop))),
     overKeys,
-    overProps: Math.max(0, props.length - MAX_PROPS),
+    overProps: props.length - kept.length,
   };
-  bySpeed.set(s, anim);
+  if (maxProps === MAX_PROPS) bySpeed.set(s, anim);
   return anim;
 }
 
