@@ -64,6 +64,7 @@ import {
   type PlanOptions,
   type ResolvedFigure,
 } from "../boards.js";
+import { resolveStoryboard, type ResolvedStoryboard } from "../storyboards.js";
 import {
   resolveDirection,
   toLBox,
@@ -999,7 +1000,12 @@ export function assemblyPlanDiagnostics(
     const { figure } = resolveFigure(f, i);
     if (!figures.has(figure.id)) figures.set(figure.id, figure);
   });
+  const storyboards = new Map<string, ResolvedStoryboard>();
+  for (const sb of spec.storyboards ?? [])
+    if (!storyboards.has(sb.id)) storyboards.set(sb.id, resolveStoryboard(sb));
   const views = stepViews(spec, ctx.isFocusTarget);
-  return programs.plan(built.assemblies, figures, views, ctx.gated ? { gated: ctx.gated } : {})
-    .compression;
+  return programs.plan(built.assemblies, figures, views, {
+    ...(ctx.gated ? { gated: ctx.gated } : {}),
+    ...(storyboards.size > 0 ? { storyboards } : {}),
+  }).compression;
 }

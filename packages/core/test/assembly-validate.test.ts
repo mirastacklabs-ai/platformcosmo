@@ -18,6 +18,7 @@ const LIFT: Record<GuardGroup, boolean> = {
   phase1a: false,
   phase1b: false,
   phase2: false,
+  storyboards: false,
   phase3: false,
 };
 const META = { version: "1" };
@@ -1451,6 +1452,7 @@ describe("per-target gating mirrors the merge guard", () => {
       phase1a: true,
       phase1b: true,
       phase2: true,
+      storyboards: true,
       phase3: true,
       ...g,
     })
@@ -1474,8 +1476,8 @@ describe("per-target gating mirrors the merge guard", () => {
       "assembly/unknown-target@4/explode",
     ]);
   });
-  test("storyboard actions need phase3", () => {
-    expect(paths({ phase1a: false, phase3: false })).toEqual([
+  test("storyboard actions need the storyboards group (R-2)", () => {
+    expect(paths({ phase1a: false, storyboards: false })).toEqual([
       "assembly/storyboard-no-explode@3/explode",
       "assembly/unknown-target@4/explode",
     ]);

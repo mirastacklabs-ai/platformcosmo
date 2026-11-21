@@ -221,8 +221,12 @@ export function semanticDiagnostics(
     const k = ids.get(ep)?.kind;
     return k === "group" || k === "row" || k === "aisle";
   };
-  /** A figure id is a camera focus target (R-1): the panel is framed with its moving sprites. */
-  const isFigure = (ep: string): boolean => ids.get(ep)?.kind === "figure";
+  /**
+   * A figure or storyboard id is a camera focus target (R-1, R-2): the panel is framed (a
+   * figure with its moving sprites).
+   */
+  const isFigure = (ep: string): boolean =>
+    ids.get(ep)?.kind === "figure" || ids.get(ep)?.kind === "storyboard";
   const unknownObject = (path: string, ep: string, what: string, allowAreas = false): void => {
     const slash = ep.indexOf("/");
     let message = `Unknown ${what} ${q(ep)}`;

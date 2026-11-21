@@ -822,6 +822,46 @@ plays backward. Explode is not available (`assembly/storyboard-no-explode`). All
 2D inside the panel, so no depth questions arise. Details and the skill flow:
 [document ingestion](./document-ingestion.md).
 
+**Levels.** A storyboard has one program, its frames (`ProgramLevel.program` = `frames`), and one
+level per frame: level `k` shows the model after document step `k`, level 0 an empty panel.
+`build` moves `from → to` (default: one frame; `advance` steps by frames), `unbuild` moves back
+(default: to 0). The timeline starts where the first action starts (`build`: level 0, `unbuild`:
+the last frame). The rest frame (static output, PNG default, reduced-motion start) shows the
+finished model, level `n`; the loop opens by easing from it to the start level (at most 0.4 s,
+none of it when the first action starts at once), and a story that ends before level `n`
+reserves the closing window and returns to the rest frame (§7.4). Invalid actions (explode,
+a path below the board, `program`, range, direction) are `validate`'s; the planner leaves them out.
+
+**Frame timing** (seconds at speed 1, before the step's compression; one `ResolvedAction.length`
+is the sum over its frames): callout fade-in 0.3 (frames with `parts` or `sub`), one beat of 0.35
+per mini step (0.1 cross-fade), flight 0.6 (ease-in-out; the copies fade over the last 0.12), model
+change 0.5. A frame without a callout is the change alone (0.5). `cut` swaps in 0.02 s (so every
+value stays a function of time and reverses exactly).
+
+**Panel.** From the top: callout strip (22% of the panel width; thumbnails with `<count>x`
+beneath them on the left, the sub-build box on the right), the model area (the aspect of the first
+frame's model image, clamped to 1:4 .. 2:1; every model is fitted into it, centred), the caption
+bar (step number, then the caption). The callout of frame `k` shows from its fade-in until frame
+`k + 1` starts (it fades out then, also when frame `k + 1` has none); the last frame's callout stays
+on the finished panel. Thumbnails fly as copies of the callout's, one group per frame; the last
+mini step flies on its own and docks at `attach` (percent of the fitted model image) before the
+model changes; copies and the docked image are gone when the model image has changed. Captions
+change in two halves (old out, new in) so two never overlap.
+
+**Transitions.** `fade` cross-fades the two model images; `cut` swaps them; `wipe` reveals the new
+image from the left: its group sits in a clip window (one `clipPath` per panel) that slides in
+over the panel while the image slides the opposite way, both plain translate tracks, so the CSS
+loop, the attribute frames of PNG, GIF and MP4 and reduced motion read the same keys (resvg has
+no animated clip). `unbuild` plays every frame's keys backward with mirrored easing: an exact
+time reverse, not a second animation (a test compares them).
+
+**Images.** Every frame image goes through the image pipeline of §11 (`imageUses` lists model,
+parts and sub-build images; `image/not-found`, `image/too-large`, `image/too-many`, `budget/images`
+apply unchanged), `source` of the storyboard and of its images feed the credits line, and a
+storyboard whose first model image is missing draws no panel. Focus on a storyboard frames the
+panel; a manual `pos` that lands on other content warns (`layout/overlap` at `/storyboards/<i>/pos`).
+The merge-guard group is `storyboards` (`from: "callout"` and `subBuild` stay in `phase3`).
+
 ## 15. Figures (figure mode)
 
 A figure replays a drawn exploded and/or assembled figure in its own plane: `base` (the figure

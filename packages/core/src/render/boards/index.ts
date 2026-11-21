@@ -3,7 +3,7 @@
  * sprites in draw order, motion arrows, labels with leaders and the credits line, as render
  * nodes, plus the tracks the animator plays (`BoardsModel`). A panel is upright in screen space
  * and one depth item: it is drawn after the 3D content, where the scene put it. Storyboard
- * frames join this module in R-2.
+ * panels (R-2) are built in `storyboard.ts` on the same tracks.
  */
 import type {
   IdScheme,
@@ -28,6 +28,7 @@ import {
 } from "../../scene/boards.js";
 import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
 import { measureText } from "../../text/index.js";
+import { resolveStoryboard } from "../../scene/storyboards.js";
 import { creditsDesc, creditsLine, imageDef, imageUse } from "./images.js";
 import {
   layoutFigure,
@@ -37,21 +38,9 @@ import {
   type LabelBox,
   type SpriteBox,
 } from "./layout.js";
-import {
-  arrowKeys,
-  labelKeys,
-  partSegments,
-  poseKeys,
-  stepTimes,
-  type Seg,
-  type StepTime,
-} from "./timeline.js";
+import { arrowKeys, labelKeys, partSegments, poseKeys, stepTimes, type Seg } from "./timeline.js";
+import { buildStoryboards, type Timing } from "./storyboard.js";
 import type { BoardsModel, BoardsTracks, FadeKey, FadeTrack, PoseTrack } from "./types.js";
-
-interface Timing {
-  readonly times: StepTime[];
-  readonly total: number;
-}
 
 export { boardsOf } from "./types.js";
 export type { BoardsModel, FadeKey, FadeTrack, PoseKey, PoseTrack } from "./types.js";
@@ -106,14 +95,18 @@ const GAP = 4;
 /** Builds the boards of a scene; undefined when there are none (1.1 scenes are untouched). */
 export function buildBoards(ctx: BoardsContext): BoardsBuild | undefined {
   const { scene, spec, images, ids, prefix: P } = ctx;
-  const boards = scene.assemblies?.boards.filter((b) => b.kind === "figure") ?? [];
-  if (spec === undefined || images === undefined || boards.length === 0) return undefined;
+  const all = scene.assemblies?.boards ?? [];
+  const boards = all.filter((b) => b.kind === "figure");
+  const storyboards = all.filter((b) => b.kind === "storyboard");
+  if (spec === undefined || images === undefined || all.length === 0) return undefined;
 
   const plan = scene.assemblies?.plan ?? [];
-  // The loop closes (§7.4) when some figure ends away from its base pose.
+  // The loop closes (§7.4) when some figure ends away from its base pose, or a storyboard
+  // away from its last frame (the rest frame).
   const closeLast = closesLoop(
     (spec.figures ?? []).map((f, i) => resolveFigure(f, i).figure),
     plan,
+    (spec.storyboards ?? []).map((b) => resolveStoryboard(b)),
   );
   const timingFor = (speed: number): Timing => {
     const { times, total } = stepTimes(scene, speed, closeLast);
@@ -326,6 +319,29 @@ export function buildBoards(ctx: BoardsContext): BoardsBuild | undefined {
       width: f2(r.width + 2 * m),
       height: f2(r.height + 2 * m),
     };
+  }
+
+  // ---- storyboards (R-2) -----------------------------------------------------------------
+  if (storyboards.length > 0) {
+    const first = (id: string): number | undefined => {
+      for (const p of plan)
+        for (const a of p.actions) if (a.target === id && a.from !== a.to) return a.from;
+      return undefined;
+    };
+    buildStoryboards(
+      ctx,
+      { plan, objects, labels, defs, extents, focus, trackDefs, addAsset },
+      spec,
+      images,
+      storyboards,
+      {
+        start: (id) =>
+          first(id) ?? (spec.storyboards?.find((b) => b.id === id)?.frames.length as number),
+        end: (id) =>
+          plan[plan.length - 1]?.poses[id]?.[0]?.level ??
+          (spec.storyboards?.find((b) => b.id === id)?.frames.length as number),
+      },
+    );
   }
   if (objects.length === 0) return undefined;
 
