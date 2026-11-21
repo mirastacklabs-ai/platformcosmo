@@ -564,12 +564,14 @@ describe("transitions: a snapshot each (fade, wipe, cut)", () => {
   test("wipe: an animated clip window over a still image; fade and cut have no clip", () => {
     const wipe = pipeline(board({ transition: "wipe" }, STEPS.slice(0, 2))).model;
     const wsvg = svgOf(wipe, { speed: 1, mode: "loop" });
-    expect(wsvg).toContain(`<clipPath id="${item(wipe, "cp")}">`);
+    expect(wsvg).toContain(`<clipPath id="${item(wipe, "cp.2")}">`);
     const t = boardsOf(wipe)!.tracks(1);
     const win = t.poses.find((p) => p.id === item(wipe, "mw.2"))!;
-    const counter = t.poses.find((p) => p.id === item(wipe, "mc.2"))!;
-    // window and image move opposite ways by the panel width, so the image itself stays put
-    expect(win.keys.map((k) => k.x)).toEqual(counter.keys.map((k) => 0 - k.x));
+    // the window is the clip rect's own translate (the image stands still, and no clip-path sits
+    // on an animated element: Chromium would not re-resolve it after a seek)
+    expect(wsvg).toContain(`<rect id="${item(wipe, "mw.2")}"`);
+    expect(wsvg).not.toMatch(/__mc\./);
+    expect(t.poses.some((p) => /__mc\./.test(p.id))).toBe(false);
     expect(Math.max(...win.keys.map((k) => Math.abs(k.x)))).toBe(256);
     for (const other of ["fade", "cut"] as const) {
       const m = pipeline(board({ transition: other }, STEPS.slice(0, 2))).model;
@@ -992,9 +994,7 @@ describe("wipe: complementary reveal, no bleed-through", () => {
     const mid = f3 + 0.25;
     // frame 2 (old) leaves to the right while frame 3 (new) enters from the left, both half way
     expect(poseAt(pose("mw.2").keys, mid).x).toBeCloseTo(128, 0);
-    expect(poseAt(pose("mc.2").keys, mid).x).toBeCloseTo(-128, 0); // the image itself stays put
     expect(poseAt(pose("mw.3").keys, mid).x).toBeCloseTo(-128, 0);
-    expect(poseAt(pose("mc.3").keys, mid).x).toBeCloseTo(128, 0);
     // before the change the old window is whole, after it it is out
     expect(poseAt(pose("mw.2").keys, f3).x).toBeCloseTo(0, 1);
     expect(poseAt(pose("mw.2").keys, f3 + 0.5).x).toBeCloseTo(256, 1);

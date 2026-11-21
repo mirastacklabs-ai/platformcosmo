@@ -391,8 +391,7 @@ function drawBoard(
   const modelNodes: SvgNode[] = [];
   const calloutNodes: SvgNode[] = [];
   const capNodes: SvgNode[] = [];
-  const clipId = item("cp");
-  let usesClip = false;
+  const clipDefs: SvgNode[] = [];
 
   frames.forEach((f, idx) => {
     const k = f.index;
@@ -444,7 +443,6 @@ function drawBoard(
         ...(outK ? { outK } : {}),
       });
       if (wipe) {
-        usesClip = true;
         const win = add({
           id: item(`mw.${k}`),
           kind: "pose",
@@ -472,40 +470,28 @@ function drawBoard(
                 ),
               }),
         });
-        const counter = add({
-          id: item(`mc.${k}`),
-          kind: "pose",
-          frame: k,
-          inK: lkeys(
-            [
-              [0, [W, 0]],
-              [T.changeStart, [W, 0], EASE],
-              [T.changeEnd, [0, 0]],
-            ],
-            D,
+        // The window is the clip rect itself (one clipPath per image) and the image stands
+        // still: only the rect's translate animates, so no clip-path sits on an animated
+        // element (Chromium would not re-resolve it after a seek).
+        clipDefs.push(
+          h(
+            "clipPath",
+            { id: item(`cp.${k}`) },
+            h("rect", {
+              id: win.id,
+              x: modelRect.x,
+              y: modelRect.y,
+              width: W,
+              height: modelRect.height,
+              ...poseAttr(win),
+            }),
           ),
-          ...(Tn === undefined
-            ? {}
-            : {
-                outK: lkeys(
-                  [
-                    [0, [0, 0]],
-                    [Tn.changeStart, [0, 0], EASE],
-                    [Tn.changeEnd, [-W, 0]],
-                  ],
-                  Dn,
-                ),
-              }),
-        });
+        );
         modelNodes.push(
           h(
             "g",
             { id: me.id, ...fadeAttr(me) },
-            h(
-              "g",
-              { id: win.id, "clip-path": `url(#${clipId})`, ...poseAttr(win) },
-              h("g", { id: counter.id, ...poseAttr(counter) }, use),
-            ),
+            h("g", { "clip-path": `url(#${item(`cp.${k}`)})` }, use),
           ),
         );
       } else {
@@ -821,17 +807,7 @@ function drawBoard(
       class: `${P}-leader`,
       d: `M${fmt(panel.x)} ${fmt(y)}L${fmt(panel.x + W)} ${fmt(y)}`,
     });
-  const defs: SvgNode[] = [];
-  if (usesClip) {
-    defs.push(
-      h(
-        "clipPath",
-        { id: clipId },
-        h("rect", { x: modelRect.x, y: modelRect.y, width: W, height: modelRect.height }),
-      ),
-    );
-  }
-  shared.defs.push(...defs);
+  shared.defs.push(...clipDefs);
   shared.place(
     h(
       "g",

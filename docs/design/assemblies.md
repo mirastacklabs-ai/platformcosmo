@@ -910,10 +910,12 @@ change in two halves (old out, new in) so two never overlap.
 (`pos`: nearer = larger x + y, then id), after the 3D content.
 
 **Transitions.** `fade` cross-fades the two model images; `cut` swaps them; `wipe` reveals the new
-image from the left: its group sits in a clip window (one `clipPath` per panel) that slides in
-over the panel while the image slides the opposite way, both plain translate tracks; the old image's window slides out to the right
-in the same time (the complementary reveal), so a transparent new image never shows the old one under the sweep; so the CSS
-loop, the attribute frames of PNG, GIF and MP4 and reduced motion read the same keys (resvg has
+image from the left: each image sits still in a group clipped by its own `clipPath`, whose rect
+slides in over the panel (a plain translate track on the rect). The old image's rect slides out to
+the right in the same time (the complementary reveal), so a transparent new image never shows the
+old one under the sweep. Only the rect's transform animates, never a clip-path on an animated
+element (Chromium does not re-resolve that after a seek), and the CSS loop, the attribute frames
+of PNG, GIF and MP4 and reduced motion read the same keys (resvg has
 no animated clip). `unbuild` plays every frame's keys backward with mirrored easing: an exact
 time reverse, not a second animation (a test compares them).
 
