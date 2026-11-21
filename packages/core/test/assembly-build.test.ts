@@ -52,7 +52,7 @@ const tile = (parts: unknown[], programs: unknown[], extra: Obj = {}): Obj => ({
   programs,
   ...extra,
 });
-const OPEN = { phase1a: false, phase1b: false, phase2: false, phase3: false };
+const OPEN = { phase1a: false, phase1b: false, phase2: false, storyboards: false, phase3: false };
 const vec = (m: { offset: { x: number; y: number; z: number } }): number[] => [
   m.offset.x,
   m.offset.y,
@@ -111,7 +111,7 @@ const rover = (steps?: Obj[]): PlatformCosmoSpec => {
   return s as unknown as PlatformCosmoSpec;
 };
 
-describe("the brick rover (§19.5), without sub-builds", () => {
+describe("the brick rover (§19.5)", () => {
   const g = scene(rover());
   const a = asmOf(g, "rover");
   const main = bprog(a, "build", "rover");
@@ -157,16 +157,18 @@ describe("the brick rover (§19.5), without sub-builds", () => {
     const all = main.steps.flatMap((s) => s.adds);
     expect(new Set(all).size).toBe(all.length);
     expect([...all].sort()).toEqual([...a.leaves].sort());
-    // step windows follow each other; stagger 0.1, duration 0.6 (schema defaults)
+    // step windows follow each other; stagger 0.1, duration 0.6 (schema defaults). Step 6 plays
+    // the cab's own 3.1 s program at its staging spot, then docks (0.6 s); step 7's cargo and
+    // rails fly in from the callout first (1.2 s each: 0.6 flight + 0.6 drop, staggered by 0.1)
     expect(main.steps.map((s) => [s.start, s.end])).toEqual([
       [0, 0.6],
       [0.6, 1.4],
       [1.4, 2.3],
       [2.3, 3.3],
       [3.3, 3.9],
-      [3.9, 4.5],
-      [4.5, 5.4],
-      [5.4, 6.4],
+      [3.9, 7],
+      [7, 8.5],
+      [8.5, 9.5],
     ]);
   });
 
@@ -236,10 +238,12 @@ describe("the brick rover (§19.5), without sub-builds", () => {
     const cab = main.steps[5]!.callout;
     expect(cab.reduce((n, c) => n + c.count, 0)).toBe(10);
     expect(cab.find((c) => c.sample === "rover/cab/wall-1")!.count).toBe(2);
-    // sub-build and callout flights are Phase 3 (A2-7): hooks only, nothing is staged
-    expect(main.steps[5]!.subBuild).toBeUndefined();
-    expect(main.steps[6]!.moves.every((m) => m.overlayDuration === undefined)).toBe(true);
-    expect(main.steps[5]!.moves.map((m) => m.path)).toEqual(["rover/cab"]);
+    // the cab is staged beside the model, built by its own program, then docked (A2-7)
+    expect(main.steps[5]!.subBuild).toMatchObject({ path: "rover/cab", program: "cab-build" });
+    expect(main.steps[5]!.moves.map((m) => m.path)).toContain("rover/cab");
+    expect(main.steps[6]!.moves.every((m) => m.overlayDuration === 0.6 && m.duration === 1.2)).toBe(
+      true,
+    );
   });
 
   test("the sub-assembly's own program resolves in its owner", () => {
@@ -332,8 +336,14 @@ describe("origins and distances", () => {
     expect(m1!.start).toBeLessThan(m2!.start); // bottom-up
   });
 
-  test("callout origin drops like above (the flight is A2-7)", () => {
+  test("callout origin drops like above, after a flight as long as the drop (A2-7)", () => {
     near(move(one({ from: "callout" })), [0, 0, -1.4]);
+    const first = (p: ResolvedBuildProgram) => p.steps[1]!.moves[0]!;
+    const m = first(one({ from: "callout" }));
+    expect([m.overlayDuration, m.duration]).toEqual([0.6, 1.2]);
+    const slow = first(one({ from: "callout", duration: 2 }));
+    expect([slow.overlayDuration, slow.duration]).toEqual([2, 4]);
+    expect(first(one({ from: "above" })).overlayDuration).toBeUndefined();
   });
 });
 
@@ -1137,11 +1147,12 @@ describe("view switches of an action (Q03, Q08)", () => {
     ]);
     // reversed: the segment is 1.2 s long; step 6 un-happens first (back to 90), then step 5 (0)
     const L = b!.actions[0]!.length / b!.actions[0]!.scale;
+    // the cab step is 3.1 s long now (sub-build + dock): step 5 un-happens after it
     expect(u!.actions[0]!.views).toEqual([
       { at: 0, view: 90 },
-      { at: 0.6, view: 0 },
+      { at: 3.1, view: 0 },
     ]);
-    expect(L).toBeCloseTo(1.2, 4);
+    expect(L).toBeCloseTo(3.7, 4);
     expect(g.assemblies!.plan.map((p) => p.view)).toEqual([0, 0, 0]);
   });
 

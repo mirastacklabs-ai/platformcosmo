@@ -737,7 +737,13 @@ const designSpecs: { name: string; json: string }[] = ["assemblies.md", "documen
   })
   .sort((a, b) => (a.name < b.name ? -1 : 1));
 
-const LIFTED = { phase1a: false, phase1b: false, phase2: false, phase3: false };
+const LIFTED = {
+  phase1a: false,
+  phase1b: false,
+  phase2: false,
+  storyboards: false,
+  phase3: false,
+};
 const REF12 = new Set([
   "explode",
   "implode",

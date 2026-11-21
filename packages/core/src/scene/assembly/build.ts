@@ -18,9 +18,11 @@
  * Levels (`to`, `advance`, defaults, direction checks) are NOT decided here: they come from the
  * level machine shared with validation (`schema/assembly-levels.ts`, driven by `plan.ts`).
  *
- * Hooks left for A2-7 (Phase 3): `from: "callout"` is resolved like `above` (the world drop;
- * the overlay flight, `PartMove.overlayDuration`, is A2-7's) and `subBuild` is resolved as a
- * plain add of the named sub-assembly (no staging, `ResolvedBuildStep.subBuild` stays absent).
+ * Callout flights and sub-builds (A2-7, §6.5, §7.6): a `from: "callout"` move is the `above`
+ * drop preceded by an overlay flight of `overlayDuration` seconds (as long as the drop), so its
+ * `duration` is twice the step's; a step with `subBuild` first plays the sub-assembly's own build
+ * program at a staging offset (`ResolvedBuildStep.subBuild`, its moves are part of the step's
+ * `moves`), then moves the sub-assembly from staging to its seat as one unit.
  *
  * Bounded and total: every scan (selectors, leaves of a mover, the movers x placed-parts
  * obstruction and blocked-path scans, stacking) is charged to the shared `Work` budget BEFORE it
@@ -97,6 +99,14 @@ export interface BuildInput {
   readonly index: OwnerIndex;
   readonly sel: OwnerSelectors;
   readonly work: Work;
+  /**
+   * The resolved build program of the sub-assembly at node `path` (`program`, default its first),
+   * for a step's `subBuild`; undefined when there is none (validation reports it).
+   */
+  readonly subBuild?: (
+    path: string,
+    program: string | undefined,
+  ) => ResolvedBuildProgram | undefined;
 }
 
 export interface BuildResolved {
@@ -196,6 +206,27 @@ function specIndex(tnode: TNode, cap: number): Map<string, TNode> {
     }
   }
   return out;
+}
+
+/** A step's sub-build: the mover it stages, its program and node path. */
+interface SubPlan {
+  readonly pm: { readonly item: Item };
+  readonly program: ResolvedBuildProgram;
+  readonly path: string;
+}
+
+/**
+ * Where a sub-assembly is staged (§6.5): beside the parts placed so far along `+x`, `gap` clear
+ * of them, at the height of its seat; along `-y` when `+x` would carry it further than three
+ * quarters of the owner's width past the owner (a long model: the staging area stays near it).
+ * Local units; the sub-assembly's seat is the origin of the docking line.
+ */
+function stagingOf(placed: readonly LeafBox[], sub: LBox, ownerBox: LBox, gap: number): Dir {
+  const bounds = unionL(placed.map((p) => p.box)) ?? ownerBox;
+  const dx = bounds.x1 + gap - sub.x0;
+  const reach = ownerBox.x1 + 0.75 * (ownerBox.x1 - ownerBox.x0);
+  if (sub.x1 + dx <= reach + EPS) return [dx, 0, 0];
+  return [0, bounds.y0 - gap - sub.y1, 0];
 }
 
 const json = (v: unknown): string => (v === undefined ? "" : (JSON.stringify(v) ?? ""));
@@ -325,27 +356,58 @@ export function resolveBuild(input: BuildInput): BuildResolved | undefined {
       return;
     }
     const bounds = origin === "outside" ? (unionL(placed.map((p) => p.box)) ?? ownerBox) : ownerBox;
-    const movers: Mover[] = pl.movers.map((pm) => {
-      const it = pm.item;
-      const box = pm.partial
-        ? (unionL(pm.rest.map((l) => toLBox(l.local))) as LBox)
-        : toLBox(it.node.local);
-      const u: Dir =
-        origin === "outside"
-          ? outsideDir(box, bounds)
-          : resolveDirection(origin, it, dctx, ownerBox);
-      const d = parseDistance(st.distance);
-      return {
-        rel: it.rel,
-        item: it,
-        box,
-        u,
-        lift: false,
-        drawer: false,
-        k: d.k,
-        ...(d.fixed === undefined ? {} : { fixed: d.fixed }),
-      };
-    });
+
+    // sub-build (§6.5): the named sub-assembly, one of this step's whole movers, is built at a
+    // staging offset by its own program, then docked; it is not a plain mover of the step
+    let sub: SubPlan | undefined;
+    if (typeof st.subBuild === "string" && st.subBuild !== "") {
+      const subPath = `${owner.path}/${st.subBuild}`;
+      const pm = pl.movers.find((m) => m.item.node.path === subPath && !m.partial);
+      if (pm === undefined) {
+        diagnostics.push(
+          mk(
+            "warning",
+            "assembly/subbuild-not-added",
+            `${at}/subBuild`,
+            `Step ${si + 1}: ${JSON.stringify(st.subBuild)} is not added whole by this step (an earlier step added part of it, or "add" does not select it); it is added as a plain part`,
+            'Add the sub-assembly itself in "add" (for example "add": ["cab"]) and not an earlier step\'s parts of it',
+            { step: si + 1, path: subPath },
+          ),
+        );
+      } else {
+        const program = input.subBuild?.(subPath, st.program);
+        if (program !== undefined) {
+          if (!spend(work, placed.length + 1)) {
+            spent = true;
+            return;
+          }
+          sub = { pm, program, path: subPath };
+        }
+      }
+    }
+    const movers: Mover[] = pl.movers
+      .filter((pm) => pm !== sub?.pm)
+      .map((pm) => {
+        const it = pm.item;
+        const box = pm.partial
+          ? (unionL(pm.rest.map((l) => toLBox(l.local))) as LBox)
+          : toLBox(it.node.local);
+        const u: Dir =
+          origin === "outside"
+            ? outsideDir(box, bounds)
+            : resolveDirection(origin, it, dctx, ownerBox);
+        const d = parseDistance(st.distance);
+        return {
+          rel: it.rel,
+          item: it,
+          box,
+          u,
+          lift: false,
+          drawer: false,
+          k: d.k,
+          ...(d.fixed === undefined ? {} : { fixed: d.fixed }),
+        };
+      });
     const dist = programDistances({ movers, leaves: placed, gap, owner: ownerBox }, work);
     if (dist.capped) capped = true;
 
@@ -398,14 +460,17 @@ export function resolveBuild(input: BuildInput): BuildResolved | undefined {
       (a, b) => keys(a).minZ - keys(b).minZ || a.item.index - b.item.index || cmp(a.rel, b.rel),
     );
     const restOf = new Map(pl.movers.map((pm) => [pm.item.rel, pm]));
+    // callout flight (§7.6): the overlay flight comes first and lasts as long as the drop
+    const flight = st.from === "callout";
     const moves: PartMove[] = ranked.flatMap((m, r) => {
       const d = dist.distance.get(m.rel) ?? 0;
       const one = {
         // seat - origin: the part starts at -offset and ends on its seat
         offset: toWorld(asm.frame, [-m.u[0] * d, -m.u[1] * d, -m.u[2] * d]),
         start: r4(start + r * stagger),
-        duration: r4(duration),
+        duration: r4(flight ? 2 * duration : duration),
         easing,
+        ...(flight ? { overlayDuration: r4(duration) } : {}),
       };
       const pm = restOf.get(m.rel) as PMover;
       // a partly added sub-assembly: its remaining leaves move together, one move each
@@ -413,6 +478,26 @@ export function resolveBuild(input: BuildInput): BuildResolved | undefined {
         ? pm.rest.map((l) => ({ path: l.path, ...one }))
         : [{ path: m.item.node.path, ...one }];
     });
+    let subBuild: ResolvedBuildStep["subBuild"];
+    if (sub !== undefined) {
+      const staged = stagingOf(placed, toLBox(sub.pm.item.node.local), ownerBox, gap);
+      const staging = toWorld(asm.frame, staged);
+      // the sub-assembly's own steps play at the staging offset; its moves (program time) shift
+      // to this step, then it docks: staging to seat along the straight line, as one unit
+      let built = 0;
+      for (const ss of sub.program.steps) {
+        built = Math.max(built, ss.end);
+        for (const m of ss.moves) moves.push({ ...m, start: r4(start + m.start) });
+      }
+      moves.push({
+        path: sub.path,
+        offset: { x: -staging.x + 0, y: -staging.y + 0, z: -staging.z + 0 },
+        start: r4(start + built),
+        duration: r4(duration),
+        easing,
+      });
+      subBuild = { path: sub.path, program: sub.program.id, staging };
+    }
     moves.sort((a, b) => a.start - b.start || cmp(a.path, b.path));
     let end = start;
     for (const m of moves) end = Math.max(end, r4(m.start + m.duration));
@@ -431,6 +516,7 @@ export function resolveBuild(input: BuildInput): BuildResolved | undefined {
       moves,
       callout: st.callout === false ? [] : calloutOf(specs, leafItems),
       ...(view === undefined ? {} : { view }),
+      ...(subBuild === undefined ? {} : { subBuild }),
       start,
       end,
     });
@@ -532,12 +618,20 @@ export interface Appearance {
   /** Seconds from the action's start, speed 1, before compression. */
   readonly at: number;
   readonly visible: boolean;
+  /**
+   * The swap of a callout flight (§7.6): the world copy appears (or vanishes) at once, with no
+   * fade, because the overlay copy is there before (after) it at the same position.
+   */
+  readonly swap?: true;
 }
 
 /**
  * Appearance of the leaves one action adds or removes (B-3's visibility keys). A built leaf
- * appears when its move starts; in an unbuild (the exact reverse) it disappears when the
- * reversed move ends, `L - start`. Sorted by (at, path).
+ * appears when its move starts (a callout flight: when the flight ends and the world drop
+ * starts); in an unbuild (the exact reverse) it disappears when the reversed move ends,
+ * `L - start` (a flight: when the world lift ends and the overlay flight back starts). A leaf of
+ * a staged sub-assembly that its own program does not add is there from the step's start (and
+ * leaves at the end of the reversed step). Sorted by (at, path).
  */
 export function appearance(program: ResolvedBuildProgram, from: number, to: number): Appearance[] {
   const seg = buildSegment(program, from, to);
@@ -546,6 +640,7 @@ export function appearance(program: ResolvedBuildProgram, from: number, to: numb
   const out: Appearance[] = [];
   const reverse = seg.kind === "unbuild-played";
   const startOf = new Map(seg.moves.map((m) => [m.path, m]));
+  const off = lo < hi ? (program.steps[lo] as ResolvedBuildStep).start : 0;
   for (let i = lo; i < hi; i++) {
     const step = program.steps[i] as ResolvedBuildStep;
     for (const leaf of step.adds) {
@@ -554,10 +649,18 @@ export function appearance(program: ResolvedBuildProgram, from: number, to: numb
       for (let k = segs.length; k > 0 && m === undefined; k--)
         m = startOf.get(segs.slice(0, k).join("/"));
       if (m === undefined) continue;
+      const ov = m.overlayDuration ?? 0;
+      if (step.subBuild !== undefined && m.path === step.subBuild.path) {
+        // no move of its own inside the sub-assembly: present while it is staged
+        const at = reverse ? r4(seg.length - (step.start - off)) : r4(step.start - off);
+        out.push({ path: leaf, at, visible: !reverse });
+        continue;
+      }
       out.push({
         path: leaf,
-        at: reverse ? r4(m.start + m.duration) : m.start,
+        at: reverse ? r4(m.start + m.duration - ov) : r4(m.start + ov),
         visible: !reverse,
+        ...(ov > 0 ? { swap: true as const } : {}),
       });
     }
   }

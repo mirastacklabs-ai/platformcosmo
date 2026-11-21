@@ -49,13 +49,20 @@ const paths = (groups: Record<string, boolean>) =>
     phase1a: false,
     phase1b: false,
     phase2: false,
+    storyboards: false,
     phase3: false,
     ...groups,
   }).map((d) => d.path);
 
 describe("schema 1.2.0 guard", () => {
-  test("phases 1a (R-1) and 1b (B-1 + B-2) are lifted; phases 2 and 3 are still unrendered", () => {
-    expect(UNRENDERED).toEqual({ phase1a: false, phase1b: false, phase2: true, phase3: true });
+  test("phases 1a (R-1), 1b (B-1 + B-2) and 3 (A2-7) are lifted; phase 2 and storyboards are not", () => {
+    expect(UNRENDERED).toEqual({
+      phase1a: false,
+      phase1b: false,
+      phase2: true,
+      storyboards: true,
+      phase3: false,
+    });
   });
 
   test("an assemblies-only spec is valid after the phase 1b lift", () => {
@@ -78,6 +85,7 @@ describe("schema 1.2.0 guard", () => {
       phase1a: false,
       phase1b: true,
       phase2: true,
+      storyboards: true,
       phase3: true,
     });
     expect(d.map((x) => x.path)).toEqual(["/assemblies"]);
@@ -88,7 +96,7 @@ describe("schema 1.2.0 guard", () => {
     expect(validate(everything).diagnostics.filter((d) => d.code.startsWith("schema/"))).toEqual(
       [],
     );
-    const on = { phase1a: true, phase1b: true, phase2: true, phase3: true };
+    const on = { phase1a: true, phase1b: true, phase2: true, storyboards: true, phase3: true };
     expect(
       unsupportedDiagnostics(everything as unknown as PlatformCosmoSpec, on)
         .map((d) => d.path)
@@ -144,7 +152,13 @@ describe("schema 1.2.0 guard", () => {
         },
       ],
     } as unknown as PlatformCosmoSpec;
-    const lifted = { phase1a: false, phase1b: false, phase2: true, phase3: true };
+    const lifted = {
+      phase1a: false,
+      phase1b: false,
+      phase2: true,
+      storyboards: true,
+      phase3: true,
+    };
     const steps = unsupportedDiagnostics(spec, lifted)
       .map((d) => d.path)
       .filter((p) => p.startsWith("/steps"));
@@ -178,7 +192,7 @@ describe("schema 1.2.0 guard", () => {
   });
 
   test("lifting phases 1a and 1b leaves the phase 2 and 3 fields flagged", () => {
-    expect(paths({ phase2: true, phase3: true })).toEqual([
+    expect(paths({ phase2: true, storyboards: true, phase3: true })).toEqual([
       "/assemblies/0/closeup",
       "/assemblies/0/programs/1",
       "/assemblies/0/parts/0/closeup",
@@ -190,12 +204,12 @@ describe("schema 1.2.0 guard", () => {
     ]);
   });
 
-  test("lifting phase 2 leaves only the phase 3 build-step features and storyboards", () => {
+  test("lifting phase 2 and storyboards leaves only the phase 3 build-step features", () => {
     expect(paths({ phase3: true })).toEqual([
       "/assemblies/0/programs/1/steps/0/from",
       "/assemblies/0/programs/1/steps/0/subBuild",
-      "/storyboards",
     ]);
+    expect(paths({ storyboards: true })).toEqual(["/storyboards"]);
     expect(paths({})).toEqual([]);
   });
 

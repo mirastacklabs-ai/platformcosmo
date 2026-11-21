@@ -936,6 +936,11 @@ export interface AssemblyIdScheme {
   image(hash: string): string;
   /** Parts callout of one build step. */
   callout(owner: string, program: string, step: number): string;
+  /**
+   * Overlay copy of a leaf that flies in from a callout (§7.6): one wrapper carrying its
+   * `transform`, `visibility` and `opacity`; ids inside it get the suffix `__f`.
+   */
+  flight(path: string): string;
   /** Storyboard or figure panel. */
   board(id: string): string;
   /** One storyboard frame / figure sprite. */

@@ -1341,7 +1341,13 @@ describe("determinism, bounds, 1.1 identity and agreement with validation", () =
         }),
       }));
       const s = spec({ assemblies: engine().assemblies, steps });
-      const lifted = { phase1a: false, phase1b: false, phase2: true, phase3: true };
+      const lifted = {
+        phase1a: false,
+        phase1b: false,
+        phase2: true,
+        storyboards: true,
+        phase3: true,
+      };
       const errors = assemblyDiagnostics(s, lifted).filter((d) => d.severity === "error");
       const invalid = new Set(
         errors.map((d) => /^\/steps\/(\d+)\/assembly\/(\d+)/.exec(d.path)?.slice(1).join(":")),

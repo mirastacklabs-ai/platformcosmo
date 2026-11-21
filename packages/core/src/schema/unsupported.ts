@@ -10,7 +10,7 @@
 import type { Diagnostic } from "../contracts/index.js";
 import type { PlatformCosmoSpec, SpecPart, SpecProgram } from "./types.gen.js";
 
-export type GuardGroup = "phase1a" | "phase1b" | "phase2" | "phase3";
+export type GuardGroup = "phase1a" | "phase1b" | "phase2" | "storyboards" | "phase3";
 
 /** Field groups not rendered yet, by the phase that lifts them (tracks §0). */
 export const UNRENDERED: Readonly<Record<GuardGroup, boolean>> = {
@@ -23,8 +23,10 @@ export const UNRENDERED: Readonly<Record<GuardGroup, boolean>> = {
    * `…/closeup` paths), actions on racks and slots, build programs and build/unbuild actions.
    */
   phase2: true,
-  /** Phase 3: `storyboards` (and actions on them), build steps `from: "callout"` and `subBuild`. */
-  phase3: true,
+  /** Phase 3, tier A documents: `storyboards` and build/unbuild actions on them. Lifted by R-2. */
+  storyboards: true,
+  /** Phase 3, callouts and sub-builds of build programs: `from: "callout"` and `subBuild`. Lifted by A2-7. */
+  phase3: false,
 };
 
 const MESSAGE =
@@ -91,14 +93,14 @@ export function unsupportedDiagnostics(
     if (spec.images !== undefined) flag("/images", "images");
     if (spec.figures !== undefined) flag("/figures", "figures");
   }
-  if (groups.phase3 && spec.storyboards !== undefined) flag("/storyboards", "storyboards");
+  if (groups.storyboards && spec.storyboards !== undefined) flag("/storyboards", "storyboards");
 
   // Step actions are gated by their TARGET's kind, so each phase lifts only its own actions.
   const roots = new Map<string, GuardGroup>();
   for (const r of spec.racks ?? []) roots.set(r.id, "phase2");
   for (const a of spec.assemblies ?? []) roots.set(a.id, "phase1b");
   for (const f of spec.figures ?? []) roots.set(f.id, "phase1a");
-  for (const b of spec.storyboards ?? []) roots.set(b.id, "phase3");
+  for (const b of spec.storyboards ?? []) roots.set(b.id, "storyboards");
   // `closeup` is a reserved path segment only after the first segment and only in specs with
   // 1.2.0 content; in a plain 1.1 spec it is an ordinary id (`r1/closeup` is a slot).
   const has12 =
@@ -128,8 +130,8 @@ export function unsupportedDiagnostics(
       const at = `/steps/${i}/assembly/${j}`;
       if ("build" in a || "unbuild" in a) {
         const target = "build" in a ? a.build : a.unbuild;
-        const storyboard = roots.get(target.split("/")[0] as string) === "phase3";
-        if (storyboard ? groups.phase3 : groups.phase2 || pathGate(target)) {
+        const storyboard = roots.get(target.split("/")[0] as string) === "storyboards";
+        if (storyboard ? groups.storyboards : groups.phase2 || pathGate(target)) {
           flag(at, "build" in a ? "build" : "unbuild");
         }
         return;

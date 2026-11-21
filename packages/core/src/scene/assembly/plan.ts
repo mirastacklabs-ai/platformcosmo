@@ -328,6 +328,67 @@ export class AssemblyPrograms {
     const builds = new Map<string, ResolvedBuildProgram>();
     const unresolved = new Set<string>();
     const indexes = new Map<string, { index: OwnerIndex; sel: OwnerSelectors }>();
+    const tried = new Set<string>();
+    /**
+     * Resolves one build program (once). A step's `subBuild` asks for the build program of a
+     * sub-assembly, which may belong to an owner that sorts later, so programs resolve on demand
+     * (`subOf`); the nesting is strict (a sub-assembly is below its owner), so this ends.
+     */
+    const buildOne = (rel: string, info: ProgInfo): void => {
+      const pk = `${rel}\0${info.id}`;
+      if (tried.has(pk)) return;
+      tried.add(pk);
+      const owner = owners.get(rel) as OwnerInfo;
+      const spec = atPointer(this.spec, info.ptr) as SpecBuildProgram | undefined;
+      if (spec === undefined || !Array.isArray(spec.steps)) {
+        unresolved.add(pk);
+        return;
+      }
+      let ix = indexes.get(rel);
+      if (ix === undefined) {
+        const index = indexOwner(owner.node, this.work);
+        ix = { index, sel: new OwnerSelectors(index, this.work) };
+        indexes.set(rel, ix);
+      }
+      if (!ix.index.complete) {
+        this.budgetWarning();
+        unresolved.add(pk);
+        return;
+      }
+      const r = resolveBuild({
+        asm,
+        owner: owner.node,
+        tnode: owner.tnode,
+        prog: spec,
+        ptr: info.ptr,
+        index: ix.index,
+        sel: ix.sel,
+        work: this.work,
+        subBuild: subOf,
+      });
+      if (r === undefined) {
+        this.budgetWarning();
+        unresolved.add(pk);
+        return;
+      }
+      if (r.capped) this.budgetWarning();
+      this.diagnostics.push(...r.diagnostics);
+      builds.set(pk, r.program);
+    };
+    const subOf = (path: string, program: string | undefined): ResolvedBuildProgram | undefined => {
+      const rel =
+        path === asm.id
+          ? ""
+          : path.startsWith(`${asm.id}/`)
+            ? path.slice(asm.id.length + 1)
+            : undefined;
+      const o = rel === undefined ? undefined : owners.get(rel);
+      if (rel === undefined || o === undefined) return undefined;
+      const info = program === undefined ? o.builds[0] : o.builds.find((b) => b.id === program);
+      if (info === undefined) return undefined;
+      buildOne(rel, info);
+      return builds.get(`${rel}\0${info.id}`);
+    };
     for (const rel of [...owners.keys()].sort(cmp)) {
       const owner = owners.get(rel) as OwnerInfo;
       for (const info of owner.explodes) {
@@ -355,43 +416,7 @@ export class AssemblyPrograms {
           unresolved.add(pk);
         } else programs.set(pk, r);
       }
-      for (const info of owner.builds) {
-        const pk = `${rel}\0${info.id}`;
-        const spec = atPointer(this.spec, info.ptr) as SpecBuildProgram | undefined;
-        if (spec === undefined || !Array.isArray(spec.steps)) {
-          unresolved.add(pk);
-          continue;
-        }
-        let ix = indexes.get(rel);
-        if (ix === undefined) {
-          const index = indexOwner(owner.node, this.work);
-          ix = { index, sel: new OwnerSelectors(index, this.work) };
-          indexes.set(rel, ix);
-        }
-        if (!ix.index.complete) {
-          this.budgetWarning();
-          unresolved.add(pk);
-          continue;
-        }
-        const r = resolveBuild({
-          asm,
-          owner: owner.node,
-          tnode: owner.tnode,
-          prog: spec,
-          ptr: info.ptr,
-          index: ix.index,
-          sel: ix.sel,
-          work: this.work,
-        });
-        if (r === undefined) {
-          this.budgetWarning();
-          unresolved.add(pk);
-          continue;
-        }
-        if (r.capped) this.budgetWarning();
-        this.diagnostics.push(...r.diagnostics);
-        builds.set(pk, r.program);
-      }
+      for (const info of owner.builds) buildOne(rel, info);
     }
     const out: Resolved = { asm, spec: specAsm, owners, programs, builds, nodes, unresolved };
     this.resolved.set(asm.id, out);

@@ -23,6 +23,7 @@ import type {
   SceneAssembly,
   Vec3,
 } from "../../contracts/index.js";
+import type { SpecEasing } from "../../schema/types.gen.js";
 import { toLoopMoves } from "../../depth/epochs.js";
 import { appearance, buildSegment, presentAt } from "../../scene/assembly/build.js";
 import { baseOf, fadeEnd, finalOf, type LeafPresence, type PresenceEvent } from "./builds.js";
@@ -53,8 +54,26 @@ export interface StageRun {
   readonly holdEnd: number;
 }
 
+/**
+ * One callout flight (§7.6): an overlay copy of `path` flies in screen space during `[t0, t1]`
+ * (loop seconds, speed 1). A build flies from the callout slot to the hover point and the world
+ * copy appears at `t1` (the swap); an unbuild is the exact reverse: the world copy leaves at
+ * `t0` and the overlay copy flies from the hover point back to the slot.
+ */
+export interface FlightRun {
+  /** The node the move belongs to (a leaf, or a sub-assembly flying as one unit). */
+  readonly path: string;
+  readonly kind: "build" | "unbuild";
+  readonly t0: number;
+  readonly t1: number;
+  /** The flight's curve as played (an unbuild's is mirrored). */
+  readonly easing: SpecEasing;
+}
+
 export interface LoopBuild {
   readonly moves: BezierMove[];
+  /** Callout flights, sorted by (t0, path). */
+  readonly flights: FlightRun[];
   readonly runs: StageRun[];
   /** Closing window of the last step, when some program returns to its base level. */
   readonly closure?: { readonly t0: number; readonly t1: number };
@@ -162,6 +181,7 @@ export function buildLoop(
   const firstBuild = new Set<string>();
   const seen = new Set<string>();
   const buildMoves: BezierMove[] = [];
+  const flights: FlightRun[] = [];
   const playBuild = (
     prog: ResolvedBuildProgram,
     a: ResolvedAction,
@@ -185,6 +205,34 @@ export function buildLoop(
       scale: a.scale,
       length: seg.length,
     });
+    // callout flights (§7.6): a move with an overlay phase plays it first (a build) or last (an
+    // unbuild); only the world phase is a loop move. The swap time is the one `appearance` uses.
+    const swapOf = new Map<string, number>();
+    for (const sm of seg.moves) {
+      const ov = sm.overlayDuration ?? 0;
+      if (!(ov > 0)) continue;
+      if (sm.reversed) {
+        const ts = r4(segStart + r4(sm.start + sm.duration - ov) * a.scale);
+        swapOf.set(sm.path, ts);
+        flights.push({
+          path: sm.path,
+          kind: "unbuild",
+          t0: ts,
+          t1: r4(segStart + (sm.start + sm.duration) * a.scale),
+          easing: sm.easing,
+        });
+      } else {
+        const ts = r4(segStart + r4(sm.start + ov) * a.scale);
+        swapOf.set(sm.path, ts);
+        flights.push({
+          path: sm.path,
+          kind: "build",
+          t0: r4(segStart + sm.start * a.scale),
+          t1: ts,
+          easing: sm.easing,
+        });
+      }
+    }
     for (const m of lm) {
       // `toLoopMoves` mirrors an unbuild in time; its curve is mirrored here, as an implode's
       let mv: BezierMove = {
@@ -193,6 +241,8 @@ export function buildLoop(
         t1: r4(m.t1),
         ...(a.kind === "unbuild" ? { easing: REVERSED_EASING[m.easing] } : {}),
       };
+      const swap = swapOf.get(m.path);
+      if (swap !== undefined) mv = a.kind === "unbuild" ? { ...mv, t1: swap } : { ...mv, t0: swap };
       const prev = net.get(m.path) ?? zero;
       if (a.kind === "build" && (prev.x !== 0 || prev.y !== 0 || prev.z !== 0)) {
         // rebuilt after an unbuild: it starts where the unbuild left it (its origin) and
@@ -208,7 +258,12 @@ export function buildLoop(
     for (const ap of appearance(prog, a.from, a.to)) {
       const p = presence.get(ap.path);
       if (p === undefined) continue;
-      const e: PresenceEvent = { t: r4(segStart + ap.at * a.scale), visible: ap.visible, floor };
+      const e: PresenceEvent = {
+        t: r4(segStart + ap.at * a.scale),
+        visible: ap.visible,
+        floor,
+        ...(ap.swap === true ? { swap: true as const } : {}),
+      };
       p.events.push(e);
     }
   };
@@ -409,6 +464,9 @@ export function buildLoop(
   return {
     moves,
     runs,
+    flights: flights.sort(
+      (x, y) => x.t0 - y.t0 || (x.path < y.path ? -1 : x.path > y.path ? 1 : 0),
+    ),
     ...(closure === undefined ? {} : { closure }),
     settled,
     presence,

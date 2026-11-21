@@ -46,7 +46,13 @@ const tile = (parts: unknown[], programs: unknown[], extra: Obj = {}): Obj => ({
 });
 const codes = (d: readonly Diagnostic[], code: string): Diagnostic[] =>
   d.filter((x) => x.code === code);
-const LIFTED = { phase1a: false, phase1b: false, phase2: true, phase3: true };
+const LIFTED = {
+  phase1a: false,
+  phase1b: false,
+  phase2: true,
+  storyboards: true,
+  phase3: true,
+};
 
 const engine = (): Obj => {
   const md = readFileSync(new URL("../../../docs/design/assemblies.md", import.meta.url), "utf8");
