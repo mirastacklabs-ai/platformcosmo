@@ -866,26 +866,51 @@ When the user gives no program, Claude (and `pcosmo validate --suggest`, Track D
 and explains it:
 
 1. **Body**: the part with `role: body`, else the one most others mate with, else the largest
-   volume. It never moves.
+   volume (a pack's default role `body` does not count). It never moves. Boxes are the
+   **effective** placement the resolved tree gives (`pcosmo validate --suggest` reads it), not
+   only the `at`/`size` the spec states, so omitting `at` on a tray does not hand the pick to a
+   small lid.
 2. **Classify** the rest: covers (thin parts on the outer bounds whose largest face touches the
-   body: lids, panels, valve covers, pans, doors), fasteners (small, repeated, `type` screw,
-   bolt, clip, pin), shells (open containers), sub-assemblies, internals (enclosed or seated
-   inside a shell).
+   body and spans at least half of the body's face on that side: lids, panels, valve covers,
+   pans, doors; a flat part such as a DIMM or a chip on a board is thin too but covers nothing),
+   fasteners (small, repeated, `type` screw, bolt, clip, pin), shells (open containers),
+   sub-assemblies, internals (enclosed or seated inside a shell, or inside the body on another
+   part), **components** (parts sitting on the body's top face: a board's chips, DIMMs,
+   connectors; also anything stacked above them).
 3. **Stage order**: fasteners first (along their `axis`), then covers (`away` from their
    mating surface), then sub-assemblies as units (`drawer` for rack devices, `away` or `out`
    otherwise), then each sub-assembly's internals (nested program, `lift` when they stack),
-   then remaining loose parts (`out`). One stage per class (and per direction); split a class larger than 24
-   leaf parts into consecutive stages in spec order. Each sub-assembly's own parts get their
-   own nested program, so a class never has to be split across sub-assemblies.
+   then components, then remaining loose parts (`out`). One stage per class (and per
+   direction); split a class larger than 24 leaf parts into consecutive stages in spec order.
+   Each sub-assembly's own parts get their own nested program, so a class never has to be split
+   across sub-assemblies. Nested owners are imploded before the root.
+   - **Mounting depth**: a part carried by another (its bottom at or above the carrier's top,
+     over its footprint: a heat sink on a CPU on a board; a card on a board in a case) leaves in
+     an earlier stage than its carrier, top-most first, so the carrier never passes through it
+     (`assembly/transit-collision`). Stages of one class are split by level and named
+     `Internals (level n)` / `Components (level n)` (level 0 sits on the body or a seat); with
+     several levels the internals use `+z` instead of `lift` (`lift` layers equal-height parts
+     together and can sort a board below its heat sinks). A stage whose parts interpenetrate
+     at rest (a crank through its rods) moves them rigidly: `+z`, one number (the body's top
+     above the lowest part plus the default gap) and `stagger: 0`.
+   - **Components** are one `+z` lift with a clearly visible distance, nothing sideways, named
+     "Components" (not "Covers"). The distance is a number (§6.3): a quarter of the body's
+     larger footprint extent, or 1.5 times the tallest component if more; each mounting level
+     adds one step (`(n + 1)` steps for level n), so a part ends clear above its carrier. The
+     `auto` distance stays tiny for flat parts, which is what made board lifts barely visible.
 4. **Directions**: away from the mating surface; prefer visible directions (`+z`, `+x`, `+y`)
    because parts that travel into hidden directions are covered by the body; when only a
    hidden direction is free (oil pan down, PSU to the rear), use it, stage it late and fade
    others.
 5. **Timing**: stagger 0.06–0.12 s `outside-in`, durations 0.6–1.0 s, and a step `duration`
    that fits (validator `assembly/compressed` tells).
-6. **Labels**: shown for stages with ≤ 12 parts; details only on the focused stage.
-7. **Story**: assembled overview → one step per stage with focus → nested explodes with focus
-   → implode in one step at the end (avoids the fast loop closure).
+6. **Labels**: a stage's labels are `show` when it moves ≤ 12 parts, or when every part in it has
+   a `label` (the author named them to be read; §6.6 hides labels only where the stage says
+   `hide`); `hide` otherwise. Details only on the focused stage.
+7. **Story**: assembled overview → one step per stage → nested explodes with focus on the
+   nested owner → implode in one step at the end (avoids the fast loop closure). Steps for the
+   root owner carry **no `focus`**: focusing a part zooms the camera onto it and crops the
+   assembly (a board lost most of its area); a nested owner is focused as a whole.
 8. **Builds**: base first, bottom-up, sub-builds for anything the document builds separately,
    `advance: 2–4` when a booklet has many tiny steps.
 

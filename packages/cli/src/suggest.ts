@@ -8,13 +8,22 @@
  */
 import type { PartShapeRegistry } from "@platformcosmo/core";
 
-export type PartClass = "body" | "fastener" | "cover" | "unit" | "internal" | "loose";
+export type PartClass = "body" | "fastener" | "cover" | "unit" | "internal" | "mounted" | "loose";
+
+/** A box in the owner's local units (the scene tree's `local`, or what the spec states). */
+export interface PlacedBox {
+  min: [number, number, number];
+  max: [number, number, number];
+}
+/** Effective boxes the scene tree resolves, keyed by node path (`assembly/part`, `.../part-2`). */
+export type PlacedBoxes = ReadonlyMap<string, PlacedBox>;
 
 export interface SuggestedStage {
   label: string;
   parts: string[];
   direction: string;
-  distance: "auto";
+  /** `auto` (section 6.3), or a number in owner units for lift-offs from a body's top face. */
+  distance: "auto" | number;
   order: "outside-in";
   stagger: number;
   duration: number;
@@ -88,7 +97,7 @@ const FASTENER = /^(screw|bolt|clip|pin|nut|washer|rivet|fastener)s?$/;
 const COVER = /(^|-)(lid|panel|cover|pan|door|cap)$/;
 const RACK_DEVICE = /^(server|storage|switch|psu|router|firewall|chassis)/;
 
-type Box = { min: [number, number, number]; max: [number, number, number] };
+type Box = PlacedBox;
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const vec = (v: unknown): [number, number, number] | undefined =>
   Array.isArray(v) && v.length >= 3 && v.slice(0, 3).every(isNum)
@@ -102,6 +111,8 @@ interface Item {
   count: number;
   box?: Box;
   cls: PartClass;
+  /** Mounting level within its stage class: 0 sits on the body or a seat, n on a part of level n-1. */
+  level: number;
 }
 
 const isGroup = (p: P): boolean => p.parts !== undefined || p.use !== undefined;
@@ -112,6 +123,99 @@ function boxOf(p: P): Box | undefined {
   const size = vec(p.size);
   if (!at || !size || isGroup(p)) return undefined;
   return { min: at, max: [at[0] + size[0], at[1] + size[1], at[2] + size[2]] };
+}
+
+/** The placement the scene tree resolved (a counted part: the union of its instances), else the stated one. */
+function placedBox(
+  p: P,
+  id: string,
+  path: string,
+  placed: PlacedBoxes | undefined,
+): Box | undefined {
+  if (!placed || isGroup(p)) return boxOf(p);
+  const n = countOf(p);
+  const names =
+    n > 1 ? Array.from({ length: Math.min(n, 1024) }, (_, k) => `${id}-${k + 1}`) : [id];
+  let u: Box | undefined;
+  for (const name of names) {
+    const b = placed.get(`${path}/${name}`);
+    if (!b) continue;
+    const a = u;
+    u = a
+      ? {
+          min: [0, 1, 2].map((k) => Math.min(a.min[k]!, b.min[k]!)) as Box["min"],
+          max: [0, 1, 2].map((k) => Math.max(a.max[k]!, b.max[k]!)) as Box["max"],
+        }
+      : { min: [...b.min], max: [...b.max] };
+  }
+  return u ?? boxOf(p);
+}
+
+/** Area of the overlap of two boxes in the horizontal plane. */
+function overlapXY(a: Box, b: Box): number {
+  const w = Math.min(a.max[0], b.max[0]) - Math.max(a.min[0], b.min[0]);
+  const d = Math.min(a.max[1], b.max[1]) - Math.max(a.min[1], b.min[1]);
+  return w > TOL && d > TOL ? w * d : 0;
+}
+
+/** Sits on the body's top face: at or above it, over its footprint. */
+const onTop = (b: Box, body: Box): boolean =>
+  b.min[2] >= body.max[2] - TOL && overlapXY(b, body) > 0;
+
+/** Some two boxes of the group interpenetrate at rest. */
+function overlapEach(g: Item[]): boolean {
+  for (const [i, a] of g.entries()) {
+    for (const b of g.slice(i + 1)) {
+      if (!a.box || !b.box) continue;
+      if (
+        [0, 1, 2].every(
+          (k) => a.box!.min[k]! < b.box!.max[k]! - TOL && b.box!.min[k]! < a.box!.max[k]! - TOL,
+        )
+      )
+        return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * One distance that takes the whole group out of the body (top of the body above its lowest
+ * part) plus the default gap (10% of the owner's largest extent), so it moves as one.
+ */
+function rigidLift(g: Item[], body: Item | undefined, all: Item[]): number {
+  const boxes = all.flatMap((it) => (it.box ? [it.box] : []));
+  const ext = Math.max(
+    0,
+    ...[0, 1, 2].map(
+      (k) => Math.max(...boxes.map((b) => b.max[k]!)) - Math.min(...boxes.map((b) => b.min[k]!)),
+    ),
+  );
+  const low = Math.min(...g.flatMap((it) => (it.box ? [it.box.min[2]] : [])));
+  const out = body?.box ? Math.max(0, body.box.max[2] - low) : 0;
+  return Math.round((out + 0.1 * ext) * 100) / 100;
+}
+
+/**
+ * Mounting level of each item of `group`: 0 when nothing in the group carries it, else one more
+ * than its carrier (the item with the highest top at or below its bottom, under its footprint).
+ */
+function levels(group: Item[]): void {
+  const memo = new Map<Item, number>();
+  const level = (it: Item, seen: Set<Item>): number => {
+    const known = memo.get(it);
+    if (known !== undefined) return known;
+    let carrier: Item | undefined;
+    if (it.box && !seen.has(it)) {
+      for (const q of group) {
+        if (q === it || !carries(q, it)) continue;
+        if (!carrier || q.box!.max[2] > carrier.box!.max[2] + TOL) carrier = q;
+      }
+    }
+    const v = carrier ? 1 + level(carrier, new Set(seen).add(it)) : 0;
+    memo.set(it, v);
+    return v;
+  };
+  for (const it of group) it.level = level(it, new Set());
 }
 
 const volume = (b: Box | undefined): number =>
@@ -145,7 +249,20 @@ function sideOf(b: Box, body: Box): string | undefined {
   return undefined;
 }
 
-const touchesOuter = (b: Box, body: Box): boolean => sideOf(b, body) !== undefined;
+/**
+ * A cover is thin AND spans at least half of the body's face on its side: a flat part on top of
+ * a board (a DIMM, a chip) is thin too, but covers nothing.
+ */
+function coversBody(b: Box, body: Box): boolean {
+  const side = sideOf(b, body);
+  if (side === undefined) return false;
+  const k = AXIS_INDEX[side[1] as "x" | "y" | "z"];
+  const [i, j] = [0, 1, 2].filter((a) => a !== k) as [number, number];
+  const w = Math.min(b.max[i]!, body.max[i]!) - Math.max(b.min[i]!, body.min[i]!);
+  const d = Math.min(b.max[j]!, body.max[j]!) - Math.max(b.min[j]!, body.min[j]!);
+  const face = (body.max[i]! - body.min[i]!) * (body.max[j]! - body.min[j]!);
+  return w > 0 && d > 0 && w * d >= 0.5 * face - TOL;
+}
 
 function classify(it: Item, reg: PartShapeRegistry | undefined, ctx: Ctx): PartClass {
   const p = it.p;
@@ -165,8 +282,18 @@ function classify(it: Item, reg: PartShapeRegistry | undefined, ctx: Ctx): PartC
   );
   if (words.some((w) => FASTENER.test(w))) return "fastener";
   if (words.some((w) => COVER.test(w))) return "cover";
-  if (it.box && ctx.body?.box && thin(it.box) && touchesOuter(it.box, ctx.body.box)) return "cover";
+  if (it.box && ctx.body?.box && thin(it.box) && coversBody(it.box, ctx.body.box)) return "cover";
   if (it.box && ctx.shells.some((s) => s !== it && s.box && inside(it.box!, s.box!)))
+    return "internal";
+  if (it.box && ctx.body?.box && onTop(it.box, ctx.body.box)) return "mounted";
+  // seated on another part inside the body (a card on a board in a case): it leaves with the
+  // internals, before its carrier
+  if (
+    it.box &&
+    ctx.body?.box &&
+    inside(it.box, ctx.body.box) &&
+    ctx.items.some((q) => q !== it && q !== ctx.body && carries(q, it))
+  )
     return "internal";
   return "loose";
 }
@@ -174,7 +301,16 @@ function classify(it: Item, reg: PartShapeRegistry | undefined, ctx: Ctx): PartC
 interface Ctx {
   body?: Item;
   shells: Item[];
+  items: Item[];
 }
+
+/** `q` holds `it` on its top face: `it` starts at or above `q`'s top, over its footprint. */
+const carries = (q: Item, it: Item): boolean =>
+  q.box !== undefined &&
+  it.box !== undefined &&
+  !q.isGroup &&
+  it.box.min[2] >= q.box.max[2] - TOL &&
+  overlapXY(it.box, q.box) > 0;
 
 const sel = (it: Item): string => (it.count > 1 ? `${it.id}-*` : it.id);
 
@@ -195,6 +331,8 @@ function direction(it: Item, cls: PartClass, body: Item | undefined, internals: 
       return p.mates !== undefined || p.inserts !== undefined ? "away" : "out";
     case "internal":
       return internals.length >= 2 ? "lift" : "away";
+    case "mounted":
+      return "+z";
     default:
       return "out";
   }
@@ -224,16 +362,19 @@ function suggestOwner(
   label: string,
   parts: P[],
   reg: PartShapeRegistry | undefined,
+  placed: PlacedBoxes | undefined,
 ): Suggestion | string {
   const items: Item[] = parts.map((p, i) => {
-    const b = boxOf(p);
+    const id = p.id ?? `part-${i + 1}`;
+    const b = placedBox(p, id, path, placed);
     return {
       p,
-      id: p.id ?? `part-${i + 1}`,
+      id,
       isGroup: isGroup(p),
       count: countOf(p),
       ...(b ? { box: b } : {}),
       cls: "loose" as PartClass,
+      level: 0,
     };
   });
   if (items.length < 2) return "nothing to move (fewer than two parts)";
@@ -284,6 +425,7 @@ function suggestOwner(
   };
   const ctx: Ctx = {
     shells: items.filter((it) => roleOf(it.p) === "shell" || it.p.shape === "tray"),
+    items,
   };
   if (body) ctx.body = body;
   for (const it of items) it.cls = it === body ? "body" : classify(it, reg, ctx);
@@ -293,14 +435,22 @@ function suggestOwner(
     cover: of("cover"),
     unit: of("unit"),
     internal: of("internal"),
+    mounted: of("mounted"),
     loose: of("loose"),
   };
+  levels([...classes.internal, ...classes.mounted, ...classes.loose]);
 
   // 3-4. One stage per class and direction (a class larger than STAGE_MAX is split in order);
   // covers on a hidden side go last, with the others faded.
   const stages: SuggestedStage[] = [];
   const counts: number[] = [];
-  const push = (name: string, group: Item[], dir: string): void => {
+  const push = (
+    name: string,
+    group: Item[],
+    dir: string,
+    distance: SuggestedStage["distance"] = "auto",
+    stagger = STAGGER,
+  ): void => {
     if (group.length === 0) return;
     const chunks: Item[][] = [];
     let cur: Item[] = [];
@@ -322,11 +472,12 @@ function suggestOwner(
         label: `${name}${suffix}`,
         parts: c.map(sel),
         direction: dir,
-        distance: "auto",
+        distance,
         order: "outside-in",
-        stagger: STAGGER,
+        stagger,
         duration: DURATION,
-        labels: leaves <= LABELS_MAX ? "show" : "hide",
+        // labelled parts keep their labels when exploded (a plan's components are meant to be read)
+        labels: leaves <= LABELS_MAX || c.every((it) => it.p.label !== undefined) ? "show" : "hide",
         ...(hidden(dir) ? { fade: "unselected" as const } : {}),
       });
       counts.push(leaves);
@@ -352,12 +503,46 @@ function suggestOwner(
   }
   for (const [d, g] of byDirection(classes.unit, "unit"))
     push(d === "drawer" ? "Devices" : "Sub-assemblies", g, d);
+  // Parts mounted on another part leave in an earlier stage than their carrier: deepest first.
+  const byLevel = (group: Item[]): [number, Item[]][] => {
+    const top = Math.max(...group.map((it) => it.level));
+    const out: [number, Item[]][] = [];
+    for (let l = top; l >= 0; l--) {
+      const g = group.filter((it) => it.level === l);
+      if (g.length > 0) out.push([l, g]);
+    }
+    return out;
+  };
   if (classes.internal.length > 0) {
-    push(
-      "Internals",
-      classes.internal,
-      direction(classes.internal[0]!, "internal", body, classes.internal),
-    );
+    const lv = byLevel(classes.internal);
+    // `lift` stacks parts of equal rest height as one layer, which can sort a carrier above what
+    // it carries (a board with the fans beside it, under its heat sinks): with several levels a
+    // stage uses plain +z, whose stacking follows the footprints (6.3). Parts that interpenetrate
+    // at rest (a crank through its rods) must move as one: a single number clears them all and
+    // the stage has no stagger.
+    const base = direction(classes.internal[0]!, "internal", body, classes.internal);
+    for (const [l, g] of lv) {
+      const name = lv.length === 1 ? "Internals" : `Internals (level ${l})`;
+      if (overlapEach(g)) push(name, g, "+z", rigidLift(g, body, items), 0);
+      else push(name, g, lv.length > 1 && base === "lift" ? "+z" : base);
+    }
+  }
+  if (classes.mounted.length > 0) {
+    // One lift off the body's top face, clearly visible: a quarter of the body's footprint (or
+    // 1.5 times the tallest part, if more), one step further for each level of mounting so that
+    // a part stays clear above its carrier.
+    const bb = body!.box!;
+    const foot = Math.max(bb.max[0] - bb.min[0], bb.max[1] - bb.min[1]);
+    const tall = Math.max(...classes.mounted.map((it) => it.box!.max[2] - it.box!.min[2]));
+    const step = Math.round(Math.max(0.25 * foot, 1.5 * tall) * 100) / 100;
+    const lv = byLevel(classes.mounted);
+    for (const [l, g] of lv)
+      push(
+        lv.length === 1 ? "Components" : `Components (level ${l})`,
+        g,
+        "+z",
+        Math.round(step * (l + 1) * 100) / 100,
+      );
   }
   push("Other parts", classes.loose, "out");
   for (const [d, g] of late) push(`Covers (${d}, hidden side)`, g, d);
@@ -371,9 +556,9 @@ function suggestOwner(
   const names = (c: Item[]): string[] => c.map((it) => it.id);
   const explanation = [
     ...why,
-    `${stages.length} stage${stages.length === 1 ? "" : "s"}: fasteners first, then covers, sub-assemblies, internals and loose parts; hidden-side covers last with the rest faded`,
+    `${stages.length} stage${stages.length === 1 ? "" : "s"}: fasteners first, then covers, sub-assemblies, internals, parts mounted on the body and loose parts; parts mounted on another part leave before it; hidden-side covers last with the rest faded`,
     `timing: stagger ${STAGGER} s outside-in, ${DURATION} s per part; a step of ${stepDuration} s plays the whole program`,
-    `labels shown for stages with ${LABELS_MAX} parts or fewer`,
+    `labels shown for stages with ${LABELS_MAX} parts or fewer, or whose parts all have a label`,
   ];
   return {
     owner: path,
@@ -384,6 +569,7 @@ function suggestOwner(
       cover: names(classes.cover),
       unit: names(classes.unit),
       internal: names(classes.internal),
+      mounted: names(classes.mounted),
       loose: names(classes.loose),
     },
     program: { id: PROGRAM_ID, label: `${label}: suggested explode`, stages },
@@ -395,19 +581,20 @@ function suggestOwner(
 
 function story(root: Suggestion, label: string, nested: Suggestion[]): SuggestedStep[] {
   const steps: SuggestedStep[] = [{ caption: `${label} assembled`, duration: 2 }];
-  const run = (s: Suggestion, caption: (st: SuggestedStage) => string): void => {
+  const run = (s: Suggestion, caption: (st: SuggestedStage) => string, focus: boolean): void => {
     s.program.stages.forEach((st, k) => {
-      const first = st.parts[0]!.replace(/-\*$/, "-1");
       steps.push({
         caption: caption(st),
         duration: fitStep(stageTime(st, s.stageLeaves[k] ?? 1)),
-        focus: `${s.owner}/${first}`,
+        // never a part of the root (the zoom crops what the explode reveals); a nested owner is
+        // focused whole
+        ...(focus ? { focus: s.owner } : {}),
         assembly: [{ explode: s.owner, program: PROGRAM_ID, to: k + 1 }],
       });
     });
   };
-  run(root, (st) => st.label);
-  for (const n of nested) run(n, (st) => `${n.owner.split("/").pop()}: ${st.label}`);
+  run(root, (st) => st.label, false);
+  for (const n of nested) run(n, (st) => `${n.owner.split("/").pop()}: ${st.label}`, true);
   steps.push({
     caption: `${label} reassembled`,
     duration: fitStep(
@@ -424,7 +611,11 @@ function story(root: Suggestion, label: string, nested: Suggestion[]): Suggested
 }
 
 /** Proposals for every assembly without a program (top level, and nested groups up to depth 3). */
-export function suggest(spec: unknown, reg?: PartShapeRegistry): SuggestReport {
+export function suggest(
+  spec: unknown,
+  reg?: PartShapeRegistry,
+  placed?: PlacedBoxes,
+): SuggestReport {
   const out: SuggestReport = { suggestions: [], skipped: [] };
   const assemblies = (spec as { assemblies?: A[] } | null)?.assemblies;
   if (!Array.isArray(assemblies)) return out;
@@ -445,7 +636,7 @@ export function suggest(spec: unknown, reg?: PartShapeRegistry): SuggestReport {
       continue;
     }
     const label = a.label ?? a.id;
-    const root = suggestOwner(a.id, label, a.parts, reg);
+    const root = suggestOwner(a.id, label, a.parts, reg, placed);
     if (typeof root === "string") {
       out.skipped.push({ owner: a.id, reason: root });
       continue;
@@ -462,7 +653,7 @@ export function suggest(spec: unknown, reg?: PartShapeRegistry): SuggestReport {
         // a counted group has instances id-1..id-n; the program (on the part) serves each, the story plays the first
         const path = `${base}/${p.id}${countOf(p) > 1 ? "-1" : ""}`;
         const ptr = `${pointer}/parts/${k}`;
-        const sug = suggestOwner(path, p.label ?? p.id, p.parts, reg);
+        const sug = suggestOwner(path, p.label ?? p.id, p.parts, reg, placed);
         if (typeof sug !== "string") {
           sug.pointer = ptr;
           owners++;
