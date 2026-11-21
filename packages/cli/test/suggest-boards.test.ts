@@ -793,4 +793,42 @@ describe("covers move aside; counted sub-assemblies", () => {
       { owner: "a/unit", reason: "one stage: the root moves it as a unit" },
     ]);
   });
+
+  test("a piston a little below or proud of the deck still leaves through it (+z)", () => {
+    const dirs = [49, 51].map((h) => {
+      const rep = suggest({
+        assemblies: [
+          {
+            id: "a",
+            parts: [
+              { id: "block", role: "body", at: [0, 0, 0], size: [100, 100, 200] },
+              { id: "piston", role: "internal", at: [10, 10, 150], size: [20, 20, h] },
+            ],
+          },
+        ],
+      });
+      return rep.suggestions[0]!.program.stages.map((x) => x.direction);
+    });
+    expect(dirs).toEqual([["+z"], ["+z"]]);
+  });
+
+  test("engine with a pulley beyond +x: the crank takes a clear face; build stays clean", async () => {
+    const spec = structuredClone(await fixture("engine-r2")) as {
+      assemblies: { parts: unknown[] }[];
+    };
+    spec.assemblies[0]!.parts.push({
+      id: "pulley",
+      at: [430, 55, 20],
+      size: [30, 120, 120],
+      label: "Timing pulley",
+    });
+    const rep = await suggestOf(spec, "engine-pulley");
+    const st = brief(rep.suggestions[0]!.program.stages);
+    expect(st).toContainEqual(["Internals", "-x", "auto", "show", "crankshaft"]);
+    expect(await mergedDiagnostics(spec, rep, "engine-pulley")).toEqual({
+      codes: [],
+      vCode: 0,
+      bCode: 0,
+    });
+  }, 120_000);
 });

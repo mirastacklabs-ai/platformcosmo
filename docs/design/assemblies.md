@@ -961,13 +961,18 @@ and explains it:
      another cover (that one leaves first, `+z`) and a cover not on the body's top face keep
      `+z`. `+x` and `+y` are the owner's local axes; a `rotate` of the owner is not considered
      yet.
-   - **Exits.** A sub-assembly or internal enclosed by the body (inside its box) leaves through
-     the first face of the body it is flush with (`+z`, `+x`, `+y`, then `-z`, `-x`, `-y`):
-     pistons flush with a block's open top go `+z`, a crank as long as the block goes `+x`,
-     never `out` or `away` through the block. With several internals a stage still uses `lift`
-     (or `+z`, see Mounting depth). A part that exits through a hidden face passes through the
-     cover on that side, so that cover leaves first (a stage before the sub-assemblies) instead
-     of last.
+   - **Exits.** A sub-assembly or internal enclosed by the body (inside its box, give or take 1%
+     of the body's extent on each axis) leaves through the first face of the body it is flush with
+     (`+z`, `+x`, `+y`, then `-z`, `-x`, `-y`), where flush also takes 1% of the body's extent
+     on that axis, both ways (a piston slightly below or proud of the deck): pistons at a
+     block's open top go `+z`, a crank as long as the block goes `+x`, never `out` or `away`
+     through the block. A face is skipped when a part that leaves at the same time or later
+     (sub-assemblies, internals, components, loose parts) reaches beyond it over the part's
+     footprint (a pulley past the crank's end), and the next flush face is tried; with no clear
+     face the part falls back to `away` (`out` for a sub-assembly). With several internals a
+     stage still uses `lift` (or `+z`, see Mounting depth). A part that exits through a hidden
+     face passes through the cover on that side, so that cover leaves first (a stage before the
+     sub-assemblies) instead of last.
    - **Mounting depth.** A part carried by another (its bottom touches the carrier's top,
      over its footprint, the carrier having height: a heat sink on a CPU on a board; a card on
      a board in a case; a sensor on a lid) leaves before its carrier, top-most first, so the

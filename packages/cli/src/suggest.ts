@@ -339,22 +339,59 @@ const sel = (it: Item): string => (it.count > 1 ? `${it.id}-*` : it.id);
 
 /**
  * The open face an enclosed part leaves through: the first face of the body (`+z`, `+x`, `+y`,
- * then the hidden ones) its box is flush with. Undefined when it is not inside the body or touches
- * no face, where `away` finds the shortest exit.
+ * then the hidden ones) its box is flush with, within 1% of the body's extent on that axis either
+ * way (a piston a little below or proud of the deck is still flush), and clear: no part that
+ * leaves at the same time or later reaches beyond that face over the part's footprint (a pulley
+ * past the crank's end), else the next face. Undefined when the part is not inside the body,
+ * touches no clear face, or `all` is missing, where `away` finds the shortest exit.
  */
-function exitFace(it: Item, body: Item | undefined): string | undefined {
+function exitFace(it: Item, body: Item | undefined, all: Item[]): string | undefined {
   const bb = body?.box;
-  if (!bb || !it.box || !inside(it.box, bb)) return undefined;
+  const ib = it.box;
+  if (!bb || !ib) return undefined;
+  const tol = [0, 1, 2].map((k) => 0.01 * (bb.max[k]! - bb.min[k]!));
+  if (
+    ![0, 1, 2].every(
+      (k) => ib.min[k]! >= bb.min[k]! - tol[k]! && ib.max[k]! <= bb.max[k]! + tol[k]!,
+    )
+  )
+    return undefined;
+  // parts that leave after this one: sub-assemblies, internals, components, loose parts (a cover on
+  // the exit side leaves first, see the hidden-side order in suggestOwner)
+  const later = all.filter(
+    (q) =>
+      q !== it &&
+      q !== body &&
+      q.box !== undefined &&
+      (q.cls === "unit" || q.cls === "internal" || q.cls === "mounted" || q.cls === "loose"),
+  );
   for (const sign of ["+", "-"] as const)
     for (const a of AXES) {
       const k = AXIS_INDEX[a];
-      if (sign === "+" ? it.box.max[k]! >= bb.max[k]! - TOL : it.box.min[k]! <= bb.min[k]! + TOL)
-        return `${sign}${a}`;
+      const flush =
+        sign === "+" ? ib.max[k]! >= bb.max[k]! - tol[k]! : ib.min[k]! <= bb.min[k]! + tol[k]!;
+      if (!flush) continue;
+      const blocked = later.some((q) => {
+        const b = q.box!;
+        const beyond =
+          sign === "+" ? b.max[k]! > bb.max[k]! + tol[k]! : b.min[k]! < bb.min[k]! - tol[k]!;
+        const over = [0, 1, 2]
+          .filter((m) => m !== k)
+          .every((m) => Math.min(b.max[m]!, ib.max[m]!) - Math.max(b.min[m]!, ib.min[m]!) > TOL);
+        return beyond && over;
+      });
+      if (!blocked) return `${sign}${a}`;
     }
   return undefined;
 }
 
-function direction(it: Item, cls: PartClass, body: Item | undefined, internals: Item[]): string {
+function direction(
+  it: Item,
+  cls: PartClass,
+  body: Item | undefined,
+  internals: Item[],
+  all: Item[] = [],
+): string {
   const p = it.p;
   switch (cls) {
     case "fastener":
@@ -369,10 +406,11 @@ function direction(it: Item, cls: PartClass, body: Item | undefined, internals: 
       )
         return "drawer";
       return (
-        exitFace(it, body) ?? (p.mates !== undefined || p.inserts !== undefined ? "away" : "out")
+        exitFace(it, body, all) ??
+        (p.mates !== undefined || p.inserts !== undefined ? "away" : "out")
       );
     case "internal":
-      return internals.length >= 2 ? "lift" : (exitFace(it, body) ?? "away");
+      return internals.length >= 2 ? "lift" : (exitFace(it, body, all) ?? "away");
     case "mounted":
       return "+z";
     default:
@@ -633,7 +671,7 @@ function suggestOwner(
   const byDirection = (group: Item[], cls: PartClass): Map<string, Item[]> => {
     const m = new Map<string, Item[]>();
     for (const it of group) {
-      const d = aside.get(it) ?? direction(it, cls, body, classes.internal);
+      const d = aside.get(it) ?? direction(it, cls, body, classes.internal, items);
       const g = m.get(d);
       if (g) g.push(it);
       else m.set(d, [it]);
@@ -683,7 +721,7 @@ function suggestOwner(
   // a part that exits through a hidden face passes through the cover there: that cover leaves first
   const exits = new Set(
     [...classes.unit, ...classes.internal].map((it) =>
-      direction(it, it.cls, body, classes.internal),
+      direction(it, it.cls, body, classes.internal, items),
     ),
   );
   for (const [d, g] of late.filter(([d]) => exits.has(d)))
@@ -697,7 +735,7 @@ function suggestOwner(
     // stage uses plain +z, whose stacking follows the footprints (6.3). Parts that interpenetrate
     // at rest (a crank through its rods) must move as one: a single number clears them all, the
     // stage has no stagger and is never split; the other parts of the level move normally.
-    const base = direction(classes.internal[0]!, "internal", body, classes.internal);
+    const base = direction(classes.internal[0]!, "internal", body, classes.internal, items);
     const multi = byLevel(classes.internal).length > 1;
     pushLevels("Internals", [], classes.internal, (name, g) => {
       const tied = linked(g);
