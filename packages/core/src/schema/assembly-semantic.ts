@@ -1112,7 +1112,9 @@ function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string
       (spec.equipment?.length ?? 0) +
       (spec.rows?.length ?? 0) +
       (spec.aisles?.length ?? 0) +
-      (spec.cables?.length ?? 0) >
+      (spec.cables?.length ?? 0) +
+      (spec.figures?.length ?? 0) +
+      (spec.storyboards?.length ?? 0) >
     0;
   prog.steps.forEach((st, j) => {
     const sp = `${pp}/steps/${j}`;
@@ -1142,7 +1144,7 @@ function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string
           "error",
           "assembly/view-needs-assembly-only",
           `${sp}/view`,
-          "Quarter-turn views need an assembly-only spec (no nodes or DC content)",
+          "Quarter-turn views need an assembly-only spec (no nodes, DC content, figures or storyboards)",
           'Remove "view", or move the nodes and racks to another spec',
         ),
       );

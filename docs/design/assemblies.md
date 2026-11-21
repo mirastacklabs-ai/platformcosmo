@@ -359,11 +359,11 @@ the same instant and position) and drops to its seat.
 ### 7.7 Quarter-turn views
 
 `view` (build steps, assembly-only specs: `assembly/view-needs-assembly-only` otherwise) rotates
-the scene by −v about the assembly's rest centre. Each used view is projected and depth-sorted
+the scene by −v about the centre of the union of the assemblies' rest bounds (one assembly: its own rest centre). Each used view is projected and depth-sorted
 separately into its own `view(v)` group; at the build step's start the views cross-fade over
 0.3 s. Decals on faces turned away are not drawn; billboards and sprites are view-independent
 (pre-rendered sprites keep their drawn angle, which the skill notes). Cost: elements × views
-(`budget/views` warning above 5000 total).
+(`budget/views` warning above 5000 total; the scene reports a lower bound, one element per primitive, and the renderer applies the same threshold to its real count). The per-view viewBox comes from the rotated `reachBounds`. Views need an assembly-only spec: figures and storyboards are refused too (`assembly/view-needs-assembly-only`). Decal faces are assembly-local data and are kept in every view; the renderer maps them through `frame.rotate`.
 
 ## 8. Racks, nesting, close-ups
 
@@ -449,11 +449,17 @@ Element and byte budgets count every level.
 ### 8.5 Size reconciliation
 
 Physical units are true scale in DC context (1 tile = 600 mm; 19-inch rack interior 450 mm
-wide, 2U = 88.9 mm). The pack's device box stays the 1.1 one (540 mm wide, filling the rack
-between its posts) so 1.1 output is byte-identical; slot internals are fitted into the centred
-450 mm interior inside it. A close-up of a physical part with a physical template is matched to the
-part's world box at true scale; a mismatch above 10% on any axis gives
-`assembly/size-mismatch` and the close-up is fitted uniformly (contain). Figures and
+wide, 2U = 88.9 mm). A close-up of a physical part with a physical template is reconciled by
+**containment in the part's interior** (a DC slot: the 450 mm interior of the 540 mm device
+box; any other host: its box), per axis in world axes. The template front is turned onto the
+host front in world axes (the host assembly's `rotate` included); the scene never turns a
+template to fit its footprint. Only a template larger than the interior by more than 10% on an
+axis gives `assembly/size-mismatch` (warning) and is shrunk uniformly (contain); a template
+shorter in z never warns; a template under 50% of the interior in x or y gets an info and is
+drawn at true scale, never enlarged. A footprint that would match better turned a quarter is
+reported (`assembly/closeup-turned`, info) and left alone. Close-ups the scene cannot build
+within the 8-segment path limit (host path plus template height) or the level caps are skipped
+with `assembly/too-deep` or `budget/levels`, at the host's pointer. Figures and
 storyboards (pixel units) are fitted to the part's zoomed screen rect. The skill takes real
 dimensions from documents (a 13-inch board is 330 mm) and states assumptions when a figure is
 "not drawn to scale" (keep relative layout, scale from the stated board size).
@@ -921,7 +927,8 @@ suggestions):
 | `assembly/clip-fallback`                                                                                        | info                                              | enclosed part hidden until clear                                                                                                                                 |
 | `assembly/depth-input`                                                                                          | error                                             | internal: invalid depth-order input (non-finite box, move or loop); that input is ignored                                                                        |
 | `assembly/bounds-growth`                                                                                        | info                                              | reach bounds > 4× rest                                                                                                                                           |
-| `assembly/size-mismatch`                                                                                        | warning                                           | template or close-up does not fit at true scale                                                                                                                  |
+| `assembly/size-mismatch`                                                                                        | warning (info: much smaller)                      | template or close-up does not fit at true scale                                                                                                                  |
+| `assembly/closeup-turned`                                                                                       | info                                              | a close-up's footprint would match its host better turned a quarter; not turned (fronts stay aligned)                                                            |
 | `assembly/reserved-id`                                                                                          | error                                             | slot id `frame` on a rack in assembly mode; any part id `closeup` (reserved segment)                                                                             |
 | `semantic/reserved-id`                                                                                          | warning                                           | a 1.1 id `closeup` (still valid; rename before adding close-ups)                                                                                                 |
 | `assembly/too-deep`                                                                                             | error                                             | path longer than 8 segments (also through `use` and `closeup` templates)                                                                                         |
@@ -932,7 +939,6 @@ suggestions):
 | `assembly/storyboard-no-explode`                                                                                | error                                             | explode on a storyboard                                                                                                                                          |
 | `assembly/edge-to-part`                                                                                         | error                                             | edge, flow or cable endpoint is a part path                                                                                                                      |
 | `assembly/unknown-shape`                                                                                        | error                                             | `pack:id` shape not installed or in the DC pack (validate: only with a registry; `render()` always refuses)                                                      |
-| `options/invalid-png-step`                                                                                      | error                                             | `png.step` is not a positive integer, is given with `png.time`, or is beyond the timeline                                                                        |
 | `assembly/shape-params`                                                                                         | error                                             | unknown or invalid `params` for a shape                                                                                                                          |
 | `assembly/duplicate-part`                                                                                       | error                                             | sibling ids collide (also after `count` expansion)                                                                                                               |
 | `brick/off-grid`                                                                                                | warning                                           | non-integer stud or plate position, `size` or `pitch` (after converting to studs)                                                                                |
@@ -946,6 +952,7 @@ suggestions):
 | `asset/annotation-erased`                                                                                       | info                                              | figure end moved onto its drawn stroke, or ink inside a mask erased (ingestion §6.4)                                                                             |
 | `asset/rim-stroke`                                                                                              | info / warning (undecided)                        | figure template rim pixels a board stroke touches: peeled, or undecided (ingestion §6.4)                                                                         |
 | `budget/assembly-parts`, `budget/depth-copies`, `budget/views`, `budget/levels`, `budget/images`, `budget/time` | warning / error                                   | §13                                                                                                                                                              |
+| `options/invalid-png-step`                                                                                      | error                                             | `png.step` is not a positive integer, is given with `png.time`, or is beyond the timeline                                                                        |
 
 ## 19. Examples
 
