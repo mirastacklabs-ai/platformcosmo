@@ -18,7 +18,9 @@ Everything is offline.
 2. **Never hand-write SVG**, and never edit anything `pcosmo build` wrote. You change the spec and rebuild.
 3. **Do not invent fields or codes.** If validation names an unknown field, remove it or use the suggestion.
 4. **Do not invent programs.** For an explode, run `pcosmo validate <spec> --suggest`, read what it prints and paste
-   it (section 3). Write your own program only when the user gave an order, or `--suggest` printed nothing usable.
+   it (section 3). Write your own program only when the user gave an order, or `--suggest` printed nothing usable. `--suggest` prints
+   only `suggestions skipped: fix errors first` while the spec has errors; that is not "nothing usable": run
+   `pcosmo validate` until it reports no errors, then run `--suggest` again.
 5. **Never put text from the user's material on a command line.** Titles, labels and attributions go into the spec
    file with `Write`; shell arguments are only paths, numbers and fixed flags you chose.
 6. **Do not work around `assembly/unsupported`.** See section 1: tell the user which feature this build cannot draw yet.
@@ -90,7 +92,9 @@ Right-handed, matching the screen: `x` runs to the lower right, `y` to the lower
 **minimum corner** of a part's box, `size` is `[width x, depth y, height z]`, both in the assembly's units and in
 the parent's frame (children of a sub-assembly are relative to the sub-assembly's `at`). Rotations are quarter turns
 about `z` only (`rotate`: 0, 90, 180, 270, about the part's own centre), so everything stays axis-aligned. Cylinder,
-ring and shaft take `axis` `x`, `y` or `z`. **Give every part an explicit `at` and `size`:** the heuristics and the
+ring and shaft take `axis` `x`, `y` or `z`. `y = 0` is the **back** end of the unit (far from the viewer) and larger `y` comes toward the viewer's lower left: the
+default `front` is `+y`, so put a device's front, a drive bay or a PSU's face at the largest `y`. Length runs along `x`.
+**Give every part an explicit `at` and `size`:** the heuristics and the
 suggestion only use what the spec states, so a part without both takes no part in the geometric rules (a missing
 size also means it can never be picked as the largest part, so a big shell without a size loses to a small lid).
 
@@ -128,14 +132,24 @@ cylinder (a screw head); `prism` vertical hexagon; `wedge` a 45 degree slope (hi
   Positions must be whole studs and plates, otherwise the warning `brick/off-grid`. Hinges, angled rotations and
   flexible parts are not available: approximate and list it as an assumption.
 
+**Default sizes** (mm, `[x, y, z]`; a shape scales per axis to the `size` you give, so omit `size` only when you want
+these): `hw:board` 305x330x12, `cpu` 76x56x5, `heatsink` 105x90x60, `dimm` 133.35x4x31.25, `gpu-card` 267x38x111,
+`nic-ocp3` 76x115x16, `nvme-m2` 80x22x3.8, `e1s` 33.75x118.75x9.5 (flat), `psu` 73.5x185x39, `fan` 60x56x60,
+`riser` 130x12x100, `pcie-card` 168x20x69, `chassis-2u` 482.6x740x88.9, `lid` 447.6x740x3. `auto:block-i4` 420x230x260
+(length along `x`), `head` 420x230x100, `valve-cover` 400x200x70, `crankshaft` 420x120x120, `camshaft` 420x40x40,
+`piston` 82x82x66, `rod` 24x50x150, `valve` 34x34x110, `oil-pan` 420x230x90, `intake` 380x110x90, `exhaust` 380x90x80,
+`timing-belt` 20x200x300. Fronts of `hw:` devices are at `+y`. `pcosmo` has no command that lists shapes: this is the list.
+
 Shapes are generic: no brand names or marks in labels or ids unless the user's own material uses them.
 
 ### 2.4 Images on parts
 
 Use an image when the user gave one for a part (a GPU card photo, a front panel). Do this:
 
-1. Copy the file into the working directory (for example `img/gpu-card.png`). Only PNG, JPEG and SVG; WebP and
-   everything else is `image/format`: convert it or ask. Images are capped in size (`image/too-large`).
+1. The image must sit **next to the spec** (for example `img/gpu-card.png`). You do not copy, convert or write
+   images: if it is elsewhere, ask the user to place it there. Only PNG, JPEG and SVG are accepted; for a WebP or
+   anything else (`image/format`) ask the user to convert it to PNG or JPEG. Images are capped in size
+   (`image/too-large`).
 2. Add `images: [{ "id": "gpu-photo", "src": "img/gpu-card.png", "alt": "GPU card, side view" }]`. `src` is a path
    **relative to the spec**: no `..`, no absolute path, no URL. Optional `crop` `[x, y, w, h]` in pixels.
 3. On the part: `"shape": "card", "image": { "ref": "gpu-photo", "face": "right", "fit": "cover" }`. `face`:
@@ -190,7 +204,8 @@ a `lift`, or an `order`. Also look for parts passing through each other in the P
 `steps[].assembly` is up to 20 actions, played in order:
 `{ "explode": "<path>", "program": "<id>", "to": <stage>, "start": <seconds> }` and
 `{ "implode": "<path>", "program": "<id>", "to": <stage> }`. `to` is the stage level to reach (explode default: all
-stages; implode default: 0, fully assembled). Levels carry over between steps, so step by step: `to: 1`, then `to: 2`.
+stages; implode default: 0, fully assembled). Levels carry over between steps, so step by step: `to: 1`, then `to: 2`. Every stage in the program's list is one level,
+including a stage with `with: "previous"` (it starts together with the one before it but still counts).
 `explode` to a lower level is `assembly/explode-backwards` (use `implode`); `implode` to a higher one is
 `assembly/implode-forwards`. `to` past the last stage is `assembly/stage-out-of-range`; a path or program that does
 not exist is `assembly/unknown-target` or `assembly/unknown-program`.
@@ -215,7 +230,9 @@ say the same thing:
 
 1. Write the assembly **without** `programs`, with `role` set where you know it, and with explicit `at` and `size`
    on every part.
-2. `pcosmo validate <spec> --suggest --packs-dir "${CLAUDE_PLUGIN_DATA}/icons"`. For every assembly (and every
+2. Run `pcosmo validate <spec>` until it reports **no errors** (with errors, `--suggest` only prints
+   `suggestions skipped: fix errors first`). Then
+   `pcosmo validate <spec> --suggest --packs-dir "${CLAUDE_PLUGIN_DATA}/icons"`. For every assembly (and every
    nested sub-assembly up to depth 3) that has no program it prints why, the stages, and two fragments: a
    `programs` entry with the JSON pointer to add it at (`/assemblies/0/programs`, or
    `/assemblies/0/parts/3/programs` for a sub-assembly; create the array if missing), and the `steps` to append (keep
@@ -231,7 +248,7 @@ say the same thing:
 ### The heuristics it follows (assemblies design section 17)
 
 1. **Body.** The part with an explicit `role: "body"`, else the part most others `mates` with (`cpu-1` counts for
-   the counted part `cpu`), else the part with the largest volume (needs `at` and `size`). A pack's default role
+   the counted part `cpu`), else the part with the largest volume (needs `at` and `size`; sub-assemblies and `use` instances always move as units and their size never counts). A pack's default role
    `body` (every brick, many `auto:` parts) does **not** count; only an explicit spec role does. The body never
    moves. With no role, no mates and no sizes there is no body, and every part may move.
 2. **Classify** the rest, from `role`, `type`, the shape name and, where `at` and `size` are given, geometry:
@@ -254,6 +271,31 @@ say the same thing:
 7. **Story.** `"<label> assembled"` (2 s) then one step per stage with `focus` on its first part and
    `explode` `to: k`, then each nested sub-assembly's stages (caption `"<sub-assembly>: <stage>"`), then **one**
    final step that implodes the nested sub-assemblies first and the root last.
+
+### 3.1 When the user dictates the order, and making the story read well
+
+- **The user's order wins, in the suggestion's format.** Keep the stage shape and timing `--suggest` printed
+  (`distance: "auto"`, `order`, `stagger`, `duration`, `labels`, `fade`, one step per stage with `focus` and `to`), and only
+  reorder or regroup the stages, or choose the directions the user named. Do not drop the final single-step implode.
+  Each stage in the list, including a `with: "previous"` stage, counts as one level for `to`, so renumber `to` after
+  you reorder.
+- **Keep pairs together.** Parts that always travel together (a piston and its connecting rod, a bearing and its
+  cap) are one sub-assembly (`parts`), which moves as a unit. Parts inside a housing (the crankshaft in a block, boards in
+  a chassis) are hidden in the assembled pose: that is expected, not a defect.
+- **Carrier before cargo.** A part mounted on another (valves on a head, a bearing on a shaft) moves before it, or in
+  the same stage as it, so it is not dragged through its neighbours (`assembly/transit-collision`). Put cargo in the
+  carrier's sub-assembly when it should travel with it.
+- **Leave gaps between end positions.** `distance: "auto"` keeps stages clear of what they stack with; a number or `"1x"`
+  you set yourself can put one stage's end pose inside another's (a dropped crankshaft inside the oil pan). Prefer
+  `auto` or a larger multiple, and check the exploded PNG.
+- **`focus` keeps everything in frame.** `focus` zooms the camera to one part; if the exploded subject and its labels do
+  not fit in the zoomed picture, drop `focus` from that step (it then shows the whole scene) or focus the sub-assembly
+  path or the root instead of one small part. Check the exploded PNG for cut-off parts and labels.
+- **Labels.** A counted part has one `label` for all copies, so four pistons read `Piston` four times: label one copy
+  (a separate part for the first copy, the rest as a counted part without a label), or label the group instead. A stage
+  with more than 12 parts hides its labels (`labels: "hide"` in the suggestion): set `"show"` on the stage you want to read, or
+  split the stage, so the exploded pose keeps its labels. If neighbours still overlap with `fit: 14`, raise `fit` (up to
+  40), shorten the labels, or leave the least important parts unlabelled; do not move parts.
 
 Known reading of the rules: on a board, flat parts sitting on the plate come out as "Covers" (thin, on the body's
 outer side). The motion (up, stacked clear of each other) is what you want; you may rename the stage `label`.

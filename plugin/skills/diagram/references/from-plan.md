@@ -59,6 +59,11 @@ A plan has no heights. Use type defaults (mm) and list them in the assumptions:
 | battery (a cylinder)              | 3               |
 | jumper header                     | 6               |
 
+**Mapping a label to a type:** CPU or processor: socket (8). Bridge, PCH, BIOS or flash, BMC, any other chip: chip (3).
+DIMM bank or memory slot: DIMM slot (10). PCIe, PCI, riser slot: PCIe slot (11). Power connector, SATA, USB, LAN, audio,
+front-panel and every other port or header block: connector (9). Coin cell or battery: battery (3). Jumper or
+jumper block: jumper header (6). Decide by what the part is, not by its colour or its size on the plan.
+
 A part with no type you can name: use 5 and say so. A part that is clearly tall (a heat sink drawn on the plan, a
 fan) keeps a default only if no better value is stated; do not invent one.
 
@@ -104,29 +109,29 @@ first part with `role: "body"`, and one part per rectangle.
           "id": "mainboard",
           "shape": "plate",
           "at": [0, 0, 0],
-          "size": [330.2, 228.6, 1.6],
+          "size": [305, 244, 1.6],
           "role": "body"
         },
         {
-          "id": "cpu-1",
+          "id": "cpu-a",
           "type": "cpu",
-          "at": [50.8, 25.4, 1.6],
-          "size": [50.8, 50.8, 8],
-          "label": "CPU 1"
+          "at": [42, 36, 1.6],
+          "size": [48, 48, 8],
+          "label": "CPU A"
         },
         {
-          "id": "pcie-1",
+          "id": "pcie-a",
           "type": "slot",
-          "at": [174, 17, 1.6],
-          "size": [144, 10.2, 11],
-          "label": "PCIe 1"
+          "at": [150, 22, 1.6],
+          "size": [120, 9, 11],
+          "label": "PCIe A"
         },
         {
           "id": "battery",
           "type": "battery",
           "shape": "cylinder",
-          "at": [237, 90, 1.6],
-          "size": [25.4, 25.4, 3],
+          "at": [205, 160, 1.6],
+          "size": [20, 20, 3],
           "label": "Battery"
         }
       ]
@@ -144,7 +149,7 @@ first part with `role: "body"`, and one part per rectangle.
 2. `pcosmo build <spec> --png --no-animated --packs-dir "${CLAUDE_PLUGIN_DATA}/icons"` (a plan has one view; a plain
    `pcosmo build` also writes the animated SVG). `Read` the PNG.
 3. Compare with the plan: every rectangle is there; the relative order and alignment are the same (what is left of
-   what, which are in a row); proportions look right (the dimension line's board is about 13:9); labels are legible and
+   what, which are in a row); the outline's aspect ratio matches the plan's; labels are legible and
    not on top of each other. Neighbouring labels that overlap: shorten them or raise `fit`, then rebuild. The
    plan's top is the back of the picture (plan y runs toward the lower left, plan x toward the lower right), so the
    layout appears turned 45 degrees: that is expected.

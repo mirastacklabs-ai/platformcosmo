@@ -4,6 +4,7 @@
 // Run in a container: scripts/pc exec node tests/assemblies-skill/make-inputs.mjs [--check]
 // Renders SVG -> PNG with the repo's resvg-wasm and Oswald. `--check` writes nothing and exits 1 when
 // a committed PNG or truth file differs.
+// The truth file lives in truth/, apart from inputs/, so the E2E agents' input folder holds no ground truth.
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { createRequire } from "node:module";
@@ -132,19 +133,22 @@ const svgs = {
 };
 const dir = join(here, "inputs");
 const check = process.argv.includes("--check");
-if (!check) await mkdir(dir, { recursive: true });
+if (!check) {
+  await mkdir(dir, { recursive: true });
+  await mkdir(join(here, "truth"), { recursive: true });
+}
 let stale = 0;
 
-async function emit(name, bytes) {
-  const target = join(dir, name);
+async function emit(name, bytes, base = dir) {
+  const target = join(base, name);
   if (check) {
     const onDisk = await readFile(target).catch(() => null);
     const same = onDisk !== null && Buffer.compare(onDisk, Buffer.from(bytes)) === 0;
-    console.log(`${same ? "ok   " : "STALE"} inputs/${name}`);
+    console.log(`${same ? "ok   " : "STALE"} ${name}`);
     if (!same) stale++;
   } else {
     await writeFile(target, bytes);
-    console.log(`wrote inputs/${name} (${bytes.length} bytes)`);
+    console.log(`wrote ${name} (${bytes.length} bytes)`);
   }
 }
 
@@ -161,7 +165,7 @@ for (const [name, svg] of Object.entries(svgs)) {
   const png = img.asPng();
   img.free();
   r.free();
-  await emit(`${name}.png`, png);
+  await emit(`inputs/${name}.png`, png, here);
 }
-await emit("board-plan.truth.json", Buffer.from(`${JSON.stringify(truth, null, 2)}\n`));
+await emit("truth/board-plan.truth.json", Buffer.from(`${JSON.stringify(truth, null, 2)}\n`), here);
 if (stale) process.exitCode = 1;
