@@ -539,6 +539,10 @@ omitted. Both copies sit at the same place when they swap, so the
 swap is invisible except for the occlusion change it is meant to cause. Copies ≤ 0.5 × items
 (beyond: epochs merged, `budget/depth-copies` warning). Frame, static and per-step outputs use
 the same DOM with static visibility for their time, so every output agrees with the animation.
+The DOM itself carries the rest frame (`frameAt(0)`) as attributes (hidden, translated and dimmed
+wrappers), so a bare emit shows the rest pose; frame and step overrides write the FULL state of
+every registered wrapper (`AssemblyFrameState` lists every id, `translate(0 0)` and opacity 1
+included). CSS animations override presentation attributes, so loop mode is unaffected.
 Phase 1b ships without copies (epochs that would need one are merged and marked approximate);
 copies land in Phase 3 ([tracks](./assemblies-tracks.md)).
 
@@ -549,11 +553,13 @@ of `a` lies inside or on `b` (flush faces count, so camshafts flush with a cover
 inside it).
 
 Every rule of this section reasons about the faces of a solid's `depthBox`, so only solids that
-**fill** their box take part: one `box`, `plate` or `card` primitive whose box is the
-`depthBox`. A cylinder, shaft, wedge, prism or multi-primitive solid leaves empty box corners
-where a crossing leaf can be visible in front of it, so it never encloses, hides, clips or
-orders by the hidden-face rule; it is ordered by separation or bisection only (approximate where
-those cannot decide).
+**fill** their box take part: a solid fills its `depthBox` when ANY single `box`, `plate` or
+`card` primitive has a box equal to the `depthBox`. Other primitives (studs, bores, lugs, decals,
+flush cylinders) may exist alongside it: the solid region still contains the whole `depthBox`, so
+detailed housings occlude like plain boxes. A solid without such a primitive (a cylinder, shaft,
+wedge, prism or an assembly of smaller pieces) leaves empty box corners where a crossing leaf can
+be visible in front of it, so it never encloses, hides, clips or orders by the hidden-face rule;
+it is ordered by separation or bisection only (approximate where those cannot decide).
 
 - **Enclosed** leaf: its `depthBox` lies inside a `solid` leaf's `depthBox`, or inside the
   **union of touching solids** (solids whose boxes share a face, merged into connected blocks;

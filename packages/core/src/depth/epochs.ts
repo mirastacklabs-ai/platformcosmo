@@ -171,6 +171,12 @@ export interface LoopMove {
   readonly from: Vec3;
   readonly to: Vec3;
   readonly easing: SpecEasing;
+  /**
+   * Optional CSS cubic-bezier `(x1, y1, x2, y2)` that REPLACES `easing`'s curve (the camera curve of
+   * the loop closure, §7.4), so the certified and the drawn positions are the same function. All four
+   * values must be in [0, 1] (monotone); `easing` stays set (keyword fallback for readers).
+   */
+  readonly bezier?: readonly [number, number, number, number];
 }
 
 export interface DepthBudgets {
@@ -311,7 +317,13 @@ export function easeProgress(easing: SpecEasing, x: number): number {
   if (!(x > 0)) return 0;
   if (x >= 1) return 1;
   if (easing === "linear") return x;
-  const c = BEZIER[easing] ?? BEZIER.ease;
+  return curveProgress(BEZIER[easing] ?? BEZIER.ease, x);
+}
+
+/** Progress of an arbitrary cubic-bezier (same bisection as `easeProgress`). */
+export function curveProgress(c: readonly [number, number, number, number], x: number): number {
+  if (!(x > 0)) return 0;
+  if (x >= 1) return 1;
   let lo = 0;
   let hi = 1;
   for (let k = 0; k < 48; k++) {
@@ -324,7 +336,8 @@ export function easeProgress(easing: SpecEasing, x: number): number {
 
 function progress(m: NMove, t: number): number {
   if (m.t1 - m.t0 <= TIME_EPS) return t >= m.t0 - TIME_EPS ? 1 : 0;
-  return easeProgress(m.easing, (t - m.t0) / (m.t1 - m.t0));
+  const x = (t - m.t0) / (m.t1 - m.t0);
+  return m.bezier === undefined ? easeProgress(m.easing, x) : curveProgress(m.bezier, x);
 }
 
 /** Contribution of one move at time `t`. */
@@ -443,6 +456,7 @@ interface NMove {
   readonly from: Vec;
   readonly to: Vec;
   readonly easing: SpecEasing;
+  readonly bezier?: readonly [number, number, number, number];
 }
 
 function normMove(m: LoopMove): NMove {
@@ -453,6 +467,7 @@ function normMove(m: LoopMove): NMove {
     from: [m.from.x, m.from.y, m.from.z],
     to: [m.to.x, m.to.y, m.to.z],
     easing: m.easing,
+    ...(m.bezier === undefined ? {} : { bezier: m.bezier }),
   };
 }
 
@@ -921,7 +936,13 @@ class EpochSolver {
         m.t1 < m.t0 ||
         !finiteVec(m.from) ||
         !finiteVec(m.to) ||
-        !EASINGS.has(m.easing)
+        !EASINGS.has(m.easing) ||
+        (m.bezier !== undefined &&
+          !(
+            Array.isArray(m.bezier) &&
+            m.bezier.length === 4 &&
+            m.bezier.every((v) => Number.isFinite(v) && v >= 0 && v <= 1)
+          ))
       ) {
         this.bad(
           `a move${typeof m?.path === "string" ? ` of "${m.path}"` : ""} has invalid times, offsets or easing; it is ignored.`,
@@ -943,7 +964,7 @@ class EpochSolver {
     // Synchronized groups: equal (t0, t1, easing) → equal progress curve.
     const groups = new Map<string, number>();
     this.sync = Int32Array.from(mv, (m) => {
-      const k = `${m.t0}|${m.t1}|${m.easing}`;
+      const k = `${m.t0}|${m.t1}|${m.easing}|${m.bezier?.join(",") ?? ""}`;
       let g = groups.get(k);
       if (g === undefined) {
         g = groups.size;

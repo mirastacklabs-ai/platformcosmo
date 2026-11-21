@@ -19,6 +19,7 @@ import type {
 } from "../contracts/index.js";
 import { depthOrder, orderGroups } from "../depth/index.js";
 import type { PlatformCosmoSpec } from "../schema/types.gen.js";
+import { buildAssemblyRender } from "./assembly/index.js";
 import { buildBoards } from "./boards/index.js";
 import { createIds, iconDef } from "../emit/index.js";
 import { h } from "../emit/xml.js";
@@ -727,6 +728,39 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     extents.push(...boardsBuild.extents);
   }
 
+  // ---- Assemblies (schema 1.2.0) -----------------------------------------------------------
+  // Absent for every 1.1 scene (no `assemblies`), so their layers and view box are untouched.
+  const asmResult = buildAssemblyRender({
+    scene,
+    spec: inputs.spec,
+    images: inputs.images,
+    projection,
+    ids,
+    prefix: P,
+    labelSize,
+    fs,
+    text: (o) =>
+      textEl({
+        x: o.x,
+        y: o.y,
+        size: o.size,
+        ...(o.anchor === undefined ? {} : { anchor: o.anchor }),
+        cls: o.cls,
+        ...(o.bold === true ? { bold: true } : {}),
+        content: o.content,
+      }),
+    fit: (text, size, bold, maxWidth) => fit(text, size, bold, maxWidth),
+    nudge: (box, placedBoxes) => nudgeLabel(box, placedBoxes),
+    focusMargin: { side: MARGIN_FOCUS, bottom: labelSize + 6 },
+  });
+  if (asmResult) diagnostics.push(...asmResult.diagnostics);
+  const asmBuild = asmResult !== undefined && "model" in asmResult ? asmResult : undefined;
+  if (asmBuild) {
+    layers.background.push(...asmBuild.defs);
+    layers.objects.push(...asmBuild.objects);
+    extents.push(...asmBuild.extents);
+  }
+
   // ---- Viewbox, overlays ---------------------------------------------------------------
   const pad = Math.max(0, scene.canvas.padding); // pixels (schema: canvas.padding)
   let vb: Rect =
@@ -970,6 +1004,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
 
   layers.labels.push(...arrowNodes, ...labelNodes);
   if (boardsBuild) layers.labels.push(...boardsBuild.labels);
+  if (asmBuild) layers.labels.push(...asmBuild.labels);
 
   // ---- Focus rects, glyph coverage -----------------------------------------------------
   const focusRects: Record<string, Rect> = {};
@@ -1018,6 +1053,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     font: inputs.font,
     fontAssets: fontAssets(),
     ...(boardsBuild ? { boards: boardsBuild.model } : {}),
+    ...(asmBuild ? { assembly: asmBuild.model } : {}),
   };
   registry.set(model, inputs);
   return { model, diagnostics };
