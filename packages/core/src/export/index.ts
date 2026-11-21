@@ -16,6 +16,7 @@ import type {
   RenderOutput,
 } from "../contracts/index.js";
 import { gifEncoder } from "./gif.js";
+import { stepEndTime } from "../render/assembly/tracks.js";
 import { pngStepDiagnostic, validateRenderOptions } from "./options.js";
 import { pngSize } from "./png.js";
 import { bufferingSink, MAX_OUTPUT_BYTES, OutputTooLargeError } from "./stream.js";
@@ -236,7 +237,10 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
     const hold = model.assembly ? assemblyAnim(model.assembly, speed).ends[k] : undefined;
     // `ends` is loop seconds, `close` and the frame clock are output seconds: divide by speed
     // (as assemblySettled does), and never reach into the next step's window
-    const t = Math.min(hold !== undefined ? hold / speed : close - dur * 0.001, close - 1e-6);
+    const t = Math.min(
+      hold !== undefined ? stepEndTime(hold) / speed : close - dur * 0.001,
+      close - 1e-6,
+    );
     const frame = deps.animator.animate(model, { speed, mode: "frame", time: t });
     const at = deps.animator.animate(model, { speed, motion, mode: "step", step });
     return {

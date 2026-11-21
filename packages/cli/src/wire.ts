@@ -38,6 +38,7 @@ export function defaultDeps(): Deps {
       createIconResolver: core.createIconResolver,
       sanitizeSvg: core.sanitizeSvg,
       fetchIconPack: core.fetchIconPack,
+      buildAssemblies: core.buildAssemblies,
       gifEncoder: core.gifEncoder,
     },
     themes: named<ThemeRegistry>(themesModule, "themeRegistry"),

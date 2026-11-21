@@ -86,8 +86,9 @@ export function assemblyElements(a: SceneAssembly): number {
 
 /**
  * Pre-render lower bound of the elements (one per primitive of every leaf): the main assemblies,
- * `views` copies of them, and every level (§13). A1-4 computes the real count (copies, labels,
- * leaders, callouts) in `AssemblyRenderModel.elements` and uses this as its floor.
+ * `views` copies of them, and every level (§13). A1-4 counts the real elements (copies, labels,
+ * leaders, callouts) in `AssemblyRenderModel.elements` and does not use this; the renderer drops
+ * the scene's `budget/views` once it reports its own.
  */
 export function sceneElements(
   base: readonly SceneAssembly[],

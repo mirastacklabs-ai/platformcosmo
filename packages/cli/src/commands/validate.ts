@@ -3,9 +3,15 @@ import type { Diagnostic } from "@platformcosmo/core";
 import { flag, parse } from "../args.js";
 import { addCloseupChecks, loadSpec, makeResolver } from "../common.js";
 import { loadSpecImages } from "../images.js";
-import { type Ctx, EXIT, UsageError } from "../deps.js";
+import { type Ctx, type Deps, EXIT, UsageError } from "../deps.js";
 import { formatDiagnostics, hasErrors, plural } from "../format.js";
-import { formatSuggestions, suggest, type SuggestReport } from "../suggest.js";
+import {
+  formatSuggestions,
+  suggest,
+  type PlacedBox,
+  type PlacedBoxes,
+  type SuggestReport,
+} from "../suggest.js";
 
 export const HELP = `Usage: pcosmo validate <spec> [options]
 
@@ -19,6 +25,30 @@ Options:
   --packs-dir <dir>  Icon pack directory (default: $CLAUDE_PLUGIN_DATA/icons or ~/.platformcosmo/icons)
   -h, --help     Show this help
 `;
+
+/** Effective boxes of every node of the resolved assembly trees (undefined when core lacks them). */
+function placedBoxes(spec: unknown, deps: Deps): PlacedBoxes | undefined {
+  if (!deps.core.buildAssemblies) return undefined;
+  const out = new Map<string, PlacedBox>();
+  try {
+    const built = deps.core.buildAssemblies(spec as never, {
+      ...(deps.parts ? { parts: deps.parts } : {}),
+      ...(deps.dcPack?.shapes ? { dcShapes: deps.dcPack.shapes } : {}),
+    });
+    const walk = (n: (typeof built.assemblies)[number]["root"]): void => {
+      const { origin: o, size: z } = n.local;
+      out.set(n.path, {
+        min: [o.x, o.y, o.z],
+        max: [o.x + z.x, o.y + z.y, o.z + z.z],
+      });
+      for (const c of n.children) walk(c);
+    };
+    for (const a of built.assemblies) walk(a.root);
+  } catch {
+    return undefined; // the stated placement is used instead
+  }
+  return out;
+}
 
 export async function validateCommand(ctx: Ctx, args: string[]): Promise<number> {
   const p = parse(args, {
@@ -49,7 +79,8 @@ export async function validateCommand(ctx: Ctx, args: string[]): Promise<number>
   const SKIPPED = "suggestions skipped: fix errors first";
   const wantSuggest = flag(p, "suggest");
   const suggestSkipped = wantSuggest && (spec === undefined || hasErrors(all));
-  if (wantSuggest && !suggestSkipped) suggestions = suggest(spec, ctx.deps.parts);
+  if (wantSuggest && !suggestSkipped)
+    suggestions = suggest(spec, ctx.deps.parts, placedBoxes(spec, ctx.deps));
   const errors = all.filter((d) => d.severity === "error").length;
   const warnings = all.filter((d) => d.severity === "warning").length;
   const failed = errors > 0 || (flag(p, "strict") && warnings > 0);

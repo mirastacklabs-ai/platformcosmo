@@ -70,6 +70,9 @@ export type { ProjectionOptions, Silhouette } from "./geometry/index.js";
 export { AssemblyPrograms } from "./scene/assembly/plan.js";
 export type { AssemblyProgramsOptions } from "./scene/assembly/plan.js";
 export { reassignSplit } from "./geometry/parts.js";
+/** @internal The resolved assembly tree, for `pcosmo validate --suggest` (effective placement). */
+export { buildAssemblies } from "./scene/assembly/tree.js";
+export type { AssemblyBuild, AssemblyBuildOptions } from "./scene/assembly/tree.js";
 
 // Depth ordering and text (Track A1).
 export { depthOrder, compareBoxes, depthKey, orderGroups } from "./depth/index.js";
