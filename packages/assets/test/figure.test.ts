@@ -640,6 +640,7 @@ describe("error codes", () => {
           "arrow-residual",
           "hull-uncertain",
           "annotation-invalid",
+          "annotation-erased",
           "seat-unverified",
         ],
         ...[

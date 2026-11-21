@@ -260,6 +260,11 @@ describe("no 1 px leftovers in the clean base", () => {
       const sources = sourcesOf(f);
       const r = runFigure(manifest, sources).value!;
       expect(errorsOf(r.report), `${k} px`).toEqual([]);
+      // The moved end is reported (info), never silent.
+      const info = r.report.diagnostics.find(
+        (d) => d.code === "asset/annotation-erased" && d.path === "/annotations/0",
+      );
+      expect(info?.params?.snaps).toEqual([{ end: 0, distance: k }]);
       // Both poses equal the ground truth: no shaft stub under the lifted or seated sinks.
       for (const s of ["assembled", "exploded"] as const) {
         const [ours, truth] = poses(f, r.outputs, s);
@@ -378,5 +383,99 @@ describe("no 1 px leftovers in the clean base", () => {
     expect(errorCodes(check(manifest, sources, { ...r.outputs, base }))).toContain(
       "asset/base-unrecovered",
     );
+  });
+  it("two drawings: a pin the arrow starts from stays the part's, and a sprite without it fails", () => {
+    for (const L of [3, 6]) {
+      const f = figure("main");
+      const manifest = structuredClone(f.manifest);
+      const X = clone(f.states.exploded!.image);
+      const A = clone(f.states.assembled!.image);
+      // A 2 px pin, L px long, under each heat sink in both drawings where the exploded arrow's
+      // shaft starts; the arrow is declared from the pin's end.
+      const pins: ["assembled" | "exploded", number, number][] = [];
+      for (const [k, id] of (["hs-1", "hs-2"] as const).entries()) {
+        const [x, y0] = manifest.annotations[k].polyline[0] as [number, number];
+        const e = f.states.exploded!.truth.units[id]!.pos;
+        const s = f.states.assembled!.truth.units[id]!.pos;
+        for (let t = 0; t < L; t++)
+          for (const xx of [x, x + 1])
+            pins.push(
+              ["exploded", xx, y0 + t],
+              ["assembled", xx - e[0] + s[0], y0 + t - e[1] + s[1]],
+            );
+        manifest.annotations[k].polyline[0] = [x, y0 + L];
+      }
+      for (const [s, x, y] of pins) setPx(s === "exploded" ? X : A, x, y, BLACK);
+      const sources = { "exploded.png": X, "assembled.png": A };
+      const r = runFigure(manifest, sources).value!;
+      expect(errorsOf(r.report), `${L} px`).toEqual([]);
+      for (const s of ["assembled", "exploded"] as const) {
+        const [ours, truth] = poses(f, r.outputs, s);
+        for (const [ps, x, y] of pins) if (ps === s) setPx(truth, x, y, BLACK);
+        expect(differences(ours, truth), `${L} px, ${s}`).toBe(0);
+      }
+      // As before this fix: the pin taken as the arrow's (snapped over) and cut from the sprite.
+      const p = r.outputs.parts[0]!;
+      const sp = clone(r.outputs.sprites[p.sprite]!);
+      const ox = p.exploded[0] + r.report.alignment!.dx;
+      const oy = p.exploded[1] + r.report.alignment!.dy;
+      for (const [ps, x, y] of pins.slice(0, 4 * L))
+        if (ps === "exploded") setPx(sp, x - ox, y - oy, [0, 0, 0, 0]);
+      const sprites = r.outputs.sprites.map((q, i) => (i === p.sprite ? sp : q));
+      expect(errorCodes(check(manifest, sources, { ...r.outputs, sprites }))).toContain(
+        "asset/occluded-unrecovered",
+      );
+    }
+  });
+
+  it("one drawing: the template carries no board trace where it touches it", () => {
+    const f = figure("assembled-only");
+    const r = runFigure(f.manifest, sourcesOf(f)).value!;
+    expect(errorsOf(r.report)).toEqual([]);
+    const [ours, truth] = poses(f, r.outputs, "assembled");
+    expect(differences(ours, truth)).toBe(0);
+    // As before this fix: 2 px of the trace that meets hs-1's top-left edge in its template,
+    // which seated hs-2 (whose drawing is paper there) shows as a burr.
+    const k = r.outputs.parts.findIndex((p) => p.id === "hs-2");
+    const p = r.outputs.parts[k]!;
+    const sp = clone(r.outputs.sprites[p.sprite]!);
+    for (const [x, y] of [
+      [230, 98],
+      [228, 99],
+    ] as const) {
+      expect(lumAt(f.states.assembled!.image, x, y)).toBeGreaterThan(200);
+      setPx(sp, x - p.seat[0], y - p.seat[1], BLACK);
+    }
+    const sprites = r.outputs.sprites.map((q, i) => (i === p.sprite ? sp : q));
+    expect(errorCodes(check(f.manifest, sourcesOf(f), { ...r.outputs, sprites }))).toContain(
+      "asset/foreign-pixels",
+    );
+  });
+
+  it("one drawing: ink entirely inside an arrow's mask is erased with it and reported", () => {
+    const f = figure("assembled-only");
+    const [x0, y0] = quietPatch(f, 24, 60);
+    const x = x0 + 12;
+    const A = clone(f.states.assembled!.image);
+    drawArrow(A, x, y0 + 8, y0 + 50);
+    // A 2 x 2 dot beside the shaft, inside the mask, touching nothing.
+    fill(A, x + 3, y0 + 24, 1, 2);
+    const arrow = {
+      kind: "arrow",
+      state: "assembled",
+      polyline: [
+        [x, y0 + 8],
+        [x, y0 + 50],
+      ],
+    };
+    const manifest = { ...f.manifest, annotations: [...f.manifest.annotations, arrow] };
+    const r = runFigure(manifest, { "assembled.png": A }).value!;
+    expect(errorsOf(r.report)).toEqual([]);
+    const idx = f.manifest.annotations.length;
+    const info = r.report.diagnostics.find(
+      (d) => d.code === "asset/annotation-erased" && d.path === `/annotations/${idx}`,
+    );
+    expect(info?.severity).toBe("info");
+    expect(info?.params?.inside).toBe(2);
   });
 });

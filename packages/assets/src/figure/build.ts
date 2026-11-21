@@ -64,6 +64,11 @@ export interface BaseModel {
     readonly pixels: number;
     readonly bbox: Box;
   }[];
+  /**
+   * One drawing: per annotation, the drawing's ink under its mask that is neither its own stroke
+   * nor a board stroke running out of the erase (a dot under a tip), erased with it.
+   */
+  readonly inside: readonly { readonly annotation: number; readonly pixels: number }[];
 }
 
 const DIRS: readonly (readonly [number, number])[] = [
@@ -95,7 +100,7 @@ function oneDrawing(
   partZ: Mask,
   part: Mask,
   annErase: readonly { g: AnnotationGeometry; m: Mask }[],
-): Pick<BaseModel, "erase" | "recover" | "board" | "cuts"> {
+): BaseModel {
   const st = a.img[a.base]!;
   const { W, H } = st;
   const raw = (x: number, y: number): boolean =>
@@ -312,11 +317,20 @@ function oneDrawing(
     const y = (p - x) / W;
     rb.data[(y - rb.y) * rb.w + x - rb.x] = 1;
   }
+  // Board ink under the masks erased with them (entirely inside, touching nothing outside).
+  const inside = new Map<number, number>();
+  for (let j = 0; j < N.h; j++)
+    for (let i = 0; i < N.w; i++) {
+      if (!N.data[j * N.w + i] || keepMask.data[j * N.w + i]) continue;
+      const e = annErase.find(({ m }) => has(m, i + N.x, j + N.y));
+      if (e) inside.set(e.g.index, (inside.get(e.g.index) ?? 0) + 1);
+    }
   return {
     erase: minus(erase, keepMask),
     recover: (x, y) => rebuilt.get(y * W + x),
     board: union(keepMask, rb),
     cuts,
+    inside: [...inside].map(([annotation, pixels]) => ({ annotation, pixels })),
   };
 }
 
@@ -377,6 +391,7 @@ export function baseModel(a: Analysis): BaseModel {
     erase,
     board: EMPTY,
     cuts: [],
+    inside: [],
     recover: (x, y) => {
       const qx = x + dx;
       const qy = y + dy;

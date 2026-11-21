@@ -598,6 +598,26 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
           if (comps.some((c) => c.pixels > 0)) foreignAny.add(k);
           for (const c of comps.filter((c) => c.pixels >= T.foreign).sort(byPixels))
             items.push({ state: s, part: u.id, pixels: c.pixels, bbox: c.box });
+          // One drawing: an instance's sprite (the template cut from another instance) showing ink
+          // on top where its own drawing is paper carries something of the template's drawing
+          // only (a board stroke touching the template): any pixel fails.
+          if (states.length === 1 && cls.unit !== k) {
+            const paper = (x: number, y: number): boolean =>
+              has(inkM, x, y) &&
+              top(x, y) &&
+              !st.rawInk[y * st.W + x] &&
+              Math.abs(st.lum[y * st.W + x]! - spriteLum(sp, x - px, y - py)) > T.luminance;
+            for (const c of components(inkM, paper, 8).sort(byPixels)) {
+              foreignAny.add(k);
+              items.push({
+                state: s,
+                part: u.id,
+                pixels: c.pixels,
+                bbox: c.box,
+                reason: `${c.pixels} px of ${u.id}'s sprite show ink where its drawing is paper`,
+              });
+            }
+          }
         }
       }
     }
@@ -815,11 +835,25 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
             top[y * st.W + x]! < rank &&
             !has(a.excluded[s]!, x, y);
           for (const c of components(u.place[s]!.E, miss, 8).sort(byPixels)) {
-            (c.pixels > T.occluded ? items : warnItems).push({
+            // Part ink the drawing shows there (a pin or an edge the sprite lacks) fails at any
+            // size: the size threshold is for hidden pixels, not for the part's own visible ink.
+            let ink = 0;
+            for (let j = 0; j < c.box.h; j++)
+              for (let i = 0; i < c.box.w; i++) {
+                const x = i + c.box.x;
+                const y = j + c.box.y;
+                if (miss(x, y) && st.rawInk[y * st.W + x]) ink++;
+              }
+            (c.pixels > T.occluded || ink > 0 ? items : warnItems).push({
               state: s,
               part: u.id,
               pixels: c.pixels,
               bbox: c.box,
+              ...(ink > 0
+                ? {
+                    reason: `${ink} px of ${u.id}'s ink the drawing shows are missing from its sprite`,
+                  }
+                : {}),
             });
           }
           // The analysis's record: template pixels hidden in its drawing that no other
@@ -935,6 +969,32 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
       }
     }
     entry("arrow-residual", "asset/arrow-residual", items, 0, "error");
+  }
+
+  // ---- what the analysis took as annotation ink beyond the declaration (§6.4): an end moved
+  // onto the stroke as drawn and, with one drawing, ink entirely inside a mask. Both are
+  // documented ambiguities (a tick in line with a tip, a dot under it), reported, never silent.
+  if (usable) {
+    const inside = new Map(model.inside.map((v) => [v.annotation, v.pixels]));
+    for (const g of a.annotations) {
+      const n = inside.get(g.index) ?? 0;
+      if (g.snaps.length === 0 && n === 0) continue;
+      const what = g.snaps.map(
+        (v) => `its ${v.end === 0 ? "first" : "last"} point moved ${v.distance} px onto the stroke`,
+      );
+      if (n > 0) what.push(`${n} px of other ink entirely inside its mask were erased with it`);
+      diagnostics.push({
+        severity: "info",
+        code: "asset/annotation-erased",
+        path: `/annotations/${g.index}`,
+        message: `annotation ${g.index}: ${what.join("; ")}`,
+        params: {
+          annotation: g.index,
+          snaps: g.snaps.map((v) => ({ end: v.end, distance: v.distance })),
+          inside: n,
+        },
+      });
+    }
   }
 
   // ---- hull confidence and annotation validity (from the analysis)

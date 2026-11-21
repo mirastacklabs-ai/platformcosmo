@@ -52,8 +52,18 @@ export interface AnnotationGeometry {
   allowances: Box[];
   /** The detected arrowhead's own ink (the wedge, before its 1 px stamp), or EMPTY. */
   headInk: Mask;
+  /** Ends moved onto the stroke as drawn (§6.4): the end, how far, and the ink walked over. */
+  readonly snaps: readonly Snap[];
   /** Geometry-level problems (each becomes an `asset/annotation-invalid`). */
   readonly problems: string[];
+}
+
+/** A polyline end moved onto its stroke as drawn: how far, and the raw-ink pixels walked over. */
+export interface Snap {
+  readonly end: 0 | 1;
+  readonly distance: number;
+  /** Pixel indices (y * W + x) of the continuation's runs. */
+  readonly pixels: readonly number[];
 }
 
 export function polylineLength(pts: readonly (readonly [number, number])[]): number {
@@ -154,9 +164,11 @@ function snapEnds(
   ink: Uint8Array,
   W: number,
   H: number,
-): (readonly [number, number])[] {
+  fixed: readonly (0 | 1)[],
+): { pts: (readonly [number, number])[]; snaps: Snap[] } {
   const out = pts.map((p) => [p[0], p[1]] as const);
-  if (med <= 0 || med > 12 || pts.length < 2) return out;
+  const snaps: Snap[] = [];
+  if (med <= 0 || med > 12 || pts.length < 2) return { pts: out, snaps };
   const reach = 2 * (med + 2) + 2;
   const on = (x: number, y: number): boolean => {
     const a = Math.round(x);
@@ -164,6 +176,8 @@ function snapEnds(
     return a >= 0 && b >= 0 && a < W && b < H && ink[b * W + a] !== 0;
   };
   for (const e of [0, pts.length - 1]) {
+    const end: 0 | 1 = e === 0 ? 0 : 1;
+    if (fixed.includes(end)) continue;
     const [ex, ey] = pts[e]!;
     const [nx0, ny0] = pts[e === 0 ? 1 : e - 1]!;
     const L = Math.hypot(ex - nx0, ey - ny0);
@@ -195,6 +209,7 @@ function snapEnds(
     let [plo, phi] = start;
     let last = 0;
     let ended = false;
+    const walked: number[] = [];
     for (let t = 1; t <= reach; t++) {
       const r = runAt(ex + t * ux, ey + t * uy, plo - 1, phi + 1);
       if (!r) {
@@ -212,11 +227,14 @@ function snapEnds(
       last = t;
       plo = lo;
       phi = hi;
+      for (let k = lo; k <= hi; k++)
+        walked.push(Math.round(ey + t * uy + k * ny) * W + Math.round(ex + t * ux + k * nx));
     }
     if (!ended || last === 0) continue;
     out[e] = [Math.round(ex + last * ux), Math.round(ey + last * uy)] as const;
+    snaps.push({ end, distance: last, pixels: walked });
   }
-  return out;
+  return { pts: out, snaps };
 }
 
 export interface AnnotationInput {
@@ -225,6 +243,8 @@ export interface AnnotationInput {
   /** Points or rect already translated into the state image. */
   readonly points?: readonly (readonly [number, number])[];
   readonly rect?: Box;
+  /** Ends (0 = first, 1 = last) that keep their declared position (a vetoed snap). */
+  readonly fixed?: readonly (0 | 1)[];
 }
 
 /**
@@ -259,6 +279,7 @@ export function measureAnnotation(
       mask: dilate(band, 2, W, H),
       allowances: [],
       headInk: EMPTY,
+      snaps: [],
       problems,
     };
   }
@@ -267,7 +288,7 @@ export function measureAnnotation(
   const declared = input.points!;
   const runsOf = (q: readonly Sample[]): number[] => q.filter((s) => s.run > 0).map((s) => s.run);
   const first = samplePolyline(declared).map((p) => measure(ink, W, H, p, closed));
-  const pts = snapEnds(declared, strokeRun(runsOf(first)), ink, W, H);
+  const { pts, snaps } = snapEnds(declared, strokeRun(runsOf(first)), ink, W, H, input.fixed ?? []);
   const moved = pts.some((p, k) => p[0] !== declared[k]![0] || p[1] !== declared[k]![1]);
   const samples = moved ? samplePolyline(pts).map((p) => measure(ink, W, H, p, closed)) : first;
   const runs = runsOf(samples);
@@ -335,6 +356,7 @@ export function measureAnnotation(
     mask: union(capsules(pts, hw + 2, W, H), dilate(band, 2, W, H)),
     allowances: [],
     headInk: EMPTY,
+    snaps,
     problems,
   };
 }
