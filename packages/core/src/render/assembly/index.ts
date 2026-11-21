@@ -53,10 +53,12 @@ import { stepTimes } from "../boards/timeline.js";
 import { ELEMENT_WARN, MAX_LEVELS } from "../../scene/assembly/levels.js";
 import { MAX_VIEWS } from "../../scene/assembly/views.js";
 import { levelOf } from "../../scene/assembly/levels.js";
-import { buildLevelGroups, levelFocusRect, matrixAttr, roundRect } from "./levels.js";
-import { VIEW_FADE, scopeIds, viewNode, viewRender } from "./views.js";
+import { buildLevelGroups, levelFocusRect, roundRect } from "./levels.js";
+import { groupTracks, placementAttr } from "./groups.js";
+import { scopeIds, viewNode, viewRender } from "./views.js";
 import { clipDef, partGroup, wrap, type DomContext, type Wrappers } from "./dom.js";
 import { buildLabels, type LabelTrack, type TextSpec } from "./labels.js";
+import { andVisibility, presenceTracks, presentWindows, type PresenceTracks } from "./builds.js";
 import { buildLoop, type StageRun } from "./loop.js";
 import {
   MoveIndex,
@@ -225,8 +227,19 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
 
   // ---- depth epochs ----------------------------------------------------------------------
   const statics = input.statics.filter((s) => !leafByPath.has(s.key));
+  // built parts exist in windows only (B-3): the depth order skips them while absent
+  const pres = new Map<string, PresenceTracks>();
+  for (const [path, p] of loopBuild.presence) {
+    pres.set(path, presenceTracks(p, loopBuild.loopFades.get(path), total, loopBuild.closure));
+  }
   const inputs: DepthItemInput[] = [
-    ...depthItems(leaves),
+    ...depthItems(leaves).map((it) => {
+      const w =
+        it.path === undefined
+          ? undefined
+          : presentWindows(pres.get(it.path)?.visibility ?? [], total);
+      return w === undefined ? it : { ...it, present: w };
+    }),
     ...statics.map((s) => ({ key: s.key, box: s.box })),
   ];
   const result = depthEpochs(inputs, loopBuild.moves, total, {
@@ -340,11 +353,17 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     } else {
       motion = offsetTrack(plain(chain), total, projection, extraTimes);
     }
-    const visibility = visibilityTrack(
+    let visibility = visibilityTrack(
       result.epochs.map((e, i) => ({ t0: e.t0, visible: (epochSets[i] as Set<string>).has(key) })),
       total,
     );
-    const opacity = windowsTrack(fadeWindows.get(path) ?? [], FADE_OPACITY, total);
+    let opacity = windowsTrack(fadeWindows.get(path) ?? [], FADE_OPACITY, total);
+    // built parts exist from their move's start (B-3): the presence tracks join the epochs'
+    const pt = pres.get(path);
+    if (pt !== undefined) {
+      visibility = andVisibility(visibility, pt.visibility, total);
+      if (pt.opacity.length > 0) opacity = pt.opacity;
+    }
     const track: PartTrack = { copy: key, host, motion, visibility, opacity };
     tracks.push(track);
     const w: { -readonly [K in keyof Wrappers]: Wrappers[K] } = {};
@@ -578,8 +597,6 @@ function mergeRanges(
   return out;
 }
 
-const r4n = (v: number): number => Math.round(v * 10000) / 10000 + 0;
-
 const byKey = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 const sortedRecord = <T>(r: Record<string, T>): Record<string, T> =>
@@ -771,61 +788,35 @@ export function buildAssemblyRender(
       opacity: sortedRecord(opacity),
     };
   };
-  // Opacity and placement of the view and level groups at loop time `t` (§7.7, §8.4): the view
-  // in effect cross-fades in over VIEW_FADE at its step's start; a close-up cross-fades in over
-  // the transition into its step (the end of the previous step; step 1: up to its motion window)
-  // and eases from `fromHost(hostAt(k - 1))` (zoom 1: B-3 composes the camera) to its overview.
+  // Opacity and placement of the view and level groups (groups.ts): keys on the loop clock that
+  // frameAt/stepEnd evaluate and the animator writes as CSS (§7.7, §8.4).
   const clk = main.model.clock;
-  const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
   const levelAtStep = (k: number): string | undefined => {
     const focus = k < 0 ? undefined : scene.timeline[k]?.focus;
     return focus === undefined ? undefined : levelOf(levels, focus)?.path;
   };
-  const tStart = (k: number): number => (k <= 0 ? 0 : (clk[k - 1]?.end ?? 0));
-  const tEnd = (k: number): number => (k <= 0 ? (clk[0]?.open ?? 0) : (clk[k]?.start ?? 0));
+  const gtracks = groupTracks({
+    total,
+    clock: clk,
+    plan,
+    views: viewRenders,
+    levels: lv?.levels ?? [],
+    levelAtStep,
+    mainLayers:
+      lv === undefined
+        ? []
+        : ["background", "groups", "edges", "flows", "objects", "labels", "dcflows"].map(
+            (l) => `${ctx.prefix}-ly_${l}`,
+          ),
+  });
   const groupState = (
     t: number,
   ): { transforms: Record<string, string>; opacity: Record<string, number> } => {
     const transforms: Record<string, string> = {};
     const opacity: Record<string, number> = {};
-    if (turned.length > 0) {
-      let kv = 0;
-      for (let i = 0; i < clk.length; i++) if ((clk[i]?.start ?? 0) <= t) kv = i;
-      const cur = plan[kv]?.view ?? 0;
-      const prev = kv > 0 ? (plan[kv - 1]?.view ?? 0) : 0;
-      const f = clamp01((t - (clk[kv]?.start ?? 0)) / VIEW_FADE);
-      for (const v of viewRenders) {
-        opacity[v.group] = round2(
-          v.turn === cur ? (v.turn === prev ? 1 : f) : v.turn === prev ? 1 - f : 0,
-        );
-      }
-    }
-    if (lv !== undefined) {
-      let k = 0;
-      for (let i = 0; i < clk.length; i++) if (tStart(i) <= t) k = i;
-      const span = tEnd(k) - tStart(k);
-      const f = span > 1e-9 ? clamp01((t - tStart(k)) / span) : 1;
-      const cur = levelAtStep(k);
-      const prev = levelAtStep(k - 1);
-      for (const l of lv.levels) {
-        const isCur = l.path === cur;
-        const isPrev = l.path === prev;
-        opacity[l.group] = round2(isCur ? (isPrev ? 1 : f) : isPrev ? 1 - f : 0);
-        let a = l.overview;
-        if (isCur && !isPrev) {
-          const e = l.fromHost(l.hostAt(k));
-          a = {
-            scale: e.scale + (a.scale - e.scale) * f,
-            tx: e.tx + (a.tx - e.tx) * f,
-            ty: e.ty + (a.ty - e.ty) * f,
-          };
-        }
-        transforms[l.group] = matrixAttr({
-          scale: r4n(a.scale),
-          tx: round2(a.tx),
-          ty: round2(a.ty),
-        });
-      }
+    for (const g of gtracks) {
+      opacity[g.id] = round2(evalOpacity(g.opacity, t));
+      if (g.placement !== undefined) transforms[g.id] = placementAttr(g.placement, t);
     }
     return { transforms, opacity };
   };
@@ -881,6 +872,7 @@ export function buildAssemblyRender(
         : levelFocusRect(levels, lv, step, id, ctx.focusMargin ?? { side: 0, bottom: 0 }).rect,
     ...(lv === undefined ? {} : { levels: lv.levels }),
     ...(turned.length === 0 ? {} : { views: viewRenders }),
+    groups: gtracks,
   };
   const _check: AssemblyRenderModel = model;
   void _check;

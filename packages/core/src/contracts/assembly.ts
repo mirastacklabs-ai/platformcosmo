@@ -777,16 +777,17 @@ export interface AssemblyAffine {
 /**
  * One close-up level group (§8.4, A1-4). All rects are screen rects (user units). A level has
  * its own coordinates ("local": its world projected, no camera); `overview` places them in the
- * main viewport. The level group `<g id=group>` sits in the overlay layer (pinned like captions:
- * a sibling of the camera) with `transform = overview` and `opacity = 0` at rest.
+ * main viewport. The level group `<g id=group>` sits in the overlay layer, INSIDE the camera
+ * group (the parent camera composes its zoom onto the group's own placement), with
+ * `transform = overview` and `opacity = 0` at rest.
  *
- * Entry rule (B-3): for a focus transition into step k the group starts at
- * `fromHost(camera(hostAt(k - 1)))` (the host's drawn rect after the parent camera's zoom, which
- * only B-3 knows) and eases to `overview`; `enter` is that start for a host that never moved and
- * a camera at zoom 1. `AssemblyRenderModel.frameAt` composes it at zoom 1.
+ * Entry (B-3): for a focus transition into step k the group starts at
+ * `fromHost(hostAt(k - 1))` (zoom 1: the camera that is in effect at that time composes the
+ * parent's zoom, so it is NOT applied again here) and eases to `overview`; leaving reverses it.
+ * `AssemblyRenderModel.frameAt` and the animator use the same keys (`groups`).
  *
- * Occluders (B-3): the main world cross-fades against the level (at least the host's depth
- * neighbours), so nothing of the main scene slides under the level while it zooms in.
+ * Occluders (B-3): the main world's layer groups (objects, labels, flows) cross-fade against the
+ * level over the same windows, so nothing of the main scene slides under the level.
  *
  * Figure and storyboard levels (`model` absent): `rest`, `reach`, `overview`, `focus` and `enter`
  * are PLACEHOLDERS derived from the host rect; R-2 owns their real fit to the host's zoomed rect.
