@@ -376,7 +376,12 @@ the scene by −v about the centre of the union of the assemblies' rest bounds (
 separately into its own `view(v)` group; at the build step's start the views cross-fade over
 0.3 s. Decals on faces turned away are not drawn; billboards and sprites are view-independent
 (pre-rendered sprites keep their drawn angle, which the skill notes). Cost: elements × views
-(`budget/views` warning above 5000 total; the scene reports a lower bound, one element per primitive, and the renderer applies the same threshold to its real count). The per-view viewBox comes from the rotated `reachBounds`. Views need an assembly-only spec: figures and storyboards are refused too (`assembly/view-needs-assembly-only`). Decal faces are assembly-local data and are kept in every view; the renderer maps them through `frame.rotate`.
+(`budget/views` warning above 5000 total; the scene reports a lower bound, one element per primitive, and the renderer applies the same threshold to its real count). The per-view viewBox comes from the rotated `reachBounds`. Views need an assembly-only spec: figures and storyboards are refused too (`assembly/view-needs-assembly-only`). Decal faces are assembly-local data and are kept in every view; the renderer maps them through `frame.rotate`. Render model (A1-4): `AssemblyRenderModel.views` has one entry per view (0 included) with its own
+model (projection, depth epochs, tracks, frames), group `ids.view(turn)` (objects, then labels;
+views other than 0 rest at opacity 0) and `viewBox`; ids of a view other than 0 carry the
+suffix `__v<turn>`, images keep one definition. Caps run before any build: at most 4 views, and
+2 x 2000 leaves built over main, levels and views (`budget/views`, error); the real element count
+over all views above 5000 gives `budget/views` (warning).
 
 ## 8. Racks, nesting, close-ups
 
@@ -458,6 +463,28 @@ the node (≤ 3×) while the level cross-fades in, starting with its rest bounds
 node's zoomed screen rect and easing to its own overview; leaving reverses it. Levels nest
 (≤ 4 deep, ≤ 8 instances per spec). Per-step outputs and frames render the level in effect.
 Element and byte budgets count every level.
+
+**Render model (A1-4).** `AssemblyRenderModel.levels` has one entry per level, sorted by path.
+The level group (`ids.level(path)`) sits in the overlay layer, pinned against the camera like
+the captions, with `transform = overview` and `opacity 0` at rest. All rects are screen rects;
+a level has its own coordinates (its world projected), `overview` places them in the main
+viewport (its reach contained in the main overview area), `hostRect` is the host box seen
+through the parent's overview and `hostFocus` the camera rect that frames it. The cross-fade
+starts at `enter` (the level's rest bounds contained in the host's rect, centred, so there is
+no jump; `fromHost(zoomed)` gives the same for the camera's zoomed rect) and eases to
+`overview`; `hostAt(step)` follows a host that moved. Focus ids inside a level resolve in the
+level's own world through its overview (`focusRect`), margins in viewport pixels. Figure and
+storyboard levels carry the geometry and an empty group; their fit is a placeholder for R-2.
+`frameAt`/`stepEnd` merge the states of the main scene, every view and every level, including
+the opacity of each view group (linear over 0.3 s at the build step's start) and of each level
+group (linear over the camera transition into its step), and the level groups' placement
+(zoom 1); B-3 still animates them in CSS. Entry rule: a focus transition into step k starts the
+level at `fromHost(camera(hostAt(k - 1)))`; `enter` is that start for a host that never moved.
+Occluders: B-3 cross-fades the main world against the level (at least the host's depth
+neighbours), so nothing of the main scene slides under the level while it zooms in. The
+top-level `focusRect` answers world ids in the view in effect (`plan[step - 1].view`); ids
+inside a level are answered by `levelFocusRect(step, id)` in overlay coordinates and are not in
+`RenderModel.focusRects`. Close-ups and views do not combine (`assembly/view-needs-assembly-only`).
 
 ### 8.5 Size reconciliation
 
@@ -940,8 +967,8 @@ suggestions):
 | `assembly/clip-fallback`                                                                                        | info                                              | enclosed part hidden until clear                                                                                                                                 |
 | `assembly/depth-input`                                                                                          | error                                             | internal: invalid depth-order input (non-finite box, move or loop); that input is ignored                                                                        |
 | `assembly/bounds-growth`                                                                                        | info                                              | reach bounds > 4× rest                                                                                                                                           |
-| `assembly/size-mismatch`                                                                                        | warning (info: much smaller)                      | template or close-up does not fit at true scale                                                                                                                  |
 | `assembly/closeup-turned`                                                                                       | info                                              | a close-up's footprint would match its host better turned a quarter; not turned (fronts stay aligned)                                                            |
+| `assembly/size-mismatch`                                                                                        | warning (info: much smaller)                      | template or close-up does not fit at true scale                                                                                                                  |
 | `assembly/reserved-id`                                                                                          | error                                             | slot id `frame` on a rack in assembly mode; any part id `closeup` (reserved segment)                                                                             |
 | `semantic/reserved-id`                                                                                          | warning                                           | a 1.1 id `closeup` (still valid; rename before adding close-ups)                                                                                                 |
 | `assembly/too-deep`                                                                                             | error                                             | path longer than 8 segments (also through `use` and `closeup` templates)                                                                                         |
@@ -955,7 +982,7 @@ suggestions):
 | `assembly/unknown-shape`                                                                                        | error                                             | `pack:id` shape not installed or in the DC pack (validate: only with a registry; `render()` always refuses)                                                      |
 | `assembly/shape-params`                                                                                         | error                                             | unknown or invalid `params` for a shape                                                                                                                          |
 | `assembly/duplicate-part`                                                                                       | error                                             | sibling ids collide (also after `count` expansion)                                                                                                               |
-| `brick/off-grid`                                                                                                | warning                                           | non-integer stud or plate position, `size` or `pitch` (after converting to studs)                                                                                |
+| `brick/off-grid`                                                                                                | warning                                           | non-integer stud or plate position                                                                                                                               |
 | `image/not-found`, `image/unsafe-path`                                                                          | error                                             | CLI path resolution (did-you-mean over files in the directory)                                                                                                   |
 | `image/format`, `image/format-mismatch`                                                                         | error                                             | not PNG, JPEG or SVG by magic bytes (WebP: convert to PNG or JPEG) / differ from extension                                                                       |
 | `image/too-large`, `image/too-many`                                                                             | error                                             | §11.4 caps                                                                                                                                                       |
