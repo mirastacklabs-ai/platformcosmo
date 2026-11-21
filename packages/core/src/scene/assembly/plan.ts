@@ -17,7 +17,8 @@
  * The actions then flow through `planFigureSteps` (`foreign`): ONE cursor, motion window and
  * compression computation for figures and assemblies.
  *
- * Build programs and racks are A2-6 / Phase 2: their actions are left alone here.
+ * Build programs (A2-6, `build.ts`) resolve beside the explode programs and play through the
+ * same machine and step loop; racks are Phase 2 (E-1).
  *
  * Qualified program names: a `ProgramLevel.program` of a program owned by a sub-assembly is
  * `<owner path relative to the assembly>/<program id>` (`head/service`); a root program is its
@@ -39,6 +40,9 @@ import type {
   SceneAssembly,
   PartShapePack,
   PartShapeRegistry,
+  LoopStart,
+  QuarterTurn,
+  ResolvedBuildProgram,
   SceneAssemblyNode,
 } from "../../contracts/index.js";
 import { LevelMachine, type AccessStep } from "../../schema/assembly-levels.js";
@@ -52,6 +56,7 @@ import type {
   PlatformCosmoSpec,
   SpecAssembly,
   SpecAssemblyAction,
+  SpecBuildProgram,
   SpecExplodeProgram,
   SpecStage,
 } from "../../schema/types.gen.js";
@@ -73,6 +78,14 @@ import {
 } from "./directions.js";
 import { parseDistance, programDistances, type LeafBox, type Mover } from "./distances.js";
 import { frameMap, rnd, unionBoxes } from "./frame.js";
+import {
+  baseBuildLevel,
+  buildSegment,
+  loopStartOf,
+  resolveBuild,
+  viewAt,
+  viewSwitches,
+} from "./build.js";
 import { buildAssemblies } from "./tree.js";
 import {
   OwnerSelectors,
@@ -89,6 +102,7 @@ import {
   r4,
   rankMovers,
   stageStart,
+  transitionOf,
   type OrderKeys,
 } from "./timing.js";
 
@@ -149,6 +163,8 @@ interface OwnerInfo {
   readonly explodes: readonly ProgInfo[];
   /** Default explode program (A2-1 rule). */
   readonly dflt: ProgInfo | undefined;
+  /** Build programs of the owner, spec order. */
+  readonly builds: readonly ProgInfo[];
 }
 
 interface ResolvedProgramInfo {
@@ -163,6 +179,8 @@ interface Resolved {
   readonly owners: ReadonlyMap<string, OwnerInfo>;
   /** By `<ownerRel>\0<program id>`. */
   readonly programs: ReadonlyMap<string, ResolvedProgramInfo>;
+  /** Resolved build programs, by `<ownerRel>\0<program id>`. */
+  readonly builds: ReadonlyMap<string, ResolvedBuildProgram>;
   readonly nodes: ReadonlyMap<string, SceneAssemblyNode>;
   /** Programs that could not be resolved (budget or malformed): `<ownerRel>\0<id>`. */
   readonly unresolved: ReadonlySet<string>;
@@ -174,6 +192,8 @@ interface Simulated {
   readonly actions: ReadonlyMap<string, ForeignAction>;
   /** Pose after each step (index = step), full list per assembly. */
   readonly poses: readonly (readonly ProgramLevel[])[];
+  /** View a step's build/unbuild actions leave in effect (`at` = action index), by step. */
+  readonly views: ReadonlyMap<number, { readonly at: number; readonly view: QuarterTurn }>;
   readonly base: readonly ProgramLevel[];
   /** Programs some action (or the base pose) plays: `<ownerRel>\0<id>`. */
   readonly used: ReadonlySet<string>;
@@ -282,7 +302,8 @@ export class AssemblyPrograms {
         const explodes = t.progs.filter((p) => p.kind === "explode");
         if (t.progs.length > 0) {
           const dflt = explodes.find((p) => p.id === t.defaultProg) ?? explodes[0];
-          owners.set(rel, { rel, node: n, tnode: t, explodes, dflt });
+          const builds = t.progs.filter((p) => p.kind === "build");
+          owners.set(rel, { rel, node: n, tnode: t, explodes, dflt, builds });
         }
       }
       let byId: Map<string, TNode> | undefined;
@@ -304,6 +325,7 @@ export class AssemblyPrograms {
     collect(asm.root, tree, "");
 
     const programs = new Map<string, ResolvedProgramInfo>();
+    const builds = new Map<string, ResolvedBuildProgram>();
     const unresolved = new Set<string>();
     const indexes = new Map<string, { index: OwnerIndex; sel: OwnerSelectors }>();
     for (const rel of [...owners.keys()].sort(cmp)) {
@@ -333,8 +355,45 @@ export class AssemblyPrograms {
           unresolved.add(pk);
         } else programs.set(pk, r);
       }
+      for (const info of owner.builds) {
+        const pk = `${rel}\0${info.id}`;
+        const spec = atPointer(this.spec, info.ptr) as SpecBuildProgram | undefined;
+        if (spec === undefined || !Array.isArray(spec.steps)) {
+          unresolved.add(pk);
+          continue;
+        }
+        let ix = indexes.get(rel);
+        if (ix === undefined) {
+          const index = indexOwner(owner.node, this.work);
+          ix = { index, sel: new OwnerSelectors(index, this.work) };
+          indexes.set(rel, ix);
+        }
+        if (!ix.index.complete) {
+          this.budgetWarning();
+          unresolved.add(pk);
+          continue;
+        }
+        const r = resolveBuild({
+          asm,
+          owner: owner.node,
+          tnode: owner.tnode,
+          prog: spec,
+          ptr: info.ptr,
+          index: ix.index,
+          sel: ix.sel,
+          work: this.work,
+        });
+        if (r === undefined) {
+          this.budgetWarning();
+          unresolved.add(pk);
+          continue;
+        }
+        if (r.capped) this.budgetWarning();
+        this.diagnostics.push(...r.diagnostics);
+        builds.set(pk, r.program);
+      }
     }
-    const out: Resolved = { asm, spec: specAsm, owners, programs, nodes, unresolved };
+    const out: Resolved = { asm, spec: specAsm, owners, programs, builds, nodes, unresolved };
     this.resolved.set(asm.id, out);
     return out;
   }
@@ -547,10 +606,19 @@ export class AssemblyPrograms {
     const used = new Set<string>();
     const targetOf = (rel: string): string => (rel === "" ? asm.id : `${asm.id}/${rel}`);
     const levelKey = (rel: string, id: string): string => `${targetOf(rel)}\u0000${id}`;
-    const allProgs: { key: string; q: string }[] = [];
+    // `rest`: the base level of a build program (finished, or 0 for `pose: empty`)
+    const allProgs: { key: string; q: string; rest?: number }[] = [];
     for (const rel of [...res.owners.keys()].sort(cmp)) {
-      for (const p of (res.owners.get(rel) as OwnerInfo).explodes) {
+      const o = res.owners.get(rel) as OwnerInfo;
+      for (const p of o.explodes) {
         allProgs.push({ key: levelKey(rel, p.id), q: qualifiedProgram(rel, p.id) });
+      }
+      for (const p of o.builds) {
+        allProgs.push({
+          key: levelKey(rel, p.id),
+          q: qualifiedProgram(rel, p.id),
+          rest: baseBuildLevel(p.count, res.spec.pose),
+        });
       }
     }
     allProgs.sort((a, b) => cmp(a.q, b.q));
@@ -560,16 +628,26 @@ export class AssemblyPrograms {
       machine.levels.set(levelKey("", root.dflt.id), root.dflt.count);
       used.add(`\u0000${root.dflt.id}`);
     }
-    const snapshot = (): ProgramLevel[] =>
+    // A build program's timeline starts at `k - advance` of its first action (§7.2): until
+    // then its level is that start, known only once the action is applied, so earlier
+    // snapshots are patched afterwards. A program no action plays stays at its rest level.
+    const startLevel = new Map<string, number>();
+    const unstarted: { entry: { level: number }; key: string; rest: number }[] = [];
+    const snapshot = (forBase = false): ProgramLevel[] =>
       allProgs.map((p) => {
         const only = machine.opened.get(p.key);
-        return {
+        const entry = {
           program: p.q,
-          level: machine.levels.get(p.key) ?? 0,
+          level: machine.levels.get(p.key) ?? p.rest ?? 0,
           ...(only === undefined || only.size === 0 ? {} : { only: [...only].sort() }),
         };
+        if (!forBase && p.rest !== undefined && !machine.levels.has(p.key)) {
+          unstarted.push({ entry, key: p.key, rest: p.rest });
+        }
+        return entry;
       });
-    const base = snapshot();
+    const base = snapshot(true);
+    const views = new Map<number, { at: number; view: QuarterTurn }>();
 
     const diagnostics: Diagnostic[] = [];
     const actions = new Map<string, ForeignAction>();
@@ -582,6 +660,8 @@ export class AssemblyPrograms {
       to: number,
       exclude?: ReadonlySet<string>,
     ): number => {
+      const b = res.builds.get(`${rel}\u0000${id}`);
+      if (b !== undefined) return buildSegment(b, from, to).length;
       const r = res.programs.get(`${rel}\u0000${id}`);
       return r === undefined ? 0 : programSegment(r.program, from, to, exclude).length;
     };
@@ -621,7 +701,6 @@ export class AssemblyPrograms {
     (this.spec.steps ?? []).forEach((step, si) => {
       (step.assembly ?? []).forEach((a, ai) => {
         const kind = actionKey(a);
-        if (kind !== "explode" && kind !== "implode") return; // build programs: A2-6
         const target = (a as unknown as Record<string, string>)[kind] as string;
         if (typeof target !== "string") return;
         // an instance is rooted at a multi-segment path (`r2/srv/closeup`): the target is
@@ -660,7 +739,34 @@ export class AssemblyPrograms {
         );
         if (!r.ok) return; // invalid: validation reports it
         used.add(`${rel}\u0000${r.prog.id}`);
-        if (!res.programs.has(`${rel}\u0000${r.prog.id}`)) {
+        const isBuild = kind === "build" || kind === "unbuild";
+        if (isBuild && !startLevel.has(r.key)) startLevel.set(r.key, r.from);
+        const built = res.builds.get(`${rel}\u0000${r.prog.id}`);
+        let switches: { at: number; view: QuarterTurn }[] = [];
+        if (isBuild && built !== undefined && !r.noop) {
+          // the view this action leaves: that of the new level, or the rest view (0) when it
+          // leaves a level that had set one (§7.7); a no-op action changes nothing
+          const nv = viewAt(built, r.to);
+          const eff = nv ?? (viewAt(built, r.from) === undefined ? undefined : 0);
+          if (eff !== undefined) {
+            const prev = views.get(si);
+            if (prev !== undefined && prev.view !== eff) {
+              diagnostics.push(
+                mk(
+                  "info",
+                  "assembly/view-conflict",
+                  at,
+                  `Actions ${prev.at + 1} and ${ai + 1} of this step set different views (${prev.view} and ${eff}); the last one wins`,
+                  "Put the view changes in separate steps",
+                  { views: [prev.view, eff] },
+                ),
+              );
+            }
+            views.set(si, { at: ai, view: eff });
+          }
+          switches = viewSwitches(built, r.from, r.to);
+        }
+        if (!(isBuild ? built !== undefined : res.programs.has(`${rel}\u0000${r.prog.id}`))) {
           // not resolved (budget or malformed): reported, never planned with a zero length
           diagnostics.push(
             mk(
@@ -674,7 +780,7 @@ export class AssemblyPrograms {
           );
           return;
         }
-        const skip = openedBefore.get(r.key);
+        const skip = isBuild ? undefined : openedBefore.get(r.key);
         const own = r.noop ? 0 : segLen(rel, r.prog.id, r.from, r.to, skip);
         const implied: ProgramLevel[] = [];
         let access = 0;
@@ -716,6 +822,7 @@ export class AssemblyPrograms {
             start: 0,
             length: natural,
             scale: 1,
+            ...(switches.length === 0 ? {} : { views: switches }),
             ...(implied.length === 0 ? {} : { accessLength: r4(access) }),
             ...(skip === undefined || skip.size === 0 || r.noop
               ? {}
@@ -726,7 +833,8 @@ export class AssemblyPrograms {
       });
       poses.push(snapshot());
     });
-    const sim: Simulated = { actions, poses, base, used, diagnostics };
+    for (const u of unstarted) u.entry.level = startLevel.get(u.key) ?? u.rest;
+    const sim: Simulated = { actions, poses, views, base, used, diagnostics };
     this.simulated.set(asm.id, sim);
     return sim;
   }
@@ -751,7 +859,17 @@ export class AssemblyPrograms {
     if (res === undefined || sim === undefined || sim.used.size === 0) return undefined;
     type Iv = [number, number, number, number, number, number];
     const total = new Map<string, Iv>();
-    const used = [...sim.used].sort().filter((k) => res.programs.has(k));
+    const used = [...sim.used].sort().filter((k) => res.programs.has(k) || res.builds.has(k));
+    // every move of a played program with its sign: an explode move runs 0 -> offset, a build
+    // move runs -offset -> 0 (the part starts at its origin, `offset` = seat - origin)
+    const movesOf = (key: string): { moves: readonly PartMove[]; sign: 1 | -1 }[] => {
+      const b = res.builds.get(key);
+      if (b !== undefined) return b.steps.map((st) => ({ moves: st.moves, sign: -1 }));
+      return (res.programs.get(key) as ResolvedProgramInfo).program.stages.map((st) => ({
+        moves: st.moves,
+        sign: 1,
+      }));
+    };
     // Cheap bound: the sum of |offset| of every move of every played program, on every axis
     // (any leaf's displacement is at most that, in either direction).
     const bound = (): Box3 | undefined => {
@@ -759,7 +877,7 @@ export class AssemblyPrograms {
       let sy = 0;
       let sz = 0;
       for (const key of used) {
-        for (const st of (res.programs.get(key) as ResolvedProgramInfo).program.stages) {
+        for (const st of movesOf(key)) {
           for (const m of st.moves) {
             sx += Math.abs(m.offset.x);
             sy += Math.abs(m.offset.y);
@@ -780,8 +898,7 @@ export class AssemblyPrograms {
       // Programs of one owner can be exploded together (two programs, both at their last
       // stage), so their offsets ADD, like those of nested owners.
       for (const key of used) {
-        const r = res.programs.get(key) as ResolvedProgramInfo;
-        for (const st of r.program.stages) {
+        for (const st of movesOf(key)) {
           for (const m of st.moves) {
             const node = res.nodes.get(m.path);
             if (node === undefined) continue;
@@ -794,7 +911,7 @@ export class AssemblyPrograms {
               exact = false;
               break sweep;
             }
-            const o = m.offset;
+            const o = st.sign > 0 ? m.offset : { x: -m.offset.x, y: -m.offset.y, z: -m.offset.z };
             for (const l of leaves) {
               const iv = total.get(l.path) ?? [0, 0, 0, 0, 0, 0];
               iv[0] += Math.min(0, o.x);
@@ -880,9 +997,10 @@ export class AssemblyPrograms {
         const res = this.resolve(a);
         const sim = this.simulate(a);
         if (res === undefined || sim === undefined) return a;
-        const programs: ResolvedProgram[] = [...res.programs.values()]
-          .map((r) => r.program)
-          .sort((p, q) => cmp(p.owner, q.owner) || cmp(p.id, q.id));
+        const programs: ResolvedProgram[] = [
+          ...[...res.programs.values()].map((r) => r.program),
+          ...res.builds.values(),
+        ].sort((p, q) => cmp(p.owner, q.owner) || cmp(p.id, q.id));
         return { ...a, programs, basePose: sim.base };
       }),
     };
@@ -898,7 +1016,13 @@ export class AssemblyPrograms {
     figures: ReadonlyMap<string, ResolvedFigure>,
     views: readonly (string | undefined)[],
     opts: PlanOptions = {},
-  ): { plan: AssemblyStepPlan[]; diagnostics: Diagnostic[]; compression: Diagnostic[] } {
+  ): {
+    plan: AssemblyStepPlan[];
+    diagnostics: Diagnostic[];
+    compression: Diagnostic[];
+    /** Loop-start fades by assembly id (§7.4), only for assemblies that have any. */
+    loopStart: Map<string, LoopStart>;
+  } {
     const sims = new Map<string, Simulated>();
     const diagnostics: Diagnostic[] = [];
     for (const a of assemblies) {
@@ -927,17 +1051,51 @@ export class AssemblyPrograms {
         opts.closeLoop === true ||
         endsAwayFromBase(last === undefined ? undefined : lastPose, basePose),
     });
+    // View in effect at the end of each step (§7.7): the build/unbuild action that comes last
+    // in the step (across assemblies) and whose program sets views decides; else it carries over
+    let view: QuarterTurn = 0;
     const plan = planned.plan.map((p, si) => {
+      let at = -1;
+      let first: { id: string; view: QuarterTurn } | undefined;
+      for (const id of ids) {
+        const v = (sims.get(id) as Simulated).views.get(si);
+        if (v === undefined) continue;
+        if (first !== undefined && first.id !== id && first.view !== v.view) {
+          diagnostics.push(
+            mk(
+              "info",
+              "assembly/view-conflict",
+              `/steps/${si}/assembly`,
+              `Assemblies ${JSON.stringify(first.id)} and ${JSON.stringify(id)} set different views (${first.view} and ${v.view}) in one step; the later action wins`,
+              "Put the view changes in separate steps",
+              { views: [first.view, v.view] },
+            ),
+          );
+        }
+        first ??= { id, view: v.view };
+        if (v.at > at) {
+          at = v.at;
+          view = v.view;
+        }
+      }
       const poses: Record<string, readonly ProgramLevel[]> = { ...p.poses };
       for (const id of ids)
         poses[id] = (sims.get(id) as Simulated).poses[si] as readonly ProgramLevel[];
       const sorted: Record<string, readonly ProgramLevel[]> = {};
       for (const k of Object.keys(poses).sort()) sorted[k] = poses[k] as readonly ProgramLevel[];
-      return { ...p, poses: sorted };
+      return { ...p, poses: sorted, view };
     });
     // Compression is reported by validation (`assemblyPlanDiagnostics`), never twice.
     const compression = planned.diagnostics.filter((d) => d.code === "assembly/compressed");
-    return { plan, diagnostics, compression };
+    // loop start (§7.4): the opening transition of step 1 is the plan's own `lead_1`
+    const d1 = (this.spec.steps ?? [])[0]?.duration ?? 3;
+    const lead = views[0] === undefined ? 0 : transitionOf(d1);
+    const loopStart = new Map<string, LoopStart>();
+    for (const a of assemblies) {
+      const ls = loopStartOf(a, plan, lead);
+      if (ls !== undefined) loopStart.set(a.id, ls);
+    }
+    return { plan, diagnostics, compression, loopStart };
   }
 }
 

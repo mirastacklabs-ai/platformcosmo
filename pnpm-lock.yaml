@@ -90,6 +90,9 @@ importers:
       '@platformcosmo/parts-brick':
         specifier: workspace:*
         version: link:../parts-brick
+      '@platformcosmo/pdf':
+        specifier: workspace:*
+        version: link:../pdf
       '@platformcosmo/themes':
         specifier: workspace:*
         version: link:../themes

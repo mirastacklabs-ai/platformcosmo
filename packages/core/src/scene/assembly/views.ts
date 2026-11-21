@@ -58,11 +58,19 @@ export function usedViews(spec: PlatformCosmoSpec): QuarterTurn[] {
   ).filter((a) => a.template !== true);
   while (stack.length > 0) {
     const owner = stack.pop() as { programs?: unknown; parts?: readonly SpecPart[] };
+    if (owner === null || typeof owner !== "object") continue;
     if (Array.isArray(owner.programs)) {
       for (const p of owner.programs as { kind?: string; steps?: { view?: number }[] }[]) {
+        if (p === null || typeof p !== "object") continue;
         if (p.kind !== "build" || !Array.isArray(p.steps)) continue;
         for (const s of p.steps)
-          if (typeof s.view === "number" && VALID.has(s.view)) turns.add(s.view);
+          if (
+            s !== null &&
+            typeof s === "object" &&
+            typeof s.view === "number" &&
+            VALID.has(s.view)
+          )
+            turns.add(s.view);
       }
     }
     if (Array.isArray(owner.parts)) stack.push(...owner.parts);

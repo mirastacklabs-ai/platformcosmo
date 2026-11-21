@@ -55,6 +55,7 @@
     "@platformcosmo/parts-auto": "workspace:*",
     "@platformcosmo/parts-base": "workspace:*",
     "@platformcosmo/parts-brick": "workspace:*",
+    "@platformcosmo/pdf": "workspace:*",
     "@platformcosmo/themes": "workspace:*",
     "fflate": "0.8.3"
   },
