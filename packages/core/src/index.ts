@@ -78,6 +78,18 @@ export type {
 } from "./parts/define.js";
 export type { ProjectionOptions, Silhouette } from "./geometry/index.js";
 
+/**
+ * @internal For the DC pack's rack assemblies (assemblies.md 8): the A2-3 program resolver and
+ * step planner run over a rack tree exactly as over a spec assembly, and a turned tray's depth
+ * halves are reassigned with core's rule. Not stable API.
+ */
+export { AssemblyPrograms } from "./scene/assembly/plan.js";
+export type { AssemblyProgramsOptions } from "./scene/assembly/plan.js";
+export { reassignSplit } from "./geometry/parts.js";
+/** @internal The resolved assembly tree, for `pcosmo validate --suggest` (effective placement). */
+export { buildAssemblies } from "./scene/assembly/tree.js";
+export type { AssemblyBuild, AssemblyBuildOptions } from "./scene/assembly/tree.js";
+
 // Depth ordering and text (Track A1).
 export { depthOrder, compareBoxes, depthKey, orderGroups } from "./depth/index.js";
 export type { DepthItem } from "./depth/index.js";

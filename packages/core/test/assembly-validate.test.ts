@@ -122,8 +122,16 @@ describe("design examples are fixtures", () => {
       expect(figureIds.has(target.split("/")[0] as string), d.path).toBe(false);
     }
     expect(new Set(unknown.map((d) => d.path)).size).toBe(unknown.length);
+    // A2-3 compression info goes live with the phase 1b lift (plan wiring in semantic.ts): it is
+    // reported at most once per step (never again by the scene), and it is only an info.
+    const compressed = all.filter((d) => d.code === "assembly/compressed");
+    expect(new Set(compressed.map((d) => d.path)).size).toBe(compressed.length);
+    expect(compressed.every((d) => d.severity === "info" || d.severity === "warning")).toBe(true);
     const rest = all.filter(
-      (d) => d.code !== "assembly/unsupported" && d.code !== "assembly/unknown-target",
+      (d) =>
+        d.code !== "assembly/unsupported" &&
+        d.code !== "assembly/unknown-target" &&
+        d.code !== "assembly/compressed",
     );
     expect(rest).toEqual([]);
   });
@@ -843,9 +851,33 @@ describe("program checks", () => {
       ],
     };
     none(run(view), "assembly/view-needs-assembly-only");
-    for (const extra of [{ nodes: [{ id: "n", type: "server" }] }, { racks: [{ id: "r1" }] }]) {
+    for (const extra of [
+      { nodes: [{ id: "n", type: "server" }] },
+      { racks: [{ id: "r1" }] },
+      { figures: [{ id: "f", base: "b", parts: [] }] },
+      { storyboards: [{ id: "sb", frames: [] }] },
+    ]) {
       const e = one(run({ ...view, ...extra }), "assembly/view-needs-assembly-only");
       expect(e.path).toBe("/assemblies/0/programs/0/steps/0/view");
+    }
+  });
+  test("view cannot be combined with close-ups (levels draw the front only)", () => {
+    const base = (extraPart: Record<string, unknown>, asm: Record<string, unknown> = {}) => ({
+      assemblies: [
+        { id: "t", template: true, parts: [{ id: "q" }] },
+        {
+          id: "a",
+          parts: [{ id: "p", ...extraPart }],
+          programs: [{ id: "b", kind: "build", steps: [{ add: ["p"], view: 90 }] }],
+          ...asm,
+        },
+      ],
+    });
+    none(run(base({})), "assembly/view-needs-assembly-only");
+    for (const spec of [base({ closeup: "t" }), base({}, { closeup: "t" })]) {
+      const e = one(run(spec), "assembly/view-needs-assembly-only");
+      expect(e.path).toBe("/assemblies/1/programs/0/steps/0/view");
+      expect(e.message).toContain("close-ups");
     }
   });
   test("stage-out-of-range: explode/implode to, build to/advance, with the valid range", () => {
@@ -1476,9 +1508,11 @@ describe("per-target gating mirrors the merge guard", () => {
   });
   test("default wiring: validate reports structure plus the guard, and de-duplicates figure targets", () => {
     const d = val({ ...engine(), steps: [{ assembly: [{ explode: "enigne" }] }] });
-    // phase1a is lifted (R-1): an unknown root is no longer gated, so the guard only flags the
-    // assemblies, and the unknown target is reported once (A2-F's duplicate is filtered)
-    expect(code(d, "assembly/unsupported").map((x) => x.path)).toEqual(["/assemblies"]);
+    // phases 1a and 1b are lifted: an unknown root is not gated, so the guard flags only the
+    // engine example's build program (phase 2), and the unknown target is reported once
+    expect(code(d, "assembly/unsupported").map((x) => x.path)).toEqual([
+      "/assemblies/0/programs/1",
+    ]);
     const unknown = code(d, "assembly/unknown-target");
     expect(unknown.map((x) => x.path)).toEqual(["/steps/0/assembly/0/explode"]);
     expect(unknown[0]?.suggestion).toBe('Did you mean "engine"?');

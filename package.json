@@ -15,7 +15,7 @@
     "typecheck": "pnpm -r --if-present run typecheck",
     "gen:types": "node scripts/gen-types.mjs",
     "check:types-gen": "node scripts/gen-types.mjs --check",
-    "ci": "pnpm format:check && pnpm lint && pnpm check:types-gen && pnpm check:versions && pnpm build && pnpm typecheck && vitest run && pnpm -r publish --dry-run --no-git-checks",
+    "ci": "pnpm format:check && pnpm lint && pnpm check:types-gen && pnpm check:versions && pnpm build && pnpm check:plugin && pnpm typecheck && vitest run && pnpm -r publish --dry-run --no-git-checks",
     "publish:dry": "pnpm build && pnpm -r publish --dry-run --no-git-checks",
     "changeset": "changeset",
     "sync:versions": "node scripts/sync-plugin-version.mjs",

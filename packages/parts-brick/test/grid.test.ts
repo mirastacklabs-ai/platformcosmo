@@ -138,3 +138,33 @@ describe("stud count cap", () => {
     expect(performance.now() - t).toBeLessThan(100);
   });
 });
+
+describe("group offsets", () => {
+  const group = (over: Record<string, unknown>) =>
+    checkBrickPlacement({
+      path: "/assemblies/0/parts/1",
+      kind: "group",
+      units: "stud",
+      shapes: ["brick:brick"],
+      ...over,
+    });
+
+  test("an off-grid group holding bricks warns on at and on pitch when repeated", () => {
+    const [d] = group({ at: [0.5, 0, 0] });
+    expect(d).toMatchObject({
+      code: "brick/off-grid",
+      severity: "warning",
+      path: "/assemblies/0/parts/1/at",
+    });
+    const p = group({ at: [0, 0, 0], pitch: [0, 1.5, 0], count: 2 });
+    expect(p[0]?.path).toBe("/assemblies/0/parts/1/pitch");
+    expect(group({ at: [0, 0, 0], pitch: [0, 1.5, 0] })).toEqual([]); // pitch unused without count
+  });
+
+  test("on-grid, brick-free and unitless groups are silent", () => {
+    expect(group({ at: [1, 2, 3] })).toEqual([]);
+    expect(group({ at: [0.5, 0, 0], shapes: ["hw:dimm"] })).toEqual([]);
+    expect(group({ at: [0.5, 0, 0], shapes: [] })).toEqual([]);
+    expect(group({ at: [0.5, 0, 0], units: undefined })).toEqual([]);
+  });
+});

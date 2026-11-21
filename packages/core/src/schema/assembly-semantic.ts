@@ -12,7 +12,14 @@
  * guard still gates that target's phase (tracks §0), so a Phase 1a build never resolves such
  * a target. Figure ids are camera focus targets.
  */
-import type { DcPack, Diagnostic, PartShapeDef, PartShapeRegistry } from "../contracts/index.js";
+import type {
+  DcPack,
+  Diagnostic,
+  PartPlacement,
+  PartPlacementCheck,
+  PartShapeDef,
+  PartShapeRegistry,
+} from "../contracts/index.js";
 import { planFigureSteps, resolveFigure, stepViews, type ResolvedFigure } from "../scene/boards.js";
 import { UNRENDERED, type GuardGroup } from "./unsupported.js";
 import { globMatch } from "./glob.js";
@@ -115,6 +122,8 @@ export interface AssemblyContext {
   readonly parts?: PartShapeRegistry;
   /** `dc:` shapes come from the DC pack when no registry names them. */
   readonly dc?: DcPack;
+  /** Pack placement check (`brick/off-grid`), called once per spec part with a pack shape. */
+  readonly placement?: PartPlacementCheck;
 }
 
 const PRIMITIVES = [
@@ -228,6 +237,8 @@ interface Check {
   readonly matches: Map<TNode, Map<string, { paths: readonly string[]; hint?: string | null }>>;
   /** Sorted installed shape refs, built once on first use. */
   known?: readonly string[];
+  /** Placement-check calls made so far. */
+  placed?: number;
 }
 
 /** Candidates for a did-you-mean search, bounded (deterministic: the first ones in order). */
@@ -603,7 +614,112 @@ function shapeLookup(c: Check, ref: string): PartShapeDef | undefined | "uncheck
   return registry === undefined ? "unchecked" : undefined;
 }
 
-function checkShape(c: Check, p: SpecPart, ptr: string): void {
+/** Diagnostics kept per placement call, and calls made per validation run. */
+const PLACEMENT_DIAG_CAP = 8;
+const PLACEMENT_CALL_CAP = 20_000;
+const GROUP_NODE_CAP = 2_000;
+
+/** Pack-shape refs below a group, for the placement check: bounded, sorted, deduplicated. */
+function groupShapes(c: Check, p: SpecPart): readonly string[] {
+  const found = new Set<string>();
+  const seen = new Set<string>();
+  let nodes = 0;
+  const walk = (parts: readonly SpecPart[], depth: number): void => {
+    for (const q of parts) {
+      if (++nodes > GROUP_NODE_CAP || depth > MAX_DEPTH) return;
+      if (q.parts !== undefined) walk(q.parts, depth + 1);
+      else if (q.use !== undefined) {
+        if (seen.has(q.use)) continue;
+        seen.add(q.use);
+        const t = (c.spec.assemblies ?? []).find((a) => a.id === q.use);
+        if (t !== undefined) walk(t.parts, depth + 1);
+      } else if (q.shape !== undefined && PACK_REF.test(q.shape)) found.add(q.shape);
+    }
+  };
+  walk([p], 0);
+  return [...found].sort();
+}
+
+const wellFormed = (d: unknown): d is Diagnostic => {
+  const x = d as Partial<Diagnostic> | null;
+  return (
+    typeof x === "object" &&
+    x !== null &&
+    (x.severity === "error" || x.severity === "warning" || x.severity === "info") &&
+    typeof x.code === "string" &&
+    typeof x.path === "string" &&
+    typeof x.message === "string" &&
+    (x.suggestion === undefined || typeof x.suggestion === "string")
+  );
+};
+
+/**
+ * Runs the pack's placement check for one spec part or group; never throws, the output is
+ * capped and only well-formed diagnostics are kept.
+ */
+function checkPlacement(
+  c: Check,
+  p: SpecPart,
+  ptr: string,
+  shape: string | undefined,
+  units: string,
+): void {
+  const fn = c.ctx.placement;
+  if (fn === undefined) return;
+  c.placed = (c.placed ?? 0) + 1;
+  if (c.placed > PLACEMENT_CALL_CAP) {
+    if (c.placed === PLACEMENT_CALL_CAP + 1) {
+      c.out.push(
+        mk(
+          "info",
+          "assembly/diagnostics-capped",
+          "/assemblies",
+          `Placement checks stopped after ${PLACEMENT_CALL_CAP} parts; later parts are not checked`,
+          "Merge repeated parts with count",
+          { limit: PLACEMENT_CALL_CAP },
+        ),
+      );
+    }
+    return;
+  }
+  const req: PartPlacement = {
+    path: ptr,
+    ...(shape === undefined ? { kind: "group" as const, shapes: groupShapes(c, p) } : { shape }),
+    units,
+    ...(p.at === undefined ? {} : { at: p.at }),
+    ...(p.pitch === undefined ? {} : { pitch: p.pitch }),
+    ...(p.count === undefined ? {} : { count: p.count }),
+    ...(p.size === undefined ? {} : { size: p.size }),
+    ...(p.axis === undefined ? {} : { axis: p.axis }),
+    ...(p.params === undefined ? {} : { params: p.params }),
+  };
+  try {
+    const ds = fn(req);
+    if (!Array.isArray(ds)) return;
+    let kept = 0;
+    for (const d of ds) {
+      if (!wellFormed(d)) continue;
+      if (kept++ >= PLACEMENT_DIAG_CAP) {
+        c.out.push(
+          mk(
+            "info",
+            "assembly/diagnostics-capped",
+            ptr,
+            `This part's placement check reported more than ${PLACEMENT_DIAG_CAP} diagnostics; the rest are omitted`,
+            undefined,
+            { limit: PLACEMENT_DIAG_CAP },
+          ),
+        );
+        break;
+      }
+      c.out.push(d);
+    }
+  } catch {
+    // A pack's placement check must not throw; if it does, it reports nothing.
+  }
+}
+
+function checkShape(c: Check, p: SpecPart, ptr: string, units: string): void {
   const shape = p.shape;
   if (shape === undefined || (PRIMITIVES as readonly string[]).includes(shape)) {
     if (p.params !== undefined) {
@@ -650,6 +766,7 @@ function checkShape(c: Check, p: SpecPart, ptr: string): void {
     );
     return;
   }
+  checkPlacement(c, p, ptr, shape, units);
   if (p.params === undefined) return;
   try {
     for (const d of def.readParams(p.params).diagnostics) {
@@ -692,11 +809,17 @@ function checkAssembly(c: Check, a: SpecAssembly, i: number): void {
       ),
     );
   }
-  checkParts(c, a.parts, `${base}/parts`, 1);
+  checkParts(c, a.parts, `${base}/parts`, 1, a.units ?? "mm");
   if (root !== undefined) checkPrograms(c, root, a.programs, `${base}/programs`);
 }
 
-function checkParts(c: Check, parts: readonly SpecPart[], base: string, level: number): void {
+function checkParts(
+  c: Check,
+  parts: readonly SpecPart[],
+  base: string,
+  level: number,
+  units: string,
+): void {
   parts.forEach((p, k) => {
     const ptr = `${base}/${k}`;
     if (p.id === "closeup") {
@@ -711,7 +834,15 @@ function checkParts(c: Check, parts: readonly SpecPart[], base: string, level: n
         ),
       );
     }
-    checkShape(c, p, ptr);
+    checkShape(c, p, ptr, units);
+    // A group moved off the stud grid shifts its bricks off it (only when it has pack leaves).
+    if (
+      (p.parts !== undefined || p.use !== undefined) &&
+      c.ctx.parts !== undefined &&
+      (p.at !== undefined || p.pitch !== undefined)
+    ) {
+      checkPlacement(c, p, ptr, undefined, units);
+    }
     const image = p.image;
     if (image !== undefined) {
       const ref = typeof image === "string" ? image : image.ref;
@@ -763,7 +894,7 @@ function checkParts(c: Check, parts: readonly SpecPart[], base: string, level: n
             { depth: level + 2, limit: MAX_DEPTH },
           ),
         );
-      } else checkParts(c, p.parts, `${ptr}/parts`, level + 1);
+      } else checkParts(c, p.parts, `${ptr}/parts`, level + 1, units);
     }
     if (here !== undefined) checkPrograms(c, here.node, p.programs, `${ptr}/programs`);
   });
@@ -971,8 +1102,20 @@ function explodeProgram(c: Check, owner: TNode, prog: SpecExplodeProgram, pp: st
   });
 }
 
+/** Whether any assembly, part or rack slot names a close-up (levels and views do not combine yet). */
+function hasCloseups(spec: PlatformCosmoSpec): boolean {
+  const walk = (parts: readonly SpecPart[] | undefined): boolean =>
+    (parts ?? []).some((p) => p.closeup !== undefined || walk(p.parts));
+  return (
+    (spec.assemblies ?? []).some((a) => a.closeup !== undefined || walk(a.parts)) ||
+    (spec.racks ?? []).some((r) => (r.slots ?? []).some((sl) => sl.closeup !== undefined))
+  );
+}
+
 function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string): void {
   const addedBy = new Map<string, number>();
+  /** Proper ancestors of added nodes, with the first step that added something below them. */
+  const below = new Map<string, number>();
   const { spec } = c;
   const mixed =
     (spec.nodes?.length ?? 0) +
@@ -981,7 +1124,9 @@ function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string
       (spec.equipment?.length ?? 0) +
       (spec.rows?.length ?? 0) +
       (spec.aisles?.length ?? 0) +
-      (spec.cables?.length ?? 0) >
+      (spec.cables?.length ?? 0) +
+      (spec.figures?.length ?? 0) +
+      (spec.storyboards?.length ?? 0) >
     0;
   prog.steps.forEach((st, j) => {
     const sp = `${pp}/steps/${j}`;
@@ -990,9 +1135,21 @@ function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string
       for (const p of evalSelector(c, owner, s, `${sp}/add/${i}`)) sel.add(p);
     });
     const added = [...sel];
-    const twice = added.filter((p) => addedBy.has(p));
+    // overlap by leaf set: the same node, an ancestor of an earlier add, or a node below one
+    // (a descendant of a node selected in this very step is not a conflict)
+    const firstStep = (p: string): number | undefined => {
+      const hit = addedBy.get(p) ?? below.get(p);
+      if (hit !== undefined) return hit;
+      const segs = p.split("/");
+      for (let k = segs.length - 1; k > 0; k--) {
+        const up = addedBy.get(segs.slice(0, k).join("/"));
+        if (up !== undefined) return up;
+      }
+      return undefined;
+    };
+    const twice = added.filter((p) => firstStep(p) !== undefined);
     if (twice.length > 0) {
-      const first = addedBy.get(twice[0] as string) as number;
+      const first = firstStep(twice[0] as string) as number;
       c.out.push(
         mk(
           "error",
@@ -1004,15 +1161,33 @@ function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string
         ),
       );
     }
-    for (const p of added) if (!addedBy.has(p)) addedBy.set(p, j);
+    for (const p of added) {
+      if (!addedBy.has(p)) addedBy.set(p, j);
+      const segs = p.split("/");
+      for (let k = 1; k < segs.length; k++) {
+        const up = segs.slice(0, k).join("/");
+        if (!below.has(up)) below.set(up, j);
+      }
+    }
     if (st.view !== undefined && mixed) {
       c.out.push(
         mk(
           "error",
           "assembly/view-needs-assembly-only",
           `${sp}/view`,
-          "Quarter-turn views need an assembly-only spec (no nodes or DC content)",
+          "Quarter-turn views need an assembly-only spec (no nodes, DC content, figures or storyboards)",
           'Remove "view", or move the nodes and racks to another spec',
+        ),
+      );
+    }
+    if (st.view !== undefined && !mixed && hasCloseups(spec)) {
+      c.out.push(
+        mk(
+          "error",
+          "assembly/view-needs-assembly-only",
+          `${sp}/view`,
+          "Quarter-turn views cannot be combined with close-ups: a close-up level is drawn from the front only",
+          'Remove "view", or remove the "closeup" references from this spec',
         ),
       );
     }
