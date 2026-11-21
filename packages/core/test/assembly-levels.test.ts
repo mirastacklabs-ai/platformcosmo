@@ -9,7 +9,7 @@ import type {
   ResolvedExplodeProgram,
   SceneAssembly,
 } from "../src/index.js";
-import { buildScene } from "../src/index.js";
+import { buildScene, closeupDiagnostics } from "../src/index.js";
 import type { PlatformCosmoSpec } from "../src/schema/types.gen.js";
 import { frameMap } from "../src/scene/assembly/frame.js";
 import { AssemblyPrograms } from "../src/scene/assembly/plan.js";
@@ -305,7 +305,7 @@ describe("size reconciliation (§8.5)", () => {
     expect(w).toHaveLength(1);
     expect(w[0]).toMatchObject({
       severity: "warning",
-      path: "/assemblies/1",
+      path: "/assemblies/1/parts/0/closeup",
       params: { host: "host/p", closeup: "tpl", axis: "x", limit: 0.1 },
     });
     expect(w[0]!.params!.mismatch as number).toBeCloseTo(0.11, 9);
@@ -456,7 +456,7 @@ describe("levels budget (§13)", () => {
     expect(deep).toHaveLength(1);
     expect(deep[0]).toMatchObject({
       severity: "error",
-      path: "/assemblies/3",
+      path: "/assemblies/3/parts/0/closeup",
       params: { host: "a0/p/closeup/p/closeup/p/closeup/p", depth: 10, limit: 8 },
     });
   });
@@ -492,7 +492,7 @@ describe("levels budget (§13)", () => {
 
   test("budget/levels names the host's pointer", () => {
     const over = levels(chain(6, "root"));
-    expect(codes(over.diagnostics, "budget/levels")[0]!.path).toBe("/assemblies/4");
+    expect(codes(over.diagnostics, "budget/levels")[0]!.path).toBe("/assemblies/4/closeup");
   });
 
   test("eight instances build; the ninth is refused and nothing past it is looked at", () => {
@@ -1110,5 +1110,70 @@ describe("existing output is unchanged", () => {
     expect(base[0]!.id).toBe("a");
     expect(base[0]!.root.id).toBe("a");
     expect(base[0]!.root.path).toBe("a");
+  });
+});
+
+describe("closeupDiagnostics (validate)", () => {
+  const tpl = (x: number): PlatformCosmoSpec =>
+    spec({
+      assemblies: [
+        { id: "tpl", template: true, units: "mm", parts: [box("b", [0, 0, 0], [x, 100, 50])] },
+        {
+          id: "host",
+          units: "mm",
+          parts: [box("p", [0, 0, 0], [100, 100, 50], { closeup: "tpl" })],
+        },
+      ],
+    });
+  test("reports the scene's size checks, sorted, and nothing for a spec without close-ups", () => {
+    const d = closeupDiagnostics(tpl(111));
+    expect(d.map((x) => x.code)).toEqual(["assembly/size-mismatch"]);
+    expect(d).toEqual(closeupDiagnostics(tpl(111)));
+    expect(closeupDiagnostics(tpl(100))).toEqual([]);
+    expect(closeupDiagnostics(spec({}))).toEqual([]);
+    expect(closeupDiagnostics(spec({ assemblies: [{ id: "a", parts: [] }] }))).toEqual([]);
+  });
+  test("the scene reports the same diagnostic (render shows it once, validate adds it)", () => {
+    const s = buildScene(tpl(111), {});
+    expect(codes(s.diagnostics, "assembly/size-mismatch")).toHaveLength(1);
+  });
+});
+
+describe("closeupDiagnostics sections", () => {
+  const withCloseup = (): PlatformCosmoSpec =>
+    spec({
+      assemblies: [
+        { id: "tpl", template: true, units: "mm", parts: [box("b", [0, 0, 0], [111, 100, 50])] },
+        {
+          id: "host",
+          units: "mm",
+          parts: [box("p", [0, 0, 0], [100, 100, 50], { closeup: "tpl" })],
+        },
+      ],
+      racks: [{ id: "r", slots: [{ id: "s", at: 1, type: "server-2u", assembly: "tpl" }] }],
+    });
+  const crashing = {
+    shapes: undefined,
+    buildScene: () => {
+      throw new Error("boom");
+    },
+    buildAssembly: () => ({ diagnostics: [] }),
+  } as never;
+
+  test("a dc-pack crash is a diagnostic and keeps the close-up result", () => {
+    const d = closeupDiagnostics(withCloseup(), { dc: crashing });
+    expect(d.map((x) => x.code).sort()).toEqual([
+      "assembly/size-mismatch",
+      "render/internal-error",
+    ]);
+    expect(d.find((x) => x.code === "render/internal-error")!.message).toContain("boom");
+  });
+
+  test("closeups: false skips the close-up section", () => {
+    expect(closeupDiagnostics(withCloseup(), { closeups: false })).toEqual([]);
+  });
+
+  test("the size mismatch points at the part's closeup field", () => {
+    expect(closeupDiagnostics(withCloseup())[0]!.path).toBe("/assemblies/1/parts/0/closeup");
   });
 });
