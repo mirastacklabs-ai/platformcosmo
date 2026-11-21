@@ -8,6 +8,9 @@ import { homedir } from "node:os";
 import * as core from "@platformcosmo/core";
 import type { DcPack, LoadedIconPack, ThemeRegistry, ValidateThemeFn } from "@platformcosmo/core";
 import * as dcPackModule from "@platformcosmo/dc-pack";
+import * as partsAuto from "@platformcosmo/parts-auto";
+import * as partsBase from "@platformcosmo/parts-base";
+import * as partsBrick from "@platformcosmo/parts-brick";
 import * as iconsBase from "@platformcosmo/icons-base";
 import * as iconsK8s from "@platformcosmo/icons-k8s";
 import * as iconsLucide from "@platformcosmo/icons-lucide";
@@ -16,6 +19,7 @@ import * as themesModule from "@platformcosmo/themes";
 import type { Deps } from "./deps.js";
 import { createFfmpegEncoder, ffmpegAvailable } from "@platformcosmo/core/node";
 import { createIconHttpClient } from "./http.js";
+import { combineRegistries } from "./parts.js";
 
 const named = <T>(mod: unknown, key: string): T | undefined =>
   (mod as Record<string, unknown>)[key] as T | undefined;
@@ -33,11 +37,14 @@ export function defaultDeps(): Deps {
       createIconResolver: core.createIconResolver,
       sanitizeSvg: core.sanitizeSvg,
       fetchIconPack: core.fetchIconPack,
+      buildAssemblies: core.buildAssemblies,
       gifEncoder: core.gifEncoder,
     },
     themes: named<ThemeRegistry>(themesModule, "themeRegistry"),
     validateTheme: named<ValidateThemeFn>(themesModule, "validateTheme"),
     dcPack: named<DcPack>(dcPackModule, "dcPack"),
+    parts: combineRegistries([partsBase.registry, partsBrick.registry, partsAuto.registry]),
+    placement: partsBrick.checkBrickPlacement,
     bundledPacks,
     http: createIconHttpClient(),
     env: process.env,

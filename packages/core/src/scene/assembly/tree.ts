@@ -45,7 +45,16 @@ import type {
 import { CIRCULAR_KINDS, partGeometry, reassignSplit } from "../../geometry/parts.js";
 import { AssemblyModel, LEAF_ERROR, MAX_DEPTH } from "../../schema/assembly-tree.js";
 import type { PlatformCosmoSpec, SpecPart, SpecState } from "../../schema/types.gen.js";
-import { belowGroundLift, frameMap, makeFrame, rnd, unionBoxes, unitMm } from "./frame.js";
+import {
+  TILE_MM,
+  belowGroundLift,
+  frameMap,
+  makeFrame,
+  rnd,
+  turnFront,
+  unionBoxes,
+  unitMm,
+} from "./frame.js";
 import { toSource } from "./source.js";
 import { classifySiblings, type LBox, type RoleItem } from "./roles.js";
 
@@ -217,6 +226,8 @@ interface Ctx {
   readonly stack: number[];
   readonly diagnostics: Diagnostic[];
   readonly units: AssemblyUnits;
+  /** `code|pointer` of image diagnostics already reported: once per spec part, not per copy. */
+  readonly reported: Set<string>;
 }
 
 const vec = (v: readonly number[] | undefined, d: number): [number, number, number] => [
@@ -443,7 +454,12 @@ function orientBox(b: Box3, q: number, size: Vec3): Box3 {
 }
 
 /** Turns a pack shape's geometry (built unrotated, size `unrot`) by `q` quarter turns. */
-function orientGeometry(g: PartGeometry, q: number, unrot: Vec3): PartGeometry {
+function orientGeometry(
+  g: PartGeometry,
+  q: number,
+  unrot: Vec3,
+  onDropped?: (im: PartImagePlacement) => void,
+): PartGeometry {
   if (q % 4 === 0) return g;
   const primitives: PartPrimitive[] = g.primitives.map((p) => ({
     ...p,
@@ -455,7 +471,7 @@ function orientGeometry(g: PartGeometry, q: number, unrot: Vec3): PartGeometry {
       ? { rotate: ((((p.rotate ?? 0) / 90 + q) % 4) * 90) as QuarterTurn }
       : {}),
   }));
-  const images = turnImages(g.images, q);
+  const images = turnImages(g.images, q, onDropped);
   return reassignSplit({
     ...g,
     primitives,
@@ -470,10 +486,14 @@ const FACE_CYCLE = ["+x", "+y", "-x", "-y"] as const;
 
 /**
  * Decal faces follow a turn: `right` (+x) and `left` (+y) move round the cycle; a decal whose
- * face turns away from the viewer (-x, -y) cannot be drawn and is dropped. Billboards and
+ * face turns away from the viewer (-x, -y) cannot be drawn: it is dropped and reported. Billboards and
  * `top` are unaffected.
  */
-function turnImages(images: PartGeometry["images"], q: number): PartGeometry["images"] | undefined {
+function turnImages(
+  images: PartGeometry["images"],
+  q: number,
+  onDropped?: (im: PartImagePlacement) => void,
+): PartGeometry["images"] | undefined {
   if (images === undefined) return undefined;
   const out: PartImagePlacement[] = [];
   for (const im of images) {
@@ -485,6 +505,7 @@ function turnImages(images: PartGeometry["images"], q: number): PartGeometry["im
     const to = FACE_CYCLE[(at + q) % 4];
     if (to === "+x") out.push({ ...im, face: "right" });
     else if (to === "+y") out.push({ ...im, face: "left" });
+    else onDropped?.(im);
   }
   return out;
 }
@@ -503,7 +524,15 @@ function credit(used: Used, s: AssetSource | undefined): void {
   used.credits.push(s);
 }
 
-function placement(ctx: Ctx, p: SpecPart, used: Used): PartImagePlacement | undefined {
+/** Pushes a part-image diagnostic once per spec part: copies and `use` instances share it. */
+function reportOnce(ctx: Ctx, d: Diagnostic): void {
+  const key = `${d.code}|${d.path}`;
+  if (ctx.reported.has(key)) return;
+  ctx.reported.add(key);
+  ctx.diagnostics.push(d);
+}
+
+function placement(ctx: Ctx, p: SpecPart, used: Used, d: Draft): PartImagePlacement | undefined {
   const img = p.image;
   if (img === undefined) return undefined;
   const ref = typeof img === "string" ? img : img.ref;
@@ -514,13 +543,26 @@ function placement(ctx: Ctx, p: SpecPart, used: Used): PartImagePlacement | unde
   const own = typeof img === "string" ? undefined : img;
   const c = own?.crop ?? spec.crop;
   const asset = ctx.opts.images?.get(ref);
+  if (asset === undefined) {
+    // Never silent, with or without a crop (the renderer reports the same code before the scene).
+    reportOnce(ctx, {
+      severity: "error",
+      code: "image/not-found",
+      path: `${d.ptr}/image`,
+      message: `Image "${ref}" of part ${JSON.stringify(d.path)} was not provided to the renderer`,
+      suggestion:
+        "Load it with the CLI (the path is relative to the spec's directory) or pass it in RenderOptions.images",
+      params: { id: ref, part: d.path },
+    });
+  }
+  // A crop places the image without the asset; a whole-image crop needs the asset's size.
   const crop: Rect | undefined =
     c !== undefined
       ? { x: c[0], y: c[1], width: c[2], height: c[3] }
       : asset !== undefined
         ? { x: 0, y: 0, width: asset.width, height: asset.height }
         : undefined;
-  if (crop === undefined) return undefined; // whole-image crop needs the asset's size
+  if (crop === undefined) return undefined;
   return { image: ref, face: own?.face ?? "billboard", crop, fit: own?.fit ?? "contain" };
 }
 
@@ -537,7 +579,7 @@ function leafGeometry(ctx: Ctx, d: Draft, used: Used): PartGeometry | undefined 
   const unrot = odd ? { x: rot.y, y: rot.x, z: rot.z } : rot;
   const tone = p.tone ?? "base";
   const color = p.color === undefined ? undefined : (ctx.opts.color ?? plainColor)(p.color);
-  const image = placement(ctx, p, used);
+  const image = placement(ctx, p, used, d);
   const images = image === undefined ? undefined : [image];
   const axis = p.axis ?? "z";
   try {
@@ -551,7 +593,16 @@ function leafGeometry(ctx: Ctx, d: Draft, used: Used): PartGeometry | undefined 
         ...(color === undefined ? {} : { color }),
         state: d.state,
       });
-      const o = orientGeometry(g, d.turns, unrot);
+      const o = orientGeometry(g, d.turns, unrot, (im) =>
+        reportOnce(ctx, {
+          severity: "info",
+          code: "assembly/image-unresolved",
+          path: d.ptr,
+          message: `Part ${JSON.stringify(d.path)}: the "${im.face}" decal of image "${im.image}" faces away from the viewer after the part's turn, so it is not drawn`,
+          suggestion: "Turn the part back, or show the image on a face that stays visible",
+          params: { part: d.path, image: im.image, face: im.face },
+        }),
+      );
       return images !== undefined && o.images === undefined ? { ...o, images } : o;
     }
     const ref = p.shape ?? "box";
@@ -643,17 +694,20 @@ function collectLeaves(d: Draft, out: Draft[]): void {
   }
 }
 
-function prepare(ctx: Ctx, index: number, used: Used): Prepared | undefined {
+function prepare(ctx: Ctx, index: number, used: Used, rootPath?: string): Prepared | undefined {
   const a = ctx.model.assemblies[index];
   if (a === undefined) return undefined;
   const children: Draft[] = [];
   const state = a.state ?? "healthy";
+  // a close-up instance is rooted at its own path (`<host>/closeup`, A2-5); depth counts it
+  const path = rootPath ?? a.id;
+  const depth = path.split("/").length;
   ctx.stack.push(index);
-  expandList(ctx, a.parts, `/assemblies/${index}/parts`, a.id, 1, [0, 0, 0], state, children);
+  expandList(ctx, a.parts, `/assemblies/${index}/parts`, path, depth, [0, 0, 0], state, children);
   ctx.stack.pop();
   const root: Draft = {
-    id: a.id,
-    path: a.id,
+    id: path.slice(path.lastIndexOf("/") + 1),
+    path,
     ptr: `/assemblies/${index}`,
     kind: "sub",
     part: { id: a.id },
@@ -758,7 +812,7 @@ function place(
   }
   const restBounds = unionBoxes(bounds) ?? map.box(prep.localBounds);
   return {
-    id: prep.root.id,
+    id: prep.root.path,
     source: "spec",
     ...(a.label === undefined ? {} : { label: a.label }),
     frame,
@@ -775,6 +829,118 @@ const shift = (b: Box3, dx: number, dy: number, dz: number): Box3 => ({
   origin: { x: rnd(b.origin.x + dx), y: rnd(b.origin.y + dy), z: rnd(b.origin.z + dz) },
   size: b.size,
 });
+
+export interface TemplateInstanceOptions extends AssemblyBuildOptions {
+  /** Extra quarter turn of the instance, added to the template's own `rotate`. */
+  readonly turn?: QuarterTurn;
+  /**
+   * Decides the instance's turn and uniform fit from the template's size in millimetres (local
+   * bounds x unit, the template's own `rotate` applied) once it is expanded: close-ups reconcile
+   * sizes with it (`closeup.ts`). `fit` is a factor on the true-scale frame (1 = true scale).
+   */
+  readonly adapt?: (
+    sizeMm: Vec3,
+    units: AssemblyUnits,
+    front: FrontSide,
+  ) => { readonly turn?: QuarterTurn; readonly fit?: number };
+  /** Leaves the expansion may add (the caller's remaining budget); over it, nothing is built. */
+  readonly leafBudget?: number;
+}
+
+export interface TemplateInstance {
+  readonly assembly: SceneAssembly;
+  /** Index of the template in `spec.assemblies`. */
+  readonly index: number;
+  readonly leafCount: number;
+  /** Image keys used, sorted. */
+  readonly images: readonly string[];
+  /** Credits (§11.6) of the instance's images and sources, first-use order, deduplicated. */
+  readonly credits: readonly AssetSource[];
+  readonly diagnostics: readonly Diagnostic[];
+}
+
+/**
+ * One instance of the assembly `templateId` rooted at the scene path `path` (a close-up,
+ * assemblies §8.4): paths are `<path>/<part>/…`, units are true scale unless `adapt` fits it,
+ * and it stands at the origin (rest and reach bounds start at x = y = 0, z lifted). Nothing is
+ * built (undefined) for an unknown, over-budget or cyclic template, or beyond `leafBudget`.
+ */
+export function buildTemplateInstance(
+  spec: PlatformCosmoSpec,
+  model: AssemblyModel,
+  templateId: string,
+  path: string,
+  opts: TemplateInstanceOptions = {},
+): TemplateInstance | undefined {
+  const i = model.byId.get(templateId);
+  const a = i === undefined ? undefined : (spec.assemblies ?? [])[i];
+  if (i === undefined || a === undefined || !model.fits(i)) return undefined;
+  const leaves = model.metrics(i).leaves;
+  if (leaves > (opts.leafBudget ?? LEAF_ERROR)) return undefined;
+  const diagnostics: Diagnostic[] = [];
+  const used: Used = { images: new Set(), credits: [], creditKeys: new Set() };
+  const units = (a.units ?? "mm") as AssemblyUnits;
+  const ctx: Ctx = { spec, model, opts, stack: [], diagnostics, units, reported: new Set() };
+  const prep = prepare(ctx, i, used, path);
+  if (prep === undefined) return undefined;
+  const base = (a.rotate ?? 0) as QuarterTurn;
+  const lb = prep.localBounds.size;
+  const mm = unitMm(units);
+  const odd = base === 90 || base === 270;
+  const sizeMm = {
+    x: odd ? lb.y * mm.y : lb.x * mm.x,
+    y: odd ? lb.x * mm.x : lb.y * mm.y,
+    z: lb.z * mm.z,
+  };
+  const asked = opts.adapt?.(sizeMm, units, turnFront((a.front ?? "+y") as FrontSide, base));
+  const turn = ((((base + (asked?.turn ?? opts.turn ?? 0)) % 360) + 360) % 360) as QuarterTurn;
+  const k = asked?.fit;
+  // a uniform factor on true scale: `fit` (tiles of the largest horizontal extent) = k x its true size
+  const extentMm = Math.max(lb.x * mm.x, lb.y * mm.y);
+  const fit =
+    k !== undefined && k !== 1 && k > 0 && Number.isFinite(k) && extentMm > 0
+      ? (k * extentMm) / TILE_MM
+      : undefined;
+  const frameOf = (origin: Vec3): AssemblyFrame =>
+    makeFrame({
+      units,
+      ...(fit === undefined ? {} : { fit }),
+      front: (a.front ?? "+y") as FrontSide,
+      rotate: turn,
+      localBounds: prep.localBounds,
+      ...(fit === undefined ? { trueScale: true } : {}),
+      origin,
+    });
+  const meta = {
+    ...(a.label === undefined ? {} : { label: a.label }),
+    ...(a.closeup === undefined ? {} : { closeup: a.closeup }),
+    ...(a.source === undefined ? {} : { source: a.source }),
+  };
+  const probe = place(prep, frameOf({ x: 0, y: 0, z: 0 }), meta);
+  const extra = opts.reach?.(probe);
+  const reach0 = unionBoxes(
+    extra === undefined ? [probe.restBounds] : [probe.restBounds, extra],
+  ) as Box3;
+  const lift = opts.lift === false ? 0 : belowGroundLift(reach0);
+  const ox = -reach0.origin.x;
+  const oy = -reach0.origin.y;
+  const placed = place(prep, frameOf({ x: ox, y: oy, z: lift }), meta);
+  const assembly: SceneAssembly = {
+    ...placed,
+    ...(a.program === undefined ? {} : { defaultProgram: a.program }),
+    reachBounds: shift(reach0, ox, oy, lift),
+  };
+  for (const l of prep.leaves) credit(used, toSource(l.part.source));
+  credit(used, toSource(a.source));
+  return {
+    assembly,
+    index: i,
+    leafCount: prep.leaves.length,
+    images: [...used.images].sort(),
+    credits: used.credits,
+    diagnostics,
+  };
+}
 
 /**
  * Resolves every non-template spec assembly. Assemblies without `pos` stand in a row along +x
@@ -795,6 +961,7 @@ export function buildAssemblies(
   }
   const model = new AssemblyModel(spec);
   let budget = LEAF_ERROR;
+  const reported = new Set<string>();
   let cx = opts.origin?.x ?? 0;
   const cy = opts.origin?.y ?? 0;
 
@@ -804,7 +971,7 @@ export function buildAssemblies(
     if (!model.fits(i) || leaves > budget) return; // reported by validation (budget/assembly-parts)
     budget -= leaves;
     const units = (a.units ?? "mm") as AssemblyUnits;
-    const ctx: Ctx = { spec, model, opts, stack: [], diagnostics, units };
+    const ctx: Ctx = { spec, model, opts, stack: [], diagnostics, units, reported };
     const prep = prepare(ctx, i, used);
     if (prep === undefined) return;
 
@@ -897,8 +1064,16 @@ export function mergeSceneAssemblies(
 ): SceneAssemblies {
   if (other === undefined) {
     // a plain `SceneAssemblies`: an `AssemblyBuild` also carries its diagnostics
-    const { assemblies, boards, plan, images, credits } = asm;
-    return { assemblies, boards, plan, images, credits };
+    const { assemblies, boards, plan, images, credits, levels, views } = asm;
+    return {
+      assemblies,
+      boards,
+      plan,
+      images,
+      credits,
+      ...(levels === undefined ? {} : { levels }),
+      ...(views === undefined ? {} : { views }),
+    };
   }
   const keys = new Set(asm.credits.map((c) => JSON.stringify(c)));
   return {
@@ -911,5 +1086,7 @@ export function mergeSceneAssemblies(
     plan: other.plan.length > 0 ? other.plan : asm.plan,
     images: [...new Set([...asm.images, ...other.images])].sort(),
     credits: [...asm.credits, ...other.credits.filter((c) => !keys.has(JSON.stringify(c)))],
+    ...(asm.levels === undefined ? {} : { levels: asm.levels }),
+    ...(asm.views === undefined ? {} : { views: asm.views }),
   };
 }

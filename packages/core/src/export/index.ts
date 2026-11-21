@@ -4,6 +4,8 @@
  * `render()` only wires them up. All outputs are deterministic (mp4 depends on the system ffmpeg).
  */
 import { r2, t4 } from "../anim/css.js";
+import { assemblyAnim } from "../anim/assembly.js";
+import { windows } from "../anim/timeline.js";
 import type {
   AnimationLayer,
   Diagnostic,
@@ -14,7 +16,8 @@ import type {
   RenderOutput,
 } from "../contracts/index.js";
 import { gifEncoder } from "./gif.js";
-import { validateRenderOptions } from "./options.js";
+import { stepEndTime } from "../render/assembly/tracks.js";
+import { pngStepDiagnostic, validateRenderOptions } from "./options.js";
 import { pngSize } from "./png.js";
 import { bufferingSink, MAX_OUTPUT_BYTES, OutputTooLargeError } from "./stream.js";
 
@@ -155,8 +158,12 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
   // Raster outputs ----------------------------------------------------------------------------
   let lastSvg: string | undefined;
   let lastPng: Uint8Array | undefined;
-  const renderFrame = async (time: number, scale: number): Promise<Uint8Array> => {
-    const layer = deps.animator.animate(model, { speed, mode: "frame", time });
+  const renderFrame = async (
+    time: number,
+    scale: number,
+    layerOf?: () => AnimationLayer,
+  ): Promise<Uint8Array> => {
+    const layer = layerOf?.() ?? deps.animator.animate(model, { speed, mode: "frame", time });
     const svg = withRootSize(
       deps.emit(pinOverlay(model, layer), layer, { font, target: "raster" }),
       model.viewBox,
@@ -214,15 +221,56 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
     });
   };
 
+  /**
+   * `png.step`: the end pose of step k as `steps` shows it. A raster cannot run the step layer's
+   * SMIL particles, so flows and state come from the frame layer at the END of the step's hold
+   * (the assembly clock's `ends[k]`; plain specs: just before the step window closes), and the
+   * camera and pose come from the step layer. The pose must stay in `attrs` (resvg ignores CSS
+   * transforms), so the pose is taken from the step layer and never rebuilt from CSS.
+   */
+  const stepLayer = (step: number): AnimationLayer => {
+    const w = windows(model.scene.timeline, speed);
+    const k = step - 1;
+    const start = w.starts[k] ?? 0;
+    const dur = w.durations[k] ?? 0;
+    const close = start + dur;
+    const hold = model.assembly ? assemblyAnim(model.assembly, speed).ends[k] : undefined;
+    // `ends` is loop seconds, `close` and the frame clock are output seconds: divide by speed
+    // (as assemblySettled does), and never reach into the next step's window
+    const t = Math.min(
+      hold !== undefined ? stepEndTime(hold) / speed : close - dur * 0.001,
+      close - 1e-6,
+    );
+    const frame = deps.animator.animate(model, { speed, mode: "frame", time: t });
+    const at = deps.animator.animate(model, { speed, motion, mode: "step", step });
+    return {
+      css: frame.css,
+      defs: frame.defs,
+      layers: frame.layers,
+      duration: frame.duration,
+      ...(at.viewBox ? { viewBox: at.viewBox } : {}),
+      ...(at.attrs ? { attrs: at.attrs } : {}),
+    };
+  };
+
   if (wanted.has("png")) {
     const scale = options.png?.scale ?? 2;
-    if (!tooLarge("png", scale, 1)) {
+    const step = options.png?.step;
+    const count = model.scene.timeline.length;
+    const badStep = step === undefined ? undefined : pngStepDiagnostic(step, count);
+    if (badStep) {
+      diagnostics.push(badStep);
+    } else if (!tooLarge("png", scale, 1)) {
       try {
         outputs.push({
           kind: "png",
           path: `${name}.png`,
           mime: "image/png",
-          data: await renderFrame(options.png?.time ?? 0, scale),
+          data: await renderFrame(
+            options.png?.time ?? 0,
+            scale,
+            step === undefined ? undefined : () => stepLayer(step),
+          ),
         });
       } catch (e) {
         diagnostics.push({

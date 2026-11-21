@@ -26,6 +26,19 @@ function err(code: string, path: string, message: string, suggestion?: string): 
   };
 }
 
+/** `options/invalid-png-step` when `step` is beyond the `count` steps of the spec, else undefined. */
+export function pngStepDiagnostic(step: number, count: number): Diagnostic | undefined {
+  if (step <= count) return undefined;
+  return err(
+    "options/invalid-png-step",
+    "/png/step",
+    count === 0
+      ? "png.step needs a spec with steps; this one has none."
+      : `png.step ${step} is beyond the ${count} step(s) of the spec.`,
+    count === 0 ? "Use png.time or omit it." : `Use a step from 1 to ${count}.`,
+  );
+}
+
 /** Code-point order (locale independent, deterministic). */
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -65,6 +78,25 @@ export function validateRenderOptions(options: RenderOptions | undefined): Diagn
   const time = o.png?.time;
   if (time !== undefined && !(isNum(time) && time >= 0)) {
     out.push(err("options/invalid-png-time", "/png/time", "png.time must be a number >= 0."));
+  }
+  const step = o.png?.step;
+  if (step !== undefined && !(isNum(step) && Number.isInteger(step) && step >= 1)) {
+    out.push(
+      err(
+        "options/invalid-png-step",
+        "/png/step",
+        "png.step must be a positive integer (1-based step number).",
+      ),
+    );
+  } else if (step !== undefined && time !== undefined) {
+    out.push(
+      err(
+        "options/invalid-png-step",
+        "/png/step",
+        "png.step and png.time are exclusive: a step has no time of its own.",
+        "Pass one of them.",
+      ),
+    );
   }
   const fps = o.video?.fps;
   if (fps !== undefined && !(isNum(fps) && fps >= 1 && fps <= 60)) {

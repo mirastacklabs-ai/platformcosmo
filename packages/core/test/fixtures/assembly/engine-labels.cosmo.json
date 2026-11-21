@@ -1,0 +1,218 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "Four-cylinder inline engine",
+    "description": "Exploded view of an inline-four engine in three stages."
+  },
+  "canvas": {
+    "theme": "light"
+  },
+  "assemblies": [
+    {
+      "id": "engine",
+      "label": "Inline-four engine",
+      "units": "mm",
+      "fit": 8,
+      "parts": [
+        {
+          "id": "block",
+          "shape": "auto:block-i4",
+          "at": [0, 0, 120],
+          "size": [400, 160, 180],
+          "role": "body",
+          "label": "Cylinder block"
+        },
+        {
+          "id": "gasket",
+          "shape": "plate",
+          "at": [0, 0, 300],
+          "size": [400, 160, 6],
+          "role": "cover",
+          "tone": "muted",
+          "label": "Head gasket"
+        },
+        {
+          "id": "head",
+          "shape": "auto:head",
+          "at": [0, 0, 306],
+          "size": [400, 160, 80],
+          "role": "cover",
+          "label": "Cylinder head"
+        },
+        {
+          "id": "valve-cover",
+          "shape": "auto:valve-cover",
+          "at": [20, 20, 386],
+          "size": [360, 120, 30],
+          "role": "cover",
+          "label": "Valve cover"
+        },
+        {
+          "id": "intake",
+          "shape": "auto:intake",
+          "at": [40, 160, 316],
+          "size": [320, 50, 50],
+          "role": "internal",
+          "label": "Intake manifold"
+        },
+        {
+          "id": "exhaust",
+          "shape": "auto:exhaust",
+          "at": [40, -50, 316],
+          "size": [320, 50, 50],
+          "role": "internal",
+          "label": "Exhaust manifold"
+        },
+        {
+          "id": "piston",
+          "shape": "auto:piston",
+          "at": [25, 50, 235],
+          "size": [60, 60, 55],
+          "count": 4,
+          "pitch": [100, 0, 0],
+          "role": "internal",
+          "label": "Piston"
+        },
+        {
+          "id": "rod",
+          "shape": "auto:rod",
+          "at": [45, 65, 150],
+          "size": [20, 30, 85],
+          "count": 4,
+          "pitch": [100, 0, 0],
+          "role": "internal",
+          "label": "Connecting rod"
+        },
+        {
+          "id": "crank",
+          "shape": "auto:crankshaft",
+          "at": [10, 50, 100],
+          "size": [380, 60, 60],
+          "role": "internal",
+          "label": "Crankshaft"
+        },
+        {
+          "id": "oil-pan",
+          "shape": "auto:oil-pan",
+          "at": [0, 0, 0],
+          "size": [400, 160, 100],
+          "role": "cover",
+          "label": "Oil pan"
+        }
+      ],
+      "programs": [
+        {
+          "id": "teardown",
+          "label": "Three-stage teardown",
+          "stages": [
+            {
+              "label": "Top end",
+              "parts": ["valve-cover", "head", "gasket"],
+              "direction": "+z",
+              "distance": "auto",
+              "order": "outside-in",
+              "stagger": 0.08,
+              "duration": 0.8,
+              "labels": "show"
+            },
+            {
+              "label": "Manifolds",
+              "parts": ["intake", "exhaust"],
+              "direction": "out",
+              "distance": "auto",
+              "order": "outside-in",
+              "stagger": 0.08,
+              "duration": 0.8,
+              "labels": "show",
+              "with": "previous"
+            },
+            {
+              "label": "Pistons and rods",
+              "parts": ["piston-*", "rod-*"],
+              "direction": "+z",
+              "distance": "auto",
+              "order": "outside-in",
+              "stagger": 0.08,
+              "duration": 0.8,
+              "labels": "show"
+            },
+            {
+              "label": "Crankshaft and oil pan",
+              "parts": ["crank"],
+              "direction": "-z",
+              "distance": "auto",
+              "order": "outside-in",
+              "stagger": 0.08,
+              "duration": 0.8,
+              "labels": "show"
+            },
+            {
+              "label": "Oil pan",
+              "parts": ["oil-pan"],
+              "direction": "-z",
+              "distance": "auto",
+              "order": "outside-in",
+              "stagger": 0.08,
+              "duration": 0.8,
+              "labels": "show",
+              "with": "previous",
+              "fade": "unselected"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "caption": "Inline-four engine assembled",
+      "duration": 2
+    },
+    {
+      "caption": "Stage 1: top end comes off",
+      "duration": 3.2,
+      "focus": "engine",
+      "assembly": [
+        {
+          "explode": "engine",
+          "program": "teardown",
+          "to": 2
+        }
+      ]
+    },
+    {
+      "caption": "Stage 2: pistons and rods lift out",
+      "duration": 2.6,
+      "focus": "engine",
+      "assembly": [
+        {
+          "explode": "engine",
+          "program": "teardown",
+          "to": 3
+        }
+      ]
+    },
+    {
+      "caption": "Stage 3: crankshaft and oil pan drop away",
+      "duration": 3,
+      "focus": "engine",
+      "assembly": [
+        {
+          "explode": "engine",
+          "program": "teardown",
+          "to": 5
+        }
+      ]
+    },
+    {
+      "caption": "Engine back together",
+      "duration": 6,
+      "assembly": [
+        {
+          "implode": "engine"
+        }
+      ]
+    }
+  ]
+}

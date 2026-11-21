@@ -157,9 +157,11 @@ async function writeSetUnsafe(
 export async function staleOutputs(
   dirAbs: string,
   current: ReadonlySet<string>,
+  pattern?: RegExp,
 ): Promise<string[]> {
   const out: string[] = [];
   const pat =
+    pattern ??
     /^(base\.png|sprite-[1-9][0-9]{0,2}\.png|fragment\.json|report\.json|exclusions-(exploded|assembled)\.png)$/;
   try {
     let n = 0;
