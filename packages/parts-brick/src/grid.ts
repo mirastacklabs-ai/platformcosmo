@@ -115,7 +115,10 @@ function studsFor(p: BrickPlacement, shapeId: string, w: number, d: number): num
 
 /** A group's offset (`at`, and `pitch` when repeated) must be on the grid if it holds bricks. */
 function checkGroup(p: BrickPlacement): Diagnostic[] {
-  if (!Array.isArray(p.shapes) || !p.shapes.some((s) => typeof s === "string" && s.startsWith(PREFIX))) {
+  if (
+    !Array.isArray(p.shapes) ||
+    !p.shapes.some((s) => typeof s === "string" && s.startsWith(PREFIX))
+  ) {
     return [];
   }
   const f = toStudFactors(p.units);
