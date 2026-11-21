@@ -851,7 +851,12 @@ describe("program checks", () => {
       ],
     };
     none(run(view), "assembly/view-needs-assembly-only");
-    for (const extra of [{ nodes: [{ id: "n", type: "server" }] }, { racks: [{ id: "r1" }] }]) {
+    for (const extra of [
+      { nodes: [{ id: "n", type: "server" }] },
+      { racks: [{ id: "r1" }] },
+      { figures: [{ id: "f", base: "b", parts: [] }] },
+      { storyboards: [{ id: "sb", frames: [] }] },
+    ]) {
       const e = one(run({ ...view, ...extra }), "assembly/view-needs-assembly-only");
       expect(e.path).toBe("/assemblies/0/programs/0/steps/0/view");
     }

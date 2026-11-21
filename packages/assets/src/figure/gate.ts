@@ -598,6 +598,26 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
           if (comps.some((c) => c.pixels > 0)) foreignAny.add(k);
           for (const c of comps.filter((c) => c.pixels >= T.foreign).sort(byPixels))
             items.push({ state: s, part: u.id, pixels: c.pixels, bbox: c.box });
+          // One drawing: an instance's sprite (the template cut from another instance) showing ink
+          // on top where its own drawing is paper carries something of the template's drawing
+          // only (a board stroke touching the template): any pixel fails.
+          if (states.length === 1 && cls.unit !== k) {
+            const paper = (x: number, y: number): boolean =>
+              has(inkM, x, y) &&
+              top(x, y) &&
+              !st.rawInk[y * st.W + x] &&
+              Math.abs(st.lum[y * st.W + x]! - spriteLum(sp, x - px, y - py)) > T.luminance;
+            for (const c of components(inkM, paper, 8).sort(byPixels)) {
+              foreignAny.add(k);
+              items.push({
+                state: s,
+                part: u.id,
+                pixels: c.pixels,
+                bbox: c.box,
+                reason: `${c.pixels} px of ${u.id}'s sprite show ink where its drawing is paper`,
+              });
+            }
+          }
         }
       }
     }
@@ -745,8 +765,41 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
         for (let i = 0; i < Z.w; i++)
           if (Z.data[j * Z.w + i] && cand(i + Z.x, j + Z.y) && !visible(i + Z.x, j + Z.y))
             invisible++;
+      // One drawing: the drawing's strokes under the annotation masks that the analysis keeps
+      // (they run out of the erase) or rebuilds by continuity must be in the base; any pixel
+      // missing is a cut board line (nothing to hide it: no other depiction).
+      if (states.length === 1) {
+        const B = model.board;
+        const miss = (x: number, y: number): boolean => {
+          if (!has(B, x, y)) return false;
+          const want = has(Z, x, y) ? model.recover(x, y) : undefined;
+          const lum = want ? lumOf(want) : sb.lum[y * sb.W + x]!;
+          return Math.abs(outLum[y * sb.W + x]! - lum) > T.luminance;
+        };
+        for (const c of components(B, miss, 8).sort(byPixels))
+          items.push({
+            state: b,
+            pixels: c.pixels,
+            bbox: c.box,
+            reason: `${c.pixels} px of the drawing's strokes under the annotations, kept or rebuilt by the analysis, are missing from the base`,
+          });
+      }
     }
     entry("base-unrecovered", "asset/base-unrecovered", items, T.unrecovered, "error");
+    // One drawing: a stroke of the drawing that an annotation's erase cut and that could not be
+    // rebuilt (it meets the annotation from both sides without lining up, or enters a text
+    // rectangle) is a gap the analysis cannot fill.
+    if (usable) {
+      for (const c of model.cuts) {
+        diagnostics.push({
+          severity: "warning",
+          code: "asset/base-unrecovered",
+          path: `/annotations/${c.annotation}`,
+          message: `base-unrecovered: erasing annotation ${c.annotation} cut a stroke of the drawing that does not line up across it, so it could not be rebuilt (one drawing: nothing to recover it from)`,
+          params: { annotation: c.annotation, pixels: c.pixels, bbox: c.bbox },
+        });
+      }
+    }
     if (invisible > 0) {
       diagnostics.push({
         severity: "info",
@@ -782,11 +835,25 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
             top[y * st.W + x]! < rank &&
             !has(a.excluded[s]!, x, y);
           for (const c of components(u.place[s]!.E, miss, 8).sort(byPixels)) {
-            (c.pixels > T.occluded ? items : warnItems).push({
+            // Part ink the drawing shows there (a pin or an edge the sprite lacks) fails at any
+            // size: the size threshold is for hidden pixels, not for the part's own visible ink.
+            let ink = 0;
+            for (let j = 0; j < c.box.h; j++)
+              for (let i = 0; i < c.box.w; i++) {
+                const x = i + c.box.x;
+                const y = j + c.box.y;
+                if (miss(x, y) && st.rawInk[y * st.W + x]) ink++;
+              }
+            (c.pixels > T.occluded || ink > 0 ? items : warnItems).push({
               state: s,
               part: u.id,
               pixels: c.pixels,
               bbox: c.box,
+              ...(ink > 0
+                ? {
+                    reason: `${ink} px of ${u.id}'s ink the drawing shows are missing from its sprite`,
+                  }
+                : {}),
             });
           }
           // The analysis's record: template pixels hidden in its drawing that no other
@@ -834,6 +901,9 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
     if (usable) {
       const outLum = luminanceOverWhite(out.base);
       const t = sb.threshold;
+      // Any annotation ink left in the base, even 1 px, is a defect: a lifted part reveals it.
+      // Erased pixels inside the mask (whose ends follow the stroke as drawn, §6.4) that are
+      // still dark and that recovery does not explain.
       for (const g of a.annotations) {
         if (g.state !== b) continue;
         const m = g.mask;
@@ -842,10 +912,60 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
           const rec = model.recover(x, y);
           return !(rec && lumOf(rec) < t);
         };
-        for (const c of components(m, f, 8)
-          .filter((c) => c.pixels >= T.annotationResidual)
-          .sort(byPixels)) {
+        for (const c of components(m, f, 8).sort(byPixels)) {
           items.push({ state: b, annotation: g.index, pixels: c.pixels, bbox: c.box });
+        }
+      }
+      // Annotation ink carried by a sprite: in each drawn state, a sprite's ink inside that
+      // drawing's annotation masks outside the part's expected silhouette there (an arrow's stub
+      // cut with the part where the arrow touches it). The pipeline's sprites are exactly the
+      // expected silhouette, so any pixel fails.
+      for (const s of states) {
+        const masks = a.annotations.filter((g) => g.state === s).map((g) => g.mask);
+        if (masks.length === 0) continue;
+        const M = union(...masks);
+        for (let k = 0; k < a.units.length; k++) {
+          const u = unitOf(k);
+          const inkM = spriteInk(k, s);
+          const E = u.place[s]!.E;
+          const f = (x: number, y: number): boolean =>
+            has(inkM, x, y) && has(M, x, y) && !has(E, x, y);
+          for (const c of components(inkM, f, 8).sort(byPixels))
+            items.push({
+              state: s,
+              part: u.id,
+              pixels: c.pixels,
+              bbox: c.box,
+              reason: `${c.pixels} px of ${u.id}'s sprite lie inside annotation masks outside its expected silhouette`,
+            });
+          // With two drawings, the part's other depiction decides inside the silhouette too: a
+          // sprite's ink under an annotation where the other drawing, through the part's own
+          // motion, shows paper that no annotation or other part covers is the annotation's (a
+          // shaft stub kept with a declared end). A real feature there (a pin) shows ink.
+          if (states.length !== 2) continue;
+          const o = s === "assembled" ? "exploded" : "assembled";
+          const so = a.img[o]!;
+          const [ax, ay] = posIn(k, s);
+          const [bx, by] = posIn(k, o);
+          const masksO = a.annotations.filter((g) => g.state === o).map((g) => g.mask);
+          const paper = (x: number, y: number): boolean => {
+            if (!has(inkM, x, y) || !has(M, x, y) || !has(E, x, y)) return false;
+            const qx = x - ax + bx;
+            const qy = y - ay + by;
+            if (qx < 0 || qy < 0 || qx >= so.W || qy >= so.H) return false;
+            const q = qy * so.W + qx;
+            if (so.rawInk[q] || Math.abs(so.lum[q]! - so.backgroundLum) > T.luminance) return false;
+            if (masksO.some((m) => has(m, qx, qy))) return false;
+            return !a.units.some((w, i) => i !== k && has(w.place[o]!.E, qx, qy));
+          };
+          for (const c of components(inkM, paper, 8).sort(byPixels))
+            items.push({
+              state: s,
+              part: u.id,
+              pixels: c.pixels,
+              bbox: c.box,
+              reason: `${c.pixels} px of ${u.id}'s sprite under annotations show ink where its ${o} drawing shows paper`,
+            });
         }
       }
       // Annotations of the other drawing, mapped into the base: there the base may hold no ink
@@ -870,13 +990,39 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
           return true;
         };
         for (const c of components(m, f, 8)
-          .filter((c) => c.pixels >= T.annotationResidual)
+          .filter((c) => c.pixels >= 1)
           .sort(byPixels)) {
           items.push({ state: b, annotation: g.index, pixels: c.pixels, bbox: c.box });
         }
       }
     }
-    entry("arrow-residual", "asset/arrow-residual", items, T.annotationResidual, "error");
+    entry("arrow-residual", "asset/arrow-residual", items, 0, "error");
+  }
+
+  // ---- what the analysis took as annotation ink beyond the declaration (§6.4): an end moved
+  // onto the stroke as drawn and, with one drawing, ink entirely inside a mask. Both are
+  // documented ambiguities (a tick in line with a tip, a dot under it), reported, never silent.
+  if (usable) {
+    const inside = new Map(model.inside.map((v) => [v.annotation, v.pixels]));
+    for (const g of a.annotations) {
+      const n = inside.get(g.index) ?? 0;
+      if (g.snaps.length === 0 && n === 0) continue;
+      const what = g.snaps.map(
+        (v) => `its ${v.end === 0 ? "first" : "last"} point moved ${v.distance} px onto the stroke`,
+      );
+      if (n > 0) what.push(`${n} px of other ink entirely inside its mask were erased with it`);
+      diagnostics.push({
+        severity: "info",
+        code: "asset/annotation-erased",
+        path: `/annotations/${g.index}`,
+        message: `annotation ${g.index}: ${what.join("; ")}`,
+        params: {
+          annotation: g.index,
+          snaps: g.snaps.map((v) => ({ end: v.end, distance: v.distance })),
+          inside: n,
+        },
+      });
+    }
   }
 
   // ---- hull confidence and annotation validity (from the analysis)
