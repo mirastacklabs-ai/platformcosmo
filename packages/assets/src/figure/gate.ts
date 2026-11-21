@@ -938,6 +938,34 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
               bbox: c.box,
               reason: `${c.pixels} px of ${u.id}'s sprite lie inside annotation masks outside its expected silhouette`,
             });
+          // With two drawings, the part's other depiction decides inside the silhouette too: a
+          // sprite's ink under an annotation where the other drawing, through the part's own
+          // motion, shows paper that no annotation or other part covers is the annotation's (a
+          // shaft stub kept with a declared end). A real feature there (a pin) shows ink.
+          if (states.length !== 2) continue;
+          const o = s === "assembled" ? "exploded" : "assembled";
+          const so = a.img[o]!;
+          const [ax, ay] = posIn(k, s);
+          const [bx, by] = posIn(k, o);
+          const masksO = a.annotations.filter((g) => g.state === o).map((g) => g.mask);
+          const paper = (x: number, y: number): boolean => {
+            if (!has(inkM, x, y) || !has(M, x, y) || !has(E, x, y)) return false;
+            const qx = x - ax + bx;
+            const qy = y - ay + by;
+            if (qx < 0 || qy < 0 || qx >= so.W || qy >= so.H) return false;
+            const q = qy * so.W + qx;
+            if (so.rawInk[q] || Math.abs(so.lum[q]! - so.backgroundLum) > T.luminance) return false;
+            if (masksO.some((m) => has(m, qx, qy))) return false;
+            return !a.units.some((w, i) => i !== k && has(w.place[o]!.E, qx, qy));
+          };
+          for (const c of components(inkM, paper, 8).sort(byPixels))
+            items.push({
+              state: s,
+              part: u.id,
+              pixels: c.pixels,
+              bbox: c.box,
+              reason: `${c.pixels} px of ${u.id}'s sprite under annotations show ink where its ${o} drawing shows paper`,
+            });
         }
       }
       // Annotations of the other drawing, mapped into the base: there the base may hold no ink

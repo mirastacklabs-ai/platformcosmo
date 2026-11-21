@@ -145,6 +145,30 @@ function differing(
   return n;
 }
 
+/**
+ * `main` with a 2 px pin, L px long, under each heat sink in both drawings where the exploded
+ * arrow's shaft starts (the shaft drawn over it); the arrows are declared from `short` px past
+ * the pin's end.
+ */
+function pinned(L: number, short: number) {
+  const f = figure("main");
+  const manifest = structuredClone(f.manifest);
+  const X = clone(f.states.exploded!.image);
+  const A = clone(f.states.assembled!.image);
+  const pins: ["assembled" | "exploded", number, number][] = [];
+  for (const [k, id] of (["hs-1", "hs-2"] as const).entries()) {
+    const [x, y0] = manifest.annotations[k].polyline[0] as [number, number];
+    const e = f.states.exploded!.truth.units[id]!.pos;
+    const s = f.states.assembled!.truth.units[id]!.pos;
+    for (let t = 0; t < L; t++)
+      for (const xx of [x, x + 1])
+        pins.push(["exploded", xx, y0 + t], ["assembled", xx - e[0] + s[0], y0 + t - e[1] + s[1]]);
+    manifest.annotations[k].polyline[0] = [x, y0 + L + short];
+  }
+  for (const [s, x, y] of pins) setPx(s === "exploded" ? X : A, x, y, BLACK);
+  return { f, manifest, sources: { "exploded.png": X, "assembled.png": A }, pins };
+}
+
 describe("no 1 px leftovers in the clean base", () => {
   it("an arrow whose drawn tip runs past its declared end is erased whole, and any leftover fails", () => {
     const f = figure("main");
@@ -386,27 +410,7 @@ describe("no 1 px leftovers in the clean base", () => {
   });
   it("two drawings: a pin the arrow starts from stays the part's, and a sprite without it fails", () => {
     for (const L of [3, 6]) {
-      const f = figure("main");
-      const manifest = structuredClone(f.manifest);
-      const X = clone(f.states.exploded!.image);
-      const A = clone(f.states.assembled!.image);
-      // A 2 px pin, L px long, under each heat sink in both drawings where the exploded arrow's
-      // shaft starts; the arrow is declared from the pin's end.
-      const pins: ["assembled" | "exploded", number, number][] = [];
-      for (const [k, id] of (["hs-1", "hs-2"] as const).entries()) {
-        const [x, y0] = manifest.annotations[k].polyline[0] as [number, number];
-        const e = f.states.exploded!.truth.units[id]!.pos;
-        const s = f.states.assembled!.truth.units[id]!.pos;
-        for (let t = 0; t < L; t++)
-          for (const xx of [x, x + 1])
-            pins.push(
-              ["exploded", xx, y0 + t],
-              ["assembled", xx - e[0] + s[0], y0 + t - e[1] + s[1]],
-            );
-        manifest.annotations[k].polyline[0] = [x, y0 + L];
-      }
-      for (const [s, x, y] of pins) setPx(s === "exploded" ? X : A, x, y, BLACK);
-      const sources = { "exploded.png": X, "assembled.png": A };
+      const { f, manifest, sources, pins } = pinned(L, 0);
       const r = runFigure(manifest, sources).value!;
       expect(errorsOf(r.report), `${L} px`).toEqual([]);
       for (const s of ["assembled", "exploded"] as const) {
@@ -477,5 +481,34 @@ describe("no 1 px leftovers in the clean base", () => {
     );
     expect(info?.severity).toBe("info");
     expect(info?.params?.inside).toBe(2);
+  });
+  it("two drawings: a shaft stub kept with an end declared short of a pin fails the gate", () => {
+    // The end's walk over the shaft and the pin is vetoed (the pin is the part's), so the 3 px of
+    // shaft between the declared end and the pin join the part: the gate must not pass that.
+    for (const L of [4, 6]) {
+      const { manifest, sources } = pinned(L, 3);
+      const r = runFigure(manifest, sources).value!;
+      expect(errorCodes(r.report), `${L} px`).toContain("asset/arrow-residual");
+    }
+  });
+
+  it("one drawing, s5: each sprite equals its truth sprite (no trace remnant on the edge)", () => {
+    const f = figure("assembled-only", { scale: 2, stroke: 5 });
+    const r = runFigure(f.manifest, sourcesOf(f)).value!;
+    expect(errorsOf(r.report)).toEqual([]);
+    const st = f.states.assembled!;
+    const blankOf = (): Raster => ({
+      width: st.image.width,
+      height: st.image.height,
+      data: new Uint8Array(st.image.width * st.image.height * 4).fill(255),
+    });
+    for (const p of r.outputs.parts) {
+      const ours = blankOf();
+      const truth = blankOf();
+      paste(ours, r.outputs.sprites[p.sprite]!, p.seat[0], p.seat[1]);
+      const t = st.truth.units[p.id]!.full;
+      paste(truth, f.sprites[p.id]!.raster, t.x, t.y);
+      expect(differences(ours, truth), p.id).toBe(0);
+    }
   });
 });

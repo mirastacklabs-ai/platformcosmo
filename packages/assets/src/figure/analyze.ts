@@ -249,6 +249,9 @@ export function thresholds(strict: boolean) {
   } as const;
 }
 
+/** Re-analyses after vetoed end snaps (§6.4): at most this many. */
+const MAX_RERUNS = 2;
+
 /** Stand-alone test: at most this fraction of the whole ink beyond the seeded mask is static. */
 const STANDALONE_STATIC = 0.25;
 const TAN30 = Math.tan(Math.PI / 6);
@@ -521,6 +524,7 @@ export function analyzeFigure(
   sources: FigureSources,
   options: FigureOptions = {},
   fixedEnds: ReadonlyMap<number, readonly (0 | 1)[]> = new Map(),
+  reruns = 0,
 ): { value?: Analysis; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = [];
   for (const k of ["maxPixels", "maxMultiplyAdds"] as const) {
@@ -1752,6 +1756,94 @@ export function analyzeFigure(
         if (isEmpty(rim)) break;
         regrow(c, minus(c.mask, rim));
       }
+      // What is left of such a stroke on the rim is decided by the part's own outline next to it:
+      // the mask-boundary pixels within 2 strokes + 2 px with no raw ink outside next to them (a
+      // clean edge), at least 3 on each side of the pixel along the edge, fitted by a line
+      // (total least squares, RMS residual at most 0.75 px). A pixel at least 0.5 px beyond that
+      // line on the outside, and 0.15 px beyond the farthest of those clean edge pixels (the
+      // staircase of the edge itself), is the stroke's, not the edge's, and leaves the template.
+      {
+        const m = c.mask;
+        const outside = (x: number, y: number): boolean => !has(m, x, y);
+        const rimOf = (x: number, y: number): { edge: boolean; runs: boolean } => {
+          let edge = false;
+          let runs = false;
+          for (let dy = -1; dy <= 1; dy++)
+            for (let dx = -1; dx <= 1; dx++) {
+              if (!outside(x + dx, y + dy)) continue;
+              if (dx === 0 || dy === 0) edge = true;
+              if (raw(x + dx, y + dy)) runs = true;
+            }
+          return { edge, runs };
+        };
+        const R = 2 * st.stroke + 2;
+        const peel: [number, number][] = [];
+        for (let j = 0; j < m.h; j++)
+          for (let i = 0; i < m.w; i++) {
+            const x = i + m.x;
+            const y = j + m.y;
+            if (!m.data[j * m.w + i] || !raw(x, y)) continue;
+            const here = rimOf(x, y);
+            if (!here.edge || !here.runs) continue;
+            const clean: [number, number][] = [];
+            const inner: [number, number][] = [];
+            for (let dy = -R; dy <= R; dy++)
+              for (let dx = -R; dx <= R; dx++) {
+                if (dx * dx + dy * dy > R * R || !has(m, x + dx, y + dy)) continue;
+                inner.push([dx, dy]);
+                const q = rimOf(x + dx, y + dy);
+                if (q.edge && !q.runs) clean.push([dx, dy]);
+              }
+            if (clean.length < 6) continue;
+            // Total least squares line through the clean edge pixels (relative to the pixel).
+            let mx = 0;
+            let my = 0;
+            for (const [a, b] of clean) {
+              mx += a;
+              my += b;
+            }
+            mx /= clean.length;
+            my /= clean.length;
+            let sxx = 0;
+            let syy = 0;
+            let sxy = 0;
+            for (const [a, b] of clean) {
+              sxx += (a - mx) ** 2;
+              syy += (b - my) ** 2;
+              sxy += (a - mx) * (b - my);
+            }
+            const th = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+            const ux = Math.cos(th);
+            const uy = Math.sin(th);
+            const nx = -uy;
+            const ny = ux;
+            let res = 0;
+            let before = 0;
+            let after = 0;
+            for (const [a, b] of clean) {
+              res += ((a - mx) * nx + (b - my) * ny) ** 2;
+              const t = a * ux + b * uy;
+              if (t < 0) before++;
+              else if (t > 0) after++;
+            }
+            if (before < 3 || after < 3 || Math.sqrt(res / clean.length) > 0.75) continue;
+            // The inside of the part: the side the mask's pixels around lie on. Distances are
+            // measured outward; the clean edge's own staircase sets how far an edge pixel may sit.
+            let side = 0;
+            for (const [a, b] of inner) side += (a - mx) * nx + (b - my) * ny;
+            if (side === 0) continue;
+            const out = (a: number, b: number): number =>
+              -((a - mx) * nx + (b - my) * ny) * Math.sign(side);
+            let spread = 0;
+            for (const [a, b] of clean) spread = Math.max(spread, out(a, b));
+            if (out(0, 0) >= Math.max(0.5, spread + 0.15)) peel.push([x, y]);
+          }
+        if (peel.length > 0)
+          regrow(
+            c,
+            filter(c.mask, (x, y) => !peel.some(([a, b]) => a === x && b === y)),
+          );
+      }
       const add = endingInk(minus(tp.partInk, tp.E), tp.hull, st.rawInk, st.W, st.H);
       if (isEmpty(add)) continue;
       const joined = union(c.mask, add);
@@ -2032,8 +2124,9 @@ export function analyzeFigure(
   // An end moved onto the stroke must not take a part's own ink: where the ink walked over maps,
   // through a part's own motion (placed in both drawings), onto ink of the other drawing that no
   // annotation there covers (a pin under the part, drawn in both states), the end keeps its
-  // declared position and the analysis runs again with it fixed.
-  if (states.length === 2) {
+  // declared position and the analysis runs again with it fixed (at most MAX_RERUNS times, so the
+  // work is bounded at 3 analyses whatever the annotations).
+  if (states.length === 2 && reruns < MAX_RERUNS) {
     const veto = new Map<number, (0 | 1)[]>();
     for (const g of annotations) {
       const s = g.state;
@@ -2065,7 +2158,7 @@ export function analyzeFigure(
     if (veto.size > 0) {
       const next = new Map(fixedEnds);
       for (const [k, v] of veto) next.set(k, [...(next.get(k) ?? []), ...v]);
-      return analyzeFigure(input, sources, options, next);
+      return analyzeFigure(input, sources, options, next, reruns + 1);
     }
   }
 
