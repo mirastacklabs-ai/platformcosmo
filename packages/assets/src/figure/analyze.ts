@@ -45,6 +45,7 @@ import {
   convexHull,
   count,
   dilate,
+  endingInk,
   erode,
   fillHoles,
   filter,
@@ -239,7 +240,6 @@ export function thresholds(strict: boolean) {
     foreign: 4 * k,
     unrecovered: 24 * k,
     occluded: 24 * k,
-    annotationResidual: 4 * k,
     cumulative: 16 * k,
     exclusionFraction: 0.05 * k,
     textFraction: 0.02 * k,
@@ -248,6 +248,9 @@ export function thresholds(strict: boolean) {
     luminance: 48,
   } as const;
 }
+
+/** Re-analyses after vetoed end snaps (§6.4): at most this many. */
+const MAX_RERUNS = 2;
 
 /** Stand-alone test: at most this fraction of the whole ink beyond the seeded mask is static. */
 const STANDALONE_STATIC = 0.25;
@@ -520,6 +523,8 @@ export function analyzeFigure(
   input: unknown,
   sources: FigureSources,
   options: FigureOptions = {},
+  fixedEnds: ReadonlyMap<number, readonly (0 | 1)[]> = new Map(),
+  reruns = 0,
 ): { value?: Analysis; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = [];
   for (const k of ["maxPixels", "maxMultiplyAdds"] as const) {
@@ -776,6 +781,7 @@ export function analyzeFigure(
         annotation: a,
         ...(ai.points ? { points: ai.points } : {}),
         ...(ai.rect ? { rect: ai.rect } : {}),
+        ...(fixedEnds.has(ai.index) ? { fixed: fixedEnds.get(ai.index)! } : {}),
       },
       st.rawInk,
       st.W,
@@ -1670,6 +1676,242 @@ export function analyzeFigure(
     }
   }
 
+  // ---- two drawings: a thin feature of the part at an arrow's contact (a pin the arrow starts
+  // from) is not the arrow's stub where the part's own motion carries it onto ink of the other
+  // drawing that no annotation covers: what the allowance's stub opening removed there comes back
+  // into the template, grown from it inside the allowance squares.
+  if (states.length === 2) {
+    for (const c of classes) {
+      const tu = units[c.unit]!;
+      const s = c.state;
+      const o = other(s);
+      const st = img[s]!;
+      const so = img[o]!;
+      const tp = tu.place[s]!;
+      const po = tu.place[o]!;
+      const squares = annotations.filter((g) => g.state === s).flatMap((g) => g.allowances);
+      if (squares.length === 0) continue;
+      const others = units.filter((w) => w !== tu);
+      const fits = (x: number, y: number): boolean => {
+        if (!squares.some((b) => inBox(b, x, y)) || !st.rawInk[y * st.W + x]) return false;
+        if (others.some((w) => has(w.place[s]!.E, x, y))) return false;
+        const qx = x + po.x - tp.x;
+        const qy = y + po.y - tp.y;
+        if (qx < 0 || qy < 0 || qx >= so.W || qy >= so.H || !so.rawInk[qy * so.W + qx])
+          return false;
+        if (others.some((w) => has(w.place[o]!.E, qx, qy))) return false;
+        return !annotations.some((g) => g.state === o && has(g.mask, qx, qy));
+      };
+      let mask = c.mask;
+      for (let grew = true; grew;) {
+        grew = false;
+        const ring = filter(dilate(mask, 1, st.W, st.H), (x, y) => !has(mask, x, y) && fits(x, y));
+        if (!isEmpty(ring)) {
+          mask = union(mask, ring);
+          grew = true;
+        }
+      }
+      if (mask === c.mask) continue;
+      regrow(c, tight(mask));
+    }
+  }
+
+  // ---- one drawing: the part ink in the hull that ends there (an outer edge segmentation missed
+  // where a board line touches it) goes with the part: the base erases it with the part (§6.4),
+  // so the template carries it too, or nothing would show it in either pose.
+  if (states.length === 1) {
+    const s = states[0]!;
+    const st = img[s]!;
+    const raw = (x: number, y: number): boolean =>
+      x >= 0 && y >= 0 && x < st.W && y < st.H && st.rawInk[y * st.W + x] !== 0;
+    for (const c of classes) {
+      const tu = units[c.unit]!;
+      const tp = tu.place[s]!;
+      // A board stroke running on out of the template where it touches it (a trace meeting an
+      // edge) is not the part's where another instance shows paper there, uncovered: its pixels
+      // on the template's rim leave the template (one drawing; instances only).
+      const mates = c.units.filter((i) => i !== c.unit).map((i) => units[i]!);
+      const peeled: [number, number][] = [];
+      const undecided: [number, number][] = [];
+      // Peeled a rim at a time (a stroke a few pixels thick), at most the stroke's width + 2.
+      for (let pass = 0; mates.length > 0 && pass < st.stroke + 2; pass++) {
+        const rim = filter(c.mask, (x, y) => {
+          if (!raw(x, y)) return false;
+          let edge = false;
+          let runs = false;
+          for (let dy = -1; dy <= 1; dy++)
+            for (let dx = -1; dx <= 1; dx++) {
+              if (has(c.mask, x + dx, y + dy)) continue;
+              if (dx === 0 || dy === 0) edge = true;
+              if (raw(x + dx, y + dy)) runs = true;
+            }
+          if (!edge || !runs) return false;
+          return mates.some((u) => {
+            const p = u.place[s]!;
+            const qx = x + p.x - tp.x;
+            const qy = y + p.y - tp.y;
+            if (qx < 0 || qy < 0 || qx >= st.W || qy >= st.H || st.ink[qy * st.W + qx])
+              return false;
+            return !units.some((w) => w !== u && has(w.place[s]!.E, qx, qy));
+          });
+        });
+        if (isEmpty(rim)) break;
+        for (let j = 0; j < rim.h; j++)
+          for (let i = 0; i < rim.w; i++)
+            if (rim.data[j * rim.w + i]) peeled.push([i + rim.x, j + rim.y]);
+        regrow(c, minus(c.mask, rim));
+      }
+      // What is left of such a stroke on the rim is decided by the part's own outline next to it,
+      // only where that outline is straight through the pixel: the mask-boundary pixels within
+      // 2 strokes + 2 px with no raw ink outside next to them (a clean edge), at least 3 on each
+      // side of the pixel along the edge, fitted by a line on each side separately (total least
+      // squares, RMS at most 0.5 px) and together (RMS at most 1.15 x the worse side + 0.05: one
+      // edge, not a vertex or corner). A pixel at least 0.5 px beyond the common line on the
+      // outside, 0.15 px beyond the farthest clean edge pixel (the edge's own staircase) and
+      // 0.5 px beyond each side's own line (a convex curve bulges past the common line, not past
+      // the sides') is the stroke's and leaves the template. Anything else beyond the common line,
+      // and every such pixel where the outline is not straight (a stroke ending on a vertex or
+      // corner), stays and is reported (`asset/rim-stroke` warning); a peel is reported as info.
+      {
+        const m = c.mask;
+        const rimOf = (x: number, y: number): { edge: boolean; runs: boolean } => {
+          let edge = false;
+          let runs = false;
+          for (let dy = -1; dy <= 1; dy++)
+            for (let dx = -1; dx <= 1; dx++) {
+              if (has(m, x + dx, y + dy)) continue;
+              if (dx === 0 || dy === 0) edge = true;
+              if (raw(x + dx, y + dy)) runs = true;
+            }
+          return { edge, runs };
+        };
+        /** Total least squares line: centroid, unit direction and RMS residual. */
+        const fit = (pts: readonly (readonly [number, number])[]) => {
+          let mx = 0;
+          let my = 0;
+          for (const [a, b] of pts) {
+            mx += a;
+            my += b;
+          }
+          mx /= pts.length;
+          my /= pts.length;
+          let sxx = 0;
+          let syy = 0;
+          let sxy = 0;
+          for (const [a, b] of pts) {
+            sxx += (a - mx) ** 2;
+            syy += (b - my) ** 2;
+            sxy += (a - mx) * (b - my);
+          }
+          const th = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+          const ux = Math.cos(th);
+          const uy = Math.sin(th);
+          let res = 0;
+          for (const [a, b] of pts) res += ((a - mx) * -uy + (b - my) * ux) ** 2;
+          return { mx, my, ux, uy, rms: Math.sqrt(res / pts.length) };
+        };
+        const R = 2 * st.stroke + 2;
+        const peel: [number, number][] = [];
+        for (let j = 0; j < m.h; j++)
+          for (let i = 0; i < m.w; i++) {
+            const x = i + m.x;
+            const y = j + m.y;
+            if (!m.data[j * m.w + i] || !raw(x, y)) continue;
+            const here = rimOf(x, y);
+            if (!here.edge || !here.runs) continue;
+            const clean: [number, number][] = [];
+            const inner: [number, number][] = [];
+            for (let dy = -R; dy <= R; dy++)
+              for (let dx = -R; dx <= R; dx++) {
+                if (dx * dx + dy * dy > R * R || !has(m, x + dx, y + dy)) continue;
+                inner.push([dx, dy]);
+                const q = rimOf(x + dx, y + dy);
+                if (q.edge && !q.runs) clean.push([dx, dy]);
+              }
+            const all = clean.length >= 6 ? fit(clean) : undefined;
+            const before = all ? clean.filter(([a, b]) => a * all.ux + b * all.uy < 0) : [];
+            const after = all ? clean.filter(([a, b]) => a * all.ux + b * all.uy > 0) : [];
+            const f1 = before.length >= 3 ? fit(before) : undefined;
+            const f2 = after.length >= 3 ? fit(after) : undefined;
+            const straight =
+              all &&
+              f1 &&
+              f2 &&
+              f1.rms <= 0.5 &&
+              f2.rms <= 0.5 &&
+              all.rms <= 1.15 * Math.max(f1.rms, f2.rms) + 0.05;
+            let side = 0;
+            if (straight)
+              for (const [a, b] of inner) side += (a - all.mx) * -all.uy + (b - all.my) * all.ux;
+            if (!straight || side === 0) {
+              undecided.push([x, y]);
+              continue;
+            }
+            // Distances outward from a line (its inside: where the mask around lies); the clean
+            // edge's own staircase sets how far an edge pixel may sit.
+            const outFrom = (l: NonNullable<typeof all>) => {
+              let sg = 0;
+              for (const [a, b] of inner) sg += (a - l.mx) * -l.uy + (b - l.my) * l.ux;
+              return (a: number, b: number): number =>
+                -((a - l.mx) * -l.uy + (b - l.my) * l.ux) * Math.sign(sg);
+            };
+            const out = outFrom(all);
+            let spread = 0;
+            for (const [a, b] of clean) spread = Math.max(spread, out(a, b));
+            if (out(0, 0) < Math.max(0.5, spread + 0.15)) continue;
+            if (Math.min(outFrom(f1)(0, 0), outFrom(f2)(0, 0)) >= 0.5) peel.push([x, y]);
+            else undecided.push([x, y]);
+          }
+        if (peel.length > 0) {
+          peeled.push(...peel);
+          regrow(
+            c,
+            filter(c.mask, (x, y) => !peel.some(([a, b]) => a === x && b === y)),
+          );
+        }
+      }
+      // Never silent: what left the template, and what could not be decided (the template is
+      // cut from one instance, so either goes with every copy).
+      const list = (q: [number, number][]) => {
+        let x0 = Infinity;
+        let y0 = Infinity;
+        let x1 = -Infinity;
+        let y1 = -Infinity;
+        for (const [x, y] of q) {
+          x0 = Math.min(x0, x);
+          y0 = Math.min(y0, y);
+          x1 = Math.max(x1, x);
+          y1 = Math.max(y1, y);
+        }
+        return {
+          pixels: q.slice(0, 256).map(([x, y]) => [x + st.origin[0], y + st.origin[1]]),
+          count: q.length,
+          bbox: { x: x0 + st.origin[0], y: y0 + st.origin[1], w: x1 - x0 + 1, h: y1 - y0 + 1 },
+        };
+      };
+      if (peeled.length > 0)
+        diagnostics.push({
+          severity: "info",
+          code: "asset/rim-stroke",
+          path: "",
+          message: `${peeled.length} px where a board stroke touches ${tu.id}'s outline left its template (the stroke's, not the part's)`,
+          params: { part: tu.id, state: s, ...list(peeled) },
+        });
+      if (undecided.length > 0)
+        diagnostics.push({
+          severity: "warning",
+          code: "asset/rim-stroke",
+          path: "",
+          message: `a board stroke touches ${tu.id}'s outline where it is not straight (a vertex or corner): ${undecided.length} px there may be the stroke's or the part's; check the sprite there`,
+          params: { part: tu.id, state: s, ...list(undecided) },
+        });
+      const add = endingInk(minus(tp.partInk, tp.E), tp.hull, st.rawInk, st.W, st.H);
+      if (isEmpty(add)) continue;
+      const joined = union(c.mask, add);
+      regrow(c, tight(u0holes(units, c) ? joined : fillHoles(joined)));
+    }
+  }
+
   // ---- template sprites: non-part annotation ink inside a template (§6.4 applied to sprites) is
   // replaced from another depiction's own segmentation where it is not annotated; what no other
   // depiction shows becomes background and is recorded as unrecovered.
@@ -1940,6 +2182,47 @@ export function analyzeFigure(
     }
   }
 
+  // An end moved onto the stroke must not take a part's own ink: where the ink walked over maps,
+  // through a part's own motion (placed in both drawings), onto ink of the other drawing that no
+  // annotation there covers (a pin under the part, drawn in both states), the end keeps its
+  // declared position and the analysis runs again with it fixed (at most MAX_RERUNS times, so the
+  // work is bounded at 3 analyses whatever the annotations).
+  if (states.length === 2 && reruns < MAX_RERUNS) {
+    const veto = new Map<number, (0 | 1)[]>();
+    for (const g of annotations) {
+      const s = g.state;
+      const o = other(s);
+      const st = img[s]!;
+      const so = img[o]!;
+      for (const sn of g.snaps) {
+        const ok = (u: Unit): boolean => {
+          const ps = u.place[s]!;
+          const po = u.place[o]!;
+          const near = dilate(ps.hull, sn.distance + 2, st.W, st.H);
+          let n = 0;
+          for (const q of sn.pixels) {
+            const x = q % st.W;
+            const y = (q - x) / st.W;
+            if (!has(near, x, y)) continue;
+            const qx = x + po.x - ps.x;
+            const qy = y + po.y - ps.y;
+            if (qx < 0 || qy < 0 || qx >= so.W || qy >= so.H || !so.rawInk[qy * so.W + qx])
+              continue;
+            if (annotations.some((h) => h.state === o && has(h.mask, qx, qy))) continue;
+            n++;
+          }
+          return 2 * n > sn.pixels.length;
+        };
+        if (units.some(ok)) veto.set(g.index, [...(veto.get(g.index) ?? []), sn.end]);
+      }
+    }
+    if (veto.size > 0) {
+      const next = new Map(fixedEnds);
+      for (const [k, v] of veto) next.set(k, [...(next.get(k) ?? []), ...v]);
+      return analyzeFigure(input, sources, options, next, reruns + 1);
+    }
+  }
+
   return {
     value: {
       manifest,
@@ -1962,6 +2245,51 @@ export function analyzeFigure(
     },
     diagnostics,
   };
+
+  /**
+   * Replaces a class's template mask (template-state coordinates): the old sprite's pixels stay
+   * where the mask keeps them, new ones come from the template's drawing; every instance follows.
+   */
+  function regrow(c: TemplateClass, mask: Mask): void {
+    const s = c.state;
+    const tu = units[c.unit]!;
+    const tp = tu.place[s]!;
+    const sprite = colours(img[s]!.image, mask);
+    for (let j = 0; j < c.mask.h; j++)
+      for (let i = 0; i < c.mask.w; i++) {
+        if (!c.mask.data[j * c.mask.w + i] || !has(mask, i + c.mask.x, j + c.mask.y)) continue;
+        const q0 = (j * c.mask.w + i) * 4;
+        const q1 = ((j + c.mask.y - mask.y) * mask.w + i + c.mask.x - mask.x) * 4;
+        sprite.data.set(c.sprite.data.subarray(q0, q0 + 4), q1);
+      }
+    const ox = mask.x - c.mask.x;
+    const oy = mask.y - c.mask.y;
+    const grown = minus(mask, c.mask);
+    c.mask = mask;
+    c.sprite = sprite;
+    (tu.dep as Record<FigureState, Depiction>)[s] = {
+      ...tu.dep[s]!,
+      V: union(tu.dep[s]!.V, grown),
+    };
+    for (const ui of c.units) {
+      const u = units[ui]!;
+      for (const s2 of states) {
+        const p = u.place[s2]!;
+        const nx = p.x + ox;
+        const ny = p.y + oy;
+        (u.place as Record<FigureState, Placement>)[s2] = {
+          ...p,
+          x: nx,
+          y: ny,
+          E: shifted(mask, nx - mask.x, ny - mask.y),
+          visible: intersect(
+            union(p.visible, shifted(grown, p.x - tp.x, p.y - tp.y)),
+            shifted(mask, nx - mask.x, ny - mask.y),
+          ),
+        };
+      }
+    }
+  }
 
   function place(u: Unit, s: FigureState, x: number, y: number, score: number, E: Mask): void {
     (u.place as Record<FigureState, Placement>)[s] = {

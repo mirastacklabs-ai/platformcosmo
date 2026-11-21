@@ -100,6 +100,7 @@ const result = await build({
     "@platformcosmo/core": src("core"),
     "@platformcosmo/themes": src("themes"),
     "@platformcosmo/assets": src("assets"),
+    "@platformcosmo/pdf": src("pdf"),
     "@platformcosmo/dc-pack": src("dc-pack"),
     "@platformcosmo/icons-base": src("icons-base"),
     "@platformcosmo/icons-lucide": src("icons-lucide"),
@@ -287,10 +288,11 @@ function notices() {
   }
   return `${lines.join("\n").trimEnd()}\n`;
 }
-// Size guard. Baseline: 5,842,308 bytes (D-1 on top of D-2a: shape packs, suggest and the image
-// and asset commands; 5,382,188 with the brand fonts before those). The guard sits about 1.3%
-// above, so any growth needs a decision: raise it only with a PR note that lists what grew and why.
-const MAX_BUNDLE_BYTES = 5_920_000;
+// Size guard. Baseline: 5,968,158 bytes (D-2b on top of D-1: the PDF parser and the `assets pdf`
+// commands, +105 KB over 5,863,107; 5,842,308 for D-1 on top of D-2a; 5,382,188 with the brand
+// fonts before those). The guard sits about 1.3% above, so any growth needs a decision: raise it
+// only with a PR note that lists what grew and why.
+const MAX_BUNDLE_BYTES = 6_050_000;
 if (Buffer.byteLength(out) > MAX_BUNDLE_BYTES) {
   console.error(
     `plugin/bin/pcosmo.mjs is ${Buffer.byteLength(out)} bytes, over the ${MAX_BUNDLE_BYTES} guard; check for an accidental dependency or asset.`,

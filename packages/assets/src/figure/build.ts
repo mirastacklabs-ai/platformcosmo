@@ -6,9 +6,22 @@
 import { luminancePlane, type LuminancePlane } from "../locate.js";
 import type { Raster } from "../raster.js";
 import type { Analysis, Unit } from "./analyze.js";
-import { inBox } from "./annotations.js";
+import { inBox, ownInk, type AnnotationGeometry } from "./annotations.js";
 import type { FigureState } from "./manifest.js";
-import { blank, dilate, erode1, filter, has, labelMask, minus, union, type Mask } from "./mask.js";
+import {
+  EMPTY,
+  blank,
+  dilate,
+  erode1,
+  filter,
+  endingInk,
+  has,
+  labelMask,
+  minus,
+  union,
+  type Box,
+  type Mask,
+} from "./mask.js";
 
 export interface FigureOutputPart {
   /** The unit's group id: the figure part id of the spec. */
@@ -37,33 +50,288 @@ export interface BaseModel {
   readonly erase: Mask;
   /** Colour from the other drawing, or undefined when no other depiction shows the pixel. */
   readonly recover: (x: number, y: number) => readonly [number, number, number] | undefined;
+  /**
+   * One drawing: the drawing's own pixels under the annotation masks that the base keeps (a
+   * stroke that runs out of the erase) or rebuilds by continuity: board ink the base must show.
+   */
+  readonly board: Mask;
+  /**
+   * One drawing: strokes of the drawing an annotation's erase cut that could not be rebuilt
+   * (they meet the annotation from both sides but do not line up, or enter a text rectangle).
+   */
+  readonly cuts: readonly {
+    readonly annotation: number;
+    readonly pixels: number;
+    readonly bbox: Box;
+  }[];
+  /**
+   * One drawing: per annotation, the drawing's ink under its mask that is neither its own stroke
+   * nor a board stroke running out of the erase (a dot under a tip), erased with it.
+   */
+  readonly inside: readonly { readonly annotation: number; readonly pixels: number }[];
 }
 
-/** The components of `ink` (inside `hull`) with no raw-ink neighbour outside the hull. */
-function endingInk(ink: Mask, hull: Mask, raw: Uint8Array, W: number, H: number): Mask {
-  if (ink.w === 0) return ink;
-  const lab = labelMask(ink);
-  const runsOn = new Uint8Array(lab.count + 1);
-  for (let j = 0; j < ink.h; j++) {
-    for (let i = 0; i < ink.w; i++) {
-      const l = lab.labels[j * ink.w + i]!;
-      if (!l || runsOn[l]) continue;
-      for (let dy = -1; dy <= 1 && !runsOn[l]; dy++)
-        for (let dx = -1; dx <= 1; dx++) {
-          const x = i + ink.x + dx;
-          const y = j + ink.y + dy;
-          if (x < 0 || y < 0 || x >= W || y >= H) continue;
-          if (raw[y * W + x] && !has(hull, x, y)) {
-            runsOn[l] = 1;
-            break;
+const DIRS: readonly (readonly [number, number])[] = [
+  [1, 0],
+  [0, 1],
+  [1, 1],
+  [1, -1],
+];
+
+/**
+ * One drawing (§6.4): nothing to recover from, so each annotation's erase takes only its own
+ * stroke as drawn (`ownInk`) and the paper under its mask. The drawing's other ink there is the
+ * board's: it stays where its component runs out of the erase (a line passing under the mask's
+ * margin). An own pixel inside a board stroke that crosses the annotation is rebuilt by
+ * continuity: along a direction across the annotation (more than ~37° from its local
+ * direction; any direction for a text rectangle), past the own stroke (at most its run + 2
+ * divided by the sine of the angle; for text, the rectangle, at most 64 px), one side must be an
+ * anchor (board ink kept or outside the erase, or already rebuilt, running on for 2 more pixels
+ * the same way) and the other at least 1 pixel of board ink of the same tone (a stroke ending
+ * just past the annotation); the board ink past the annotation on both sides stays too. Passes
+ * repeat until nothing changes, each seeing only the previous passes' results, so the scan
+ * order does not matter. Own pixels left that touch board ink on both sides of a polyline
+ * within 2w + 2 px of each other (strokes that do not line up), or any board ink for a text
+ * rectangle, are reported as cuts.
+ */
+function oneDrawing(
+  a: Analysis,
+  erase: Mask,
+  partZ: Mask,
+  part: Mask,
+  annErase: readonly { g: AnnotationGeometry; m: Mask }[],
+): BaseModel {
+  const st = a.img[a.base]!;
+  const { W, H } = st;
+  const raw = (x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < W && y < H && st.rawInk[y * W + x] !== 0;
+  const isPart = (x: number, y: number): boolean => has(partZ, x, y) || has(part, x, y);
+  const owns = annErase.map(({ g, m }) => {
+    const o = ownInk(g, st.rawInk, W);
+    return { g, m, o, mask: filter(o.mask, (x, y) => has(m, x, y) && !isPart(x, y)) };
+  });
+  const ownAll = union(...owns.map((o) => o.mask));
+  const isOwn = (x: number, y: number): boolean => has(ownAll, x, y);
+  const annZ = filter(union(...annErase.map((e) => e.m)), (x, y) => !has(partZ, x, y));
+  // Board ink under the masks; kept where its component touches ink outside the erase.
+  const N = filter(annZ, (x, y) => raw(x, y) && !isOwn(x, y) && !isPart(x, y));
+  const keep = new Uint8Array(N.w * N.h);
+  {
+    const lab = labelMask(N);
+    const out = new Uint8Array(lab.count + 1);
+    for (let j = 0; j < N.h; j++)
+      for (let i = 0; i < N.w; i++) {
+        const l = lab.labels[j * N.w + i]!;
+        if (!l || out[l]) continue;
+        for (let dy = -1; dy <= 1 && !out[l]; dy++)
+          for (let dx = -1; dx <= 1; dx++) {
+            const x = i + N.x + dx;
+            const y = j + N.y + dy;
+            if (raw(x, y) && !has(erase, x, y) && !isPart(x, y)) {
+              out[l] = 1;
+              break;
+            }
           }
+      }
+    for (let k = 0; k < keep.length; k++) if (out[lab.labels[k]!]) keep[k] = 1;
+  }
+  const kept = (x: number, y: number): boolean =>
+    has(N, x, y) && keep[(y - N.y) * N.w + x - N.x] === 1;
+  /** Board ink: raw, not part, not an annotation's own stroke. */
+  const boardInk = (x: number, y: number): boolean => raw(x, y) && !isOwn(x, y) && !isPart(x, y);
+  const rebuilt = new Map<number, [number, number, number]>();
+  const farKeep = new Set<number>();
+  // Board ink outside the erase, or kept, or already rebuilt: a crossing stroke's own pixels.
+  const anchored = (
+    x: number,
+    y: number,
+    done: ReadonlyMap<number, unknown>,
+    far: ReadonlySet<number>,
+  ): boolean =>
+    done.has(y * W + x) ||
+    (boardInk(x, y) && (kept(x, y) || far.has(y * W + x) || !has(erase, x, y)));
+  const skip = (x: number, y: number, done: ReadonlyMap<number, unknown>): boolean =>
+    isOwn(x, y) && !done.has(y * W + x);
+  /** The crossing through own pixel (x, y) of annotation g, or undefined. */
+  const crossing = (
+    g: AnnotationGeometry,
+    smp: AnnotationGeometry["samples"][number] | undefined,
+    x: number,
+    y: number,
+    done: ReadonlyMap<number, unknown>,
+    farSnap: ReadonlySet<number>,
+  ): { c: [number, number, number]; far: number[] } | undefined => {
+    let best: { span: number; c: [number, number, number]; far: number[] } | undefined;
+    for (const [dx, dy] of DIRS) {
+      let cap: number;
+      if (g.kind === "text") cap = Math.min(64, Math.max(g.rect!.w, g.rect!.h) + 6);
+      else {
+        if (!smp) continue;
+        const cos = Math.abs((dx * smp.ux + dy * smp.uy) / Math.hypot(dx, dy));
+        if (cos > 0.8) continue;
+        cap = Math.ceil((g.medianRun + 2) / Math.sqrt(1 - cos * cos)) + 1;
+      }
+      // First pixel past the own stroke on each side: board ink (anchored on at least one).
+      const side = (sx: number, sy: number): { t: number; anchor: boolean } | undefined => {
+        let t = 1;
+        while (t <= cap && skip(x + t * sx, y + t * sy, done)) t++;
+        if (t > cap) return undefined;
+        const ax = x + t * sx;
+        const ay = y + t * sy;
+        const ink = (qx: number, qy: number): boolean => done.has(qy * W + qx) || boardInk(qx, qy);
+        if (!ink(ax, ay)) return undefined;
+        // An anchor: board ink that is kept or outside the erase, running on for 2 more pixels
+        // the same way (a stroke across the annotation, not a pixel touching it).
+        const on = ink(ax + sx, ay + sy) && ink(ax + 2 * sx, ay + 2 * sy);
+        return { t, anchor: on && anchored(ax, ay, done, farSnap) };
+      };
+      const p1 = side(dx, dy);
+      const p2 = side(-dx, -dy);
+      if (!p1 || !p2 || (!p1.anchor && !p2.anchor)) continue;
+      const sa = p1.anchor && (!p2.anchor || p1.t <= p2.t) ? 1 : -1;
+      const [A, B] = sa === 1 ? [p1, p2] : [p2, p1];
+      const ax = x + sa * A.t * dx;
+      const ay = y + sa * A.t * dy;
+      const bx = x - sa * B.t * dx;
+      const by = y - sa * B.t * dy;
+      const colour = (px: number, py: number): [number, number, number] => {
+        const d = done.get(py * W + px) as [number, number, number] | undefined;
+        if (d) return d;
+        const q = (py * W + px) * 4;
+        return [st.image.data[q]!, st.image.data[q + 1]!, st.image.data[q + 2]!];
+      };
+      const cA = colour(ax, ay);
+      const cB = colour(bx, by);
+      const lum = (c: readonly number[]): number => 0.299 * c[0]! + 0.587 * c[1]! + 0.114 * c[2]!;
+      if (Math.abs(lum(cA) - lum(cB)) > 48) continue;
+      const span = A.t + B.t;
+      if (best && best.span <= span) continue;
+      // The board ink on both sides (a stroke ending just past the annotation) stays.
+      const far: number[] = [];
+      for (const [px, py, sx, sy] of [
+        [ax, ay, sa * dx, sa * dy],
+        [bx, by, -sa * dx, -sa * dy],
+      ] as const)
+        for (let t = 0; t <= cap; t++) {
+          const qx = px + t * sx;
+          const qy = py + t * sy;
+          if (!boardInk(qx, qy) || !has(N, qx, qy)) break;
+          far.push(qy * W + qx);
+        }
+      best = { span, c: cA, far };
+    }
+    return best;
+  };
+  // Passes until nothing changes (each pass sees only the previous passes' rebuilt pixels, so the
+  // scan order does not matter); a crossing next to a rebuilt pixel (two annotations meeting on
+  // a board line) is found in a later pass.
+  const own = owns.map(({ g, o, mask }) => {
+    const px: { x: number; y: number; smp: AnnotationGeometry["samples"][number] | undefined }[] =
+      [];
+    for (let j = 0; j < mask.h; j++)
+      for (let i = 0; i < mask.w; i++) {
+        if (!mask.data[j * mask.w + i]) continue;
+        const x = i + mask.x;
+        const y = j + mask.y;
+        const k = o.sample[(y - o.mask.y) * o.mask.w + x - o.mask.x]!;
+        px.push({ x, y, smp: k >= 0 ? g.samples[k] : undefined });
+      }
+    return { g, px };
+  });
+  for (let pass = 0; pass < 8; pass++) {
+    const done = new Map(rebuilt);
+    const farSnap = new Set(farKeep);
+    let changed = false;
+    for (const { g, px } of own)
+      for (const { x, y, smp } of px) {
+        if (rebuilt.has(y * W + x)) continue;
+        const c = crossing(g, smp, x, y, done, farSnap);
+        if (!c) continue;
+        rebuilt.set(y * W + x, c.c);
+        for (const q of c.far) farKeep.add(q);
+        changed = true;
+      }
+    if (!changed) break;
+  }
+  const cuts: { annotation: number; pixels: number; bbox: Box }[] = [];
+  for (const { g, px } of own) {
+    // Not rebuilt: board ink touching it is a stroke the erase cut here (text), or one that
+    // meets the polyline on this side (a cut when another meets it on the other side nearby).
+    const contacts: { x: number; y: number; side: number; s: number }[] = [];
+    for (const { x, y, smp } of px) {
+      if (rebuilt.has(y * W + x)) continue;
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const qx = x + dx;
+          const qy = y + dy;
+          if (!boardInk(qx, qy) || farKeep.has(qy * W + qx)) continue;
+          if (has(erase, qx, qy) && !kept(qx, qy)) continue;
+          // A stroke the polyline ends on (beyond its first or last sample) is on neither side.
+          const along = smp ? (qx - smp.x) * smp.ux + (qy - smp.y) * smp.uy : 0;
+          const end =
+            smp === g.samples[0]
+              ? along < -0.5
+              : smp === g.samples[g.samples.length - 1] && along > 0.5;
+          const side = smp && !end ? Math.sign((qx - smp.x) * smp.uy - (qy - smp.y) * smp.ux) : 0;
+          contacts.push({ x: qx, y: qy, side, s: smp ? smp.s : 0 });
         }
     }
+    const reach = 2 * g.width + 2;
+    const cut =
+      g.kind === "text"
+        ? contacts
+        : contacts.filter((c) =>
+            contacts.some(
+              (d) => d.side !== 0 && d.side === -c.side && Math.abs(d.s - c.s) <= reach,
+            ),
+          );
+    if (cut.length > 0) {
+      const seen = new Set(cut.map((c) => c.y * W + c.x));
+      let x0 = W;
+      let y0 = H;
+      let x1 = -1;
+      let y1 = -1;
+      for (const c of cut) {
+        x0 = Math.min(x0, c.x);
+        y0 = Math.min(y0, c.y);
+        x1 = Math.max(x1, c.x);
+        y1 = Math.max(y1, c.y);
+      }
+      cuts.push({
+        annotation: g.index,
+        pixels: seen.size,
+        bbox: { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 },
+      });
+    }
   }
-  return filter(ink, (x, y) => {
-    const l = lab.labels[(y - ink.y) * ink.w + x - ink.x]!;
-    return l > 0 && runsOn[l] === 0;
-  });
+  const keepMask = blank(N.x, N.y, N.w, N.h);
+  for (let k = 0; k < keep.length; k++) keepMask.data[k] = keep[k]!;
+  for (const p of farKeep) {
+    const x = p % W;
+    const y = (p - x) / W;
+    keepMask.data[(y - N.y) * N.w + x - N.x] = 1;
+  }
+  const rb = blank(ownAll.x, ownAll.y, ownAll.w, ownAll.h);
+  for (const p of rebuilt.keys()) {
+    const x = p % W;
+    const y = (p - x) / W;
+    rb.data[(y - rb.y) * rb.w + x - rb.x] = 1;
+  }
+  // Board ink under the masks erased with them (entirely inside, touching nothing outside).
+  const inside = new Map<number, number>();
+  for (let j = 0; j < N.h; j++)
+    for (let i = 0; i < N.w; i++) {
+      if (!N.data[j * N.w + i] || keepMask.data[j * N.w + i]) continue;
+      const e = annErase.find(({ m }) => has(m, i + N.x, j + N.y));
+      if (e) inside.set(e.g.index, (inside.get(e.g.index) ?? 0) + 1);
+    }
+  return {
+    erase: minus(erase, keepMask),
+    recover: (x, y) => rebuilt.get(y * W + x),
+    board: union(keepMask, rb),
+    cuts,
+    inside: [...inside].map(([annotation, pixels]) => ({ annotation, pixels })),
+  };
 }
 
 export function baseModel(a: Analysis): BaseModel {
@@ -87,7 +355,7 @@ export function baseModel(a: Analysis): BaseModel {
   });
   const allowB = a.annotations.filter((g) => g.state === b).flatMap((g) => g.allowances);
   const partInk = union(...a.units.map((u) => u.place[b]!.partInk));
-  const annErase: Mask[] = a.annotations
+  const annErase: { g: AnnotationGeometry; m: Mask }[] = a.annotations
     .filter((g) => g.state === b)
     .map((g) => {
       const m = g.mask;
@@ -100,11 +368,18 @@ export function baseModel(a: Analysis): BaseModel {
           if (has(partInk, x, y) && !allowB.some((q) => inBox(q, x, y))) data[j * m.w + i] = 0;
         }
       }
-      return { ...m, data };
+      return { g, m: { ...m, data } };
     });
-  const erase = union(...parts, ...annErase);
+  const erase = union(...parts, ...annErase.map((e) => e.m));
   const o = a.states.includes(other(b)) ? other(b) : undefined;
-  if (!o) return { erase, recover: () => undefined };
+  if (!o)
+    return oneDrawing(
+      a,
+      erase,
+      union(...parts),
+      union(partInk, ...a.units.map((u) => u.place[b]!.E)),
+      annErase,
+    );
   const so = a.img[o]!;
   const [dx, dy] = a.d[o]!;
   // Recovery never copies a part (its silhouette or part ink, with its fringe) or an annotation.
@@ -114,6 +389,9 @@ export function baseModel(a: Analysis): BaseModel {
   );
   return {
     erase,
+    board: EMPTY,
+    cuts: [],
+    inside: [],
     recover: (x, y) => {
       const qx = x + dx;
       const qy = y + dy;
