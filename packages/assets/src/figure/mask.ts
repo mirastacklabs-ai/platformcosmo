@@ -687,3 +687,30 @@ export function peelExterior(m: Mask, keep: (gx: number, gy: number) => boolean)
     for (let i = 0; i < m.w; i++) if (seen[(j + 1) * w + i + 1]) data[j * m.w + i] = 0;
   return { ...m, data };
 }
+
+/** The components of `ink` (inside `hull`) with no raw-ink neighbour outside the hull. */
+export function endingInk(ink: Mask, hull: Mask, raw: Uint8Array, W: number, H: number): Mask {
+  if (ink.w === 0) return ink;
+  const lab = labelMask(ink);
+  const runsOn = new Uint8Array(lab.count + 1);
+  for (let j = 0; j < ink.h; j++) {
+    for (let i = 0; i < ink.w; i++) {
+      const l = lab.labels[j * ink.w + i]!;
+      if (!l || runsOn[l]) continue;
+      for (let dy = -1; dy <= 1 && !runsOn[l]; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const x = i + ink.x + dx;
+          const y = j + ink.y + dy;
+          if (x < 0 || y < 0 || x >= W || y >= H) continue;
+          if (raw[y * W + x] && !has(hull, x, y)) {
+            runsOn[l] = 1;
+            break;
+          }
+        }
+    }
+  }
+  return filter(ink, (x, y) => {
+    const l = lab.labels[(y - ink.y) * ink.w + x - ink.x]!;
+    return l > 0 && runsOn[l] === 0;
+  });
+}
