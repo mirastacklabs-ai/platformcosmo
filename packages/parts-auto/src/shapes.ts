@@ -9,7 +9,7 @@ import { defineShape, type Draft, type ParamSpec } from "./define.js";
  * is +y (the side the iso viewer sees), the exhaust side -y, as in assemblies §19.3.
  * Each shape is authored at its default size and scaled per axis when the spec gives `size`.
  *
- * `depthBox` is the solid core (see `finish`): crank throws, cam lobes, manifold flanges, port
+ * `depthBox` is the solid core (see `finishGeometry`): crank throws, cam lobes, manifold flanges, port
  * bosses, mounting lugs, pulleys, the belt's sprockets and the bore plugs are drawn but excluded.
  *
  * Occlusion: the housings (`block-i4`, `head`, `valve-cover`, `oil-pan`) occlude through their

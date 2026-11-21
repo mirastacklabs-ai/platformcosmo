@@ -188,7 +188,7 @@ export interface ShapeInit {
   readonly draw: (solid: Solid, p: BrickParams, axis: Axis) => void;
 }
 
-const pack = definePack<BrickParams>({ prefix: "brick", enumHints: true, units: "stud" });
+const pack = definePack<BrickParams>({ prefix: "brick", enumHints: true });
 
 /** Declared params of a `brick:` shape id (`slope`), for docs and tests. */
 export const paramSpecsOf = pack.paramSpecsOf as (

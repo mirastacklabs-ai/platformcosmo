@@ -28,10 +28,11 @@ export type ParamSpec =
   | { readonly kind: "bool"; readonly def: boolean }
   | { readonly kind: "enum"; readonly values: readonly string[]; readonly def: string };
 
-/** Smallest extent, so every box stays non-degenerate after rounding to 0.01. */
+/**
+ * @internal For pack authors. Smallest extent, so every box stays non-degenerate after rounding to 0.01. */
 export const MIN_DIM = 0.01;
 
-/** Most diagnostics one `readParamSpecs` call returns; the rest are summarised in one more. */
+/** @internal For pack authors. Most diagnostics one param read returns; the rest are summarised in one more. */
 export const MAX_PARAM_DIAGNOSTICS = 20;
 
 function describe(spec: ParamSpec): string {
@@ -93,16 +94,16 @@ export function readParamSpecs(
   const src = input as Record<string, unknown>;
   const names = [...specs.keys()];
   let omitted = 0;
-  const report = (d: Diagnostic): void => {
-    if (diagnostics.length < MAX_PARAM_DIAGNOSTICS) diagnostics.push(d);
-    else omitted++;
-  };
   for (const key of Object.keys(src)) {
     const spec = specs.get(key);
     if (spec === undefined) {
+      if (diagnostics.length >= MAX_PARAM_DIAGNOSTICS) {
+        omitted++;
+        continue;
+      }
       const hint = didYouMean(key, names);
       const seg = key.slice(0, 64).replace(/~/g, "~0").replace(/\//g, "~1");
-      report({
+      diagnostics.push({
         severity: "error",
         code: "assembly/shape-params",
         path: `/params/${seg}`,
@@ -114,11 +115,15 @@ export function readParamSpecs(
     }
     const v = src[key];
     if (!isValidParam(spec, v)) {
+      if (diagnostics.length >= MAX_PARAM_DIAGNOSTICS) {
+        omitted++;
+        continue;
+      }
       const hint =
         enumHints && spec.kind === "enum" && typeof v === "string"
           ? didYouMean(v, spec.values)
           : undefined;
-      report({
+      diagnostics.push({
         severity: "error",
         code: "assembly/shape-params",
         path: `/params/${key}`,
@@ -157,7 +162,7 @@ export function normalizeParams(
 }
 
 /**
- * Per-axis size from a spec: non-positive, non-finite or missing entries fall back to `def`;
+ * @internal For pack authors. Per-axis size from a spec: non-positive, non-finite or missing entries fall back to `def`;
  * the rest is clamped to [MIN_DIM, max] (and rounded to 0.01 when `round`), so every origin is
  * non-negative and finite.
  */
@@ -261,10 +266,9 @@ export function unionBoxes(prims: readonly PartPrimitive[]): Box3 {
 const projection = createProjection();
 
 /**
- * Back-to-front order and bounds. `bounds` is everything drawn; `depthBox` is the union of the
- * primitives whose ids are in `core` (default: all), which excludes fingers, ears, handles,
- * studs and similar features so a part seated on or against this one is not "enclosed" by it
- * (§9.6). `split` marks an open-top enclosure (not `solid`).
+ * @internal For pack authors. Back-to-front order and bounds. `bounds` is everything drawn; `depthBox` is the union of the
+ * primitives whose ids are in `core` (default: all), which lets a pack leave out
+ * protruding features so a part seated on or against this one is not "enclosed" by it (§9.6). `split` marks an open-top enclosure (not `solid`).
  */
 export function finishGeometry(
   prims: readonly PartPrimitive[],
@@ -297,8 +301,7 @@ export interface ShapeInit<P extends Record<string, ParamValue> = Record<string,
   readonly role?: PartShapeDef["role"];
   /**
    * x = width, y = depth, z = height, in the pack's default units. One canonical orientation
-   * per shape; use the part's `rotate` to turn it. Devices with a front put it at +y (the side
-   * the iso viewer sees, as DC racks and `"front": "+y"`).
+   * per shape; use the part's `rotate` to turn it.
    */
   readonly size: readonly [number, number, number];
   readonly params: Readonly<Record<string, ParamSpec>>;

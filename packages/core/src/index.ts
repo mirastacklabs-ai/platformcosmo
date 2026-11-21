@@ -66,12 +66,7 @@ export {
   MIN_DIM,
   definePack,
   finishGeometry,
-  isValidParam,
-  normalizeParams,
-  quote,
-  readParamSpecs,
   sanitizeSize,
-  unionBoxes,
 } from "./parts/define.js";
 export type {
   PackOptions,

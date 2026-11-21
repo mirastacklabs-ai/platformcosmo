@@ -12,7 +12,7 @@ import {
   sanitizeSize,
   unionBoxes,
   type ParamSpec,
-} from "../src/index.js";
+} from "../src/parts/define.js";
 
 const specs = new Map<string, ParamSpec>([
   ["count", { kind: "int", min: 1, max: 4, def: 2 }],
@@ -89,6 +89,17 @@ describe("readParamSpecs", () => {
     expect(r.diagnostics).toHaveLength(MAX_PARAM_DIAGNOSTICS + 1);
     expect(r.diagnostics.at(-1)?.message).toBe("hw:x: 5 more param problems omitted.");
   });
+  it("gives a key past the cap no suggestion and skips the matcher", () => {
+    const input: Record<string, unknown> = {};
+    for (let i = 0; i < MAX_PARAM_DIAGNOSTICS; i++) input[`k${i}`] = 1;
+    input["cuont"] = 3;
+    input["mode"] = "fsat";
+    const r = readParamSpecs("hw:x", specs, input, true);
+    expect(r.diagnostics).toHaveLength(MAX_PARAM_DIAGNOSTICS + 1);
+    expect(r.diagnostics.some((d) => d.path === "/params/cuont")).toBe(false);
+    expect(r.diagnostics.some((d) => d.path === "/params/mode")).toBe(false);
+    expect(r.diagnostics.at(-1)?.message).toBe("hw:x: 2 more param problems omitted.");
+  });
 });
 
 describe("sanitizeSize", () => {
@@ -159,6 +170,29 @@ describe("definePack", () => {
   it("appends check diagnostics only for given params", () => {
     expect(shape.readParams({ thick: true }).diagnostics).toHaveLength(1);
     expect(shape.readParams({}).diagnostics).toHaveLength(0);
+  });
+  it("does not call check for non-object or array input", () => {
+    let calls = 0;
+    const p2 = definePack({ prefix: "t" });
+    const s2 = p2.defineShape({
+      id: "c",
+      label: "C",
+      type: "c",
+      size: [1, 1, 1],
+      params: {},
+      check: () => {
+        calls++;
+        return [];
+      },
+      draw: () => undefined,
+    });
+    for (const bad of [[1], "x", 3, null, undefined]) s2.readParams(bad as never);
+    expect(calls).toBe(0);
+    s2.readParams({});
+    expect(calls).toBe(1);
+  });
+  it("freezes defaults", () => {
+    expect(Object.isFrozen(shape.defaults)).toBe(true);
   });
   it("builds at the clamped spec size", () => {
     const g = shape.build({}, { size: { x: 1000, y: 10, z: 2 } } as never);

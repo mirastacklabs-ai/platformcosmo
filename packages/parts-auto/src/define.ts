@@ -15,7 +15,7 @@ export type { ParamSpec };
 /**
  * Extent limits per axis. Pack shapes expect real length units (mm, cm or in): coordinates are
  * rounded to 2 decimals of the unit, so a part a few hundredths of a unit across degenerates.
- * Sizes are clamped to [MIN_DIM, MAX_EXTENT_MM] so every origin is non-negative and finite.
+ * Sizes are clamped to [MIN_DIM, MAX_EXTENT_MM] by `definePack` so every origin is non-negative and finite.
  */
 export const MAX_EXTENT_MM = 100_000;
 
