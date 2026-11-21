@@ -1,4 +1,5 @@
 /** Crop, trim, edge-connected background removal and box-filter shrink (ingestion §3, §5). */
+import type { ImageLimits } from "@platformcosmo/core";
 import { floodFill } from "./cc.js";
 import { decodeImage } from "./decode.js";
 import { encodePng } from "./png.js";
@@ -235,9 +236,9 @@ export interface ShrunkImage {
 export async function shrinkImage(
   bytes: Uint8Array,
   maxPx: number,
-  options: { readonly toPng?: boolean } = {},
+  options: { readonly toPng?: boolean; readonly limits?: ImageLimits } = {},
 ): Promise<OpResult<ShrunkImage>> {
-  const dec = await decodeImage(bytes);
+  const dec = await decodeImage(bytes, options.limits ? { limits: options.limits } : {});
   if (!dec.value) return { diagnostics: dec.diagnostics };
   const { raster, asset } = dec.value;
   const diagnostics = [...dec.diagnostics];

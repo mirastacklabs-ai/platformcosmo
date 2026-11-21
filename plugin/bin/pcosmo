@@ -38,4 +38,11 @@ if [ "$major" -lt 22 ] || { [ "$major" -eq 22 ] && [ "$minor" -lt 12 ]; }; then
   exit 1
 fi
 
+# `pcosmo assets` reads and writes only below this directory (the working directory the skill was
+# started in) unless the caller already chose one.
+if [ -z "${PCOSMO_ASSETS_ROOT:-}" ]; then
+  PCOSMO_ASSETS_ROOT=$(pwd -P) || exit 1
+  export PCOSMO_ASSETS_ROOT
+fi
+
 exec node "$dir/pcosmo.mjs" "$@"
