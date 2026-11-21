@@ -10,6 +10,7 @@ import {
   type FigureSegment,
   type StepWindow,
 } from "../../scene/boards.js";
+import { LOOP_START_MIN } from "../../scene/assembly/build.js";
 import type { FadeKey, KeyEasing, PoseKey } from "./types.js";
 
 export const LINEAR: Bezier = [0, 0, 1, 1];
@@ -76,13 +77,15 @@ export function stepTimes(
       hold: w.hold,
       window: w.window,
     };
+    // the hold is on the output clock (§7.3): `max(lead_out, 0.4)`, in loop seconds `· speed`
+    const holdLoop = w.hold > 0 ? Math.max(window.lead / speed, LOOP_START_MIN) * speed : 0;
     const start = r4(t);
     t += s.duration;
     return {
       start,
       duration: s.duration,
       // the motion opens after the camera's lead and after the loop-start fades (§7.4)
-      open: r4(start + Math.max(window.lead, window.hold)),
+      open: r4(start + Math.max(window.lead, holdLoop)),
       end: r4(start + s.duration - window.tr),
       window,
     };

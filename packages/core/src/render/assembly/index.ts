@@ -51,6 +51,7 @@ import { projectBoxBounds, unionRects } from "../../geometry/index.js";
 import { endsAwayFromBase } from "../../scene/assembly/timing.js";
 import { closesLoop, resolveFigure } from "../../scene/boards.js";
 import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
+import { LOOP_START_MIN } from "../../scene/assembly/build.js";
 import { stepTimes } from "../boards/timeline.js";
 import { parseCopyKey } from "../../depth/copies.js";
 import { copySuffix } from "../../emit/ids.js";
@@ -224,6 +225,8 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     start: t.start,
     duration: t.duration,
     open: t.open,
+    ...(t.window.lead > 0 ? { lead: t.window.lead } : {}),
+    ...(t.window.hold > 0 ? { hold: LOOP_START_MIN } : {}),
     end: t.end,
   }));
   const loopBuild = buildLoop(assemblies, plan, times, total, closeLast, input.foreign);

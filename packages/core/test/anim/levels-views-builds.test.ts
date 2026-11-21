@@ -11,6 +11,7 @@ import {
 import type { AssemblyRenderModel, LoopFade, SceneAssembly } from "../../src/contracts/index.js";
 import { assemblyAnim, assemblyFrame, assemblyLoop } from "../../src/anim/assembly.js";
 import { Keyframes } from "../../src/anim/css.js";
+import { stepTimes } from "../../src/render/boards/timeline.js";
 import { zoomFor } from "../../src/anim/timeline.js";
 import { applyAffine } from "../../src/render/assembly/levels.js";
 import { VIEW_FADE } from "../../src/render/assembly/views.js";
@@ -670,6 +671,25 @@ describe("quarter-turn views", () => {
     }
   });
 
+  test("P2-2: a 0.2 s last step still closes the view without a jump at the wrap", () => {
+    const steps = rig().steps!.map((x, i, l) => (i === l.length - 1 ? { ...x, duration: 0.2 } : x));
+    const sm = build(rig(steps as unknown as Obj[]));
+    const sam = A(sm);
+    const vs = sam.views!;
+    for (const speed of [0.5, 1, 2]) {
+      const c = splitReduced(loopCss(sm, speed)).live;
+      const dur = sam.loop / speed;
+      for (const v of vs) {
+        const a = cssGroup(c, v.group, 0).opacity!;
+        const b = cssGroup(c, v.group, dur - 1e-4).opacity!;
+        expect(Math.abs(b - a), `css view ${v.turn} x${speed}`).toBeLessThan(0.02);
+        const f0 = frameOf(sm, 0, speed)[v.group]!.opacity as number;
+        const f1 = frameOf(sm, dur - 1e-4, speed)[v.group]!.opacity as number;
+        expect(Math.abs(f1 - f0), `frame view ${v.turn} x${speed}`).toBeLessThan(0.02);
+      }
+    }
+  });
+
   test("exactly one view is fully shown between swaps; fades sum to one", () => {
     for (let k = 0; k < 60; k++) {
       const t = (am.loop * k) / 60 + 0.021;
@@ -799,6 +819,23 @@ describe("builds: appearance along the planned path", () => {
     // the build of step 1 starts only after the fades: the base is not drawn before
     expect(opacityOf("base", fadeEnd + 0.01)).toBeLessThan(0.5);
     expect(hiddenOf("tower", fadeEnd + 0.05)).toBe(true);
+  });
+
+  test("(c) the plan clock and the render clock open step 1 together at every speed (§7.3)", () => {
+    // output seconds: hold = max(lead_out, 0.4) with fades, lead_out = min(0.8, 0.25 d / speed)
+    for (const zoom of [false, true]) {
+      const steps = rig().steps!.map((x, i) => (i === 0 && zoom ? { ...x, focus: "l/base" } : x));
+      const zm = build(rig(steps as unknown as Obj[]));
+      const zam = A(zm);
+      for (const speed of [0.5, 1, 2]) {
+        const lead = zoom ? Math.min(0.8, (0.25 * 4) / speed) : 0;
+        const want = Math.max(lead, 0.4);
+        const boards = stepTimes(zm.scene, speed, true).times[0]!.open / speed;
+        const asm = assemblyAnim(zam, speed).warp(zam.clock[0]!.open) / speed;
+        expect(boards, `boards zoom=${zoom} x${speed}`).toBeCloseTo(want, 3);
+        expect(asm, `assembly zoom=${zoom} x${speed}`).toBeCloseTo(want, 3);
+      }
+    }
   });
 
   test("(c) the fades and the motion window agree at three speeds", () => {

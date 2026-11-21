@@ -470,13 +470,13 @@ spec `closeup` stays an ordinary id (a node `closeup`, a slot `r1/closeup`) with
 using the same figure as close-up get two independent instances. A close-up's pose persists
 while it is not shown.
 
-Each level is a sibling group of the main camera (`ids.level(id)`) with its own camera and
+Each level is a group inside the camera group (`ids.level(id)`) with its own camera and
 overview transform. Entering runs during the focus transition: the level cross-fades in, starting with its rest
 bounds mapped onto the node's screen rect and easing to its own overview; leaving reverses it. The
 parent camera does **not** zoom toward the node during entry (`zoomFor` ignores level ids): the
 level group sits inside the camera group, so a zoomed parent camera would also scale and shift
-the level's overview placement, and every level track (placement, host rects, the occluder
-fades) would need the inverse camera as well. The level instead starts on the node's rect at
+the level's overview placement, and every level placement track (and the host rects it eases
+from) would need the inverse camera as well. The level instead starts on the node's rect at
 the unzoomed overview and grows to its overview, which keeps the swap jump-free and the
 camera tracks of the main world unchanged. Levels nest
 (≤ 4 deep, ≤ 8 instances per spec). Per-step outputs and frames render the level in effect.
