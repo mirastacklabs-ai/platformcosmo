@@ -56,6 +56,10 @@ importers:
       fflate:
         specifier: 0.8.3
         version: 0.8.3
+    devDependencies:
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
 
   packages/cli:
     dependencies:
@@ -77,10 +81,28 @@ importers:
       '@platformcosmo/icons-simple':
         specifier: workspace:*
         version: link:../icons-simple
+      '@platformcosmo/parts-auto':
+        specifier: workspace:*
+        version: link:../parts-auto
+      '@platformcosmo/parts-base':
+        specifier: workspace:*
+        version: link:../parts-base
+      '@platformcosmo/parts-brick':
+        specifier: workspace:*
+        version: link:../parts-brick
       '@platformcosmo/themes':
         specifier: workspace:*
         version: link:../themes
+      fflate:
+        specifier: 0.8.3
+        version: 0.8.3
     devDependencies:
+      '@platformcosmo/assets':
+        specifier: workspace:*
+        version: link:../assets
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -115,6 +137,10 @@ importers:
       '@platformcosmo/core':
         specifier: workspace:*
         version: link:../core
+    devDependencies:
+      '@platformcosmo/parts-base':
+        specifier: workspace:*
+        version: link:../parts-base
 
   packages/icons-base:
     dependencies:

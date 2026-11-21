@@ -55,7 +55,7 @@ interface Timing {
 
 export { boardsOf } from "./types.js";
 export type { BoardsModel, FadeKey, FadeTrack, PoseKey, PoseTrack } from "./types.js";
-export { checkFigureImages, creditsDesc, creditsLine } from "./images.js";
+export { checkSpecImages, creditsDesc, creditsLine } from "./images.js";
 
 /** Text element of the model builder (`textEl` in `render/model.ts`), so glyphs are accounted. */
 export interface TextSpec {
