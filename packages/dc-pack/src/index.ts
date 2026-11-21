@@ -1,7 +1,7 @@
 /** PlatformCosmo data-center pack (Track E): parametric components and hall layout. */
 import type { DcPack, SpecDcEquipmentType, SpecDcSlotType } from "@platformcosmo/core";
 import { buildDcScene } from "./scene.js";
-import { buildRackAssembly } from "./assembly.js";
+import { buildRackAssembly, slotHosts } from "./assembly.js";
 import { dcShapePack } from "./shapes.js";
 import { registry } from "./registry.js";
 
@@ -43,5 +43,6 @@ export const dcPack: DcPack = {
   registry,
   buildScene: buildDcScene,
   buildAssembly: buildRackAssembly,
+  slotHosts,
   shapes: dcShapePack,
 };

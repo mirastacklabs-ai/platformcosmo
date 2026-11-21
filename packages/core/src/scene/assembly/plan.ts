@@ -18,7 +18,8 @@
  * compression computation for figures and assemblies.
  *
  * Build programs (A2-6, `build.ts`) resolve beside the explode programs and play through the
- * same machine and step loop; racks are Phase 2 (E-1).
+ * same machine and step loop. DC racks in assembly mode (E-1, `source: "dc"`) resolve through the
+ * same planner as the spec assemblies (W-1): the DC pack registers their synthetic programs.
  *
  * Qualified program names: a `ProgramLevel.program` of a program owned by a sub-assembly is
  * `<owner path relative to the assembly>/<program id>` (`head/service`); a root program is its
@@ -30,6 +31,7 @@
 import type {
   AssemblyStepPlan,
   Box3,
+  DcPack,
   Diagnostic,
   PartMove,
   ProgramLevel,
@@ -86,6 +88,7 @@ import {
   viewAt,
   viewSwitches,
 } from "./build.js";
+import { buildRackAssemblies, targetedRacks } from "./racks.js";
 import { buildAssemblies } from "./tree.js";
 import {
   OwnerSelectors,
@@ -230,6 +233,11 @@ export class AssemblyPrograms {
   /** Close-up instances (A2-5): instance path -> id of the template it instances. */
   private readonly templates = new Map<string, string>();
   private readonly synthetic: AssemblyProgramsOptions["synthetic"];
+  /** Synthetic program bodies registered per assembly id (`registerSynthetic`). */
+  private readonly registered = new Map<
+    string,
+    (owner: string, id: string) => SpecExplodeProgram | undefined
+  >();
 
   constructor(
     readonly spec: PlatformCosmoSpec,
@@ -248,6 +256,19 @@ export class AssemblyPrograms {
    */
   registerInstance(path: string, templateId: string): void {
     this.templates.set(path, templateId);
+  }
+
+  /**
+   * Program bodies the spec does not carry for the assembly `id` (a DC rack: `drawers`, slot
+   * `internals`), by (owner path below it, program id), so one planner resolves every rack of a
+   * spec beside the spec assemblies (`DcAssemblyPlanner`). Call before the assembly is resolved;
+   * `opts.synthetic` is the fallback.
+   */
+  registerSynthetic(
+    id: string,
+    programs: (owner: string, program: string) => SpecExplodeProgram | undefined,
+  ): void {
+    this.registered.set(id, programs);
   }
 
   /** Index of the spec assembly an assembly (or close-up instance) is built from. */
@@ -332,8 +353,9 @@ export class AssemblyPrograms {
       const owner = owners.get(rel) as OwnerInfo;
       for (const info of owner.explodes) {
         const pk = `${rel}\0${info.id}`;
-        const spec = (this.synthetic?.(asm.id, rel, info.id) ?? atPointer(this.spec, info.ptr)) as
-          SpecExplodeProgram | undefined;
+        const spec = (this.registered.get(asm.id)?.(rel, info.id) ??
+          this.synthetic?.(asm.id, rel, info.id) ??
+          atPointer(this.spec, info.ptr)) as SpecExplodeProgram | undefined;
         if (spec === undefined || !Array.isArray(spec.stages)) {
           unresolved.add(pk);
           continue;
@@ -1129,6 +1151,8 @@ function worldCentre(b: Box3): [number, number, number] {
 export interface AssemblyPlanContext {
   readonly parts?: PartShapeRegistry;
   readonly dcShapes?: PartShapePack;
+  /** DC pack: racks a step action targets plan beside the assemblies, as in the scene. */
+  readonly dc?: DcPack;
   /** Which `steps[].focus` ids zoom the camera (the scene's rule). */
   readonly isFocusTarget: (id: string) => boolean;
   readonly gated?: PlanOptions["gated"];
@@ -1143,21 +1167,35 @@ export function assemblyPlanDiagnostics(
   spec: PlatformCosmoSpec,
   ctx: AssemblyPlanContext,
 ): Diagnostic[] {
-  if ((spec.assemblies?.length ?? 0) === 0 || (spec.steps?.length ?? 0) === 0) return [];
+  const dc = ctx.dc;
+  const targeted = dc?.buildAssembly === undefined ? [] : targetedRacks(spec);
+  if ((spec.steps?.length ?? 0) === 0) return [];
+  if ((spec.assemblies?.length ?? 0) === 0 && targeted.length === 0) return [];
+  // the scene's single planner and order: targeted racks, then the spec assemblies
   const programs = new AssemblyPrograms(spec);
-  const built = programs.attach(
-    buildAssemblies(spec, {
-      reach: programs.reach,
-      ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
-      ...(ctx.dcShapes === undefined ? {} : { dcShapes: ctx.dcShapes }),
-    }),
-  );
+  const dcShapes = ctx.dcShapes ?? dc?.shapes;
+  const shared = {
+    ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
+    ...(dcShapes === undefined ? {} : { dcShapes }),
+  };
+  let racks: readonly SceneAssembly[] = [];
+  if (dc !== undefined && targeted.length > 0) {
+    try {
+      racks = buildRackAssemblies(spec, dc, dc.buildScene(spec), {
+        planner: programs,
+        ...shared,
+      }).assemblies;
+    } catch {
+      racks = []; // the DC pack failed: `closeupDiagnostics` and the render report it
+    }
+  }
+  const built = programs.attach(buildAssemblies(spec, { reach: programs.reach, ...shared }));
   const figures = new Map<string, ResolvedFigure>();
   (spec.figures ?? []).forEach((f, i) => {
     const { figure } = resolveFigure(f, i);
     if (!figures.has(figure.id)) figures.set(figure.id, figure);
   });
   const views = stepViews(spec, ctx.isFocusTarget);
-  return programs.plan(built.assemblies, figures, views, ctx.gated ? { gated: ctx.gated } : {})
-    .compression;
+  const all = [...built.assemblies, ...racks].sort((p, q) => cmp(p.id, q.id));
+  return programs.plan(all, figures, views, ctx.gated ? { gated: ctx.gated } : {}).compression;
 }

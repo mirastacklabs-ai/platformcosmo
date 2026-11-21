@@ -14,10 +14,11 @@
  * scale 1/600 (true scale), `rotate` 0. A rack in a mirrored row (front at -y) is turned half a
  * turn here (boxes and geometry), so `front` is `-y` and the drawer slides toward it.
  *
- * Programs are resolved by `programs.ts`: the built-in `drawers` (doors, then every slot),
- * the rack's own `programs`, and `internals` per slot with a template (lid up, then the
- * template's default program). Nothing here throws; bad input is a diagnostic and, where the
- * tree cannot be trusted, no assembly.
+ * Programs are resolved by core's planner (the scene's shared one when it passes it, W-1): the
+ * built-in `drawers` (doors, then every slot), the rack's own `programs`, and `internals` per slot
+ * with a template (lid up, then the template's default program), whose bodies the pack registers.
+ * Nothing here throws; bad input is a diagnostic and, where the tree cannot be trusted, no
+ * assembly.
  */
 import {
   readRackParams,
@@ -35,10 +36,12 @@ import { U_MM } from "./units.js";
 /** Oversize above which a slot template warns (assemblies 8.5; the template is shrunk either way). */
 const SIZE_TOLERANCE = 0.1;
 import { partKind, tileToMm, unitMm } from "./shapes.js";
-import { AssemblyPrograms, reassignSplit } from "@platformcosmo/core";
+import { AssemblyPrograms, rackTargeted, reassignSplit } from "@platformcosmo/core";
 import type {
   AssemblyFrame,
   Box3,
+  CloseupHost,
+  DcAssemblyPlanner,
   DcSceneFragment,
   Diagnostic,
   PartGeometry,
@@ -437,6 +440,28 @@ function fitTemplate(
   return { nodes, factor: f };
 }
 
+/**
+ * The tray height and the 19-inch interior of a device chassis box (mm): the chassis keeps the
+ * 1.1 device box (540 mm); the interior is 450 mm wide, centred, inside the walls and under the
+ * lid (assemblies.md 8.2, 8.5). Slot internals fit their template into it, slot close-ups too.
+ */
+function slotInterior(cb: Box3): { readonly trayH: number; readonly interior: Box3 } {
+  const trayH = Math.max(cb.size.z - LID_MM, cb.size.z / 2);
+  const w = Math.min(WALL_MM, cb.size.x / 4, cb.size.y / 4);
+  const iw = Math.min(INTERIOR_WIDTH_MM, cb.size.x - 2 * w);
+  return {
+    trayH,
+    interior: box(
+      cb.origin.x + (cb.size.x - iw) / 2,
+      cb.origin.y + w,
+      cb.origin.z + w,
+      iw,
+      cb.size.y - 2 * w,
+      trayH - w,
+    ),
+  };
+}
+
 // ---------------------------------------------------------------------------------------------
 // Rack
 // ---------------------------------------------------------------------------------------------
@@ -459,19 +484,6 @@ const DOOR_NAMES: Readonly<Record<string, string>> = {
   "rear-door-l": "left",
   "rear-door-r": "right",
 };
-
-/** Does a step action target this rack or something below it? */
-export function isTargeted(spec: PlatformCosmoSpec, rackId: string): boolean {
-  for (const step of Array.isArray(spec.steps) ? spec.steps : []) {
-    const list: unknown = isObj(step) ? step["assembly"] : undefined;
-    for (const a of Array.isArray(list) ? list : []) {
-      if (!isObj(a)) continue;
-      const t = a["explode"] ?? a["implode"] ?? a["build"] ?? a["unbuild"];
-      if (typeof t === "string" && (t === rackId || t.startsWith(`${rackId}/`))) return true;
-    }
-  }
-  return false;
-}
 
 /** A rack in a mirrored row has its front toward -y: the post pairs swap sides in the fragment. */
 function isMirrored(fragment: DcSceneFragment, rackId: string): boolean {
@@ -678,11 +690,12 @@ export function buildRackAssembly(
   rackId: string,
   fragment: DcSceneFragment,
   templates: Readonly<Record<string, SceneAssemblyNode>>,
+  shared?: DcAssemblyPlanner,
 ): { readonly assembly?: SceneAssembly; readonly diagnostics: readonly Diagnostic[] } {
   const none = { diagnostics: [] as Diagnostic[] };
   const racks: readonly unknown[] = Array.isArray(spec.racks) ? spec.racks : [];
   const ri = racks.findIndex((r) => isObj(r) && r["id"] === rackId);
-  if (ri < 0 || !isTargeted(spec, rackId)) return none;
+  if (ri < 0 || !rackTargeted(spec, rackId)) return none;
   const rack: SpecRack = racks[ri] as SpecRack;
   const rackObj = fragment.objects.find((o) => o.id === rackId && o.type === "rack");
   const rackDef = registry.get("rack");
@@ -806,20 +819,8 @@ export function buildRackAssembly(
         break;
       } else {
         const cb = partBox(chassis, dx, dy, dz);
-        const trayH = Math.max(cb.size.z - LID_MM, cb.size.z / 2);
-        const w = Math.min(WALL_MM, cb.size.x / 4, cb.size.y / 4);
+        const { trayH, interior } = slotInterior(cb);
         const trayBox = box(cb.origin.x, cb.origin.y, cb.origin.z, cb.size.x, cb.size.y, trayH);
-        // the chassis keeps the 1.1 device box (540 mm); the template fits the 19-inch interior,
-        // 450 mm wide, centred (assemblies.md 8.5)
-        const iw = Math.min(INTERIOR_WIDTH_MM, cb.size.x - 2 * w);
-        const interior = box(
-          cb.origin.x + (cb.size.x - iw) / 2,
-          cb.origin.y + w,
-          cb.origin.z + w,
-          iw,
-          cb.size.y - 2 * w,
-          trayH - w,
-        );
         const fit = fitTemplate(tpl, tspec.units, interior, sp, sstate);
         if (fit !== undefined) {
           if (fit.nodes.length === 0) {
@@ -964,9 +965,13 @@ export function buildRackAssembly(
     reachBounds: restBounds,
   };
 
-  // programs, base pose and reach: core's planner over the rack tree
+  // programs, base pose and reach: core's planner over the rack tree (the scene's shared one, or
+  // one of the pack's own for a direct call, whose diagnostics are then this call's)
   const synthetic = syntheticPrograms(slots, rackId);
-  const planner = makePlanner(spec, rackId, synthetic);
+  remember(spec, rackId, synthetic);
+  const own = shared === undefined ? makePlanner(spec) : undefined;
+  const planner: DcAssemblyPlanner = shared ?? (own as AssemblyPrograms);
+  planner.registerSynthetic(rackId, lookupOf(synthetic));
   const attached = planner.attach({
     assemblies: [bare],
     boards: [],
@@ -975,7 +980,7 @@ export function buildRackAssembly(
     credits: [],
   }).assemblies[0] as SceneAssembly;
   const swept = planner.reach(bare);
-  diagnostics.push(...planner.diagnostics);
+  if (own !== undefined) diagnostics.push(...own.diagnostics);
 
   const customIds = customProgramIds(rack);
   const slotPtr = new Map([...slots].map(([p, s]) => [p, s.internals?.ptr]));
@@ -992,22 +997,49 @@ export function buildRackAssembly(
   const reach = unionOf(swept === undefined ? [restBounds] : [restBounds, swept]) ?? restBounds;
   const defaultProgram = customIds[0] ?? "drawers";
   const assembly: SceneAssembly = { ...attached, defaultProgram, reachBounds: reach };
-  SYNTHETIC.set(assembly, synthetic);
   return { assembly, diagnostics };
 }
 
-const SYNTHETIC = new WeakMap<SceneAssembly, Synthetic>();
+/**
+ * Synthetic programs of every rack `buildAssembly` built, by spec and then by RACK ID (not by the
+ * returned object: the scene copies assemblies, e.g. to add `loopStart`), for `assemblyPlanner`.
+ */
+const SYNTHETIC = new WeakMap<PlatformCosmoSpec, Map<string, Synthetic>>();
 
-/** Core's planner over a rack tree; `synthetic` holds the bodies the spec does not carry. */
-function makePlanner(
-  spec: PlatformCosmoSpec,
-  rackId: string,
-  synthetic: Synthetic,
-): AssemblyPrograms {
-  // core's model reads the whole spec: garbage entries (validation reports them) are neutralised
-  // in place, so every JSON pointer keeps its index
+function remember(spec: PlatformCosmoSpec, rackId: string, synthetic: Synthetic): void {
+  let byRack = SYNTHETIC.get(spec);
+  if (byRack === undefined) {
+    byRack = new Map();
+    SYNTHETIC.set(spec, byRack);
+  }
+  byRack.set(rackId, synthetic);
+}
+
+const lookupOf =
+  (synthetic: Synthetic) =>
+  (owner: string, id: string): SpecExplodeProgram | undefined =>
+    synthetic.get(`${owner}\0${id}`);
+
+/** The spec as core's model reads it, once per spec (`makePlanner`). */
+const PLAN_SPEC = new WeakMap<PlatformCosmoSpec, PlatformCosmoSpec>();
+
+/** A core planner over the spec; racks register their synthetic bodies with it. */
+function makePlanner(spec: PlatformCosmoSpec): AssemblyPrograms {
+  let planSpec = PLAN_SPEC.get(spec);
+  if (planSpec === undefined) {
+    planSpec = sanitize(spec);
+    PLAN_SPEC.set(spec, planSpec);
+  }
+  return new AssemblyPrograms(planSpec);
+}
+
+/**
+ * Core's model reads the whole spec: garbage entries (validation reports them) are neutralised in
+ * place, so every JSON pointer keeps its index.
+ */
+function sanitize(spec: PlatformCosmoSpec): PlatformCosmoSpec {
   const racks: readonly unknown[] = Array.isArray(spec.racks) ? spec.racks : [];
-  const planSpec = {
+  return {
     ...spec,
     assemblies: (Array.isArray(spec.assemblies) ? (spec.assemblies as readonly unknown[]) : [])
       .map((a) => (isObj(a) ? a : { id: "", template: true, parts: [] }))
@@ -1023,22 +1055,80 @@ function makePlanner(
         : { id: "" },
     ),
   } as unknown as PlatformCosmoSpec;
-  return new AssemblyPrograms(planSpec, {
-    synthetic: (asm, owner, id) => (asm === rackId ? synthetic.get(`${owner}\0${id}`) : undefined),
-  });
 }
 
 /**
- * A fresh core planner (programs, level machine, `plan()` with implicit access) for an assembly
- * `buildAssembly` returned: it resolves the rack's programs exactly as it does a spec
- * assembly. Undefined for any other assembly.
+ * A fresh core planner (programs, level machine, `plan()` with implicit access) over every rack
+ * `buildAssembly` built for `spec` (ONE planner per spec, the synthetic programs of all its racks
+ * merged): it resolves the racks' programs exactly as it does a spec assembly. Looked up by rack
+ * id, so a copy of the returned assembly works too. Undefined when `buildAssembly` did not build
+ * `assembly.id` for this spec.
  */
 export function assemblyPlanner(
   spec: PlatformCosmoSpec,
   assembly: SceneAssembly,
 ): AssemblyPrograms | undefined {
-  const synthetic = SYNTHETIC.get(assembly);
-  return synthetic === undefined ? undefined : makePlanner(spec, assembly.id, synthetic);
+  const byRack = SYNTHETIC.get(spec);
+  if (byRack === undefined || !byRack.has(assembly.id)) return undefined;
+  const planner = makePlanner(spec);
+  for (const [id, synthetic] of byRack) planner.registerSynthetic(id, lookupOf(synthetic));
+  return planner;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Slot close-up hosts (8.4, 8.5)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `DcPack.slotHosts`: every slot with a `closeup`, every rack (spec order): its 1.1 object box,
+ * the device's 19-inch interior in world millimetres (450 mm wide; turning a mirrored rack half a
+ * turn keeps the axes) and the rack's front side in world (`-y` in a mirrored row).
+ */
+export function slotHosts(spec: PlatformCosmoSpec, fragment: DcSceneFragment): CloseupHost[] {
+  const out: CloseupHost[] = [];
+  const racks: readonly unknown[] = Array.isArray(spec.racks) ? spec.racks : [];
+  const objects = new Map(fragment.objects.map((o) => [o.id, o]));
+  racks.forEach((raw, ri) => {
+    if (!isObj(raw) || typeof raw["id"] !== "string") return;
+    const rack = raw as unknown as SpecRack;
+    const slotsIn: readonly unknown[] = Array.isArray(rack.slots) ? rack.slots : [];
+    if (!slotsIn.some((x) => isObj(x) && typeof x["closeup"] === "string")) return;
+    const capped = {
+      ...rack,
+      slots: slotsIn.slice(0, MAX_SLOTS).map((x) => (isObj(x) ? x : { at: 0, type: "" })),
+    } as unknown as SpecRack;
+    const front = isMirrored(fragment, rack.id) ? "-y" : "+y";
+    for (const s of checkSlots(capped, ri, []).sort((a, b) => a.index - b.index)) {
+      if (typeof s.spec.closeup !== "string") continue;
+      const path = `${rack.id}/${s.id}`;
+      const obj = objects.get(path);
+      const def = registry.get(s.spec.type);
+      if (obj === undefined || def === undefined) continue;
+      const dev = def.build({ ...def.defaults, heightU: s.size }, { id: path, state: "healthy" });
+      const chassis = dev.parts.find((p) => p.id === "chassis");
+      const cb =
+        chassis === undefined
+          ? box(
+              0,
+              0,
+              0,
+              tileToMm(dev.bounds.size.x),
+              tileToMm(dev.bounds.size.y),
+              tileToMm(dev.bounds.size.z),
+            )
+          : partBox(chassis, 0, 0, 0);
+      const { interior } = slotInterior(cb);
+      out.push({
+        path,
+        closeup: s.spec.closeup,
+        box: obj.box,
+        interiorMm: interior.size,
+        front,
+        pointer: `/racks/${ri}/slots/${s.index}/closeup`,
+      });
+    }
+  });
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------
