@@ -389,7 +389,7 @@ describe("every output path writes the assembly state", () => {
             seen++;
           }
         }
-        expect(seen, label).toBeGreaterThan(30);
+        expect(seen, label).toBeGreaterThan(_n === "Board labels" ? 30 : 50);
       };
       // static / default PNG: the rest frame
       check(animate(model, { speed: 1, mode: "frame", time: 0 }), am.frameAt(0), false, "static");

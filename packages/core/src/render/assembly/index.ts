@@ -465,9 +465,9 @@ export function buildAssemblyRender(
         size: b.size,
       });
     });
-    // what the camera frames also holds the labels and leaders shown from its lead to the end
-    const lead = Math.min(0.8, 0.25 * c.duration);
-    const r = unionRects([...rects, ...labels.rectsUnder(id, Math.max(0, c.start - lead), at)]);
+    // what the camera frames also holds the labels and leaders shown during this step (the
+    // camera's lead sits inside it, boards/timeline.ts; the previous step's tail is not framed)
+    const r = unionRects([...rects, ...labels.rectsUnder(id, c.start, at)]);
     return {
       x: round2(r.x - m.side),
       y: round2(r.y - m.side),
