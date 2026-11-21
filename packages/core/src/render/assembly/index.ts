@@ -27,8 +27,11 @@ import type {
   OpacityKey,
   PartTrack,
   Projection,
+  QuarterTurn,
   Rect,
+  SceneAssembly,
   SceneGraph,
+  SceneLevel,
   SvgElement,
   SvgNode,
   TrackKey,
@@ -47,6 +50,11 @@ import { endsAwayFromBase } from "../../scene/assembly/timing.js";
 import { closesLoop, resolveFigure } from "../../scene/boards.js";
 import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
 import { stepTimes } from "../boards/timeline.js";
+import { ELEMENT_WARN, MAX_LEVELS } from "../../scene/assembly/levels.js";
+import { MAX_VIEWS } from "../../scene/assembly/views.js";
+import { levelOf } from "../../scene/assembly/levels.js";
+import { buildLevelGroups, levelFocusRect, matrixAttr, roundRect } from "./levels.js";
+import { VIEW_FADE, scopeIds, viewNode, viewRender } from "./views.js";
 import { clipDef, partGroup, wrap, type DomContext, type Wrappers } from "./dom.js";
 import { buildLabels, type LabelTrack, type TextSpec } from "./labels.js";
 import { buildLoop, type StageRun } from "./loop.js";
@@ -107,9 +115,28 @@ export interface AssemblyBuild {
   /** Screen rects that must stay inside the view box (swept boxes, labels, leaders). */
   readonly extents: Rect[];
   readonly diagnostics: Diagnostic[];
+  /**
+   * Close-up level groups for the OVERLAY layer (pinned against the camera, a sibling of it,
+   * §8.4); absent without levels. Their content is in the levels' own coordinates.
+   */
+  readonly levelNodes?: SvgNode[];
 }
 
 const EPS = 1e-9;
+
+/** Start tags of the element trees: the REAL element count of what a group draws (§13). */
+function countElements(nodes: readonly SvgNode[]): number {
+  let n = 0;
+  const walk = (list: readonly SvgNode[]): void => {
+    for (const x of list) {
+      if (typeof x !== "object" || !("tag" in x)) continue;
+      n++;
+      walk(x.children ?? []);
+    }
+  };
+  walk(nodes);
+  return n;
+}
 
 interface Registered {
   readonly key: string;
@@ -144,45 +171,48 @@ function swept(box: Box3, chain: ReturnType<MoveIndex["chain"]>, ta: number, tb:
   };
 }
 
-export function buildAssemblyRender(
-  ctx: AssemblyRenderContext,
-): AssemblyBuild | { readonly diagnostics: Diagnostic[] } | undefined {
-  const { scene, projection, ids } = ctx;
-  const assemblies = scene.assemblies?.assemblies ?? [];
-  if (assemblies.length === 0) return undefined;
+/** Everything one group (the main scene, a quarter-turn view, a close-up level) is built from. */
+export interface GroupInput {
+  readonly assemblies: readonly SceneAssembly[];
+  /** Id scheme of the group (views scope it, see views.ts). */
+  readonly ids: IdScheme & AssemblyIdScheme;
+  /** Scene objects sharing the depth order (the main scene only). */
+  readonly statics: readonly StaticItem[];
+  /** The ONE loop clock every group of the scene shares. */
+  readonly clock: LoopClock;
+  /** Image assets by hash, shared by the groups of a scene so each placeholder is defined once. */
+  readonly assets: Map<string, ImageAsset>;
+  /** Paths of close-up levels: actions on them belong to their own group (loop.ts). */
+  readonly foreign?: readonly string[];
+  /** Instance path -> id of the spec assembly it is built from (close-up levels). */
+  readonly templateOf?: ReadonlyMap<string, string>;
+}
+
+/** Step times of the master loop (`stepTimes`) and whether it closes (§7.4). */
+export interface LoopClock {
+  readonly times: ReturnType<typeof stepTimes>["times"];
+  readonly total: number;
+  readonly closeLast: boolean;
+}
+
+/** One built group: the contract-visible parts plus what the level and view code needs. */
+export interface GroupBuild extends AssemblyBuild {
+  /** Screen rect of a node (assembly, sub-assembly or part) at the END of a step, margin-free. */
+  nodeRect(step: number, id: string): Rect | undefined;
+}
+
+function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
+  const { scene, projection } = ctx;
+  const { ids, assemblies } = input;
   const diagnostics: Diagnostic[] = [];
   const specAsm = new Map((ctx.spec?.assemblies ?? []).map((a) => [a.id, a]));
-
-  // ---- cap before any work sized by the input -------------------------------------------
-  let leafCount = 0;
-  for (const a of assemblies) leafCount += a.leaves.length;
-  if (leafCount > MAX_LEAVES) {
-    diagnostics.push({
-      severity: "error",
-      code: "budget/assembly-parts",
-      path: "/assemblies",
-      message: `${leafCount} leaf parts exceed the limit of ${MAX_LEAVES}; assemblies are not drawn`,
-      suggestion: "Use fewer parts (fewer `count` repeats, simpler `use` templates)",
-      params: { parts: leafCount, limit: MAX_LEAVES },
-    });
-    return { diagnostics };
-  }
 
   const leaves = worldLeaves(assemblies);
   const leafByPath = new Map(leaves.map((l) => [l.path, l]));
 
   // ---- loop clock and moves --------------------------------------------------------------
   const plan = scene.assemblies?.plan ?? [];
-  const basePoses: Record<string, readonly { program: string; level: number }[]> = {};
-  for (const a of assemblies) basePoses[a.id] = a.basePose;
-  let closeLast = endsAwayFromBase(plan[plan.length - 1]?.poses, basePoses);
-  if (!closeLast && ctx.spec?.figures !== undefined) {
-    closeLast = closesLoop(
-      ctx.spec.figures.map((f, i) => resolveFigure(f, i).figure),
-      plan,
-    );
-  }
-  const { times, total } = stepTimes(scene, 1, closeLast);
+  const { times, total, closeLast } = input.clock;
   const clock: StepClock[] = times.map((t, i) => ({
     step: i + 1,
     start: t.start,
@@ -190,11 +220,11 @@ export function buildAssemblyRender(
     open: t.open,
     end: t.end,
   }));
-  const loopBuild = buildLoop(assemblies, plan, times, total, closeLast);
+  const loopBuild = buildLoop(assemblies, plan, times, total, closeLast, input.foreign);
   const index = new MoveIndex(loopBuild.moves);
 
   // ---- depth epochs ----------------------------------------------------------------------
-  const statics = (ctx.statics ?? []).filter((s) => !leafByPath.has(s.key));
+  const statics = input.statics.filter((s) => !leafByPath.has(s.key));
   const inputs: DepthItemInput[] = [
     ...depthItems(leaves),
     ...statics.map((s) => ({ key: s.key, box: s.box })),
@@ -237,8 +267,6 @@ export function buildAssemblyRender(
     if (run.stage.fade === "others") staticWindows.push(w);
   }
 
-  let elements = 0;
-
   // ---- labels ------------------------------------------------------------------------------
   const labels = buildLabels({
     projection,
@@ -250,14 +278,13 @@ export function buildAssemblyRender(
     fit: ctx.fit,
     nudge: ctx.nudge,
     assemblies,
-    labelMode: (id) => specAsm.get(id)?.labels ?? "exploded",
+    labelMode: (id) => specAsm.get(input.templateOf?.get(id) ?? id)?.labels ?? "exploded",
     leaves,
     index,
     runs: loopBuild.runs,
     loop: total,
     ...(loopBuild.closure === undefined ? {} : { closure: loopBuild.closure }),
   });
-  elements += labels.elements;
   diagnostics.push(...labels.diagnostics);
   const labelTracks = [...labels.tracks].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
@@ -274,12 +301,10 @@ export function buildAssemblyRender(
     ids,
     prefix: ctx.prefix,
     images: ctx.images,
-    assets: new Map<string, ImageAsset>(),
+    assets: input.assets,
     defs: [],
     diagnostics,
-    count: (n) => {
-      elements += n;
-    },
+    count: () => {},
   };
   const objects: SvgNode[] = [];
   const staticByKey = new Map(statics.map((s) => [s.key, s]));
@@ -297,7 +322,6 @@ export function buildAssemblyRender(
       staticFades.push({ key, id, opacity });
       const o0 = round2(evalOpacity(opacity, 0));
       objects.push(h("g", { id, ...(o0 < 1 ? { opacity: o0 } : {}) }, st.node));
-      elements += 1;
       continue;
     }
     const path = pathOf.get(key);
@@ -452,7 +476,7 @@ export function buildAssemblyRender(
     }
   }
   const m = ctx.focusMargin ?? { side: 0, bottom: 0 };
-  const focusRect = (step: number, id: string): Rect | undefined => {
+  const nodeRect = (step: number, id: string): Rect | undefined => {
     const c = clock[step - 1];
     const list = nodeLeaves.get(id);
     if (c === undefined || list === undefined) return undefined;
@@ -467,7 +491,11 @@ export function buildAssemblyRender(
     });
     // what the camera frames also holds the labels and leaders shown during this step (the
     // camera's lead sits inside it, boards/timeline.ts; the previous step's tail is not framed)
-    const r = unionRects([...rects, ...labels.rectsUnder(id, c.start, at)]);
+    return unionRects([...rects, ...labels.rectsUnder(id, c.start, at)]);
+  };
+  const focusRect = (step: number, id: string): Rect | undefined => {
+    const r = nodeRect(step, id);
+    if (r === undefined) return undefined;
     return {
       x: round2(r.x - m.side),
       y: round2(r.y - m.side),
@@ -487,7 +515,7 @@ export function buildAssemblyRender(
     focusRect,
     frameAt,
     stepEnd,
-    elements,
+    elements: countElements([...objects, ...labels.nodes, ...domCtx.defs]),
     labelTracks,
     staticFades,
     assets: domCtx.assets,
@@ -506,6 +534,365 @@ export function buildAssemblyRender(
     defs: domCtx.defs,
     extents,
     diagnostics,
+    nodeRect,
+  };
+}
+
+/** Built leaves (main + levels + every turned view) beyond which nothing is built (§13). */
+export const MAX_BUILT_LEAVES = 2 * MAX_LEAVES;
+
+const leavesOf = (list: readonly SceneAssembly[]): number =>
+  list.reduce((n, a) => n + a.leaves.length, 0);
+
+const capError = (
+  code: "budget/assembly-parts" | "budget/views" | "budget/levels",
+  message: string,
+  suggestion: string,
+  params: Diagnostic["params"],
+): { readonly diagnostics: Diagnostic[] } => ({
+  diagnostics: [{ severity: "error", code, path: "/assemblies", message, suggestion, params }],
+});
+
+const dedupe = (list: readonly Diagnostic[]): Diagnostic[] => {
+  const seen = new Set<string>();
+  const out: Diagnostic[] = [];
+  for (const d of list) {
+    const k = `${d.code}\u0000${d.path}\u0000${d.message}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(d);
+  }
+  return out;
+};
+
+/** Sorted ranges with overlapping or touching ones merged. */
+function mergeRanges(
+  list: readonly { readonly t0: number; readonly t1: number }[],
+): { readonly t0: number; readonly t1: number }[] {
+  const out: { t0: number; t1: number }[] = [];
+  for (const r of [...list].sort((a, b) => a.t0 - b.t0 || a.t1 - b.t1)) {
+    const last = out[out.length - 1];
+    if (last !== undefined && r.t0 <= last.t1 + EPS) last.t1 = Math.max(last.t1, r.t1);
+    else out.push({ t0: r.t0, t1: r.t1 });
+  }
+  return out;
+}
+
+const r4n = (v: number): number => Math.round(v * 10000) / 10000 + 0;
+
+const byKey = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+const sortedRecord = <T>(r: Record<string, T>): Record<string, T> =>
+  Object.fromEntries(Object.entries(r).sort(([a], [b]) => byKey(a, b)));
+
+/**
+ * Builds the assembly layer of a scene: the main scene (view 0), the close-up levels (§8.4) and
+ * the quarter-turn views (§7.7), all on ONE loop clock. Caps come first, sized by counts only:
+ * leaves of the main scene and levels (`MAX_LEAVES`), leaves built over all views
+ * (`MAX_BUILT_LEAVES`), at most `MAX_VIEWS` views and `MAX_LEVELS` levels. Without levels and
+ * views the result is the main group alone, exactly as before A1-4.
+ */
+export function buildAssemblyRender(
+  ctx: AssemblyRenderContext,
+): AssemblyBuild | { readonly diagnostics: Diagnostic[] } | undefined {
+  const { scene, projection, ids } = ctx;
+  const sa = scene.assemblies;
+  const assemblies = sa?.assemblies ?? [];
+  if (sa === undefined || assemblies.length === 0) return undefined;
+  // sorted, so the output does not depend on the order the scene lists them in
+  const levels: readonly SceneLevel[] = [...(sa.levels ?? [])].sort((a, b) =>
+    byKey(a.path, b.path),
+  );
+  const turned = (sa.views ?? []).filter((v) => v.turn !== 0).sort((a, b) => a.turn - b.turn);
+
+  // ---- cap before any work sized by the input -------------------------------------------
+  const levelLeaves = levels.reduce(
+    (n, l) => n + (l.assembly === undefined ? 0 : l.assembly.leaves.length),
+    0,
+  );
+  const leafCount = leavesOf(assemblies) + levelLeaves;
+  if (leafCount > MAX_LEAVES) {
+    return capError(
+      "budget/assembly-parts",
+      `${leafCount} leaf parts exceed the limit of ${MAX_LEAVES}; assemblies are not drawn`,
+      "Use fewer parts (fewer `count` repeats, simpler `use` templates)",
+      { parts: leafCount, limit: MAX_LEAVES },
+    );
+  }
+  if (levels.length > MAX_LEVELS) {
+    return capError(
+      "budget/levels",
+      `${levels.length} close-up levels exceed the limit of ${MAX_LEVELS}; assemblies are not drawn`,
+      "Drop some close-ups",
+      { count: levels.length, max: MAX_LEVELS },
+    );
+  }
+  if (turned.length + 1 > MAX_VIEWS) {
+    return capError(
+      "budget/views",
+      `${turned.length + 1} views exceed the limit of ${MAX_VIEWS}; assemblies are not drawn`,
+      "Use fewer view changes",
+      { views: turned.length + 1, max: MAX_VIEWS },
+    );
+  }
+  const built = leafCount + turned.reduce((n, v) => n + leavesOf(v.assemblies), 0);
+  if (built > MAX_BUILT_LEAVES) {
+    return capError(
+      "budget/views",
+      `${built} leaf parts over ${turned.length + 1} views exceed the limit of ${MAX_BUILT_LEAVES}; assemblies are not drawn`,
+      "Use fewer view changes, or fewer parts",
+      { parts: built, views: turned.length + 1, limit: MAX_BUILT_LEAVES },
+    );
+  }
+
+  // ---- the ONE loop clock ------------------------------------------------------------------
+  const plan = sa.plan;
+  const basePoses: Record<string, readonly { program: string; level: number }[]> = {};
+  for (const a of assemblies) basePoses[a.id] = a.basePose;
+  for (const l of levels) if (l.assembly !== undefined) basePoses[l.path] = l.assembly.basePose;
+  let closeLast = endsAwayFromBase(plan[plan.length - 1]?.poses, basePoses);
+  if (!closeLast && ctx.spec?.figures !== undefined) {
+    closeLast = closesLoop(
+      ctx.spec.figures.map((f, i) => resolveFigure(f, i).figure),
+      plan,
+    );
+  }
+  const { times, total } = stepTimes(scene, 1, closeLast);
+  const clock: LoopClock = { times, total, closeLast };
+  const assets = new Map<string, ImageAsset>();
+  const foreign = levels.map((l) => l.path);
+
+  const main = buildGroup(ctx, {
+    assemblies,
+    ids,
+    statics: ctx.statics ?? [],
+    clock,
+    assets,
+    foreign,
+  });
+  if (levels.length === 0 && turned.length === 0) return main;
+
+  // ---- quarter-turn views ------------------------------------------------------------------
+  const diagnostics: Diagnostic[] = [...main.diagnostics];
+  const extents: Rect[] = [...main.extents];
+  const defs: SvgNode[] = [...main.defs];
+  const viewGroups = turned.map((v) => {
+    const vids = scopeIds(ids, v.turn);
+    return {
+      turn: v.turn,
+      scene: v.assemblies,
+      ids: vids,
+      group: buildGroup(ctx, {
+        assemblies: v.assemblies,
+        ids: vids,
+        statics: [],
+        clock,
+        assets,
+        foreign,
+      }),
+    };
+  });
+  for (const v of viewGroups) {
+    diagnostics.push(...v.group.diagnostics);
+    extents.push(...v.group.extents);
+    defs.push(...v.group.defs);
+  }
+  const allViews = [
+    { turn: 0 as QuarterTurn, scene: assemblies, ids, group: main },
+    ...viewGroups,
+  ].sort((a, b) => a.turn - b.turn);
+  const viewRenders =
+    turned.length === 0
+      ? []
+      : allViews.map((v) => viewRender(ids, projection, v.turn, v.scene, v.group));
+  if (turned.length > 0) {
+    const real = viewRenders.reduce((n, v) => n + v.elements, 0);
+    if (real > ELEMENT_WARN) {
+      diagnostics.push({
+        severity: "warning",
+        code: "budget/views",
+        path: "/assemblies",
+        message: `${viewRenders.length} views need ${real} elements (warning above ${ELEMENT_WARN})`,
+        suggestion: "Use fewer view changes, or fewer parts",
+        params: { views: viewRenders.length, elements: real, limit: ELEMENT_WARN },
+      });
+    }
+  }
+
+  // ---- close-up levels ---------------------------------------------------------------------
+  const target = roundRect(unionRects(main.extents));
+  const lv =
+    levels.length === 0
+      ? undefined
+      : buildLevelGroups(levels, {
+          projection,
+          levelId: ids.level,
+          margin: ctx.focusMargin ?? { side: 0, bottom: 0 },
+          target,
+          main,
+          build: (l) =>
+            buildGroup(ctx, {
+              assemblies: l.assembly === undefined ? [] : [l.assembly],
+              ids,
+              statics: [],
+              clock,
+              assets,
+              foreign,
+              templateOf: new Map([[l.path, l.ref]]),
+            }),
+        });
+  if (lv !== undefined) {
+    diagnostics.push(...lv.diagnostics);
+    defs.push(...lv.defs);
+  }
+
+  // ---- the composed model ------------------------------------------------------------------
+  const all: AssemblyRenderModel[] = [
+    main.model,
+    ...viewGroups.map((v) => v.group.model),
+    ...(lv?.levels.flatMap((l) => (l.model === undefined ? [] : [l.model])) ?? []),
+  ];
+  const merge = (state: (g: AssemblyRenderModel) => AssemblyFrameState): AssemblyFrameState => {
+    const transforms: Record<string, string> = {};
+    const opacity: Record<string, number> = {};
+    const hidden: string[] = [];
+    const visible: string[] = [];
+    for (const g of all) {
+      const st = state(g);
+      Object.assign(transforms, st.transforms);
+      Object.assign(opacity, st.opacity);
+      hidden.push(...st.hidden);
+      visible.push(...st.visible);
+    }
+    return {
+      transforms: sortedRecord(transforms),
+      hidden: hidden.sort(byKey),
+      visible: visible.sort(byKey),
+      opacity: sortedRecord(opacity),
+    };
+  };
+  // Opacity and placement of the view and level groups at loop time `t` (§7.7, §8.4): the view
+  // in effect cross-fades in over VIEW_FADE at its step's start; a close-up cross-fades in over
+  // the transition into its step (the end of the previous step; step 1: up to its motion window)
+  // and eases from `fromHost(hostAt(k - 1))` (zoom 1: B-3 composes the camera) to its overview.
+  const clk = main.model.clock;
+  const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
+  const levelAtStep = (k: number): string | undefined => {
+    const focus = k < 0 ? undefined : scene.timeline[k]?.focus;
+    return focus === undefined ? undefined : levelOf(levels, focus)?.path;
+  };
+  const tStart = (k: number): number => (k <= 0 ? 0 : (clk[k - 1]?.end ?? 0));
+  const tEnd = (k: number): number => (k <= 0 ? (clk[0]?.open ?? 0) : (clk[k]?.start ?? 0));
+  const groupState = (
+    t: number,
+  ): { transforms: Record<string, string>; opacity: Record<string, number> } => {
+    const transforms: Record<string, string> = {};
+    const opacity: Record<string, number> = {};
+    if (turned.length > 0) {
+      let kv = 0;
+      for (let i = 0; i < clk.length; i++) if ((clk[i]?.start ?? 0) <= t) kv = i;
+      const cur = plan[kv]?.view ?? 0;
+      const prev = kv > 0 ? (plan[kv - 1]?.view ?? 0) : 0;
+      const f = clamp01((t - (clk[kv]?.start ?? 0)) / VIEW_FADE);
+      for (const v of viewRenders) {
+        opacity[v.group] = round2(
+          v.turn === cur ? (v.turn === prev ? 1 : f) : v.turn === prev ? 1 - f : 0,
+        );
+      }
+    }
+    if (lv !== undefined) {
+      let k = 0;
+      for (let i = 0; i < clk.length; i++) if (tStart(i) <= t) k = i;
+      const span = tEnd(k) - tStart(k);
+      const f = span > 1e-9 ? clamp01((t - tStart(k)) / span) : 1;
+      const cur = levelAtStep(k);
+      const prev = levelAtStep(k - 1);
+      for (const l of lv.levels) {
+        const isCur = l.path === cur;
+        const isPrev = l.path === prev;
+        opacity[l.group] = round2(isCur ? (isPrev ? 1 : f) : isPrev ? 1 - f : 0);
+        let a = l.overview;
+        if (isCur && !isPrev) {
+          const e = l.fromHost(l.hostAt(k));
+          a = {
+            scale: e.scale + (a.scale - e.scale) * f,
+            tx: e.tx + (a.tx - e.tx) * f,
+            ty: e.ty + (a.ty - e.ty) * f,
+          };
+        }
+        transforms[l.group] = matrixAttr({
+          scale: r4n(a.scale),
+          tx: round2(a.tx),
+          ty: round2(a.ty),
+        });
+      }
+    }
+    return { transforms, opacity };
+  };
+  const withGroups = (st: AssemblyFrameState, t: number): AssemblyFrameState => {
+    const g = groupState(t);
+    return {
+      ...st,
+      transforms: sortedRecord({ ...st.transforms, ...g.transforms }),
+      opacity: sortedRecord({ ...st.opacity, ...g.opacity }),
+    };
+  };
+  const settled = main.model.settled.map((v, i) => {
+    const list = all.map((g) => g.settled[i]).filter((x): x is number => x !== undefined);
+    return list.length === 0 ? v : Math.max(...list);
+  });
+  const reachRects = [
+    ...(main.model.reach === undefined ? [] : [main.model.reach]),
+    ...viewGroups.flatMap((v) => (v.group.model.reach === undefined ? [] : [v.group.model.reach])),
+  ];
+  const model: AssemblyRenderModelX = {
+    ...main.model,
+    settled,
+    approximate: mergeRanges(all.flatMap((g) => g.approximate)),
+    reach: reachRects.length === 0 ? undefined : unionRects(reachRects),
+    elements:
+      (turned.length === 0 ? main.model.elements : 0) +
+      viewRenders.reduce((n, v) => n + v.elements, 0) +
+      (lv?.levels.reduce((n, l) => n + l.elements, 0) ?? 0),
+    frameAt: (t) => {
+      const w = total > 0 ? ((t % total) + total) % total : 0;
+      return withGroups(
+        merge((g) => g.frameAt(t)),
+        w,
+      );
+    },
+    stepEnd: (step) => {
+      const c = main.model.clock[step - 1];
+      return withGroups(
+        merge((g) => g.stepEnd(step)),
+        c === undefined ? 0 : stepEndTime(Math.min(c.end, total)),
+      );
+    },
+    focusRect: (step, id) => {
+      // levels have their own coordinates (`levelFocusRect`); this is the world only
+      if (levelOf(levels, id) !== undefined) return undefined;
+      const v = plan[step - 1]?.view ?? 0;
+      const inView = v === 0 ? undefined : viewGroups.find((x) => x.turn === v);
+      return (inView?.group.model ?? main.model).focusRect(step, id);
+    },
+    levelFocusRect: (step, id) =>
+      lv === undefined
+        ? undefined
+        : levelFocusRect(levels, lv, step, id, ctx.focusMargin ?? { side: 0, bottom: 0 }).rect,
+    ...(lv === undefined ? {} : { levels: lv.levels }),
+    ...(turned.length === 0 ? {} : { views: viewRenders }),
+  };
+  const _check: AssemblyRenderModel = model;
+  void _check;
+  const wrapped = turned.length > 0;
+  return {
+    model,
+    objects: wrapped ? allViews.map((v) => viewNode(ids, v.turn, v.group)) : main.objects,
+    labels: wrapped ? [] : main.labels,
+    defs,
+    extents,
+    diagnostics: dedupe(diagnostics),
+    ...(lv === undefined ? {} : { levelNodes: lv.nodes }),
   };
 }
 
