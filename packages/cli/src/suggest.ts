@@ -32,11 +32,15 @@ export interface SuggestedStep {
 export interface Suggestion {
   /** Path of the program owner: the assembly id, or `assembly/sub/...` for a nested explode. */
   owner: string;
+  /** JSON pointer of the owner in the spec: `programs` goes to `<pointer>/programs`. */
+  pointer: string;
   body: string | null;
   classes: Record<Exclude<PartClass, "body">, string[]>;
   program: { id: string; label: string; stages: SuggestedStage[] };
   /** Seconds a step playing the whole program needs (stage times plus a hold). */
   stepDuration: number;
+  /** Leaf parts moved by each stage (for step durations). */
+  stageLeaves: number[];
   /** Present for top-level assemblies; nested owners are covered by it. */
   steps?: SuggestedStep[];
   explanation: string[];
@@ -75,7 +79,6 @@ export const STAGE_MAX = 24;
 const LABELS_MAX = 12;
 const STAGGER = 0.08;
 const DURATION = 0.8;
-const HOLD = 0.4;
 const MAX_OWNERS = 64;
 const MAX_DEPTH = 3;
 const TOL = 1e-6;
@@ -148,8 +151,10 @@ function classify(it: Item, reg: PartShapeRegistry | undefined, ctx: Ctx): PartC
   const p = it.p;
   if (it.isGroup) return "unit";
   const def = p.shape !== undefined && p.shape.includes(":") ? reg?.get(p.shape) : undefined;
-  const role = p.role ?? def?.role;
-  if (role === "body") return "body";
+  // A pack's default role `body` (every brick, many auto parts) does not make a part THE body:
+  // only an explicit spec role does, and only the one part chosen as the body is classified so.
+  const role = p.role ?? (def?.role === "body" ? undefined : def?.role);
+  if (role === "body") return "loose";
   if (role === "cover") return "cover";
   if (role === "fastener") return "fastener";
   if (role === "internal") return "internal";
@@ -197,6 +202,19 @@ function direction(it: Item, cls: PartClass, body: Item | undefined, internals: 
 
 const hidden = (d: string): boolean => d.startsWith("-");
 
+/**
+ * Smallest step duration (to 0.1 s) whose motion window holds `need` seconds even when a camera
+ * transition leads into and out of the step: the validator's window is
+ * `D - 2 * min(0.8, 0.25 * D) - 0.2` (core `fitDuration`), so a suggested step never compresses.
+ */
+export function fitStep(need: number): number {
+  for (let t = Math.max(1, Math.ceil(need * 10)); t < 6000; t++) {
+    const d = t / 10;
+    if (d - 2 * Math.min(0.8, 0.25 * d) - 0.2 >= need - 1e-9) return d;
+  }
+  return 600;
+}
+
 function stageTime(s: SuggestedStage, n: number): number {
   return s.duration + s.stagger * Math.max(0, n - 1);
 }
@@ -206,7 +224,7 @@ function suggestOwner(
   label: string,
   parts: P[],
   reg: PartShapeRegistry | undefined,
-): Suggestion | undefined {
+): Suggestion | string {
   const items: Item[] = parts.map((p, i) => {
     const b = boxOf(p);
     return {
@@ -218,7 +236,7 @@ function suggestOwner(
       cls: "loose" as PartClass,
     };
   });
-  if (items.length < 2) return undefined;
+  if (items.length < 2) return "nothing to move (fewer than two parts)";
 
   // 1. Body: role body, else the part most others mate with, else the largest volume.
   let body = items.find((it) => it.cls === "loose" && (it.p.role ?? "") === "body");
@@ -310,7 +328,9 @@ function suggestOwner(
     const m = new Map<string, Item[]>();
     for (const it of group) {
       const d = direction(it, cls, body, classes.internal);
-      m.set(d, [...(m.get(d) ?? []), it]);
+      const g = m.get(d);
+      if (g) g.push(it);
+      else m.set(d, [it]);
     }
     return m;
   };
@@ -335,10 +355,12 @@ function suggestOwner(
   push("Other parts", classes.loose, "loose", "out");
   for (const [d, g] of late) push(`Covers (${d}, hidden side)`, g, "cover", d);
 
-  if (stages.length === 0) return undefined;
+  if (stages.length === 0) {
+    return "no stages: no part other than the body is movable";
+  }
 
   const total = stages.reduce((a, s, i) => a + stageTime(s, counts[i]!), 0);
-  const stepDuration = Math.ceil((total + HOLD) * 10) / 10;
+  const stepDuration = fitStep(total);
   const names = (c: Item[]): string[] => c.map((it) => it.id);
   const explanation = [
     ...why,
@@ -348,6 +370,7 @@ function suggestOwner(
   ];
   return {
     owner: path,
+    pointer: "",
     body: body?.id ?? null,
     classes: {
       fastener: names(classes.fastener),
@@ -358,6 +381,7 @@ function suggestOwner(
     },
     program: { id: PROGRAM_ID, label: `${label}: suggested explode`, stages },
     stepDuration,
+    stageLeaves: counts,
     explanation,
   };
 }
@@ -369,7 +393,7 @@ function story(root: Suggestion, label: string, nested: Suggestion[]): Suggested
       const first = st.parts[0]!.replace(/-\*$/, (m) => (st.parts[0]!.endsWith("-*") ? "-1" : m));
       steps.push({
         caption: caption(st),
-        duration: Math.ceil((stageTime(st, STAGE_MAX) / 2 + HOLD) * 10) / 10,
+        duration: fitStep(stageTime(st, s.stageLeaves[k] ?? 1)),
         focus: `${s.owner}/${first}`,
         assembly: [{ explode: s.owner, program: PROGRAM_ID, to: k + 1 }],
       });
@@ -379,7 +403,7 @@ function story(root: Suggestion, label: string, nested: Suggestion[]): Suggested
   for (const n of nested) run(n, (st) => `${n.owner.split("/").pop()}: ${st.label}`);
   steps.push({
     caption: `${label} reassembled`,
-    duration: 2,
+    duration: root.stepDuration,
     assembly: [{ implode: root.owner }],
   });
   return steps;
@@ -391,7 +415,7 @@ export function suggest(spec: unknown, reg?: PartShapeRegistry): SuggestReport {
   const assemblies = (spec as { assemblies?: A[] } | null)?.assemblies;
   if (!Array.isArray(assemblies)) return out;
   let owners = 0;
-  for (const a of assemblies) {
+  for (const [ai, a] of assemblies.entries()) {
     if (a === null || typeof a !== "object" || typeof a.id !== "string") continue;
     if (!Array.isArray(a.parts)) continue;
     if (a.template === true) {
@@ -402,33 +426,40 @@ export function suggest(spec: unknown, reg?: PartShapeRegistry): SuggestReport {
       out.skipped.push({ owner: a.id, reason: "already has a program" });
       continue;
     }
-    const label = a.label ?? a.id;
-    const root = suggestOwner(a.id, label, a.parts, reg);
-    if (!root) {
-      out.skipped.push({ owner: a.id, reason: "nothing to move (fewer than two parts)" });
+    if (owners >= MAX_OWNERS) {
+      out.skipped.push({ owner: a.id, reason: `owner limit reached (${MAX_OWNERS})` });
       continue;
     }
+    const label = a.label ?? a.id;
+    const root = suggestOwner(a.id, label, a.parts, reg);
+    if (typeof root === "string") {
+      out.skipped.push({ owner: a.id, reason: root });
+      continue;
+    }
+    root.pointer = `/assemblies/${ai}`;
+    owners++; // the root counts before the walk, so nested owners cannot push past the limit
     const nested: Suggestion[] = [];
-    const walk = (parts: P[], base: string, depth: number): void => {
+    const walk = (parts: P[], base: string, pointer: string, depth: number): void => {
       if (depth >= MAX_DEPTH) return;
-      for (const p of parts) {
+      parts.forEach((p, k) => {
         if (owners >= MAX_OWNERS) return;
-        if (!Array.isArray(p.parts) || typeof p.id !== "string") continue;
-        if (Array.isArray(p.programs) && p.programs.length > 0) continue;
-        const path = `${base}/${p.id}`;
-        const s = suggestOwner(path, p.label ?? p.id, p.parts, reg);
-        if (s) {
+        if (!Array.isArray(p.parts) || typeof p.id !== "string") return;
+        if (Array.isArray(p.programs) && p.programs.length > 0) return;
+        // a counted group has instances id-1..id-n; the program (on the part) serves each, the story plays the first
+        const path = `${base}/${p.id}${countOf(p) > 1 ? "-1" : ""}`;
+        const ptr = `${pointer}/parts/${k}`;
+        const sug = suggestOwner(path, p.label ?? p.id, p.parts, reg);
+        if (typeof sug !== "string") {
+          sug.pointer = ptr;
           owners++;
-          nested.push(s);
+          nested.push(sug);
         }
-        walk(p.parts, path, depth + 1);
-      }
+        walk(p.parts, path, ptr, depth + 1);
+      });
     };
-    walk(a.parts, a.id, 1);
+    walk(a.parts, a.id, root.pointer, 1);
     root.steps = story(root, label, nested);
     out.suggestions.push(root, ...nested);
-    owners++;
-    if (owners >= MAX_OWNERS) break;
   }
   return out;
 }
@@ -444,16 +475,20 @@ export function formatSuggestions(file: string, r: SuggestReport): string {
         `  stage ${k + 1}: ${st.label} -> ${st.direction} (${st.parts.join(", ")})${st.fade ? `, fade ${st.fade}` : ""}`,
       );
     });
-    const snippet = {
-      programs: [s.program],
-      ...(s.steps ? { steps: s.steps } : {}),
-    };
-    lines.push(
-      "  spec fragment:",
-      ...JSON.stringify(snippet, null, 2)
+    const indent = (v: unknown): string[] =>
+      JSON.stringify(v, null, 2)
         .split("\n")
-        .map((l) => `    ${l}`),
+        .map((l) => `    ${l}`);
+    lines.push(
+      `  add to "programs" at ${s.pointer}/programs (create the array if missing); the lines below are its one entry:`,
+      ...indent(s.program),
     );
+    if (s.steps) {
+      lines.push(
+        '  append to the top-level "steps" array (these steps play the program; keep existing steps before them):',
+        ...indent(s.steps),
+      );
+    }
   }
   for (const k of r.skipped) lines.push(`${file}: no suggestion for ${k.owner}: ${k.reason}`);
   if (r.suggestions.length === 0 && r.skipped.length === 0) {

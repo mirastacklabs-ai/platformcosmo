@@ -99,6 +99,7 @@ const result = await build({
     "@platformcosmo/core/node": `${root}packages/core/src/node.ts`,
     "@platformcosmo/core": src("core"),
     "@platformcosmo/themes": src("themes"),
+    "@platformcosmo/assets": src("assets"),
     "@platformcosmo/dc-pack": src("dc-pack"),
     "@platformcosmo/icons-base": src("icons-base"),
     "@platformcosmo/icons-lucide": src("icons-lucide"),
@@ -286,7 +287,9 @@ function notices() {
   }
   return `${lines.join("\n").trimEnd()}\n`;
 }
-// Size guard: the bundle was 5,382,188 bytes with the brand fonts (5,353,952 before); fail past +10%.
+// Size guard. Baseline: 5,842,266 bytes (D-1 on top of D-2a: shape packs, suggest and the image
+// and asset commands; 5,382,188 with the brand fonts before those). The guard sits about 1.3%
+// above, so any growth needs a decision: raise it only with a PR note that lists what grew and why.
 const MAX_BUNDLE_BYTES = 5_920_000;
 if (Buffer.byteLength(out) > MAX_BUNDLE_BYTES) {
   console.error(

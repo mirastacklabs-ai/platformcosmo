@@ -1,6 +1,7 @@
 import { stripControl } from "./format.js";
 import pkg from "../package.json" with { type: "json" };
 import { UsageError, Failure, EXIT, type Ctx, type Deps, type RunResult } from "./deps.js";
+import { HELP as ASSETS_HELP, assetsCommand } from "./commands/assets.js";
 import { HELP as BUILD_HELP, buildCommand } from "./commands/build.js";
 import { HELP as EXAMPLES_HELP, examplesCommand } from "./commands/examples.js";
 import { HELP as ICONS_HELP, iconsCommand } from "./commands/icons.js";
@@ -25,6 +26,7 @@ Commands:
   validate <spec>        Schema and semantic checks, with fix suggestions (--suggest: explode program)
   build <spec>           Render outputs (--static --steps --interactive --png --gif --mp4 ...)
   watch <spec>           Rebuild on change
+  assets <sub>           doctor | crop | cutout | locate | align | figure | check | shrink
   icons <sub>            add | list | search | remove icon packs
   examples [sub]         list | show | copy gallery specs
   migrate <spec>         Migrate a spec to the current spec major (no-op for major 1)
@@ -42,6 +44,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   validate: { run: validateCommand, help: VALIDATE_HELP },
   build: { run: buildCommand, help: BUILD_HELP },
   watch: { run: watchCommand, help: WATCH_HELP },
+  assets: { run: assetsCommand, help: ASSETS_HELP },
   icons: { run: iconsCommand, help: ICONS_HELP },
   examples: { run: examplesCommand, help: EXAMPLES_HELP },
   migrate: { run: migrateCommand, help: MIGRATE_HELP },

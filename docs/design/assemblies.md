@@ -684,6 +684,15 @@ with realpath, walk the relative path one component at a time with `lstat` (no s
 components), then `open` the file **once** with `O_RDONLY | O_NOFOLLOW`, `fstat` that same file
 descriptor (regular file, size ≤ cap) and read from it up to cap + 1 bytes, so there is no
 check-then-use race between the checks and the read.
+After the open the path must still name that file (`lstat` dev/ino, `realpath`), and on Linux the
+kernel's path for the descriptor (`/proc/self/fd/N`) must equal the expected path; elsewhere the
+read is refused when a directory above the file is writable by another user (and not sticky) or
+owned by someone other than the reader or root. A read whose length differs from the `fstat` size
+is refused (`image/unsafe-path`, changed while reading). Components ending in `.` or a space,
+Windows device names, and a `realpath` that differs only by case or Unicode normalization
+(`image/not-found` with a spelling hint) are refused. Residual race: Node has no `openat`, so on a
+platform without `/proc` an owner of a directory above the file can still rename directories
+between the walk and the open; `pcosmo assets doctor` states which guard is active.
 
 ### 11.2 Validation (Track C, pure)
 
@@ -852,8 +861,9 @@ and explains it:
 3. **Stage order**: fasteners first (along their `axis`), then covers (`away` from their
    mating surface), then sub-assemblies as units (`drawer` for rack devices, `away` or `out`
    otherwise), then each sub-assembly's internals (nested program, `lift` when they stack),
-   then remaining loose parts (`out`). One stage per class; split a class larger than 24
-   parts by sub-assembly.
+   then remaining loose parts (`out`). One stage per class (and per direction); split a class larger than 24
+   leaf parts into consecutive stages in spec order. Each sub-assembly's own parts get their
+   own nested program, so a class never has to be split across sub-assemblies.
 4. **Directions**: away from the mating surface; prefer visible directions (`+z`, `+x`, `+y`)
    because parts that travel into hidden directions are covered by the body; when only a
    hidden direction is free (oil pan down, PSU to the rear), use it, stage it late and fade

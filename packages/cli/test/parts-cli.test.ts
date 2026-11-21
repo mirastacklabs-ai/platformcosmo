@@ -3,14 +3,16 @@
  * bin (assemblies.md sections 5, 12, 17, 18).
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { encodePng } from "@platformcosmo/assets";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { defaultDeps, run } from "../src/index.js";
 import { combineRegistries } from "../src/parts.js";
-import { formatSuggestions, suggest } from "../src/suggest.js";
+import { fitStep, formatSuggestions, suggest, type SuggestReport } from "../src/suggest.js";
 
 const bin = fileURLToPath(new URL("../dist/bin.js", import.meta.url));
 let dir = "";
@@ -169,6 +171,44 @@ describe("validate and build with packs (source)", () => {
     ).toBe(true);
   });
 
+  test("a group off the stud grid warns only when it holds bricks (Q02)", async () => {
+    const wing = (shape: string) =>
+      spec({
+        assemblies: [
+          {
+            id: "b",
+            units: "stud",
+            parts: [
+              { id: "base", shape: "brick:plate", at: [0, 0, 0], size: [4, 4, 1] },
+              {
+                id: "wing",
+                at: [0.5, 0, 1],
+                parts: [{ id: "leaf", shape, at: [0, 0, 0], size: [2, 2, 3] }],
+              },
+            ],
+          },
+        ],
+      });
+    const bricks = await run(
+      ["validate", await file("wing-b.cosmo.json", wing("brick:brick")), "--json"],
+      deps(),
+    );
+    const w = JSON.parse(bricks.stdout).diagnostics.filter(
+      (d: { code: string }) => d.code === "brick/off-grid",
+    );
+    expect(w).toHaveLength(1);
+    expect(w[0].path).toBe("/assemblies/0/parts/1/at");
+    const plain = await run(
+      ["validate", await file("wing-p.cosmo.json", wing("box")), "--json"],
+      deps(),
+    );
+    expect(
+      JSON.parse(plain.stdout).diagnostics.some(
+        (d: { code: string }) => d.code === "brick/off-grid",
+      ),
+    ).toBe(false);
+  });
+
   test("brick off-grid placement warns through validate and build; on-grid is silent", async () => {
     const mk = (at: number[]) =>
       spec({
@@ -238,22 +278,67 @@ describe("built bin", () => {
   });
 });
 
+const car = spec({
+  assemblies: [
+    {
+      id: "car",
+      label: "Car",
+      units: "mm",
+      parts: [
+        { id: "block", at: [0, 0, 100], size: [200, 100, 100], role: "body" },
+        { id: "pan", type: "oil-pan", at: [0, 0, 0], size: [200, 100, 100], role: "cover" },
+        { id: "lid", type: "valve-cover", at: [0, 0, 200], size: [200, 100, 20] },
+        { id: "bolt", type: "bolt", count: 4, at: [0, 0, 220], size: [5, 5, 10] },
+        { id: "crank", role: "internal", at: [10, 10, 110], size: [180, 20, 20] },
+        { id: "hose", at: [300, 0, 0], size: [10, 10, 10] },
+      ],
+    },
+  ],
+});
+
+/** Merges every suggestion into the spec: programs into their owner, steps appended at the root. */
+function applySuggestions(base: Spec, report: SuggestReport): Spec {
+  const out = structuredClone(base) as Record<string, unknown>;
+  for (const sg of report.suggestions) {
+    let node: any = out;
+    for (const seg of sg.pointer.split("/").slice(1)) node = node[seg];
+    node.programs = [...(node.programs ?? []), sg.program];
+    if (sg.steps) out.steps = [...((out.steps as unknown[]) ?? []), ...sg.steps];
+  }
+  return out as Spec;
+}
+
 describe("--png-step", () => {
   const stepped = spec({
     assemblies: [engine.assemblies[0]],
     steps: [{ caption: "one" }, { caption: "two" }],
   });
 
-  test("builds the png of a step", async () => {
-    const f = await file("ps.cosmo.json", stepped);
+  test("builds the png of a step; it differs from the rest pose (--time 0)", async () => {
+    const withProgram = applySuggestions(car, suggest(car));
+    const f = await file("ps.cosmo.json", withProgram);
     const r = await run(
       ["build", f, "--png-step", "2", "--no-animated", "--out", dir, "--name", "ps2"],
       deps(),
     );
-    expect(r.stderr).toBe("");
+    expect(r.stderr).not.toContain("error");
     expect(r.code).toBe(0);
-    const png = await readFile(join(dir, "ps2.png"));
-    expect([...png.subarray(1, 4)]).toEqual([0x50, 0x4e, 0x47]);
+    const t0 = await run(
+      ["build", f, "--png", "--time", "0", "--no-animated", "--out", dir, "--name", "ps0"],
+      deps(),
+    );
+    expect(t0.code).toBe(0);
+    const step2 = await readFile(join(dir, "ps2.png"));
+    const rest = await readFile(join(dir, "ps0.png"));
+    expect([...step2.subarray(1, 4)]).toEqual([0x50, 0x4e, 0x47]);
+    expect(Buffer.compare(step2, rest)).not.toBe(0);
+  });
+
+  test("schema errors are shown before the step range", async () => {
+    const f = await file("ps-schema.cosmo.json", { ...stepped, assemblies: [{ id: "a" }] });
+    const r = await run(["build", f, "--png-step=9", "--out", dir], deps());
+    expect(r.code).toBe(1);
+    expect(r.stderr).not.toContain("beyond");
   });
 
   test.each([["0"], ["-1"], ["1.5"], ["abc"], [""]])("rejects %j with exit 2", async (n) => {
@@ -290,24 +375,6 @@ describe("--png-step", () => {
 });
 
 describe("validate --suggest (assemblies section 17)", () => {
-  const car = spec({
-    assemblies: [
-      {
-        id: "car",
-        label: "Car",
-        units: "mm",
-        parts: [
-          { id: "block", at: [0, 0, 100], size: [200, 100, 100], role: "body" },
-          { id: "pan", type: "oil-pan", at: [0, 0, 0], size: [200, 100, 100], role: "cover" },
-          { id: "lid", type: "valve-cover", at: [0, 0, 200], size: [200, 100, 20] },
-          { id: "bolt", type: "bolt", count: 4, at: [0, 0, 220], size: [5, 5, 10] },
-          { id: "crank", role: "internal", at: [10, 10, 110], size: [180, 20, 20] },
-          { id: "hose", at: [300, 0, 0], size: [10, 10, 10] },
-        ],
-      },
-    ],
-  });
-
   test("order, directions and timing follow the heuristics", async () => {
     const f = await file("car.cosmo.json", car);
     const r = await run(["validate", f, "--suggest", "--json"], deps());
@@ -451,4 +518,255 @@ describe("1.1 output is unchanged", () => {
     const j = JSON.parse((await run(["validate", f, "--json"], deps())).stdout);
     expect(Object.keys(j)).toEqual(["file", "valid", "diagnostics"]);
   });
+});
+
+const docSpec = (title: string): Spec => {
+  const md = readFileSync(new URL("../../../docs/design/assemblies.md", import.meta.url), "utf8");
+  for (const m of md.matchAll(/```json\n([\s\S]*?)```/g)) {
+    const o = JSON.parse(m[1] as string) as { meta?: { title?: string } };
+    if (o.meta?.title === title) return o as unknown as Spec;
+  }
+  throw new Error(`no example titled ${title}`);
+};
+/** The example with its programs and steps removed: the "user gave no program" case. */
+const bare = (title: string): Spec => {
+  const o = structuredClone(docSpec(title)) as Record<string, any>;
+  delete o.steps;
+  const strip = (parts: any[]): void => {
+    for (const p of parts) {
+      delete p.programs;
+      if (p.parts) strip(p.parts);
+    }
+  };
+  for (const a of o.assemblies) {
+    delete a.program;
+    delete a.programs;
+    delete a.pose;
+    strip(a.parts);
+  }
+  return o as Spec;
+};
+const selects = (stages: { parts: string[] }[], id: string): boolean =>
+  stages.some((st) => st.parts.includes(id) || st.parts.includes(`${id}-*`));
+
+describe("suggest on pack-shaped models (pack default role body is not THE body)", () => {
+  test("flat brick rover: every leaf but the base moves, none is dropped", () => {
+    const rover = bare("Brick rover");
+    const rep = suggest(rover, defaultDeps().parts);
+    const root = rep.suggestions[0]!;
+    const ids = (rover.assemblies[0]!.parts as { id: string }[]).map((p) => p.id);
+    expect(root.body).toBe("plate"); // largest volume, not the first brick with a body default
+    const moved = new Set(root.program.stages.flatMap((st) => st.parts));
+    for (const id of ids.filter((i) => i !== "plate")) {
+      expect(selects(root.program.stages, id), `${id} is staged`).toBe(true);
+    }
+    expect(moved.has("plate")).toBe(false);
+    expect(rep.skipped).toEqual([]);
+  });
+
+  test("auto: engine: pack-default body parts are staged", () => {
+    const engineDoc = bare("Inline-4 engine teardown");
+    // Take the explicit roles away: only pack defaults (and types) remain.
+    for (const p of engineDoc.assemblies[0]!.parts as { role?: string; shape?: string }[]) {
+      if (p.role !== "body") delete p.role;
+    }
+    const rep = suggest(engineDoc, defaultDeps().parts);
+    const root = rep.suggestions[0]!;
+    expect(root.body).toBe("block");
+    const ids = (engineDoc.assemblies[0]!.parts as { id: string }[]).map((p) => p.id);
+    for (const id of ids.filter((i) => i !== "block")) {
+      expect(selects(root.program.stages, id), `${id} is staged`).toBe(true);
+    }
+  });
+
+  test("a pack-default body is never taken for the body when another part is explicit", () => {
+    const rep = suggest(
+      {
+        assemblies: [
+          {
+            id: "a",
+            parts: [
+              { id: "b1", shape: "brick:brick", at: [0, 0, 0], size: [4, 4, 3] },
+              { id: "frame", role: "body" },
+              { id: "b2", shape: "brick:brick", at: [0, 0, 3], size: [2, 2, 3] },
+            ],
+          },
+        ],
+      },
+      defaultDeps().parts,
+    );
+    expect(rep.suggestions[0]!.body).toBe("frame");
+    expect(rep.suggestions[0]!.classes.loose).toEqual(["b1", "b2"]);
+  });
+});
+
+describe("suggestions are valid specs (merge, validate, no compression)", () => {
+  const cases: [string, () => Spec][] = [
+    ["car", () => car],
+    ["engine (auto:)", () => bare("Inline-4 engine teardown")],
+    ["brick rover", () => bare("Brick rover")],
+    [
+      "nested sub-assembly",
+      () =>
+        spec({
+          assemblies: [
+            {
+              id: "a",
+              units: "mm",
+              parts: [
+                { id: "frame", role: "body", at: [0, 0, 0], size: [100, 100, 20] },
+                {
+                  id: "unit",
+                  at: [10, 10, 20],
+                  parts: [
+                    { id: "shell", role: "body", at: [0, 0, 0], size: [50, 50, 10] },
+                    { id: "chip", role: "internal", at: [5, 5, 10], size: [10, 10, 5] },
+                    { id: "lid", role: "cover", at: [0, 0, 20], size: [50, 50, 2] },
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+    ],
+  ];
+  test.each(cases)(
+    "%s",
+    async (name, mk) => {
+      const base = mk();
+      const rep = suggest(base, defaultDeps().parts);
+      expect(rep.suggestions.length).toBeGreaterThan(0);
+      const merged = applySuggestions(base, rep);
+      const f = await file(`merge-${name.replace(/\W+/g, "-")}.cosmo.json`, merged);
+      const v = await run(["validate", f, "--json"], deps());
+      const diags = JSON.parse(v.stdout).diagnostics as {
+        severity: string;
+        code: string;
+        path: string;
+        message: string;
+      }[];
+      expect(diags.filter((d) => d.severity === "error")).toEqual([]);
+      expect(diags.filter((d) => d.code === "assembly/compressed")).toEqual([]);
+      expect(v.code).toBe(0);
+    },
+    60_000,
+  );
+
+  test("the text says where each part of the fragment goes", () => {
+    const text = formatSuggestions("f", suggest(car));
+    expect(text).toContain('add to "programs" at /assemblies/0/programs');
+    expect(text).toContain('append to the top-level "steps"');
+  });
+
+  test("step durations follow each stage's leaf count; the implode step plays the whole program", () => {
+    const root = suggest(car).suggestions[0]!;
+    const steps = root.steps!;
+    root.program.stages.forEach((st, k) => {
+      const n = root.stageLeaves[k]!;
+      const expected = fitStep(st.duration + st.stagger * (n - 1));
+      expect(steps[k + 1]!.duration).toBe(expected);
+    });
+    expect(root.stageLeaves[0]).toBe(4); // the bolt-* stage holds four leaves
+    expect(steps.at(-1)!.duration).toBe(root.stepDuration);
+  });
+});
+
+describe("validate --suggest with errors, and owner limits", () => {
+  test("errors skip suggestions with a visible reason, in text and JSON", async () => {
+    const f = await file(
+      "sk.cosmo.json",
+      spec({
+        assemblies: [
+          {
+            id: "a",
+            parts: [
+              { id: "x", shape: "hw:dimn" },
+              { id: "y", shape: "box" },
+            ],
+          },
+        ],
+      }),
+    );
+    const t = await run(["validate", f, "--suggest"], deps());
+    expect(t.code).toBe(1);
+    expect(t.stdout).toContain("suggestions skipped: fix errors first");
+    const j = JSON.parse((await run(["validate", f, "--suggest", "--json"], deps())).stdout);
+    expect(j.suggestions).toBeNull();
+    expect(j.suggestionsSkipped).toContain("fix errors first");
+  });
+
+  test("the root owner counts toward the limit", () => {
+    const groups = Array.from({ length: 100 }, (_, i) => ({
+      id: `g${i}`,
+      parts: [{ id: "a", role: "body" }, { id: "b" }],
+    }));
+    const rep = suggest({
+      assemblies: [{ id: "root", parts: [{ id: "body", role: "body" }, ...groups] }],
+    });
+    expect(rep.suggestions.length).toBe(64);
+  });
+});
+
+describe("packs wired vs not: unchanged output for specs that use no packs (Q06)", () => {
+  const unwired = () => ({
+    ...defaultDeps(),
+    env: {},
+    cwd: dir,
+    parts: undefined,
+    placement: undefined,
+  });
+  async function bytes(name: string, body: unknown, d: ReturnType<typeof deps>): Promise<string[]> {
+    const f = await file(`${name}.cosmo.json`, body);
+    const out = join(dir, `out-${name}-${d === wiredDeps ? "w" : "u"}`);
+    const r = await run(["build", f, "--static", "--steps", "--out", out, "--name", "o"], d);
+    expect(r.code, r.stderr).toBe(0);
+    const files = (await readdir(out, { recursive: true })).sort();
+    const all: string[] = [];
+    for (const rel of files) {
+      const full = join(out, rel);
+      if ((await stat(full)).isFile())
+        all.push(`${rel}\n${(await readFile(full)).toString("latin1")}`);
+    }
+    return all;
+  }
+  let wiredDeps: ReturnType<typeof deps>;
+  const same = async (name: string, body: unknown): Promise<void> => {
+    wiredDeps = deps();
+    const a = await bytes(name, body, wiredDeps);
+    const b = await bytes(name, body, unwired());
+    expect(a.length).toBeGreaterThan(0);
+    expect(a).toEqual(b);
+  };
+
+  test("a 1.1 example", async () => {
+    const f = fileURLToPath(
+      new URL("../../../examples/load-balancing.cosmo.json", import.meta.url),
+    );
+    await same("lb", JSON.parse(readFileSync(f, "utf8")));
+  }, 120_000);
+
+  test("a figure spec", async () => {
+    await writeFile(
+      join(dir, "base.png"),
+      encodePng({ width: 8, height: 6, data: new Uint8Array(8 * 6 * 4).fill(200) }),
+    );
+    await writeFile(
+      join(dir, "spr.png"),
+      encodePng({ width: 4, height: 4, data: new Uint8Array(4 * 4 * 4).fill(90) }),
+    );
+    await same(
+      "fig",
+      spec({
+        images: [
+          { id: "base", src: "base.png" },
+          { id: "spr", src: "spr.png" },
+        ],
+        figures: [{ id: "f", base: "base", parts: [{ id: "p1", image: "spr", seat: [0, 2] }] }],
+      }),
+    );
+  }, 120_000);
+
+  test("a Phase 1b assembly spec without packs", async () => {
+    await same("p1b", applySuggestions(car, suggest(car)));
+  }, 120_000);
 });

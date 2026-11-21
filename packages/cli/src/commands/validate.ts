@@ -1,6 +1,8 @@
+import { dirname, resolve } from "node:path";
 import type { Diagnostic } from "@platformcosmo/core";
 import { flag, parse } from "../args.js";
 import { loadSpec, makeResolver } from "../common.js";
+import { loadSpecImages } from "../images.js";
 import { type Ctx, EXIT, UsageError } from "../deps.js";
 import { formatDiagnostics, hasErrors, plural } from "../format.js";
 import { formatSuggestions, suggest, type SuggestReport } from "../suggest.js";
@@ -31,8 +33,11 @@ export async function validateCommand(ctx: Ctx, args: string[]): Promise<number>
   if (!hasErrors(parseDiag) && spec !== undefined) {
     const { resolver, diagnostics: packDiag } = await makeResolver(ctx);
     all.push(...packDiag);
+    const imgs = await loadSpecImages(spec, dirname(resolve(ctx.deps.cwd, file)));
+    all.push(...imgs.diagnostics);
     const report = ctx.deps.core.validate(spec, {
       icons: resolver,
+      ...(imgs.resolver ? { images: imgs.resolver } : {}),
       ...(ctx.deps.dcPack ? { dc: ctx.deps.dcPack } : {}),
       ...(ctx.deps.parts ? { parts: ctx.deps.parts } : {}),
       ...(ctx.deps.placement ? { placement: ctx.deps.placement } : {}),
@@ -40,15 +45,16 @@ export async function validateCommand(ctx: Ctx, args: string[]): Promise<number>
     all.push(...report.diagnostics);
   }
   let suggestions: SuggestReport | undefined;
-  if (flag(p, "suggest") && spec !== undefined && !hasErrors(all)) {
-    suggestions = suggest(spec, ctx.deps.parts);
-  }
+  const SKIPPED = "suggestions skipped: fix errors first";
+  const wantSuggest = flag(p, "suggest");
+  const suggestSkipped = wantSuggest && (spec === undefined || hasErrors(all));
+  if (wantSuggest && !suggestSkipped) suggestions = suggest(spec, ctx.deps.parts);
   const errors = all.filter((d) => d.severity === "error").length;
   const warnings = all.filter((d) => d.severity === "warning").length;
   const failed = errors > 0 || (flag(p, "strict") && warnings > 0);
   if (flag(p, "json")) {
     ctx.out(
-      `${JSON.stringify({ file, valid: !failed, diagnostics: all, ...(suggestions ? { suggestions } : {}) }, null, 2)}\n`,
+      `${JSON.stringify({ file, valid: !failed, diagnostics: all, ...(wantSuggest ? { suggestions: suggestions ?? null } : {}), ...(suggestSkipped ? { suggestionsSkipped: SKIPPED } : {}) }, null, 2)}\n`,
     );
   } else {
     if (all.length > 0) ctx.err(formatDiagnostics(all, file));
@@ -58,6 +64,7 @@ export async function validateCommand(ctx: Ctx, args: string[]): Promise<number>
         : `${file}: valid${warnings ? ` (${plural(warnings, "warning")})` : ""}\n`,
     );
     if (suggestions) ctx.out(formatSuggestions(file, suggestions));
+    if (suggestSkipped) ctx.out(`${file}: ${SKIPPED}\n`);
   }
   return failed ? EXIT.failed : EXIT.ok;
 }

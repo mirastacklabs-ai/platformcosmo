@@ -66,4 +66,75 @@ describe("PartPlacement callback", () => {
     validate(spec(), { placement: () => (n++, []) });
     expect(n).toBe(0);
   });
+
+  test("groups with at/pitch are checked with kind group and the pack shapes below them", () => {
+    const calls: PartPlacement[] = [];
+    const brickRegistry = {
+      get: (r: string) => (r === "brick:brick" ? ({ id: "brick" } as never) : undefined),
+      list: () => ["brick:brick"],
+    };
+    const wing = {
+      $schema: "https://platformcosmo.io/schema/v1.json",
+      meta: { version: "1", title: "t" },
+      assemblies: [
+        {
+          id: "a",
+          units: "stud",
+          parts: [
+            {
+              id: "wing",
+              at: [0.5, 0, 0],
+              parts: [{ id: "b", shape: "brick:brick", at: [0, 0, 0], size: [2, 2, 3] }],
+            },
+            { id: "plain", parts: [{ id: "c", shape: "box", size: [1, 1, 1] }] },
+          ],
+        },
+      ],
+    };
+    validate(wing, { parts: brickRegistry, placement: (p) => (calls.push(p), []) });
+    const group = calls.filter((c) => c.kind === "group");
+    expect(group).toEqual([
+      {
+        path: "/assemblies/0/parts/0",
+        kind: "group",
+        shapes: ["brick:brick"],
+        units: "stud",
+        at: [0.5, 0, 0],
+      },
+    ]);
+    // the leaf is still checked on its own, and a group without at/pitch is not called
+    expect(calls.filter((c) => c.kind === undefined).map((c) => c.shape)).toEqual(["brick:brick"]);
+  });
+
+  test("malformed pack diagnostics are dropped; hitting the call cap reports one info", () => {
+    const r = validate(spec(), {
+      parts: registry,
+      placement: () =>
+        [
+          warn(1),
+          { severity: "fatal", code: "x/y", path: "", message: "m" },
+          { severity: "warning", code: 3, path: "", message: "m" },
+          null,
+          "text",
+        ] as never,
+    });
+    expect(r.diagnostics.filter((d) => d.code === "x/y")).toHaveLength(1);
+
+    const many = {
+      ...spec(),
+      assemblies: [
+        {
+          id: "a",
+          parts: Array.from({ length: 120 }, (_, i) => ({
+            id: `g${i}`,
+            parts: Array.from({ length: 200 }, (_, j) => ({ id: `q${j}`, shape: "hw:dimm" })),
+          })),
+        },
+      ],
+    };
+    let n = 0;
+    const big = validate(many, { parts: registry, placement: () => (n++, []) });
+    expect(n).toBe(20_000);
+    expect(big.diagnostics.filter((d) => d.code === "assembly/diagnostics-capped")).toHaveLength(1);
+  });
 });

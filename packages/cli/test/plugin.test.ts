@@ -1,5 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
@@ -52,6 +60,26 @@ describe("plugin launcher (POSIX sh)", () => {
   test("rejects an unparseable version", async () => {
     const r = runLauncher(await withNode("v-banana"));
     expect(r.status).toBe(1);
+  });
+
+  test("confines `pcosmo assets` to the working directory unless a root is already set", async () => {
+    const dir = await tmp();
+    const work = await tmp();
+    const node = join(dir, "node");
+    writeFileSync(
+      node,
+      `#!/bin/sh\n[ "$1" = "-p" ] && echo 24.0.0 && exit 0\necho "root=$PCOSMO_ASSETS_ROOT"\n`,
+    );
+    chmodSync(node, 0o755);
+    const env = { PATH: `${dir}:/usr/bin:/bin`, HOME: "/nonexistent" };
+    const a = spawnSync("/bin/sh", [launcher, "x"], { encoding: "utf8", env, cwd: work });
+    expect(a.stdout.trim()).toBe(`root=${realpathSync(work)}`);
+    const b = spawnSync("/bin/sh", [launcher, "x"], {
+      encoding: "utf8",
+      env: { ...env, PCOSMO_ASSETS_ROOT: "/chosen" },
+      cwd: work,
+    });
+    expect(b.stdout.trim()).toBe("root=/chosen");
   });
 
   test("explains a missing node", async () => {

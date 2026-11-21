@@ -11,6 +11,7 @@ import type {
 } from "@platformcosmo/core";
 import { type Parsed, flag, num, parse, str } from "../args.js";
 import { loadSpec, makeResolver, resolveTheme, specBaseName } from "../common.js";
+import { loadSpecImages } from "../images.js";
 import { type Ctx, EXIT, UsageError } from "../deps.js";
 import { errorDiagnostic, formatDiagnostics, hasErrors, plural } from "../format.js";
 
@@ -179,23 +180,6 @@ export async function buildOnce(ctx: Ctx, s: BuildSettings): Promise<number> {
 
   if (hasErrors(parseDiag) || spec === undefined) return finish(EXIT.failed);
 
-  if (s.pngStep !== undefined) {
-    const steps = (spec as { steps?: unknown }).steps;
-    const count = Array.isArray(steps) ? steps.length : 0;
-    if (s.pngStep > count) {
-      diagnostics.push(
-        errorDiagnostic(
-          "options/invalid-png-step",
-          count === 0
-            ? "--png-step needs a spec with steps; this one has none"
-            : `--png-step ${s.pngStep} is beyond the ${count} step(s) of the spec`,
-          count === 0 ? "use --time, or omit it" : `use a step from 1 to ${count}`,
-        ),
-      );
-      return finish(EXIT.usage);
-    }
-  }
-
   const options: { -readonly [K in keyof RenderOptions]: RenderOptions[K] } = {
     outputs: s.outputs,
     name: s.name,
@@ -214,6 +198,11 @@ export async function buildOnce(ctx: Ctx, s: BuildSettings): Promise<number> {
   const { resolver, diagnostics: packDiag } = await makeResolver(ctx);
   diagnostics.push(...packDiag);
   options.icons = resolver;
+  // Schema 1.2.0 images: read through the path guard (images.ts); nothing changes without them.
+  const imgs = await loadSpecImages(spec, dirname(resolve(ctx.deps.cwd, s.file)));
+  diagnostics.push(...imgs.diagnostics);
+  if (hasErrors(imgs.diagnostics)) return finish(EXIT.failed);
+  if (imgs.resolver) options.images = imgs.resolver;
   if (s.font) options.font = s.font;
   if (s.speed !== undefined) options.speed = s.speed;
   if (s.motion !== undefined) options.motion = s.motion;
@@ -245,6 +234,33 @@ export async function buildOnce(ctx: Ctx, s: BuildSettings): Promise<number> {
       ...(s.duration === undefined ? {} : { durationSec: s.duration }),
       ...(encoder ? { encoder: abortableEncoder(encoder, ctx.deps.signal) } : {}),
     };
+  }
+
+  if (s.pngStep !== undefined) {
+    const steps = (spec as { steps?: unknown }).steps;
+    const count = Array.isArray(steps) ? steps.length : 0;
+    if (s.pngStep > count) {
+      // Schema and semantic errors come first: they are the likelier cause of a wrong step count.
+      const report = ctx.deps.core.validate(spec, {
+        icons: resolver,
+        ...(options.images ? { images: options.images } : {}),
+        ...(options.dc ? { dc: options.dc } : {}),
+        ...(options.parts ? { parts: options.parts } : {}),
+        ...(options.placement ? { placement: options.placement } : {}),
+      });
+      diagnostics.push(...report.diagnostics);
+      if (hasErrors(report.diagnostics)) return finish(EXIT.failed);
+      diagnostics.push(
+        errorDiagnostic(
+          "options/invalid-png-step",
+          count === 0
+            ? "--png-step needs a spec with steps; this one has none"
+            : `--png-step ${s.pngStep} is beyond the ${count} step(s) of the spec`,
+          count === 0 ? "use --time, or omit it" : `use a step from 1 to ${count}`,
+        ),
+      );
+      return finish(EXIT.usage);
+    }
   }
 
   const result = await ctx.deps.core.render(spec, options);
