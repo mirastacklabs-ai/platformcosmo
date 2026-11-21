@@ -508,7 +508,7 @@ export function stepWindows(
 // ---------------------------------------------------------------------------------------------
 
 /** Which guard phase gates actions on a root id of a given kind (tracks §0). */
-export type RootPhase = "phase1a" | "phase1b" | "phase2" | "phase3";
+export type RootPhase = "phase1a" | "phase1b" | "phase2" | "storyboards";
 
 export interface PlanOptions {
   /** Phases still gated by the merge guard. Non-figure targets of a gated phase are reported
@@ -617,7 +617,7 @@ function planPass(
   declare(spec.cables, "none", "a cable");
   declare(spec.racks, "phase2", "a rack");
   declare(spec.assemblies, "phase1b", "an assembly");
-  declare(spec.storyboards, "phase3", "a storyboard");
+  declare(spec.storyboards, "storyboards", "a storyboard");
   const sortedFigs = [...figures.keys()].sort();
   const plan: AssemblyStepPlan[] = [];
 
