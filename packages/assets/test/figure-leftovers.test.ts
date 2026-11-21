@@ -203,7 +203,8 @@ function traced(
   return [f, image];
 }
 
-describe("no 1 px leftovers in the clean base", () => {
+// Every case runs the whole figure pipeline (analysis, build, gate) at least once: allow CI headroom.
+describe("no 1 px leftovers in the clean base", { timeout: 120_000 }, () => {
   it("an arrow whose drawn tip runs past its declared end is erased whole, and any leftover fails", () => {
     const f = figure("main");
     const [x0, y0] = quietPatch(f, 24, 60);
