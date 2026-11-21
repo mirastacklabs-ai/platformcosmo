@@ -364,6 +364,50 @@ function direction(it: Item, cls: PartClass, body: Item | undefined, internals: 
 const hidden = (d: string): boolean => d.startsWith("-");
 
 /**
+ * Top covers that move aside. A thin cover lying on the body's top face that carries nothing, with
+ * parts under it that leave in later stages, would end above the exploded stack and hide it in
+ * the isometric view: it slides off along the visible horizontal axis instead (`+x` or `+y`, the
+ * one it is shorter on, `+x` on a tie), at its own height, so it clears the stack in the final
+ * pose. The side must be free: no other part rises above the cover's underside across its path.
+ * Maps the cover to its direction.
+ */
+function asideCovers(covers: Item[], later: Item[], items: Item[], body: Item | undefined) {
+  const out = new Map<Item, string>();
+  const top = body?.box?.max[2];
+  if (top === undefined) return out;
+  for (const c of covers) {
+    const b = c.inst;
+    if (!b || c.isGroup || c.count > 1 || !c.box || !thin(b)) continue;
+    if (Math.abs(b.min[2] - top) > TOL) continue; // lies on the body's top face
+    if (covers.some((q) => q !== c && carries(c, q))) continue;
+    const under = later.some(
+      (q) => q.box && q.box.max[2] <= c.box!.min[2] + TOL && overlapXY(q.box, c.box!) > 0,
+    );
+    if (!under) continue;
+    const ext = [0, 1].map((k) => c.box!.max[k]! - c.box!.min[k]!);
+    const axes = (ext[1]! < ext[0]! - TOL ? [1, 0] : [0, 1]) as number[];
+    for (const k of axes) {
+      const o = 1 - k;
+      const free = items.every(
+        (q) =>
+          q === c ||
+          !q.box ||
+          q.box.max[2] <= c.box!.min[2] + TOL ||
+          q.box.max[o]! <= c.box!.min[o]! + TOL ||
+          q.box.min[o]! >= c.box!.max[o]! - TOL ||
+          q.box.max[k]! <= c.box!.min[k]! + TOL ||
+          q.box.min[k]! >= c.box!.max[k]! + ext[k]! - TOL,
+      );
+      if (free) {
+        out.set(c, k === 0 ? "+x" : "+y");
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Smallest step duration (to 0.1 s) whose motion window holds `need` seconds even when a camera
  * transition leads into and out of the step: the validator's window is
  * `D - 2 * min(0.8, 0.25 * D) - 0.2` (core `fitDuration`), so a suggested step never compresses.
@@ -536,10 +580,16 @@ function suggestOwner(
       counts.push(leaves);
     });
   };
+  const aside = asideCovers(
+    classes.cover,
+    [...classes.unit, ...classes.internal, ...classes.mounted, ...classes.loose],
+    items,
+    body,
+  );
   const byDirection = (group: Item[], cls: PartClass): Map<string, Item[]> => {
     const m = new Map<string, Item[]>();
     for (const it of group) {
-      const d = direction(it, cls, body, classes.internal);
+      const d = aside.get(it) ?? direction(it, cls, body, classes.internal);
       const g = m.get(d);
       if (g) g.push(it);
       else m.set(d, [it]);
@@ -730,7 +780,8 @@ export function suggest(
         const path = `${base}/${p.id}${countOf(p) > 1 ? "-1" : ""}`;
         const ptr = `${pointer}/parts/${k}`;
         const sug = suggestOwner(path, p.label ?? p.id, p.parts, reg, placed);
-        if (typeof sug !== "string") {
+        // one stage (or none) is the root program moving it as a unit: no nested program, no story
+        if (typeof sug !== "string" && sug.program.stages.length >= 2) {
           sug.pointer = ptr;
           owners++;
           nested.push(sug);

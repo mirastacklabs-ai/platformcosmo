@@ -5,6 +5,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ResolvedExplodeProgram, SceneAssemblyNode } from "@platformcosmo/core";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { defaultDeps, run } from "../src/index.js";
 import { suggest, type SuggestReport, type SuggestedStage } from "../src/suggest.js";
@@ -144,6 +145,7 @@ describe("focus and labels", () => {
               parts: [
                 { id: "shell", role: "body" },
                 { id: "chip", role: "internal" },
+                { id: "plate", role: "cover" },
               ],
             },
           ],
@@ -153,6 +155,7 @@ describe("focus and labels", () => {
     const steps = rep.suggestions[0]!.steps!;
     expect(steps.filter((s) => s.assembly && "explode" in s.assembly[0]!)).toEqual([
       expect.not.objectContaining({ focus: expect.anything() }),
+      expect.objectContaining({ focus: "a/unit" }),
       expect.objectContaining({ focus: "a/unit" }),
     ]);
     expect(steps.some((s) => "focus" in s && (s.focus ?? "").startsWith("a/frame"))).toBe(false);
@@ -209,7 +212,7 @@ describe("mounting depth: board-mounted parts leave before the board", () => {
     const spec = await fixture("gpu-server");
     const rep = await suggestOf(spec, "gpu-server");
     expect(brief(rep.suggestions[0]!.program.stages)).toEqual([
-      ["Covers", "+z", "auto", "show", "lid"],
+      ["Covers", "+x", "auto", "show", "lid"],
       ["Internals (level 2)", "+z", "auto", "show", "heatsink-*"],
       ["Internals (level 1)", "+z", "auto", "show", "cpu-*,dimm-left-*,dimm-right-*,gpu"],
       ["Internals (level 0)", "+z", "auto", "show", "board,fan-*,psu-*"],
@@ -321,6 +324,7 @@ describe("effective sizes through validate", () => {
             parts: [
               { id: "lid", at: [0, 0, 40], size: [20, 20, 3] },
               { id: "tray", shape: "tray", size: [200, 100, 40] },
+              { id: "chip", role: "internal", at: [10, 10, 5], size: [20, 20, 5] },
             ],
           },
         ],
@@ -506,5 +510,160 @@ describe("carrying tolerance", () => {
       ],
     });
     expect(rep.suggestions[0]!.explanation).toContain("sensor joins covers (carried by lid)");
+  });
+});
+
+describe("covers move aside; counted sub-assemblies", () => {
+  type Rect = { x: number; y: number; width: number; height: number };
+  /** Final pose screen rectangles of every leaf of assembly `id` after the suggested program. */
+  async function finalRects(spec: Record<string, unknown>, rep: SuggestReport, id: string) {
+    const core = await import("@platformcosmo/core");
+    const parts = defaultDeps().parts;
+    type Node = Record<string, unknown> & { programs?: unknown[] };
+    const out = structuredClone(spec) as Node;
+    for (const sg of rep.suggestions) {
+      let node: Node = out;
+      for (const seg of sg.pointer.split("/").slice(1)) node = node[seg] as Node;
+      node.programs = [...(node.programs ?? []), sg.program];
+    }
+    const g = core.buildScene(out as never, { ...(parts ? { parts } : {}) } as never);
+    const a = g.assemblies!.assemblies.find((x) => x.id === id)!;
+    const prog = a.programs.find((p) => p.owner === id)! as ResolvedExplodeProgram;
+    const proj = core.createProjection();
+    const rects = new Map<string, Rect>();
+    const walk = (n: SceneAssemblyNode): void => {
+      if (n.kind === "leaf") {
+        const o = { x: 0, y: 0, z: 0 };
+        for (const m of prog.stages.flatMap((s) => s.moves))
+          if (n.path === m.path || n.path.startsWith(`${m.path}/`)) {
+            o.x += m.offset.x;
+            o.y += m.offset.y;
+            o.z += m.offset.z;
+          }
+        const w = n.world;
+        rects.set(
+          n.path,
+          core.projectBoxBounds(proj, {
+            origin: { x: w.origin.x + o.x, y: w.origin.y + o.y, z: w.origin.z + o.z },
+            size: w.size,
+          }) as Rect,
+        );
+      }
+      for (const c of (n as { children?: readonly SceneAssemblyNode[] }).children ?? []) walk(c);
+    };
+    walk(a.root);
+    return rects;
+  }
+  /** Share of `b`'s screen rectangle that `a` covers. */
+  const share = (a: Rect, b: Rect): number => {
+    const w = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+    const h = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+    return w > 0 && h > 0 ? (w * h) / (b.width * b.height) : 0;
+  };
+
+  test("gpu lid slides off the visible side; no part's final projected box is covered by it", async () => {
+    const spec = await fixture("gpu-server-r2");
+    const rep = await suggestOf(spec, "gpu-r2");
+    expect(brief(rep.suggestions[0]!.program.stages).slice(0, 2)).toEqual([
+      ["Covers", "+x", "auto", "show", "lid"],
+      ["Internals (level 2)", "+z", "auto", "show", "sink-*"],
+    ]);
+    const rects = await finalRects(spec, rep, "srv");
+    const lid = rects.get("srv/lid")!;
+    // the lid stands beside the stack: its rectangle may touch the resting chassis and the board
+    // corner, but covers no moved part (lifted straight up it covered all of them)
+    const covered = [...rects].filter(
+      ([p, r]) => p !== "srv/lid" && p !== "srv/chassis" && share(lid, r) > 0.2,
+    );
+    expect(covered.map(([p]) => p)).toEqual([]);
+    expect(share(lid, rects.get("srv/chassis")!)).toBeLessThan(0.5);
+  }, 120_000);
+
+  test("gpu r2: merged program builds clean (no compression, no transit collision)", async () => {
+    const spec = await fixture("gpu-server-r2");
+    const rep = await suggestOf(spec, "gpu-r2-clean");
+    expect(await mergedDiagnostics(spec, rep, "gpu-r2")).toEqual({ codes: [], vCode: 0, bCode: 0 });
+  }, 120_000);
+
+  test("engine r2: no one-stage nested programs for the piston and rod pairs", async () => {
+    const spec = await fixture("engine-r2");
+    const rep = await suggestOf(spec, "engine-r2");
+    expect(rep.suggestions.map((x) => x.owner)).toEqual(["engine"]);
+    expect(rep.suggestions[0]!.steps!.some((s) => (s.focus ?? "").includes("pr-"))).toBe(false);
+    // the root program's transit collisions (pistons out through the block) are not this change's
+    const m = await mergedDiagnostics(spec, rep, "engine-r2");
+    expect(m).toMatchObject({ vCode: 0, bCode: 0 });
+    expect(m.codes.filter((c) => !c.startsWith("assembly/transit-collision"))).toEqual([]);
+  }, 120_000);
+
+  const unit = (parts: unknown[]) =>
+    suggest({
+      assemblies: [
+        {
+          id: "a",
+          parts: [
+            { id: "frame", role: "body", at: [0, 0, 0], size: [200, 200, 10] },
+            { id: "unit", parts },
+          ],
+        },
+      ],
+    });
+
+  test("a sub-assembly with two stages keeps its nested program and focused steps", () => {
+    const rep = unit([
+      { id: "shell", role: "body", at: [0, 0, 20], size: [100, 100, 40] },
+      { id: "lid", at: [0, 0, 60], size: [100, 100, 3] },
+      { id: "chip", role: "internal", at: [10, 10, 30], size: [20, 20, 10] },
+    ]);
+    expect(rep.suggestions.map((x) => x.owner)).toEqual(["a", "a/unit"]);
+    expect(rep.suggestions[1]!.program.stages.length).toBeGreaterThanOrEqual(2);
+    expect(rep.suggestions[0]!.steps!.some((s) => s.focus === "a/unit")).toBe(true);
+  });
+
+  test("a sub-assembly with a single stage gets no nested program", () => {
+    const rep = unit([
+      { id: "shell", role: "body", at: [0, 0, 20], size: [100, 100, 40] },
+      { id: "chip", role: "internal", at: [10, 10, 30], size: [20, 20, 10] },
+    ]);
+    expect(rep.suggestions.map((x) => x.owner)).toEqual(["a"]);
+    expect(rep.suggestions[0]!.steps!.some((s) => s.focus !== undefined)).toBe(false);
+  });
+
+  const lidded = (extra: unknown[]) =>
+    suggest({
+      assemblies: [
+        {
+          id: "a",
+          parts: [
+            { id: "base", role: "body", at: [0, 0, 0], size: [100, 100, 40] },
+            { id: "top", role: "cover", at: [0, 0, 40], size: [100, 100, 3] },
+            ...extra,
+          ],
+        },
+      ],
+    }).suggestions[0]!.program.stages.map((x) => [x.label, x.direction]);
+
+  test("a top cover keeps +z when nothing below it leaves later", () => {
+    expect(lidded([{ id: "knob", at: [10, 10, 43], size: [10, 10, 10] }]).map((x) => x[1])).toEqual(
+      ["+z", "+z"],
+    );
+    expect(lidded([])).toEqual([["Covers", "+z"]]);
+  });
+
+  test("a top cover over parts that leave later moves aside along its shorter side", () => {
+    const st = lidded([{ id: "board", role: "internal", at: [10, 10, 10], size: [50, 50, 5] }]);
+    expect(st).toEqual([
+      ["Covers", "+x"],
+      ["Internals", "away"],
+    ]);
+  });
+
+  test("the cover keeps +z when something stands in the way beside it", () => {
+    const st = lidded([
+      { id: "board", role: "internal", at: [10, 10, 10], size: [50, 50, 5] },
+      { id: "rail", at: [100, 0, 20], size: [10, 100, 40] },
+      { id: "rail2", at: [0, 100, 20], size: [100, 10, 40] },
+    ]);
+    expect(st[0]![1]).toBe("+z");
   });
 });

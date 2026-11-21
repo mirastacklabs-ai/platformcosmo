@@ -938,6 +938,19 @@ and explains it:
    consecutive stages in spec order. Each sub-assembly's own parts get their own nested
    program, so a class never has to be split across sub-assemblies. Nested owners are
    imploded before the root.
+   - **Nested programs need two stages.** A sub-assembly whose own program would have one stage
+     (or none: a piston with its rod, parts that move as one) gets no nested program and no
+     focused story steps; the root program already moves it as a unit. A sub-assembly with two
+     or more stages keeps its program and its steps.
+   - **Covers move aside.** A thin cover lying on the body's top face, carrying nothing, with
+     parts under it (sub-assemblies, internals, components, loose parts) that leave in later
+     stages, does not lift `+z`: stacked above the exploded parts it would hide them in the
+     isometric view. It slides off along the visible horizontal axis (`+x` or `+y`, the one it
+     is shorter on, `+x` on a tie) at its own height, `distance` `auto` (its extent plus the
+     gap, §6.3), so it ends beside the stack. The side must be free: no other part rises above
+     the cover's underside across its path, else the cover keeps `+z`. A cover with nothing
+     below it that leaves later, a thick cover (a cylinder head), one that carries other parts
+     (they leave first, `+z`) and a cover that does not lie on the body's top face keep `+z`.
    - **Mounting depth.** A part carried by another (its bottom touches the carrier's top,
      over its footprint, the carrier having height: a heat sink on a CPU on a board; a card on
      a board in a case; a sensor on a lid) leaves before its carrier, top-most first, so the
