@@ -17,15 +17,15 @@ spec with `/platformcosmo:diagram`.
 
 The animated `<name>.svg` is always written unless `--no-animated` is given. Flags add outputs:
 
-| Flag            | Output                     | Notes                                                                           |
-| --------------- | -------------------------- | ------------------------------------------------------------------------------- |
-| (default)       | `<name>.svg`               | Animated, looping, self-contained; works in `<img>`, inline and CSS backgrounds |
-| `--static`      | `<name>.static.svg`        | First frame, no animation (docs, print)                                         |
-| `--steps`       | `<name>.steps/step-NN.svg` | One SVG per step (slides, tutorials)                                            |
-| `--interactive` | `<name>.interactive.svg`   | Play/Pause/Step; the controls work only when the SVG is inlined in HTML         |
-| `--png`         | `<name>.png`               | `--scale 2` by default; `--time <s>` picks the animation moment                 |
-| `--gif`         | `<name>.gif`               | Rendered from frames; `--fps`, `--duration`                                     |
-| `--mp4`         | `<name>.mp4`               | Needs `ffmpeg` on PATH; if it is missing, say so and offer `--gif`              |
+| Flag            | Output                     | Notes                                                                                   |
+| --------------- | -------------------------- | --------------------------------------------------------------------------------------- |
+| (default)       | `<name>.svg`               | Animated, looping, self-contained; works in `<img>`, inline and CSS backgrounds         |
+| `--static`      | `<name>.static.svg`        | First frame, no animation (docs, print)                                                 |
+| `--steps`       | `<name>.steps/step-NN.svg` | One SVG per step (slides, tutorials)                                                    |
+| `--interactive` | `<name>.interactive.svg`   | Play/Pause/Step; the controls work only when the SVG is inlined in HTML                 |
+| `--png`         | `<name>.png`               | `--scale 2` by default; `--time <s>` picks a moment, `--png-step <n>` the end of step n |
+| `--gif`         | `<name>.gif`               | Rendered from frames; `--fps`, `--duration`                                             |
+| `--mp4`         | `<name>.mp4`               | Needs `ffmpeg` on PATH; if it is missing, say so and offer `--gif`                      |
 
 Other options: `--theme light|dark|blueprint|mono|<file>`, `--font embed|outline|system`, `--speed <n>`,
 `--motion smil|css`, `-o <dir>` (output directory), `--name <base>`, `--no-optimize`.

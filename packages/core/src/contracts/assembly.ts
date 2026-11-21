@@ -199,6 +199,36 @@ export interface PartShapeRegistry {
   list(): readonly string[];
 }
 
+/**
+ * One spec part with a pack shape, as handed to a placement check (generic: core knows no pack
+ * types). Spec fields are passed as written, in the assembly's resolved `units`.
+ */
+export interface PartPlacement {
+  /** JSON pointer of the part in the spec, e.g. `/assemblies/0/parts/2`. */
+  readonly path: string;
+  /** `group`: a sub-assembly (`parts` or `use`) with `at` or `pitch`; default a leaf part. */
+  readonly kind?: "part" | "group";
+  /** Full shape ref, e.g. `brick:brick`; absent for a group. */
+  readonly shape?: string;
+  /** Group only: the pack shape refs of the leaves below it (sorted, bounded). */
+  readonly shapes?: readonly string[];
+  /** The declaring assembly's resolved units (`mm` when the spec gives none). */
+  readonly units: string;
+  readonly at?: readonly unknown[];
+  readonly pitch?: readonly unknown[];
+  readonly count?: number;
+  readonly size?: readonly unknown[];
+  /** Spec `axis` (round parts). */
+  readonly axis?: string;
+  readonly params?: unknown;
+}
+
+/**
+ * Pack-supplied placement check (`brick/off-grid`). Called once per spec part with a valid pack
+ * shape ref; core catches throws and caps what it returns, so a pack cannot break validation.
+ */
+export type PartPlacementCheck = (p: PartPlacement) => readonly Diagnostic[];
+
 // ---------------------------------------------------------------------------------------------
 // Image assets (§11). Core never reads files: the CLI loads bytes, core validates them.
 // ---------------------------------------------------------------------------------------------
