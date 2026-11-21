@@ -160,8 +160,10 @@ Use an image when the user gave one for a part (a GPU card photo, a front panel)
    user's image belongs to a third party, say that the animation is for their personal use and that publishing is
    their licensing question.
 
-An unknown `ref` is `image/unknown`; a missing or unsafe file is `image/not-found` or `image/unsafe-path`: fix the
-path, never widen it.
+An unknown `ref` is `image/unknown`; a missing file (including one the renderer was not given) is always the error
+`image/not-found`, and an unsafe path `image/unsafe-path`: fix the path, never widen it. `assembly/image-unresolved`
+(info) means a pack shape's decal faces away from the viewer after the part's turn and is not drawn: use another `face`
+or `rotate`, or ignore it.
 
 ### 2.5 Programs, stages, selectors
 
@@ -348,6 +350,8 @@ Still look at the result: the suggestion is a good start, not a verified picture
 - `assembly/selector-empty`, `assembly/moved-twice`, `assembly/unknown-target`, `assembly/unknown-program`,
   `assembly/stage-out-of-range`: section 2.5 and 2.6.
 - `assembly/transit-collision`: a different direction, `distance`, `lift` or `order`.
+- `assembly/label-omitted` (info): a `labels: "always"` top-face label did not fit its part and was not drawn: shorten
+  it, raise `fit`, or accept it and mention it.
 - `assembly/bounds-growth` (info): the exploded unit is much larger than the assembled one; mention it, it is fine.
 - `budget/*`: too many parts or copies; reduce `count`, merge small parts, or split into two assemblies.
 - `assembly/unsupported`: section 1.

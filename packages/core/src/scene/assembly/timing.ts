@@ -10,7 +10,7 @@
  * All times are seconds at speed 1, rounded to 4 decimals (`r4`); rounding of a scaled span
  * always floors (the plan loop does that), so a compressed action never overruns its window.
  */
-import type { PartMove, ResolvedExplodeProgram, ResolvedStage } from "../../contracts/index.js";
+import type { PartMove, ResolvedStage } from "../../contracts/index.js";
 import type { SpecStage } from "../../schema/types.gen.js";
 import { BEZIER, REVERSED_EASING, mirrorBezier, type Bezier } from "../boards.js";
 
@@ -82,6 +82,9 @@ export function rankMovers<T>(
   });
 }
 
+/** What a segment needs of a stage or build step: its window and moves. */
+export type TimedStage = Pick<ResolvedStage, "start" | "end" | "moves">;
+
 /** One move of a segment: a `PartMove` with the curve it plays. */
 export interface SegmentMove extends PartMove {
   readonly bezier: Bezier;
@@ -109,7 +112,7 @@ const byStartPath = (a: PartMove, b: PartMove): number =>
  * `[st, en]` becomes `[L - en, L - st]`, its offset is negated and its easing mirrored (§7.2).
  */
 export function programSegment(
-  program: ResolvedExplodeProgram,
+  program: { readonly stages: readonly TimedStage[] },
   from: number,
   to: number,
   /** Node paths whose moves are left out (already opened by implicit access, §8.3). */
@@ -118,9 +121,9 @@ export function programSegment(
   const lo = Math.max(0, Math.min(from, to));
   const hi = Math.min(program.stages.length, Math.max(from, to));
   const kind = from <= to ? "explode" : "implode";
-  const stages: readonly ResolvedStage[] = program.stages.slice(lo, hi);
+  const stages: readonly TimedStage[] = program.stages.slice(lo, hi);
   if (stages.length === 0) return { kind, from, to, length: 0, moves: [] };
-  const offset = (stages[0] as ResolvedStage).start;
+  const offset = (stages[0] as TimedStage).start;
   const forward = stages.flatMap((s) => s.moves).filter((m) => exclude?.has(m.path) !== true);
   const end =
     exclude === undefined || exclude.size === 0

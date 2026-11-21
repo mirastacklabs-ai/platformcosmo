@@ -6,9 +6,12 @@ import type {
   Diagnostic,
   FlowKind,
   LegendEntry,
+  LoopStart,
   ObjectState,
   SceneEdge,
   SceneFlow,
+  SceneAssemblies,
+  SceneAssembly,
   SceneGraph,
   SceneGroup,
   SceneObject,
@@ -32,15 +35,43 @@ import { particleCount, PARTICLE_LIMIT } from "../schema/semantic.js";
 import type { PlatformCosmoSpec, SpecFlow, SpecNode } from "../schema/types.gen.js";
 import { boardOverlapDiagnostics, buildFigureScene, figureFocusIds } from "./boards.js";
 import { AssemblyPrograms } from "./assembly/plan.js";
+import { buildCloseups, type CloseupBuild } from "./assembly/closeup.js";
+import { levelFocusTargets } from "./assembly/levels.js";
+import { usedViews, viewScenes } from "./assembly/views.js";
 import { stepViews } from "./assembly/timing.js";
 import {
   assemblyFocusTargets,
+  assemblyNodes,
   assemblyStates,
   buildAssemblies,
   mergeSceneAssemblies,
 } from "./assembly/tree.js";
 import { NODE_TYPES, PRIMITIVE_HEIGHT } from "./categories.js";
 import { NODE_HEIGHT, footprintOf } from "./sizes.js";
+
+/** Adds close-up levels (their images and credits too) and view scenes; absent: unchanged. */
+function withLevels(
+  asm: ReturnType<typeof buildAssemblies>,
+  closeups: CloseupBuild | undefined,
+  views: SceneAssemblies["views"],
+): SceneAssemblies {
+  const hasLevels = closeups !== undefined && closeups.levels.length > 0;
+  const base =
+    closeups === undefined
+      ? asm
+      : mergeSceneAssemblies(asm, {
+          assemblies: [],
+          boards: [],
+          plan: [],
+          images: closeups.images,
+          credits: closeups.credits,
+        });
+  return {
+    ...base,
+    ...(hasLevels ? { levels: closeups.levels } : {}),
+    ...(views === undefined || views.length === 0 ? {} : { views }),
+  };
+}
 
 const r2 = (v: number): number => Math.round(v * 100) / 100;
 const byId = <T extends { id: string }>(a: T, b: T): number =>
@@ -527,6 +558,8 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
   // ---- assemblies (schema 1.2.0): a row +x of nodes and the DC hall; 1.1 specs skip this ----
   let assemblyScene: ReturnType<typeof buildAssemblies> | undefined;
   let programs: AssemblyPrograms | undefined;
+  let closeups: CloseupBuild | undefined;
+  let viewList: SceneAssemblies["views"];
   if ((spec.assemblies?.length ?? 0) > 0) {
     programs = new AssemblyPrograms(spec);
     const pre = unionBox([...boxes.values(), ...(frag ? [frag.bounds] : [])]);
@@ -540,10 +573,34 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
       color: resolveColor as (c: string) => string | undefined,
       ...(context.parts === undefined ? {} : { parts: context.parts }),
       ...(dcShapes === undefined ? {} : { dcShapes }),
+      ...(context.images ? { images: context.images } : {}),
     });
     assemblyScene = programs.attach(assemblyScene);
     diagnostics.push(...assemblyScene.diagnostics);
     for (const [path, state] of assemblyStates(assemblyScene.assemblies)) states[path] ??= state;
+    // close-up levels (§8.4) and quarter-turn views (§7.7): only when the spec has them, so a
+    // spec without keeps its scene byte for byte
+    if (
+      assemblyScene.assemblies.some((a) => assemblyNodes(a).some((n) => n.closeup !== undefined))
+    ) {
+      closeups = buildCloseups(spec, assemblyScene.assemblies, {
+        programs,
+        color: resolveColor as (c: string) => string | undefined,
+        ...(context.parts === undefined ? {} : { parts: context.parts }),
+        ...(dcShapes === undefined ? {} : { dcShapes }),
+      });
+      diagnostics.push(...closeups.diagnostics);
+      for (const l of closeups.levels) {
+        if (l.assembly === undefined) continue;
+        for (const [path, state] of assemblyStates([l.assembly])) states[path] ??= state;
+      }
+    }
+    const turns = usedViews(spec);
+    if (turns.length > 0) {
+      const v = viewScenes(assemblyScene.assemblies, turns);
+      diagnostics.push(...v.diagnostics);
+      viewList = v.views;
+    }
   }
   const focusTargets: Record<string, Box3> = Object.create(null) as Record<string, Box3>;
   const focusSource = new Map<string, Box3>(Object.entries(frag?.focusTargets ?? {}));
@@ -551,6 +608,12 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
   for (const g of groups) focusSource.set(g.id, g.box);
   if (assemblyScene !== undefined) {
     for (const [path, box] of assemblyFocusTargets(assemblyScene.assemblies)) {
+      if (!focusSource.has(path)) focusSource.set(path, box);
+    }
+  }
+  // paths inside a close-up level: boxes in that level's own world (the level is found by path)
+  if (closeups !== undefined) {
+    for (const [path, box] of levelFocusTargets(closeups.levels)) {
       if (!focusSource.has(path)) focusSource.set(path, box);
     }
   }
@@ -717,11 +780,25 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
   let assemblyPlan: ReturnType<AssemblyPrograms["plan"]> | undefined;
   if (assemblyScene !== undefined && programs !== undefined) {
     assemblyPlan = programs.plan(
-      assemblyScene.assemblies,
+      [
+        ...assemblyScene.assemblies,
+        ...(closeups?.levels.flatMap((l) => (l.assembly === undefined ? [] : [l.assembly])) ?? []),
+      ],
       figureScene?.figures ?? new Map(),
       stepViews(spec, (id) => Object.hasOwn(focusTargets, id)),
     );
     diagnostics.push(...programs.diagnostics, ...assemblyPlan.diagnostics);
+    // loop-start fades (§7.4) ride on the assemblies, in every view
+    const ls = assemblyPlan.loopStart;
+    if (ls.size > 0) {
+      const add = (list: readonly SceneAssembly[]): SceneAssembly[] =>
+        list.map((x) => (ls.has(x.id) ? { ...x, loopStart: ls.get(x.id) as LoopStart } : x));
+      assemblyScene = { ...assemblyScene, assemblies: add(assemblyScene.assemblies) };
+      const main = assemblyScene.assemblies;
+      viewList = viewList?.map((v) =>
+        v.turn === 0 ? { ...v, assemblies: main } : { ...v, assemblies: add(v.assemblies) },
+      );
+    }
   }
 
   const outDiagnostics = diagnostics.sort(
@@ -757,7 +834,11 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
         : { assemblies: figureScene.assemblies }
       : {
           assemblies: mergeSceneAssemblies(
-            { ...assemblyScene, plan: assemblyPlan?.plan ?? assemblyScene.plan },
+            withLevels(
+              { ...assemblyScene, plan: assemblyPlan?.plan ?? assemblyScene.plan },
+              closeups,
+              viewList,
+            ),
             figureScene === undefined
               ? undefined
               : {

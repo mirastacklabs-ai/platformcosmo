@@ -17,6 +17,7 @@
  * depends on object identity. Work: one pass over the leaves per placed label.
  */
 import type {
+  Diagnostic,
   IdScheme,
   OpacityKey,
   Projection,
@@ -97,6 +98,14 @@ export interface LabelOutput {
   readonly elements: number;
   /** Top-face labels by leaf path: drawn INSIDE the part group, after its faces (shared depth). */
   readonly top: ReadonlyMap<string, SvgElement>;
+  /** `assembly/label-omitted`: a requested top-face label that did not fit and was not drawn. */
+  readonly diagnostics: Diagnostic[];
+  /**
+   * Boxes (label and leader) of the leader labels of `path` and everything below it over the
+   * window `[a, b]` of loop time, wherever they are visible: what a camera that frames `path`
+   * during that window must contain.
+   */
+  readonly rectsUnder: (path: string, a: number, b: number) => Rect[];
 }
 
 interface NodeInfo {
@@ -155,6 +164,13 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
   const tracks: LabelTrack[] = [];
   const topLabels = new Map<string, SvgElement>();
   const extents: Rect[] = [];
+  const diagnostics: Diagnostic[] = [];
+  const shown: {
+    path: string;
+    rest: Rect[];
+    motion: readonly TrackKey[];
+    keys: readonly OpacityKey[];
+  }[] = [];
   let elements = 0;
 
   // Nodes (leaf or sub) with a label, from the assemblies' trees.
@@ -346,6 +362,7 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       x: q.x - sx,
       y: q.y - sy,
     }));
+    shown.push({ path, rest, motion, keys });
     const stamps = [...new Set([...motion.map((k) => k.t), ...keys.map((k) => k.t)])];
     for (const t of stamps) {
       const seen =
@@ -381,7 +398,18 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     const faceW = ((b.size.x + b.size.y) * projection.tileWidth) / 2;
     const fs2 = Math.max(8, size - 2);
     const text = ctx.fit(label, fs2, false, faceW * 0.8);
-    if (text === "" || faceW * 0.8 < fs2 * 2) continue;
+    if (text === "" || faceW * 0.8 < fs2 * 2) {
+      diagnostics.push({
+        severity: "info",
+        code: "assembly/label-omitted",
+        path: "",
+        message: `The label of part ${JSON.stringify(l.path)} (${JSON.stringify(label)}) is not drawn: its top face is too small for the text`,
+        suggestion:
+          "Raise the assembly's fit, enlarge the part, or label it with a leader (explode it with labels: show)",
+        params: { part: l.path, label },
+      });
+      continue;
+    }
     const id = `${ids.partLabel(l.path)}__top`;
     const chain = index.chain(l.path);
     // visible while the leaf is at its base pose: hidden between a move's start and the time
@@ -419,7 +447,24 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     elements += 2;
     extents.push({ x: top.x - faceW / 2, y: top.y - fs2, width: faceW, height: fs2 * 2 });
   }
-  return { nodes, tracks, extents, elements, top: topLabels };
+  const rectsUnder = (under: string, a: number, b: number): Rect[] => {
+    const out: Rect[] = [];
+    for (const e of shown) {
+      if (e.path !== under && !e.path.startsWith(`${under}/`)) continue;
+      const times = [
+        a,
+        b,
+        ...[...e.motion.map((k) => k.t), ...e.keys.map((k) => k.t)].filter((t) => t > a && t < b),
+      ];
+      for (const t of times) {
+        if (evalOpacity(e.keys, t) <= 0 && evalOpacity(e.keys, t + 1e-3) <= 0) continue;
+        const o = evalOffset(e.motion, t);
+        for (const q of e.rest) out.push({ ...q, x: q.x + o.x, y: q.y + o.y });
+      }
+    }
+    return out;
+  };
+  return { nodes, tracks, extents, elements, top: topLabels, diagnostics, rectsUnder };
 }
 
 /** Opacity 1 while the displacement equals its t = 0 value, 0 otherwise (step changes). */

@@ -150,7 +150,7 @@ first part with `role: "body"`, and one part per rectangle.
    `pcosmo build` also writes the animated SVG). `Read` the PNG.
 3. Compare with the plan: every rectangle is there; the relative order and alignment are the same (what is left of
    what, which are in a row); the outline's aspect ratio matches the plan's; labels are legible and
-   not on top of each other. Neighbouring labels that overlap: shorten them or raise `fit`, then rebuild. The
+   not on top of each other. Neighbouring labels that overlap: shorten them or raise `fit`, then rebuild. An info `assembly/label-omitted` means a label did not fit its top face and was not drawn: shorten it or raise `fit`. The
    plan's top is the back of the picture (plan y runs toward the lower left, plan x toward the lower right), so the
    layout appears turned 45 degrees: that is expected.
 4. Do not "fix" a part by nudging it off the plan to make labels fit; change labels or `fit`.
