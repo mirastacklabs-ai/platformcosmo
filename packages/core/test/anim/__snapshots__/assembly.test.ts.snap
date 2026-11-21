@@ -1,0 +1,88 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`keyframes per wrapper property (snapshots) > 2U GPU server (19.2) 1`] = `
+{
+  "animatedIds": 109,
+  "keyframes": 97,
+  "loopSeconds": 21,
+  "samples": [
+    {
+      "copy": "srv/dimm-a-1",
+      "kf": [
+        "21s linear 0:transform:translate(0px,0px)/linear 0.538095:transform:translate(0px,0px)/ease-in-out 0.57619:transform:translate(0px,-81.54px)/linear 0.832576:transform:translate(0px,-81.54px)/ease-in-out 0.865638:transform:translate(0px,0px)/linear 1:transform:translate(0px,0px)",
+      ],
+      "kind": "motion",
+    },
+    {
+      "copy": "srv/dimm-a-1",
+      "kf": [
+        "21s linear 0:opacity:1/linear 0.333333:opacity:1/ease-in-out 0.34285699999999997:opacity:0.25/linear 0.485714:opacity:0.25/ease-in-out 0.495238:opacity:1/linear 1:opacity:1",
+      ],
+      "kind": "fade",
+    },
+    {
+      "copy": "srv/chassis__back",
+      "kf": [
+        "21s linear 0:opacity:1/linear 0.333333:opacity:1/ease-in-out 0.34285699999999997:opacity:0.25/linear 0.485714:opacity:0.25/ease-in-out 0.495238:opacity:1/linear 1:opacity:1",
+      ],
+      "kind": "fade",
+    },
+    {
+      "copy": "srv/board",
+      "kf": [
+        "21s linear 0:opacity:1/linear 0.333333:opacity:1/ease-in-out 0.34285699999999997:opacity:0.25/linear 0.485714:opacity:0.25/ease-in-out 0.495238:opacity:1/linear 1:opacity:1",
+      ],
+      "kind": "fade",
+    },
+    {
+      "copy": "pc-t-pl_srv.dimm-a-1",
+      "kf": [
+        "21s linear 0:transform:translate(0px,0px)/linear 0.538095:transform:translate(0px,0px)/ease-in-out 0.57619:transform:translate(0px,-81.54px)/linear 0.832576:transform:translate(0px,-81.54px)/ease-in-out 0.865638:transform:translate(0px,0px)/linear 1:transform:translate(0px,0px)",
+        "21s linear 0:opacity:0/linear 0.568571:opacity:0/linear 0.57619:opacity:1/step-end 0.832576:opacity:0/linear 1:opacity:0",
+      ],
+      "kind": "label",
+    },
+  ],
+  "sha": "c72b061e2c96b685",
+}
+`;
+
+exports[`keyframes per wrapper property (snapshots) > Inline-4 engine (19.3) 1`] = `
+{
+  "animatedIds": 57,
+  "keyframes": 69,
+  "loopSeconds": 18,
+  "samples": [
+    {
+      "copy": "engine/exhaust",
+      "kf": [
+        "18s linear 0:transform:translate(0px,0px)/linear 0.505556:transform:translate(0px,0px)/linear 0.509722:transform:translate(0.81px,-0.41px)/linear 0.513889:transform:translate(3.35px,-1.68px)/linear 0.515972:transform:translate(5.3px,-2.65px)/linear 0.518056:transform:translate(7.7px,-3.85px)/linear 0.522222:transform:translate(13.72px,-6.86px)/linear 0.525433:transform:translate(19.19px,-9.6px)/linear 0.530989:transform:translate(29.18px,-14.59px)/linear 0.535139:transform:translate(35.92px,-17.96px)/linear 0.536544:transform:translate(37.9px,-18.95px)/linear 0.540694:transform:translate(42.64px,-21.32px)/linear 0.5421:transform:translate(43.85px,-21.92px)/linear 0.54625:transform:translate(46.19px,-23.1px)/linear 0.55:transform:translate(46.85px,-23.42px)/linear 0.75:transform:translate(46.85px,-23.42px)/linear 0.75375:transform:translate(46.19px,-23.1px)/linear 0.7579:transform:translate(43.85px,-21.92px)/linear 0.759306:transform:translate(42.64px,-21.32px)/linear 0.763456:transform:translate(37.9px,-18.95px)/linear 0.7648609999999999:transform:translate(35.92px,-17.96px)/linear 0.769011:transform:translate(29.18px,-14.59px)/linear 0.774567:transform:translate(19.19px,-9.6px)/linear 0.777778:transform:translate(13.72px,-6.86px)/linear 0.781944:transform:translate(7.7px,-3.85px)/linear 0.784028:transform:translate(5.3px,-2.65px)/linear 0.7861109999999999:transform:translate(3.35px,-1.68px)/linear 0.790278:transform:translate(0.81px,-0.41px)/linear 0.794444:transform:translate(0px,0px)/linear 1:transform:translate(0px,0px)",
+      ],
+      "kind": "motion",
+    },
+    {
+      "copy": "engine/cam-exhaust",
+      "kf": [
+        "18s linear 0:transform:translate(0px,0px)/linear 0.286667:transform:translate(0px,0px)/linear 0.28722200000000003:transform:translate(0px,-0.04px)/linear 0.288333:transform:translate(0px,-0.35px)/linear 0.29:transform:translate(0px,-1.42px)/linear 0.291528:transform:translate(0px,-3.06px)/linear 0.293056:transform:translate(0px,-5.35px)/linear 0.29458300000000004:transform:translate(0px,-8.3px)/linear 0.296111:transform:translate(0px,-11.94px)/linear 0.297639:transform:translate(0px,-16.24px)/linear 0.29916699999999996:transform:translate(0px,-21.2px)/linear 0.300694:transform:translate(0px,-26.79px)/linear 0.302222:transform:translate(0px,-32.96px)/linear 0.305:transform:translate(0px,-45.42px)/linear 0.30666699999999997:transform:translate(0px,-53.46px)/linear 0.310833:transform:translate(0px,-74.2px)/linear 0.312917:transform:translate(0px,-84.26px)/linear 0.315:transform:translate(0px,-93.69px)/linear 0.315556:transform:translate(0px,-96.06px)/linear 0.31611100000000003:transform:translate(0px,-98.37px)/linear 0.317989:transform:translate(0px,-105.61px)/linear 0.319861:transform:translate(0px,-111.93px)/linear 0.32173900000000005:transform:translate(0px,-117.27px)/linear 0.323611:transform:translate(0px,-121.59px)/linear 0.32548900000000003:transform:translate(0px,-124.91px)/linear 0.327361:transform:translate(0px,-127.22px)/linear 0.329233:transform:translate(0px,-128.58px)/linear 0.331111:transform:translate(0px,-129.02px)/linear 0.8:transform:translate(0px,-129.02px)/linear 0.801878:transform:translate(0px,-128.58px)/linear 0.80375:transform:translate(0px,-127.22px)/linear 0.805628:transform:translate(0px,-124.91px)/linear 0.8075:transform:translate(0px,-121.59px)/linear 0.8093779999999999:transform:translate(0px,-117.27px)/linear 0.81125:transform:translate(0px,-111.93px)/linear 0.813128:transform:translate(0px,-105.61px)/linear 0.815:transform:translate(0px,-98.37px)/linear 0.815556:transform:translate(0px,-96.06px)/linear 0.8161109999999999:transform:translate(0px,-93.69px)/linear 0.818194:transform:translate(0px,-84.26px)/linear 0.820278:transform:translate(0px,-74.2px)/linear 0.8244440000000001:transform:translate(0px,-53.46px)/linear 0.8261109999999999:transform:translate(0px,-45.42px)/linear 0.8288890000000001:transform:translate(0px,-32.96px)/linear 0.8304170000000001:transform:translate(0px,-26.79px)/linear 0.831944:transform:translate(0px,-21.2px)/linear 0.833472:transform:translate(0px,-16.24px)/linear 0.835:transform:translate(0px,-11.94px)/linear 0.8365279999999999:transform:translate(0px,-8.3px)/linear 0.838056:transform:translate(0px,-5.35px)/linear 0.839583:transform:translate(0px,-3.06px)/linear 0.8411109999999999:transform:translate(0px,-1.42px)/linear 0.842778:transform:translate(0px,-0.35px)/linear 0.8438890000000001:transform:translate(0px,-0.04px)/linear 0.844444:transform:translate(0px,0px)/linear 1:transform:translate(0px,0px)",
+      ],
+      "kind": "motion",
+    },
+    {
+      "copy": "engine/cam-exhaust",
+      "kf": [
+        "18s step-end 0:visibility:hidden 0.115556:visibility:visible 0.286111:visibility:hidden 0.315556:visibility:visible 0.815556:visibility:hidden 0.845:visibility:visible 0.902222:visibility:hidden",
+      ],
+      "kind": "visible",
+    },
+    {
+      "copy": "pc-t-pl_engine.cam-exhaust",
+      "kf": [
+        "18s linear 0:transform:translate(0px,0px)/linear 0.286667:transform:translate(0px,0px)/ease-in-out 0.331111:transform:translate(0px,-129.02px)/linear 0.8:transform:translate(0px,-129.02px)/ease-in-out 0.844444:transform:translate(0px,0px)/linear 1:transform:translate(0px,0px)",
+        "18s linear 0:opacity:0/linear 0.322222:opacity:0/linear 0.331111:opacity:1/step-end 0.8:opacity:0/linear 1:opacity:0",
+      ],
+      "kind": "label",
+    },
+  ],
+  "sha": "d76d7c71e6025e83",
+}
+`;
