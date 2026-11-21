@@ -26,7 +26,7 @@ Commands:
   validate <spec>        Schema and semantic checks, with fix suggestions
   build <spec>           Render outputs (--static --steps --interactive --png --gif --mp4 ...)
   watch <spec>           Rebuild on change
-  assets <sub>           doctor | crop | cutout | locate | align | figure | check | shrink
+  assets <sub>           doctor | crop | cutout | locate | align | figure | check | shrink | pdf
   icons <sub>            add | list | search | remove icon packs
   examples [sub]         list | show | copy gallery specs
   migrate <spec>         Migrate a spec to the current spec major (no-op for major 1)

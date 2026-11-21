@@ -87,6 +87,21 @@ uses so that text from a document never appears on a command line. Inputs are un
 | `assets check <manifest.json> -d out/`                                                                                | re-runs the quality gate (§6.5) on the outputs in `out/` (`fragment.json` and the PNGs it names; `src` must be one plain directory plus `base.png` / `sprite-N.png`)                                                                                                                                                           |
 | `assets shrink <img> --max-px 1024 -o out.png`                                                                        | PNG only: deterministic downscale (box filter) and PNG re-encode. JPEG is never re-encoded (no JPEG encoder dependency): it is passed through unchanged, or written as a PNG with `--to-png`                                                                                                                                   |
 
+PDF commands as built (D-2b): `--page`/`--image`/`--pages` are whole numbers, at most 1000 pages per
+command (`pdf/too-large` warning when the default range is cut); `extract --mask` names its files
+`p<page>-i<index>-mask.png`; `compose` writes `.png` (white canvas, bilinear, at most 16 MP) or
+`.svg` (page-sized, each distinct image once in `<defs>`, one `<use>` per placement) and takes
+`--dpi 10-1200` (default 96); `render` takes `--dpi 10-1200` (default 150) and `--tool
+pdftoppm|mutool`, applies the 16 MP cap to the whole page before starting the tool, then crops the
+validated, re-encoded PNG. The renderer is found only in `/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin`
+(or the one directory `PCOSMO_PDF_TOOLS_DIR` names), never through the inherited `PATH`; the call
+is a fixed argument list over two integers, with a minimal environment, the PDF on descriptor 3,
+a private `0700` directory below the allowed root as working directory, a 60 s timeout, a 64 MiB
+output cap and a process-group kill (see `packages/cli/src/pdftool.ts`). Missing tool:
+`pdf/renderer-missing`; any other tool failure or refused output: `pdf/renderer-failed`.
+`assets doctor` reports the PDF limits and the renderer search result under `pdf`. At most 200
+diagnostics are printed per command (errors first).
+
 Exit codes: 0 success (a missing optional tool is a warning only), 1 diagnostics with errors (gate
 failures included), 2 usage, 3 internal error or, for `doctor`, an unavailable renderer. Erasing a
 sprite from a base (`cutout --erase-from`) is not part of this CLI; it belongs to the from-document

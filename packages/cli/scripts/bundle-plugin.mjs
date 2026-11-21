@@ -100,6 +100,7 @@ const result = await build({
     "@platformcosmo/core": src("core"),
     "@platformcosmo/themes": src("themes"),
     "@platformcosmo/assets": src("assets"),
+    "@platformcosmo/pdf": src("pdf"),
     "@platformcosmo/dc-pack": src("dc-pack"),
     "@platformcosmo/icons-base": src("icons-base"),
     "@platformcosmo/icons-lucide": src("icons-lucide"),
