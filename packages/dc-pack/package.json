@@ -37,5 +37,8 @@
   },
   "dependencies": {
     "@platformcosmo/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@platformcosmo/parts-base": "workspace:*"
   }
 }

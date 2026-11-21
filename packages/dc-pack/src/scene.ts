@@ -119,7 +119,7 @@ const err = (
   ...extra,
 });
 
-interface ValidSlot {
+export interface ValidSlot {
   readonly index: number;
   readonly id: string;
   readonly at: number;
@@ -128,7 +128,14 @@ interface ValidSlot {
 }
 
 /** Validates slot ranges/overlaps/ids for one rack; returns the buildable slots. */
-function checkSlots(rack: SpecRack, rackIndex: number, diags: Diagnostic[]): ValidSlot[] {
+/**
+ * Racks `buildDcScene` placed in a mirrored row (front toward -y), by the fragment it returned.
+ * Kept beside the fragment, not in it, so the fragment's bytes do not change; `buildAssembly`
+ * reads it (and falls back to the rack's post order for a fragment that was copied).
+ */
+export const MIRRORED = new WeakMap<DcSceneFragment, ReadonlySet<string>>();
+
+export function checkSlots(rack: SpecRack, rackIndex: number, diags: Diagnostic[]): ValidSlot[] {
   const u = readRackParams({ u: rack.u }).u;
   const slots = (rack.slots ?? []).map((s, index) => {
     const def = registry.get(s.type);
@@ -563,6 +570,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
 
   // ---- objects ----
   const objects: SceneObject[] = [];
+  const mirroredRacks = new Set<string>();
   const refs = new Map<string, Ref>();
   const focus: Record<string, Box3> = { dc_hall: hallBox };
   let top = zBase;
@@ -594,6 +602,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     const group = it.rowId ?? "dc_hall";
     if (it.kind === "rack") {
       const rack = it.rack!;
+      if (it.mirror) mirroredRacks.add(rack.id);
       const def = registry.get("rack")!;
       const params = readRackParams({
         u: rack.u,
@@ -1072,7 +1081,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
   focus["dc_hall"] = bounds;
   const focusSorted = Object.fromEntries(Object.entries(focus).sort(([a], [b]) => cmp(a, b)));
 
-  return {
+  const fragment: DcSceneFragment = {
     objects,
     groups,
     edges: conn.edges,
@@ -1081,6 +1090,8 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
     bounds,
     diagnostics: sortDiags(diags),
   };
+  MIRRORED.set(fragment, mirroredRacks);
+  return fragment;
 }
 
 /** Global particle budget shared by spec flows and DC flows. */
