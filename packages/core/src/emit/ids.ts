@@ -46,15 +46,51 @@ export function cssEscapeId(id: string): string {
 }
 
 /**
- * The image and board part of `AssemblyIdScheme` (contracts/assembly.ts), implemented here for
- * figure rendering (R-1); the other assembly ids are A1's.
+ * The image and board part of `AssemblyIdScheme` (contracts/assembly.ts), implemented for
+ * figure rendering (R-1). `createIds` returns the whole `AssemblyIdScheme` (A1-3).
  */
 export type BoardIdScheme = Pick<AssemblyIdScheme, "image" | "board" | "boardItem" | "credits">;
 
-export function createIds(prefix: string): IdScheme & BoardIdScheme {
+/** `__c<k>` suffix of copy `k` of an element id (copy 0 has none, §9.4). */
+export const copySuffix = (copy?: number): string =>
+  copy === undefined || copy <= 0 ? "" : `__c${Math.floor(copy)}`;
+
+/** Item key (`path`, `path__back`, `path__front`) as an id segment: the half marker stays `__`. */
+function itemSeg(item: string): string {
+  const m = /^(.*)__(back|front)$/.exec(item);
+  return m ? `${seg(m[1] as string)}__${m[2] as string}` : seg(item);
+}
+
+export interface CreateIdsOptions {
+  /**
+   * Number of DOM copies by copy-0 element id (default 1 each). Phase 1b has no copies;
+   * `copyIds` lists `id`, `id__c1` ... for ids with more than one.
+   */
+  readonly copies?: ReadonlyMap<string, number>;
+}
+
+export function createIds(
+  prefix: string,
+  options: CreateIdsOptions = {},
+): IdScheme & AssemblyIdScheme {
   if (!PREFIX_RE.test(prefix)) throw new Error(`invalid id prefix: ${prefix}`);
   const p = prefix;
+  const copies = options.copies;
   return {
+    partHost: (item, copy) => `${p}-ph_${itemSeg(item)}${copySuffix(copy)}`,
+    partMotion: (item, copy) => `${p}-pm_${itemSeg(item)}${copySuffix(copy)}`,
+    partVisible: (item, copy) => `${p}-pv_${itemSeg(item)}${copySuffix(copy)}`,
+    partFade: (item, copy) => `${p}-pf_${itemSeg(item)}${copySuffix(copy)}`,
+    copyIds: (id) => {
+      const n = Math.max(1, copies?.get(id) ?? 1);
+      return Array.from({ length: n }, (_, k) => `${id}${copySuffix(k)}`);
+    },
+    partLabel: (path) => `${p}-pl_${seg(path)}`,
+    partClip: (item, copy) => `${p}-pc_${itemSeg(item)}${copySuffix(copy)}`,
+    callout: (owner, program, step) => `${p}-co_${seg(owner)}__${seg(program)}__${step}`,
+    view: (turn) => `${p}-vw_${turn}`,
+    fadeWrap: (id) => `${p}-fw_${seg(id)}`,
+    level: (id) => `${p}-lv_${seg(id)}`,
     image: (hash) => `${p}-im_${encodeRef(hash)}`,
     board: (id) => `${p}-bd_${seg(id)}`,
     boardItem: (id, item) => `${p}-bi_${seg(id)}__${seg(item)}`,

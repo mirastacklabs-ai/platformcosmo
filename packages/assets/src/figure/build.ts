@@ -8,7 +8,7 @@ import type { Raster } from "../raster.js";
 import type { Analysis, Unit } from "./analyze.js";
 import { inBox } from "./annotations.js";
 import type { FigureState } from "./manifest.js";
-import { blank, dilate, erode1, filter, has, union, type Mask } from "./mask.js";
+import { blank, dilate, erode1, filter, has, labelMask, minus, union, type Mask } from "./mask.js";
 
 export interface FigureOutputPart {
   /** The unit's group id: the figure part id of the spec. */
@@ -39,13 +39,42 @@ export interface BaseModel {
   readonly recover: (x: number, y: number) => readonly [number, number, number] | undefined;
 }
 
+/** The components of `ink` (inside `hull`) with no raw-ink neighbour outside the hull. */
+function endingInk(ink: Mask, hull: Mask, raw: Uint8Array, W: number, H: number): Mask {
+  if (ink.w === 0) return ink;
+  const lab = labelMask(ink);
+  const runsOn = new Uint8Array(lab.count + 1);
+  for (let j = 0; j < ink.h; j++) {
+    for (let i = 0; i < ink.w; i++) {
+      const l = lab.labels[j * ink.w + i]!;
+      if (!l || runsOn[l]) continue;
+      for (let dy = -1; dy <= 1 && !runsOn[l]; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const x = i + ink.x + dx;
+          const y = j + ink.y + dy;
+          if (x < 0 || y < 0 || x >= W || y >= H) continue;
+          if (raw[y * W + x] && !has(hull, x, y)) {
+            runsOn[l] = 1;
+            break;
+          }
+        }
+    }
+  }
+  return filter(ink, (x, y) => {
+    const l = lab.labels[(y - ink.y) * ink.w + x - ink.x]!;
+    return l > 0 && runsOn[l] === 0;
+  });
+}
+
 export function baseModel(a: Analysis): BaseModel {
   const b = a.base;
   const st = a.img[b]!;
   // Each moved part's expected silhouette and its part ink in the hull, dilated by 1 (the
   // anti-aliased fringe goes with the part), where another drawing can restore what lies under
-  // it. With one drawing nothing can: the silhouette goes, and of the 1 px ring only fringe
-  // (pixels that are not raw ink), so touching strokes of the board stay.
+  // it. With one drawing nothing can: the silhouette goes, of the 1 px ring only fringe
+  // (pixels that are not raw ink), so touching strokes of the board stay, and the part ink in
+  // the hull that ends there (a lever tip the mask missed; a stroke running on out of the hull
+  // is the board's).
   const twoStates = a.states.length === 2;
   const parts: Mask[] = a.units.map((u) => {
     const p = u.place[b]!;
@@ -53,6 +82,7 @@ export function baseModel(a: Analysis): BaseModel {
     return union(
       p.E,
       filter(dilate(p.E, 1, st.W, st.H), (x, y) => !st.rawInk[y * st.W + x]),
+      endingInk(minus(p.partInk, p.E), p.hull, st.rawInk, st.W, st.H),
     );
   });
   const allowB = a.annotations.filter((g) => g.state === b).flatMap((g) => g.allowances);

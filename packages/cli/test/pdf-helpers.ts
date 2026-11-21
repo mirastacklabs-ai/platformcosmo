@@ -34,6 +34,7 @@ export const ALLOWED_CODES = new Set([
   "pdf/too-large",
   "pdf/renderer-missing",
   "pdf/renderer-failed",
+  "pdf/render-unsandboxed",
   "pdf/no-images",
   "pdf/bad-page",
   "pdf/malformed",

@@ -737,11 +737,28 @@ describe("pdf extract --all: manifest cap", () => {
       const r = await pdf(dir, ["extract", "a.pdf", "--all", "--min-px", "0", "-d", "o", "--json"]);
       const j = json(r.stdout);
       expect(j.diagnostics.map((d: Diag) => d.code)).toContain("pdf/too-large");
-      expect(
-        JSON.parse(await readFile(join(dir, "o", "manifest.json"), "utf8")).images,
-      ).toHaveLength(1);
+      const m = JSON.parse(await readFile(join(dir, "o", "manifest.json"), "utf8"));
+      expect(m.images).toHaveLength(1);
+      expect(m.truncated).toBe(true);
+      expect(m.stoppedAtPage).toBeGreaterThanOrEqual(1);
     } finally {
       manifestLimits.entries = was;
+    }
+  });
+
+  test("the byte cap also applies to a run that a cap already stopped", async () => {
+    const { manifestLimits } = await import("../src/commands/assets-pdf.js");
+    const dir = await work();
+    await put(dir, "a.pdf", g.rasterPdf());
+    const was = { ...manifestLimits };
+    manifestLimits.entries = 1;
+    manifestLimits.bytes = 10;
+    try {
+      const r = await pdf(dir, ["extract", "a.pdf", "--all", "--min-px", "0", "-d", "o", "--json"]);
+      expect(r.code).toBe(1);
+      expect(await readdir(dir)).not.toContain("o");
+    } finally {
+      Object.assign(manifestLimits, was);
     }
   });
 
@@ -759,5 +776,38 @@ describe("pdf extract --all: manifest cap", () => {
     } finally {
       manifestLimits.bytes = was;
     }
+  });
+});
+
+describe("cleanDeep", () => {
+  test("drops values past the depth cap and cannot set a prototype", async () => {
+    const { cleanDeep } = await import("../src/commands/assets-pdf.js");
+    let deep: unknown = "\u202edeep";
+    for (let i = 0; i < 10; i++) deep = { a: deep };
+    expect(JSON.stringify(cleanDeep(deep))).not.toContain("deep");
+    const evil = JSON.parse('{"__proto__": {"polluted": 1}, "k": "v"}');
+    const out = cleanDeep(evil) as Record<string, unknown>;
+    expect(Object.getPrototypeOf(out)).toBeNull();
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(out.k).toBe("v");
+  });
+});
+
+describe("composeRaster budget", () => {
+  test("a placement skipped for its shrink read does not use up the budget", async () => {
+    const { composeRaster } = await import("../src/pdfcompose.js");
+    const view = { x: 0, y: 0, w: 100, h: 100, scale: 1 };
+    const big = { width: 400, height: 400, data: new Uint8Array(400 * 400 * 4) };
+    const small = { width: 1, height: 1, data: new Uint8Array([0, 0, 0, 255]) };
+    const m = [100, 0, 0, 100, 0, 0] as const;
+    const res = composeRaster(
+      view,
+      [
+        { raster: big, matrix: m },
+        { raster: small, matrix: m },
+      ],
+      12_000,
+    );
+    expect(res.skipped).toBe(1);
   });
 });

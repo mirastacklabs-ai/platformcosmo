@@ -6,7 +6,8 @@
  *
  *   - no shell for the tool: it is started as `/bin/sh -c '<fixed script>' <tool> <argv...>`, a
  *     constant script that applies `ulimit -f` (RLIMIT_FSIZE, the real bound on what the tool can
- *     write) and `ulimit -v` (address space, where the OS supports it) and then `exec "$0" "$@"`.
+ *     write; the wrapper exits 125 if it cannot be set) and `ulimit -v` (address space, best
+ *     effort: where the OS supports it) and then `exec "$0" "$@"`.
  *     The tool path and the arguments are positional parameters, never part of the script text;
  *     the two numbers in the script are integers this module computes;
  *   - the argument list is a constant template over integers this module formats itself: the page
@@ -29,9 +30,10 @@
  *     re-raised). Any subdirectory or non-regular file the tool creates fails the render;
  *   - the child is a process-group leader; a timeout, an output over the cap (polled every 20 ms,
  *     on top of RLIMIT_FSIZE), a flood on stdout/stderr or a forbidden entry kills the group. On
- *     Linux, when `unshare --user --pid --fork --kill-child --mount-proc` works unprivileged
- *     (probed once), the tool also runs without network and in its own PID namespace, so the kernel kills every
- *     descendant when the wrapper dies;
+ *     Linux, when `unshare --user --map-root-user --net --pid --fork --kill-child --mount-proc`
+ *     works unprivileged (probed once; a probe timeout is not cached), the tool also runs without
+ *     network and in its own PID namespace, so the kernel kills every descendant when the wrapper
+ *     dies. Without it the group is killed on every exit path;
  *   - afterwards the produced file is read through `readFileSafe` (no symlink, regular file, size
  *     cap), must start with the PNG signature and declare dimensions within the 16 MP cap before
  *     anything decodes it.
@@ -89,7 +91,7 @@ export const RENDER_LIMITS: RenderLimits = Object.freeze({
   maxStreamBytes: 64 * 1024,
   maxPixels: 16_777_216,
   maxSide: 16_384,
-  maxVirtualKb: 8 * 1024 * 1024,
+  maxVirtualKb: 2 * 1024 * 1024,
 });
 
 export const DPI_RANGE = { min: 10, max: 1200, default: 150 } as const;
@@ -156,8 +158,10 @@ export function renderSize(
   maxSide = RENDER_LIMITS.maxSide,
 ): { px: number; py: number } {
   const safe = (v: number): number => (Number.isFinite(v) && v > 0 ? v : 1);
-  let px = Math.max(1, Math.ceil((safe(pw) * dpi) / 72));
-  let py = Math.max(1, Math.ceil((safe(ph) * dpi) / 72));
+  const side = (v: number): number =>
+    Math.min(maxSide, Math.max(1, Math.ceil((safe(v) * dpi) / 72)));
+  let px = side(pw);
+  let py = side(ph);
   const k = Math.min(1, Math.sqrt(maxPixels / (px * py)), maxSide / px, maxSide / py);
   if (k < 1) {
     px = Math.max(1, Math.floor(px * k));
@@ -192,7 +196,14 @@ export function toolArgv(tool: ToolName, page: number, px: number, py: number): 
 
 /** The constant script of the limit wrapper; the two numbers are integers computed here. */
 export function limitScript(fsizeBlocks: number, vmemKb: number): string {
-  return `ulimit -f ${Math.trunc(fsizeBlocks)}; ulimit -v ${Math.trunc(vmemKb)} 2>/dev/null; exec "$0" "$@"`;
+  const n = (v: number, what: string): number => {
+    const t = Math.trunc(v);
+    if (!Number.isSafeInteger(t) || t < 1) throw new Error(`invalid ${what} limit`);
+    return t;
+  };
+  const f = n(fsizeBlocks, "file size");
+  const m = n(vmemKb, "memory");
+  return `ulimit -f ${f} || exit 125; ulimit -v ${m} 2>/dev/null; exec "$0" "$@"`;
 }
 
 export function minimalEnv(dirs: readonly string[], home: string): Record<string, string> {
@@ -202,6 +213,9 @@ export function minimalEnv(dirs: readonly string[], home: string): Record<string
     LC_ALL: "C",
     HOME: home,
     TMPDIR: home,
+    // a cache directory that does not exist: fontconfig must not create one in the private dir
+    XDG_CACHE_HOME: join(home, "no-cache", "x"),
+    FONTCONFIG_CACHE: join(home, "no-cache", "x"),
   };
 }
 
@@ -210,6 +224,7 @@ let unsharePath: Promise<string | undefined> | undefined;
 /** Path of a working unprivileged `unshare` (Linux only; probed once), or undefined. */
 export function unshareAvailable(): Promise<string | undefined> {
   unsharePath ??= (async () => {
+    let timedOut = false;
     if (process.platform !== "linux") return undefined;
     for (const dir of ["/usr/bin", "/bin", "/usr/local/bin"]) {
       const p = join(dir, "unshare");
@@ -218,22 +233,28 @@ export function unshareAvailable(): Promise<string | undefined> {
       } catch {
         continue;
       }
-      const ok = await new Promise<boolean>((done) => {
+      const ok = await new Promise<boolean | "timeout">((done) => {
         try {
           const c = spawn(p, [...UNSHARE_FLAGS, "/bin/true"], {
             shell: false,
             stdio: "ignore",
             env: { PATH: DEFAULT_TOOL_DIRS.join(":") },
           });
-          const t = setTimeout(() => (c.kill("SIGKILL"), done(false)), 3000);
+          const t = setTimeout(() => (c.kill("SIGKILL"), done("timeout")), 10_000);
           c.on("error", () => (clearTimeout(t), done(false)));
           c.on("close", (code) => (clearTimeout(t), done(code === 0)));
         } catch {
           done(false);
         }
       });
+      if (ok === "timeout") {
+        timedOut = true;
+        continue;
+      }
       if (ok) return p;
     }
+    // a probe that timed out (load) says nothing about unshare: do not cache it as a failure
+    if (timedOut) unsharePath = undefined;
     return undefined;
   })();
   return unsharePath;
@@ -251,7 +272,14 @@ export type RenderFailure =
   | "bad-output";
 
 export type RenderResult =
-  | { readonly ok: true; readonly png: Uint8Array; readonly width: number; readonly height: number }
+  | {
+      readonly ok: true;
+      readonly png: Uint8Array;
+      readonly width: number;
+      readonly height: number;
+      /** `unshare`: no network, own PID namespace; `none`: process-group kill only. */
+      readonly sandbox: "unshare" | "none";
+    }
   | { readonly ok: false; readonly reason: RenderFailure; readonly detail: string };
 
 const fail = (reason: RenderFailure, detail: string): RenderResult => ({
@@ -461,13 +489,15 @@ async function renderIn(
         clearTimeout(timer);
         clearInterval(poll);
         dropSignals();
+        killGroup(); // every path: a descendant that closed its stdio must not outlive the render
         child.stdout?.destroy();
         child.stderr?.destroy();
         resolveRun(v);
       };
       const stop = (kind: RenderFailure, detail: string): void => {
+        if (settled) return; // the group may be reaped and its pid reused
         abort ??= { kind, detail };
-        killGroup(); // abort paths only: a normal exit leaves nothing to kill
+        killGroup();
         // a descendant that left the group could keep the pipes open: do not wait for 'close'
         setTimeout(() => end(abort as { kind: RenderFailure; detail: string }), 500).unref();
       };
@@ -540,5 +570,11 @@ async function renderIn(
   ) {
     return fail("bad-output", `the output is ${size.width}x${size.height}, over the pixel cap`);
   }
-  return { ok: true, png: r.bytes, width: size.width, height: size.height };
+  return {
+    ok: true,
+    png: r.bytes,
+    width: size.width,
+    height: size.height,
+    sandbox: unshare ? "unshare" : "none",
+  };
 }

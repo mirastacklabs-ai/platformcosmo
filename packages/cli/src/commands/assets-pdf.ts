@@ -229,9 +229,10 @@ export const clean = (s: string, max = 400): string => {
 /** `clean` over every string in a parsed value (arrays and objects, depth-limited). */
 export function cleanDeep<T>(v: T, depth = 0): T {
   if (typeof v === "string") return clean(v, 600) as T;
-  if (depth > 6 || v === null || typeof v !== "object") return v;
+  if (depth > 6) return null as T; // too deep to be a real parameter: drop, never pass through raw
+  if (v === null || typeof v !== "object") return v;
   if (Array.isArray(v)) return v.slice(0, 1000).map((x) => cleanDeep(x, depth + 1)) as T;
-  const out: Record<string, unknown> = {};
+  const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const [k, x] of Object.entries(v).slice(0, 200)) out[clean(k, 80)] = cleanDeep(x, depth + 1);
   return out as T;
 }
@@ -554,8 +555,10 @@ async function extractCmd(ctx: Ctx, args: string[]): Promise<number> {
   const byObject = new Map<number, { name: string; sha: string }>();
   let bytes = 0;
   let stop = false;
+  let stoppedAtPage: number | undefined;
   const limitDiag = (pg: number, what: string): void => {
     stop = true;
+    stoppedAtPage = pg;
     diags.push({
       severity: "warning",
       code: "pdf/too-large",
@@ -623,7 +626,7 @@ async function extractCmd(ctx: Ctx, args: string[]): Promise<number> {
       });
     }
   }
-  if (!stop && manifestBytes(entries) > manifestLimits.bytes) {
+  if (manifestBytes(entries) > manifestLimits.bytes) {
     // entries are small and bounded in number; this is the byte backstop
     entries.length = 0;
     files.length = 0;
@@ -640,6 +643,8 @@ async function extractCmd(ctx: Ctx, args: string[]): Promise<number> {
     schema: "pcosmo-pdf-extract/1",
     pdfSha256: sha(o.bytes),
     pages: [range.from, range.to],
+    // a run stopped by a cap lists only what was written; the stop page may be partial
+    ...(stoppedAtPage === undefined ? {} : { truncated: true, stoppedAtPage }),
     mask,
     images: entries,
   };
@@ -913,7 +918,8 @@ async function renderCmd(ctx: Ctx, args: string[]): Promise<number> {
   // The whole page is rendered, so the 16 MP cap applies to the page, not to the crop.
   const px = Math.ceil((pg.width * dpi) / 72);
   const py = Math.ceil((pg.height * dpi) / 72);
-  if (px > 16_384 || py > 16_384 || px * py > RENDER_LIMITS.maxPixels) {
+  const lim = { ...RENDER_LIMITS, ...ctx.deps.pdfRender };
+  if (px > lim.maxSide || py > lim.maxSide || px * py > lim.maxPixels) {
     diags.push(tooBig(page, px, py, dpi));
     return fin(ctx, json, "pdf render", diags, {}, [], []);
   }
@@ -944,7 +950,7 @@ async function renderCmd(ctx: Ctx, args: string[]): Promise<number> {
   }
   // The pixel bound goes to the tool itself (argv), clamped to 16 MP, so it holds whatever page
   // size or UserUnit the tool reads from the file.
-  const size = renderSize(pg.width, pg.height, dpi);
+  const size = renderSize(pg.width, pg.height, dpi, lim.maxPixels, lim.maxSide);
   const res = await renderPage({
     rootDir: root,
     tool,
@@ -968,6 +974,16 @@ async function renderCmd(ctx: Ctx, args: string[]): Promise<number> {
       params: { page, image: null, bbox: null, tool: tool.name, reason: res.reason },
     });
     return fin(ctx, json, "pdf render", diags, {}, [], []);
+  }
+  if (res.sandbox === "none") {
+    diags.push({
+      severity: "info",
+      code: "pdf/render-unsandboxed",
+      path: "",
+      message: `${tool.name} ran without a network or PID namespace (unshare is not available here); only the process-group kill, the time and size limits applied`,
+      suggestion: "run on Linux with unprivileged user namespaces to get the isolated renderer",
+      params: { page, image: null, bbox: null, tool: tool.name },
+    });
   }
   const d = await decodeImage(res.png, { key: "render" });
   diags.push(...d.diagnostics);

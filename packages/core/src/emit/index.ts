@@ -305,10 +305,12 @@ export const emit: EmitFn = (
   // Image assets (§11.3): one `<image>`/`<symbol>` per hash, from the bytes the model carries.
   const imageDefs = new Map<string, SvgNode>();
   const boardAssets = boardsOf(model)?.assets;
+  // Assembly decals and billboards (A1-3) carry their assets on the assembly model.
+  const asmAssets = model.assembly?.assets;
   const hoist: Mapper = (el) => {
     if (el.tag === IMAGE_DEF_TAG) {
       const hash = String(el.attrs?.hash ?? "");
-      const asset = boardAssets?.get(hash);
+      const asset = boardAssets?.get(hash) ?? asmAssets?.get(hash);
       if (asset === undefined) throw new Error("image placeholder has no asset");
       if (!imageDefs.has(hash))
         imageDefs.set(hash, imageDefOf(asset, createIds(prefix).image(hash)));

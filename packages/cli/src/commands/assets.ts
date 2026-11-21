@@ -37,7 +37,14 @@ import { HAS_NOFOLLOW, insideAssetsRoot, readFileSafe } from "../images.js";
 import { relFromCwd, staleOutputs } from "../outputs.js";
 import { MAX_PAGES_PER_COMMAND, pdfCommand } from "./assets-pdf.js";
 import { DEFAULT_LIMITS as DEFAULT_PDF_LIMITS } from "@platformcosmo/pdf";
-import { DPI_RANGE, RENDER_LIMITS, TOOL_NAMES, findTool, toolDirs } from "../pdftool.js";
+import {
+  DPI_RANGE,
+  RENDER_LIMITS,
+  TOOL_NAMES,
+  findTool,
+  toolDirs,
+  unshareAvailable,
+} from "../pdftool.js";
 import {
   assetsRoot,
   bad,
@@ -276,6 +283,10 @@ async function doctor(ctx: Ctx, args: string[]): Promise<number> {
       });
     }
   }
+  const sandbox: "unshare" | "none" =
+    ctx.deps.pdfRender?.useUnshare !== false && (await unshareAvailable()) !== undefined
+      ? "unshare"
+      : "none";
   const pdfChosen = TOOL_NAMES.find((t) => pdfTools[t]!.found);
   const payload = {
     assetsRoot: assetsRoot(ctx),
@@ -297,6 +308,7 @@ async function doctor(ctx: Ctx, args: string[]): Promise<number> {
         available: pdfChosen !== undefined,
         tool: pdfChosen ?? null,
         tools: pdfTools,
+        sandbox,
         searchedDirs: [...toolDirs(ctx.deps.pdfRender)],
         timeoutMs: RENDER_LIMITS.timeoutMs,
         maxOutputBytes: RENDER_LIMITS.maxOutputBytes,
@@ -323,6 +335,7 @@ async function doctor(ctx: Ctx, args: string[]): Promise<number> {
     `allowed directory for inputs and outputs: ${payload.assetsRoot}${payload.assetsRootEnv === null ? "" : ` (bounded by PCOSMO_ASSETS_ROOT=${payload.assetsRootEnv})`}`,
     ...Object.entries(tools).map(([n, t]) => `${n}: ${t.found ? t.path : "not found (optional)"}`),
     `pdf renderer (pdftoppm or mutool, for assets pdf render): ${pdfChosen === undefined ? "not found in " + toolDirs(ctx.deps.pdfRender).join(":") + " (optional; compose and extract work without it)" : (pdfTools[pdfChosen]!.path ?? pdfChosen)}`,
+    `pdf render sandbox: ${sandbox === "unshare" ? "unshare (no network, own PID namespace)" : "none (process-group kill and limits only)"}`,
     `pdf limits: ${DEFAULT_PDF_LIMITS.maxFileBytes} bytes per file, ${MAX_PAGES_PER_COMMAND} pages per command, ${DEFAULT_PDF_LIMITS.maxImagePixels} px per extracted image, ${RENDER_LIMITS.timeoutMs} ms per render`,
     `limits: ${MAX_PIXELS} px per source, ${MANIFEST_LIMITS.parts} parts, ${MAX_MULTIPLY_ADDS} multiply-adds, ${ASSET_LIMITS.maxBytes} bytes per file`,
   ];

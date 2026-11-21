@@ -4,14 +4,21 @@
  * nothing needs to be installed and production has no way to point at another directory. A real
  * pdftoppm / mutool run is optional: PCOSMO_TEST_REAL_PDF_TOOLS=1 (see the last block).
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmod, mkdir, readFile, readdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { decodeImage, encodePng, type Raster } from "@platformcosmo/assets";
 import { afterEach, describe, expect, test } from "vitest";
 import * as g from "../../pdf/test/fixtures/gen.js";
-import { renderSize, toolArgv, unshareAvailable, type RenderSeam } from "../src/pdftool.js";
+import {
+  limitScript,
+  minimalEnv,
+  renderSize,
+  toolArgv,
+  unshareAvailable,
+  type RenderSeam,
+} from "../src/pdftool.js";
 import { type Diag, expectKnownCodes, json, pdf, put, work } from "./pdf-helpers.js";
 import { makeDeps, tmp } from "./helpers.js";
 import { run } from "../src/index.js";
@@ -201,6 +208,8 @@ describe("render: the happy path through a fake tool", () => {
       "_",
       "SHLVL",
       "OLDPWD",
+      "XDG_CACHE_HOME",
+      "FONTCONFIG_CACHE",
     ]);
     expect(Object.keys(env).filter((k) => !allowed.has(k))).toEqual([]);
     expect(env.PATH).toBe(
@@ -250,12 +259,14 @@ describe("render: the pixel bound is passed to the tool", () => {
       [Number.NaN, 5, 100],
       [0, 0, 100],
       [Infinity, Infinity, 10],
+      [1e306, 1e306, 1200],
     ] as const) {
       const { px, py } = renderSize(w, h, dpi);
       expect(px * py, `${w}x${h}@${dpi}`).toBeLessThanOrEqual(16_777_216);
       expect(Math.max(px, py)).toBeLessThanOrEqual(16_384);
       expect(px).toBeGreaterThanOrEqual(1);
       expect(py).toBeGreaterThanOrEqual(1);
+      expect(Number.isFinite(px) && Number.isFinite(py)).toBe(true);
     }
   });
 
@@ -565,6 +576,72 @@ describe("render: hostile and broken tools are refused or bounded", () => {
     expect(res.code).toBe(1);
     expect(json(res.stdout).diagnostics.map((d: Diag) => d.code)).toContain("asset/unsafe-path");
     expect(await readdir(outside)).toEqual([]);
+  });
+});
+
+describe("render: wrapper, process group, sandbox reporting", () => {
+  test("limitScript refuses non-integers and exits 125 when ulimit -f cannot be set", () => {
+    expect(() => limitScript(1e21, 1024)).toThrow();
+    expect(() => limitScript(Number.NaN, 1024)).toThrow();
+    expect(() => limitScript(10, 0)).toThrow();
+    const script = limitScript(1_000_000, 1024);
+    expect(script).toContain("ulimit -f 1000000 || exit 125;");
+    // `ulimit -f` failing (a tighter hard limit, a rejected value): the shell must not exec the tool
+    const res = spawnSync(
+      "/bin/sh",
+      ["-c", `ulimit() { return 1; }; ${script}`, "/bin/echo", "ran"],
+      { encoding: "utf8" },
+    );
+    expect(res.status).toBe(125);
+    expect(res.stdout).not.toContain("ran");
+  });
+
+  test("the environment points the caches at a path that does not exist", () => {
+    const env = minimalEnv(["/x"], "/w");
+    expect(env.XDG_CACHE_HOME).toBe("/w/no-cache/x");
+    expect(env.FONTCONFIG_CACHE).toBe("/w/no-cache/x");
+  });
+
+  test("a background descendant that closed its stdio is killed after a normal exit", async () => {
+    const r = await rig();
+    const src = await pngFile(r);
+    await tool(
+      r,
+      `sleep 60 >/dev/null 2>&1 &
+echo $! > '${r.rec}/child'
+cp '${src}' out.png`,
+    );
+    const res = await render(r, []);
+    expect(res.code, res.stdout).toBe(0);
+    const child = Number(await waitFor(join(r.rec, "child")));
+    expect(await gone(child), "the background sleeper survived the render").toBe(true);
+  }, 30_000);
+
+  test("without unshare a successful render says so (info); doctor reports the sandbox", async () => {
+    const r = await rig();
+    await tool(r, `cp '${await pngFile(r)}' out.png`);
+    const res = await render(r, []);
+    expect(res.code).toBe(0);
+    expect(json(res.stdout).diagnostics).toContainEqual(
+      expect.objectContaining({ code: "pdf/render-unsandboxed", severity: "info" }),
+    );
+    const doc = json(
+      (
+        await run(
+          ["assets", "doctor", "--json"],
+          makeDeps(r.dir, { env: { PATH: r.bin }, pdfRender: seam(r) }),
+        )
+      ).stdout,
+    );
+    expect(doc.pdf.render.sandbox).toBe("none");
+  });
+
+  test("the seam's maxPixels applies before the tool runs", async () => {
+    const r = await rig();
+    await tool(r, `touch '${r.rec}/ran'`);
+    const res = await render(r, ["--dpi", "72"], { maxPixels: 100, maxSide: 50 });
+    expect(res.code).toBe(1);
+    expect(await readFile(join(r.rec, "ran")).catch(() => null)).toBeNull();
   });
 });
 

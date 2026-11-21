@@ -6,6 +6,7 @@ export type * from "./contracts/index.js";
 // Stage entry points (stubs until each owning track lands; see contracts/render.ts).
 export { parseSpec, validate } from "./schema/index.js";
 export { buildScene } from "./scene/index.js";
+export { spec, assembly, explode, build, figure } from "./scene/assembly/builder.js";
 export { render } from "./render/index.js";
 export { emit } from "./emit/index.js";
 export { optimize } from "./optimize/index.js";

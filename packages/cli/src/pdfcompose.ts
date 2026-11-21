@@ -111,7 +111,6 @@ export function composeRaster(
       skipped++;
       continue;
     }
-    spent += area;
     let src = p.raster;
     const ratio = Math.max(Math.hypot(A, B) / src.width, Math.hypot(C, D) / src.height);
     if (ratio < 0.5) {
@@ -123,7 +122,7 @@ export function composeRaster(
         if (!small) {
           // a shrink reads every source pixel: charge them to the work budget (once per size)
           const read = p.raster.width * p.raster.height;
-          if (spent + read > budget) {
+          if (spent + area + read > budget) {
             skipped++;
             continue;
           }
@@ -134,6 +133,7 @@ export function composeRaster(
         src = small;
       }
     }
+    spent += area;
     const sw = src.width;
     const sh = src.height;
     const sd = src.data;
