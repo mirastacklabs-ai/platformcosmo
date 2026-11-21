@@ -45,6 +45,7 @@ import {
   convexHull,
   count,
   dilate,
+  endingInk,
   erode,
   fillHoles,
   filter,
@@ -239,7 +240,6 @@ export function thresholds(strict: boolean) {
     foreign: 4 * k,
     unrecovered: 24 * k,
     occluded: 24 * k,
-    annotationResidual: 4 * k,
     cumulative: 16 * k,
     exclusionFraction: 0.05 * k,
     textFraction: 0.02 * k,
@@ -1670,6 +1670,53 @@ export function analyzeFigure(
     }
   }
 
+  // ---- one drawing: the part ink in the hull that ends there (an outer edge segmentation missed
+  // where a board line touches it) goes with the part: the base erases it with the part (§6.4),
+  // so the template carries it too, or nothing would show it in either pose.
+  if (states.length === 1) {
+    const s = states[0]!;
+    const st = img[s]!;
+    for (const c of classes) {
+      const tu = units[c.unit]!;
+      const tp = tu.place[s]!;
+      const add = endingInk(minus(tp.partInk, tp.E), tp.hull, st.rawInk, st.W, st.H);
+      if (isEmpty(add)) continue;
+      const joined = union(c.mask, add);
+      const mask = tight(u0holes(units, c) ? joined : fillHoles(joined));
+      const sprite = colours(st.image, mask);
+      for (let j = 0; j < c.mask.h; j++)
+        for (let i = 0; i < c.mask.w; i++) {
+          if (!c.mask.data[j * c.mask.w + i]) continue;
+          const o = (j * c.mask.w + i) * 4;
+          const q = ((j + c.mask.y - mask.y) * mask.w + i + c.mask.x - mask.x) * 4;
+          sprite.data.set(c.sprite.data.subarray(o, o + 4), q);
+        }
+      const ox = mask.x - c.mask.x;
+      const oy = mask.y - c.mask.y;
+      const c0 = c.mask;
+      c.mask = mask;
+      c.sprite = sprite;
+      const grown = minus(mask, c0);
+      (tu.dep as Record<FigureState, Depiction>)[s] = {
+        ...tu.dep[s]!,
+        V: union(tu.dep[s]!.V, grown),
+      };
+      for (const ui of c.units) {
+        const u = units[ui]!;
+        const p = u.place[s]!;
+        const nx = p.x + ox;
+        const ny = p.y + oy;
+        (u.place as Record<FigureState, Placement>)[s] = {
+          ...p,
+          x: nx,
+          y: ny,
+          E: shifted(mask, nx - mask.x, ny - mask.y),
+          visible: union(p.visible, shifted(grown, p.x - tp.x, p.y - tp.y)),
+        };
+      }
+    }
+  }
+
   // ---- template sprites: non-part annotation ink inside a template (§6.4 applied to sprites) is
   // replaced from another depiction's own segmentation where it is not annotated; what no other
   // depiction shows becomes background and is recorded as unrecovered.
@@ -1742,46 +1789,6 @@ export function analyzeFigure(
     partMask[s] = clipMask(union(...ms), img[s]!.W, img[s]!.H);
   }
   const partAt = (s: FigureState, x: number, y: number): boolean => has(partMask[s]!, x, y);
-  // Each polyline's own ink beyond its mask, at its ends: raw ink attached to the ink under the
-  // mask that ends within 2w + 2 px of an end (a tip drawn past the declared end, the stub at an
-  // allowance), never part ink. A stroke that runs on out of that reach (a board line crossing
-  // near the end) is not the annotation's, nor is anything along the shaft's sides.
-  for (const g of annotations) {
-    if (g.kind === "text") continue;
-    const st = img[g.state]!;
-    const R = 2 * g.width + 2;
-    const reach = union(
-      capsules([g.points[0]!], R, st.W, st.H),
-      capsules([g.points[g.points.length - 1]!], R, st.W, st.H),
-    );
-    if (reach.w === 0) continue;
-    const rim = minus(reach, erode(reach, 1));
-    const cand = filter(
-      reach,
-      (x, y) => st.rawInk[y * st.W + x] !== 0 && !has(g.mask, x, y) && !partAt(g.state, x, y),
-    );
-    if (isEmpty(cand)) continue;
-    const own = filter(g.mask, (x, y) => st.rawInk[y * st.W + x] !== 0 && !partAt(g.state, x, y));
-    const lab = labelMask(cand);
-    const touches = new Uint8Array(lab.count + 1);
-    const runsOn = new Uint8Array(lab.count + 1);
-    for (let j = 0; j < cand.h; j++) {
-      for (let i = 0; i < cand.w; i++) {
-        const l = lab.labels[j * cand.w + i]!;
-        if (!l) continue;
-        const x = i + cand.x;
-        const y = j + cand.y;
-        if (has(rim, x, y)) runsOn[l] = 1;
-        if (!touches[l])
-          for (let dy = -1; dy <= 1; dy++)
-            for (let dx = -1; dx <= 1; dx++) if (has(own, x + dx, y + dy)) touches[l] = 1;
-      }
-    }
-    g.extra = filter(cand, (x, y) => {
-      const l = lab.labels[(y - cand.y) * cand.w + x - cand.x]!;
-      return l > 0 && touches[l] === 1 && runsOn[l] === 0;
-    });
-  }
   // Leaders: the free end (the one without a part contact) must end at a text rectangle.
   for (const g of annotations) {
     if (g.kind !== "leader") continue;
@@ -1964,11 +1971,7 @@ export function analyzeFigure(
     // part ink, so it cannot hide a defect of a part in this state.
     const parts = annotations.map((g) => {
       const [dx, dy] = shiftTo(g.state, s);
-      const m = clipMask(
-        shifted(union(g.mask, dilate(g.extra, 1, st.W, st.H)), dx, dy),
-        st.W,
-        st.H,
-      );
+      const m = clipMask(shifted(g.mask, dx, dy), st.W, st.H);
       return g.state === s ? m : filter(m, (x, y) => !partAt(s, x, y));
     });
     const X = parts.length > 0 ? union(...parts) : EMPTY;

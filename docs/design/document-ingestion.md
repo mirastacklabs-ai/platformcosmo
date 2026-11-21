@@ -536,21 +536,46 @@ added.
 
 The base (default the assembled drawing) has every moved part's mask and part ink (dilated by
 1 px; with one drawing, the mask, its anti-aliased fringe, and the part ink in the hull that
-ends there, since a stroke running on out of the hull is the board's) and
+ends there, since a stroke running on out of the hull is the board's; the template sprite then
+carries that part ink too, or neither pose would show it) and
 every declared annotation erased: the measured band of each arrow and leader polyline and each
 text rectangle, dilated by 2 px (the **annotation mask** of each state), **minus part ink** (§6.5
 rule 2): annotation erasure only ever removes ink that is not part ink, except inside each
-contact allowance. A polyline's erase also takes its own ink past the mask at its ends (raw ink
-attached to it that ends within 2w + 2 px of an end: a tip drawn past the declared end), with
-its 1 px fringe, never part ink. Erased pixels are filled from
+contact allowance. Erased pixels are filled from
 the other state's drawing at the aligned position where no part covers them there
 (`erase: recover`; the board under the heat sinks comes from the exploded drawing), else with
-the background colour and flagged. With one drawing, a straight stroke that an annotation's
-erase cut (a board line under an arrow) is rebuilt by continuity: along the horizontal,
-vertical or a diagonal, the first pixels past the erase on both sides are ink of the same tone
-that runs on for 2 more pixels. A cut stroke that does not line up is reported
-(`asset/base-unrecovered`, warning). Arrows are redrawn by the renderer as fading motion hints
+the background colour and flagged. Arrows are redrawn by the renderer as fading motion hints
 (`figures[].parts[].arrow`) in the spec output only; the gate never draws them.
+
+**Ends follow the stroke.** Before anything is measured, a polyline's declared ends move onto
+its stroke as drawn: from each end, outward along the end segment, the stroke is followed 1 px
+at a time while its run across the polyline stays on the previous run (±1 px) and does not
+widen (1 px of jitter is allowed up to the stroke run + 1). Where the ink ends within 2w + 2 px
+(a tip drawn past the declared end) or meets a wider stroke there (the part outline or board
+line the arrow touches, the end declared short of it), the end moves to the last pixel of that
+continuation; a continuation that runs on beyond that reach is another stroke and nothing
+moves. An arrow declared a few pixels short of the part it touches is then measured, allowed
+and cut exactly like one declared to the outline, so its stub is never cut into the part's
+sprite (and a stub in a sprite fails `arrow-residual`, §6.5).
+
+**One drawing.** Nothing can be recovered, so an annotation's erase takes only its **own
+stroke** and the paper under its mask. A polyline's own stroke is the raw ink within the stroke
+run / 2 + 0.25 px of its centre line (fitted per segment, least squares, to the run centres of
+the samples where the run is the stroke's, at most the stroke run + 1), plus those runs and the
+arrowhead's wedge; a text rectangle's is its ink. The drawing's other ink under the mask is the
+board's and stays where it belongs to a stroke that runs out of the erase. An own pixel inside a
+board stroke that crosses the annotation is rebuilt by continuity, across the annotation only
+(along the horizontal, vertical or a diagonal more than ~37° from the polyline's local
+direction; any of them for a text rectangle) and past at most the own stroke (its run + 2,
+divided by the sine of that angle; for text the rectangle, at most 64 px): one side must be
+board ink that stays (or was rebuilt) and runs on for 2 more pixels the same way, the other at
+least 1 pixel of board ink of the same tone (a stroke ending just past the annotation, whose end
+then stays too). This repeats until nothing changes. Own pixels left that board strokes meet
+from both sides of a polyline within 2w + 2 px of each other (lines that do not line up), or
+that any board stroke meets in a text rectangle, are reported (`asset/base-unrecovered`,
+warning). Accepted ambiguities: board ink entirely inside a mask and touching nothing outside
+it (a dot under an arrow tip) is erased with the annotation, and a thin stroke continuing a tip
+in line within 2w + 2 px is taken as the tip.
 
 ### 6.5 Quality gate (deterministic; `assets figure` and `assets check`, errors fail the command)
 
@@ -662,9 +687,9 @@ still reported.
 | rectangle masks       | a mask equal to its bbox while the bbox contains ink of another part's regions                                                                                                                                                                                                                                                                                                                                                                                                                         | `asset/rect-mask` (error)                                       |
 | group connectivity    | a group's mask is not one connected component (unless `allowDisjoint`)                                                                                                                                                                                                                                                                                                                                                                                                                                 | `asset/group-disconnected` (error)                              |
 | instance assignment   | two instances assigned to the same `locate` peak, or a swap that fits the seeds and `nearest` hints better (identical sprites render the same, so the residual cannot decide); `asset/ambiguous` (warning) where neither instance has seeds or a hint in a drawn state                                                                                                                                                                                                                                 | `asset/instance-swap` (error)                                   |
-| unrecovered base      | erased pixels filled with background (no other depiction) that are **visible in either re-render**, i.e. not covered by a sprite in that state, with a component > 24 px; with one drawing, a stroke cut by an annotation erase that cannot be rebuilt by continuity is a warning                                                                                                                                                                                                                      | `asset/base-unrecovered` (error); invisible fills are info      |
+| unrecovered base      | erased pixels filled with background (no other depiction) that are **visible in either re-render**, i.e. not covered by a sprite in that state, with a component > 24 px; with one drawing, any pixel of the strokes under the annotation masks that the analysis keeps or rebuilds (§6.4) missing from the base, and a stroke an annotation's erase cut that cannot be rebuilt is a warning                                                                                                           | `asset/base-unrecovered` (error); invisible fills are info      |
 | unrecovered occlusion | pixels of a part hidden in its source depiction and not recovered (§6.3), visible in the exploded re-render                                                                                                                                                                                                                                                                                                                                                                                            | `asset/occluded-unrecovered` (error when > 24 px, else warning) |
-| annotation residual   | ink left in the base inside a declared annotation mask (arrow or leader polyline, callout text rectangle), or of its own ink past the mask at its ends: any pixel fails (a lifted part reveals it)                                                                                                                                                                                                                                                                                                     | `asset/arrow-residual` (error)                                  |
+| annotation residual   | ink left in the base inside a declared annotation mask (arrow or leader polyline, its ends following the stroke as drawn (§6.4); callout text rectangle), and a sprite's ink inside an annotation mask of a drawn state outside the part's expected silhouette there (an arrow's stub cut with the part): any pixel fails (a lifted part reveals it)                                                                                                                                                   | `asset/arrow-residual` (error)                                  |
 | hull confidence       | the part stands alone in no state, so its hull comes from mask and prior only                                                                                                                                                                                                                                                                                                                                                                                                                          | `asset/hull-uncertain` (warning, `confidence: "reduced"`)       |
 | annotation validity   | rules 2–5 above: part ink (geodesic, inside the hull built from the part's whole ink) inside an annotation beyond its contact allowances (for text rects: any part ink or any part hull), covered ink outside the allowances inside a part hull, polyline not on ink or measured run > 12 px, a leader not ending at a text rect, an arrow without an arrowhead, more than 16 px of a part inside annotations (cumulative per part), text rect without ink or > 2%, total exclusion above 5% per state | `asset/annotation-invalid` (error)                              |
 

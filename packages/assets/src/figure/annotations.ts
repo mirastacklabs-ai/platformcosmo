@@ -50,12 +50,8 @@ export interface AnnotationGeometry {
   mask: Mask;
   /** Contact allowances: w x w squares where an end or crossing meets a part (at most 2). */
   allowances: Box[];
-  /**
-   * The annotation's own ink beyond its mask (polylines): raw ink attached to the ink under the
-   * mask that ends within about 2w of it (a tip drawn past the declared end), never part ink.
-   * Erased with the annotation and checked by arrow-residual.
-   */
-  extra: Mask;
+  /** The detected arrowhead's own ink (the wedge, before its 1 px stamp), or EMPTY. */
+  headInk: Mask;
   /** Geometry-level problems (each becomes an `asset/annotation-invalid`). */
   readonly problems: string[];
 }
@@ -142,6 +138,87 @@ function strokeRun(v: readonly number[]): number {
   return s[(s.length - 1) >> 2]!;
 }
 
+/**
+ * The polyline's ends moved onto the stroke as drawn (§6.4): from each end, outward along the end
+ * segment, the stroke is followed 1 px at a time while its run across the polyline stays on the
+ * previous run (±1 px) and does not widen beyond it (a stroke's jitter of 1 px is allowed up to
+ * the stroke run + 1). Where the ink ends within 2w + 2 px (a tip drawn past the declared end) or
+ * meets a wider stroke there (the part outline or board line the arrow touches: the declared end
+ * stopped short of it), the end moves to the last pixel of the continuation. A continuation that
+ * runs on beyond that reach is another stroke and nothing moves. Deterministic: the same pixels,
+ * walked in the same order, give the same ends.
+ */
+function snapEnds(
+  pts: readonly (readonly [number, number])[],
+  med: number,
+  ink: Uint8Array,
+  W: number,
+  H: number,
+): (readonly [number, number])[] {
+  const out = pts.map((p) => [p[0], p[1]] as const);
+  if (med <= 0 || med > 12 || pts.length < 2) return out;
+  const reach = 2 * (med + 2) + 2;
+  const on = (x: number, y: number): boolean => {
+    const a = Math.round(x);
+    const b = Math.round(y);
+    return a >= 0 && b >= 0 && a < W && b < H && ink[b * W + a] !== 0;
+  };
+  for (const e of [0, pts.length - 1]) {
+    const [ex, ey] = pts[e]!;
+    const [nx0, ny0] = pts[e === 0 ? 1 : e - 1]!;
+    const L = Math.hypot(ex - nx0, ey - ny0);
+    if (L === 0) continue;
+    const ux = (ex - nx0) / L;
+    const uy = (ey - ny0) / L;
+    const nx = -uy;
+    const ny = ux;
+    // The run across the polyline at a point through the ink pixel at an offset in [a, b]
+    // nearest the middle of that range (the lower offset first on a tie).
+    const runAt = (cx: number, cy: number, a: number, b: number): [number, number] | undefined => {
+      let k0: number | undefined;
+      const mid = Math.floor((a + b) / 2);
+      for (let d = 0; d <= b - a && k0 === undefined; d++)
+        for (const k of [mid - d, mid + d])
+          if (k >= a && k <= b && on(cx + k * nx, cy + k * ny)) {
+            k0 = k;
+            break;
+          }
+      if (k0 === undefined) return undefined;
+      let lo = k0;
+      while (k0 - lo < MAX_WALK && on(cx + (lo - 1) * nx, cy + (lo - 1) * ny)) lo--;
+      let hi = k0;
+      while (hi - k0 < MAX_WALK && on(cx + (hi + 1) * nx, cy + (hi + 1) * ny)) hi++;
+      return [lo, hi];
+    };
+    const start = runAt(ex, ey, -2, 2);
+    if (!start || start[1] - start[0] + 1 > med + 1) continue;
+    let [plo, phi] = start;
+    let last = 0;
+    let ended = false;
+    for (let t = 1; t <= reach; t++) {
+      const r = runAt(ex + t * ux, ey + t * uy, plo - 1, phi + 1);
+      if (!r) {
+        ended = true;
+        break;
+      }
+      const [lo, hi] = r;
+      const run = hi - lo + 1;
+      const prev = phi - plo + 1;
+      const widens = run > prev && (run > prev + 1 || run > med + 1);
+      if (widens || lo < plo - 1 || hi > phi + 1) {
+        ended = true;
+        break;
+      }
+      last = t;
+      plo = lo;
+      phi = hi;
+    }
+    if (!ended || last === 0) continue;
+    out[e] = [Math.round(ex + last * ux), Math.round(ey + last * uy)] as const;
+  }
+  return out;
+}
+
 export interface AnnotationInput {
   readonly index: number;
   readonly annotation: Annotation;
@@ -181,13 +258,19 @@ export function measureAnnotation(
       band,
       mask: dilate(band, 2, W, H),
       allowances: [],
-      extra: EMPTY,
+      headInk: EMPTY,
       problems,
     };
   }
-  const pts = input.points!;
-  const samples = samplePolyline(pts).map((p) => measure(ink, W, H, p, closed));
-  const runs = samples.filter((s) => s.run > 0).map((s) => s.run);
+  // The stroke run of the polyline as declared, then its ends moved onto the stroke as drawn
+  // (an end declared short of the tip or of the part it touches) and the whole measured again.
+  const declared = input.points!;
+  const runsOf = (q: readonly Sample[]): number[] => q.filter((s) => s.run > 0).map((s) => s.run);
+  const first = samplePolyline(declared).map((p) => measure(ink, W, H, p, closed));
+  const pts = snapEnds(declared, strokeRun(runsOf(first)), ink, W, H);
+  const moved = pts.some((p, k) => p[0] !== declared[k]![0] || p[1] !== declared[k]![1]);
+  const samples = moved ? samplePolyline(pts).map((p) => measure(ink, W, H, p, closed)) : first;
+  const runs = runsOf(samples);
   const med = strokeRun(runs);
   const onInk = samples.length > 0 ? runs.length / samples.length : 0;
   const hw = (med + 2) / 2;
@@ -251,7 +334,7 @@ export function measureAnnotation(
     band,
     mask: union(capsules(pts, hw + 2, W, H), dilate(band, 2, W, H)),
     allowances: [],
-    extra: EMPTY,
+    headInk: EMPTY,
     problems,
   };
 }
@@ -386,12 +469,143 @@ export function detectHead(
     const wedge = wedgeAt(g, end, raw, W, H, skip);
     if (!wedge) continue;
     g.head = end;
+    g.headInk = wedge;
     const stamp = dilate(wedge, 1, W, H);
     g.band = union(g.band, stamp);
     g.mask = union(g.mask, dilate(stamp, 2, W, H));
     return;
   }
   g.problems.push("no arrowhead was detected at either end");
+}
+
+/** An annotation's own stroke as drawn, with the sample each pixel came from. */
+export interface OwnInk {
+  readonly mask: Mask;
+  /** Per pixel of `mask` (same layout): the sample index, or -1 (a wedge or text pixel). */
+  readonly sample: Int32Array;
+}
+
+/**
+ * The annotation's own stroke as drawn (§6.4, one drawing). For a polyline: the centre line of
+ * each segment fitted (least squares, one pass dropping samples more than 1.5 px off) to the run
+ * centres of the samples where the run is the stroke's (at most the stroke run + 1; a crossing
+ * widens it), every raw-ink pixel of the mask within the stroke run / 2 + 0.25 px of it, those
+ * runs themselves and the arrowhead's wedge. For a text rectangle, its raw ink. The drawing's
+ * other ink under the mask is not the annotation's.
+ */
+export function ownInk(g: AnnotationGeometry, ink: Uint8Array, W: number): OwnInk {
+  const m = blank(g.mask.x, g.mask.y, g.mask.w, g.mask.h);
+  const sample = new Int32Array(m.w * m.h).fill(-1);
+  if (g.kind === "text") {
+    const r = g.rect!;
+    for (let y = r.y; y < r.y + r.h; y++)
+      for (let x = r.x; x < r.x + r.w; x++)
+        if (ink[y * W + x]) m.data[(y - m.y) * m.w + x - m.x] = 1;
+    return { mask: m, sample };
+  }
+  const pts = g.points;
+  const med = g.medianRun;
+  const smp = g.samples;
+  // Per segment: the start's arc length, the unit tangent and normal, and the fitted offset
+  // c(s) = a + b (s - s0) of the drawn centre from the declared line.
+  const segs: {
+    ax: number;
+    ay: number;
+    ux: number;
+    uy: number;
+    L: number;
+    s0: number;
+    a: number;
+    b: number;
+  }[] = [];
+  let s0 = 0;
+  for (let k = 1; k < pts.length; k++) {
+    const [ax, ay] = pts[k - 1]!;
+    const [bx, by] = pts[k]!;
+    const L = Math.hypot(bx - ax, by - ay);
+    if (L === 0) continue;
+    const ux = (bx - ax) / L;
+    const uy = (by - ay) / L;
+    const on = smp.filter(
+      (q) => q.run > 0 && q.run <= med + 1 && q.s >= s0 - 1e-9 && q.s <= s0 + L + 1e-9,
+    );
+    const fit = (q: readonly Sample[]): [number, number] => {
+      if (q.length === 0) return [0, 0];
+      const ms = q.reduce((t, v) => t + v.s, 0) / q.length;
+      const mc = q.reduce((t, v) => t + (v.lo + v.hi) / 2, 0) / q.length;
+      let sxx = 0;
+      let sxy = 0;
+      for (const v of q) {
+        sxx += (v.s - ms) ** 2;
+        sxy += (v.s - ms) * ((v.lo + v.hi) / 2 - mc);
+      }
+      const b = sxx > 1e-9 ? sxy / sxx : 0;
+      return [mc + b * (s0 - ms), b];
+    };
+    let [a, b] = fit(on);
+    const kept = on.filter((v) => Math.abs((v.lo + v.hi) / 2 - (a + b * (v.s - s0))) <= 1.5);
+    if (kept.length >= 2 && kept.length < on.length) [a, b] = fit(kept);
+    segs.push({ ax, ay, ux, uy, L, s0, a, b });
+    s0 += L;
+  }
+  const r = med / 2 + 0.25;
+  const last = smp.length - 1;
+  // Candidates walked along each fitted centre line in half-pixel steps (bounded work: the
+  // polyline's length times its width), each scored by its exact distance to the line.
+  const dist = new Float32Array(m.w * m.h).fill(Infinity);
+  const R = Math.ceil(r) + 1;
+  for (const sg of segs) {
+    for (let q = 0; q <= 2 * Math.ceil(sg.L); q++) {
+      const t0 = Math.min(sg.L, q / 2);
+      for (let k = -2 * R; k <= 2 * R; k++) {
+        const off = sg.a + sg.b * t0 + k / 2;
+        const x = Math.round(sg.ax + t0 * sg.ux - off * sg.uy);
+        const y = Math.round(sg.ay + t0 * sg.uy + off * sg.ux);
+        if (x < m.x || y < m.y || x >= m.x + m.w || y >= m.y + m.h) continue;
+        const i = (y - m.y) * m.w + x - m.x;
+        if (!g.mask.data[i] || !ink[y * W + x]) continue;
+        const t = Math.max(0, Math.min(sg.L, (x - sg.ax) * sg.ux + (y - sg.ay) * sg.uy));
+        const c = sg.a + sg.b * t;
+        const d = Math.hypot(
+          x - (sg.ax + t * sg.ux - c * sg.uy),
+          y - (sg.ay + t * sg.uy + c * sg.ux),
+        );
+        if (d > r + 1e-9 || d >= dist[i]!) continue;
+        dist[i] = d;
+        m.data[i] = 1;
+        sample[i] = Math.max(0, Math.min(last, Math.round((sg.s0 + t) / STEP)));
+      }
+    }
+  }
+  // The runs measured on the stroke itself (a stroke drawn off the fitted line, a curve).
+  for (let k = 0; k <= last; k++) {
+    const v = smp[k]!;
+    if (v.run === 0 || v.run > med + 1) continue;
+    for (let q = v.lo; q <= v.hi; q++) {
+      const x = Math.round(v.x + q * v.nx);
+      const y = Math.round(v.y + q * v.ny);
+      if (x < m.x || y < m.y || x >= m.x + m.w || y >= m.y + m.h) continue;
+      const i = (y - m.y) * m.w + x - m.x;
+      if (m.data[i] || !g.mask.data[i] || !ink[y * W + x]) continue;
+      m.data[i] = 1;
+      sample[i] = k;
+    }
+  }
+  const head = g.headInk;
+  const endSample = g.head === 0 ? 0 : last;
+  for (let j = 0; j < head.h; j++)
+    for (let i = 0; i < head.w; i++) {
+      if (!head.data[j * head.w + i]) continue;
+      const x = i + head.x;
+      const y = j + head.y;
+      if (!inBox(m, x, y)) continue;
+      const q = (y - m.y) * m.w + x - m.x;
+      if (!m.data[q]) {
+        m.data[q] = 1;
+        sample[q] = endSample;
+      }
+    }
+  return { mask: m, sample };
 }
 
 /** Chebyshev distance from a point to a box (0 inside). */

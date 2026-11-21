@@ -745,40 +745,38 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
         for (let i = 0; i < Z.w; i++)
           if (Z.data[j * Z.w + i] && cand(i + Z.x, j + Z.y) && !visible(i + Z.x, j + Z.y))
             invisible++;
+      // One drawing: the drawing's strokes under the annotation masks that the analysis keeps
+      // (they run out of the erase) or rebuilds by continuity must be in the base; any pixel
+      // missing is a cut board line (nothing to hide it: no other depiction).
+      if (states.length === 1) {
+        const B = model.board;
+        const miss = (x: number, y: number): boolean => {
+          if (!has(B, x, y)) return false;
+          const want = has(Z, x, y) ? model.recover(x, y) : undefined;
+          const lum = want ? lumOf(want) : sb.lum[y * sb.W + x]!;
+          return Math.abs(outLum[y * sb.W + x]! - lum) > T.luminance;
+        };
+        for (const c of components(B, miss, 8).sort(byPixels))
+          items.push({
+            state: b,
+            pixels: c.pixels,
+            bbox: c.box,
+            reason: `${c.pixels} px of the drawing's strokes under the annotations, kept or rebuilt by the analysis, are missing from the base`,
+          });
+      }
     }
     entry("base-unrecovered", "asset/base-unrecovered", items, T.unrecovered, "error");
-    // One drawing: a stroke of the drawing cut where an annotation was erased and not rebuilt
-    // (it did not line up) is a gap in the base. Its cut ends are raw ink outside the erase, not
-    // part ink, next to an erased ink pixel left as background.
-    if (usable && states.length === 1) {
-      const outLum = luminanceOverWhite(out.base);
-      const Z = model.erase;
-      const isPart = (x: number, y: number): boolean =>
-        a.units.some((u) => has(u.place[b]!.E, x, y) || has(u.place[b]!.partInk, x, y));
-      const gapAt = (x: number, y: number): boolean =>
-        has(Z, x, y) &&
-        sb.rawInk[y * sb.W + x] !== 0 &&
-        !isPart(x, y) &&
-        Math.abs(outLum[y * sb.W + x]! - sb.backgroundLum) <= T.luminance;
-      for (const g of a.annotations) {
-        if (g.state !== b) continue;
-        const reach = dilate(union(g.mask, g.extra), 1, sb.W, sb.H);
-        const cutEnd = (x: number, y: number): boolean => {
-          if (has(Z, x, y) || !sb.rawInk[y * sb.W + x] || isPart(x, y)) return false;
-          for (let dy = -1; dy <= 1; dy++)
-            for (let dx = -1; dx <= 1; dx++) if (gapAt(x + dx, y + dy)) return true;
-          return false;
-        };
-        const ends = components(reach, cutEnd, 8);
-        if (ends.length === 0) continue;
-        let n = 0;
-        for (const c of ends) n += c.pixels;
+    // One drawing: a stroke of the drawing that an annotation's erase cut and that could not be
+    // rebuilt (it meets the annotation from both sides without lining up, or enters a text
+    // rectangle) is a gap the analysis cannot fill.
+    if (usable) {
+      for (const c of model.cuts) {
         diagnostics.push({
           severity: "warning",
           code: "asset/base-unrecovered",
-          path: `/annotations/${g.index}`,
-          message: `base-unrecovered: erasing annotation ${g.index} cut ${ends.length} stroke end(s) of the drawing that do not line up to be rebuilt (one drawing: nothing to recover them from)`,
-          params: { annotation: g.index, ends: ends.length, pixels: n },
+          path: `/annotations/${c.annotation}`,
+          message: `base-unrecovered: erasing annotation ${c.annotation} cut a stroke of the drawing that does not line up across it, so it could not be rebuilt (one drawing: nothing to recover it from)`,
+          params: { annotation: c.annotation, pixels: c.pixels, bbox: c.bbox },
         });
       }
     }
@@ -870,9 +868,8 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
       const outLum = luminanceOverWhite(out.base);
       const t = sb.threshold;
       // Any annotation ink left in the base, even 1 px, is a defect: a lifted part reveals it.
-      // Inside the mask: erased pixels still dark that recovery does not explain. Beyond it: the
-      // annotation's own ink (a tip drawn past its declared end), unless the base erased it and
-      // recovery explains it.
+      // Erased pixels inside the mask (whose ends follow the stroke as drawn, §6.4) that are
+      // still dark and that recovery does not explain.
       for (const g of a.annotations) {
         if (g.state !== b) continue;
         const m = g.mask;
@@ -881,16 +878,32 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
           const rec = model.recover(x, y);
           return !(rec && lumOf(rec) < t);
         };
-        const fx = (x: number, y: number): boolean => {
-          if (!has(g.extra, x, y) || outLum[y * sb.W + x]! >= t) return false;
-          if (!has(model.erase, x, y)) return true;
-          const rec = model.recover(x, y);
-          return !(rec && lumOf(rec) < t);
-        };
-        for (const c of [...components(m, f, 8), ...components(g.extra, fx, 8)]
-          .filter((c) => c.pixels >= 1)
-          .sort(byPixels)) {
+        for (const c of components(m, f, 8).sort(byPixels)) {
           items.push({ state: b, annotation: g.index, pixels: c.pixels, bbox: c.box });
+        }
+      }
+      // Annotation ink carried by a sprite: in each drawn state, a sprite's ink inside that
+      // drawing's annotation masks outside the part's expected silhouette there (an arrow's stub
+      // cut with the part where the arrow touches it). The pipeline's sprites are exactly the
+      // expected silhouette, so any pixel fails.
+      for (const s of states) {
+        const masks = a.annotations.filter((g) => g.state === s).map((g) => g.mask);
+        if (masks.length === 0) continue;
+        const M = union(...masks);
+        for (let k = 0; k < a.units.length; k++) {
+          const u = unitOf(k);
+          const inkM = spriteInk(k, s);
+          const E = u.place[s]!.E;
+          const f = (x: number, y: number): boolean =>
+            has(inkM, x, y) && has(M, x, y) && !has(E, x, y);
+          for (const c of components(inkM, f, 8).sort(byPixels))
+            items.push({
+              state: s,
+              part: u.id,
+              pixels: c.pixels,
+              bbox: c.box,
+              reason: `${c.pixels} px of ${u.id}'s sprite lie inside annotation masks outside its expected silhouette`,
+            });
         }
       }
       // Annotations of the other drawing, mapped into the base: there the base may hold no ink
