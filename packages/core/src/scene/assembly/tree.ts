@@ -503,7 +503,7 @@ function credit(used: Used, s: AssetSource | undefined): void {
   used.credits.push(s);
 }
 
-function placement(ctx: Ctx, p: SpecPart, used: Used): PartImagePlacement | undefined {
+function placement(ctx: Ctx, p: SpecPart, used: Used, d: Draft): PartImagePlacement | undefined {
   const img = p.image;
   if (img === undefined) return undefined;
   const ref = typeof img === "string" ? img : img.ref;
@@ -520,7 +520,19 @@ function placement(ctx: Ctx, p: SpecPart, used: Used): PartImagePlacement | unde
       : asset !== undefined
         ? { x: 0, y: 0, width: asset.width, height: asset.height }
         : undefined;
-  if (crop === undefined) return undefined; // whole-image crop needs the asset's size
+  if (crop === undefined) {
+    // A whole-image crop needs the asset's size: without the asset the image cannot be drawn.
+    ctx.diagnostics.push({
+      severity: "warning",
+      code: "assembly/image-unresolved",
+      path: `${d.ptr}/image`,
+      message: `Part ${JSON.stringify(d.path)} uses image "${ref}", which was not provided, so it is not drawn`,
+      suggestion:
+        "Load the image (the CLI reads it from the spec's images list) or give the image a crop",
+      params: { part: d.path, image: ref },
+    });
+    return undefined;
+  }
   return { image: ref, face: own?.face ?? "billboard", crop, fit: own?.fit ?? "contain" };
 }
 
@@ -537,7 +549,7 @@ function leafGeometry(ctx: Ctx, d: Draft, used: Used): PartGeometry | undefined 
   const unrot = odd ? { x: rot.y, y: rot.x, z: rot.z } : rot;
   const tone = p.tone ?? "base";
   const color = p.color === undefined ? undefined : (ctx.opts.color ?? plainColor)(p.color);
-  const image = placement(ctx, p, used);
+  const image = placement(ctx, p, used, d);
   const images = image === undefined ? undefined : [image];
   const axis = p.axis ?? "z";
   try {

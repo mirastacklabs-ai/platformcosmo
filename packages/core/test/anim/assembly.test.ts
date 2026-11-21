@@ -466,7 +466,11 @@ describe("reduced motion", () => {
   });
 
   test("the camera stays on the overview and particles-style 1.1 behaviour is kept for the rest", () => {
-    const model = build(engine());
+    // the whole-engine focus now frames its labels too and so is the overview; a focus on one
+    // part still zooms, and reduced motion drops that camera
+    const spec = engine() as unknown as { steps: Obj[] };
+    for (const st of spec.steps) if (st.focus !== undefined) st.focus = "engine/oil-pan";
+    const model = build(spec as unknown as PlatformCosmoSpec);
     const { reduced } = splitReduced(animate(model, { speed: 1, mode: "loop", motion: "css" }).css);
     expect(reduced).toContain("transform:none");
   });

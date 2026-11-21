@@ -416,7 +416,9 @@ export function assemblyStepEnd(
   if (am === undefined) return undefined;
   const a = assemblyAnim(am, speed);
   if (a.props.length === 0) return undefined;
-  return attrsAtLoop(a, a.ends[step - 1] ?? 0);
+  // An instant before the end: a move that starts exactly where this step ends has not started
+  // (its hide keys, a leaf's top-face label among them, sit at that very instant).
+  return attrsAtLoop(a, Math.max(0, (a.ends[step - 1] ?? 0) - 1e-6));
 }
 
 // ---------------------------------------------------------------------------------------------

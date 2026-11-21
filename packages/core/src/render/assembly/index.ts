@@ -105,6 +105,8 @@ export interface AssemblyBuild {
   readonly defs: SvgNode[];
   /** Screen rects that must stay inside the view box (swept boxes, labels, leaders). */
   readonly extents: Rect[];
+  /** Leader label and leader boxes under a node over their visible windows (camera focus). */
+  readonly labelRects: (path: string) => Rect[];
   readonly diagnostics: Diagnostic[];
 }
 
@@ -257,6 +259,7 @@ export function buildAssemblyRender(
     ...(loopBuild.closure === undefined ? {} : { closure: loopBuild.closure }),
   });
   elements += labels.elements;
+  diagnostics.push(...labels.diagnostics);
   const labelTracks = [...labels.tracks].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   // ---- tracks and wrappers per item -------------------------------------------------------
@@ -500,6 +503,7 @@ export function buildAssemblyRender(
     labels: labels.nodes,
     defs: domCtx.defs,
     extents,
+    labelRects: labels.rectsUnder,
     diagnostics,
   };
 }
