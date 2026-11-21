@@ -720,6 +720,17 @@ export interface AssemblyAffine {
  * its own coordinates ("local": its world projected, no camera); `overview` places them in the
  * main viewport. The level group `<g id=group>` sits in the overlay layer (pinned like captions:
  * a sibling of the camera) with `transform = overview` and `opacity = 0` at rest.
+ *
+ * Entry rule (B-3): for a focus transition into step k the group starts at
+ * `fromHost(camera(hostAt(k - 1)))` (the host's drawn rect after the parent camera's zoom, which
+ * only B-3 knows) and eases to `overview`; `enter` is that start for a host that never moved and
+ * a camera at zoom 1. `AssemblyRenderModel.frameAt` composes it at zoom 1.
+ *
+ * Occluders (B-3): the main world cross-fades against the level (at least the host's depth
+ * neighbours), so nothing of the main scene slides under the level while it zooms in.
+ *
+ * Figure and storyboard levels (`model` absent): `rest`, `reach`, `overview`, `focus` and `enter`
+ * are PLACEHOLDERS derived from the host rect; R-2 owns their real fit to the host's zoomed rect.
  */
 export interface AssemblyLevelRender {
   readonly path: string;
@@ -746,8 +757,9 @@ export interface AssemblyLevelRender {
   /** Where the overview puts the level's reach in the viewport: the level camera's focus rect. */
   readonly focus: Rect;
   /**
-   * Start of the cross-fade at zoom 1: local -> viewport with `rest` contained in `hostRect`.
-   * The group eases from here to `overview` while the parent camera zooms to `hostFocus`.
+   * Start of the cross-fade for a host that never moved, at zoom 1: local -> viewport with `rest`
+   * contained in `hostRect`. The group eases from here to `overview` while the parent camera
+   * zooms to `hostFocus` (see the entry rule above).
    */
   readonly enter: AssemblyAffine;
   /** `enter` for any (zoomed) host rect: `rest` contained in `zoomed`, centred. */
@@ -803,10 +815,23 @@ export interface AssemblyRenderModel {
   readonly reach: Rect | undefined;
   /**
    * Focus rect of an id at the END pose of a step (assembly, sub-assembly or part focus);
-   * B uses it instead of `RenderModel.focusRects` when present (§7.4).
+   * B uses it instead of `RenderModel.focusRects` when present (§7.4). WORLD rects only, in the
+   * view in effect at that step (`SceneAssemblies.plan[step - 1].view`); ids inside a close-up
+   * level give undefined (see `levelFocusRect`).
    */
   focusRect(step: number, id: string): Rect | undefined;
-  /** Exact pose at time `t` (loop seconds, speed 1); `t = 0` and outside steps: base pose. */
+  /**
+   * Focus rect of an id inside a close-up level, in OVERLAY (viewport) coordinates: the level's
+   * own rect placed by its overview, with the focus margins. Level paths are not in
+   * `RenderModel.focusRects`. Absent without levels.
+   */
+  levelFocusRect?(step: number, id: string): Rect | undefined;
+  /**
+   * Exact pose at time `t` (loop seconds, speed 1); `t = 0` and outside steps: base pose. With
+   * views or levels it also holds the opacity of every view group and level group, and the
+   * placement (`matrix(s 0 0 s tx ty)`) of every level group, so one state shows the right view
+   * and level (the cross-fades are linear: 0.3 s for views, the camera transition for levels).
+   */
   frameAt(t: number): AssemblyFrameState;
   /** Pose at the end of a step (per-step outputs and reduced-motion keyframes). */
   stepEnd(step: number): AssemblyFrameState;

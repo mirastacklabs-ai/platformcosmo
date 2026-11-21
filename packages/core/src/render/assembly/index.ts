@@ -52,8 +52,9 @@ import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
 import { stepTimes } from "../boards/timeline.js";
 import { ELEMENT_WARN, MAX_LEVELS } from "../../scene/assembly/levels.js";
 import { MAX_VIEWS } from "../../scene/assembly/views.js";
-import { buildLevelGroups, levelFocusRect, roundRect } from "./levels.js";
-import { scopeIds, viewNode, viewRender } from "./views.js";
+import { levelOf } from "../../scene/assembly/levels.js";
+import { buildLevelGroups, levelFocusRect, matrixAttr, roundRect } from "./levels.js";
+import { VIEW_FADE, scopeIds, viewNode, viewRender } from "./views.js";
 import { clipDef, partGroup, wrap, type DomContext, type Wrappers } from "./dom.js";
 import { buildLabels, type LabelTrack, type TextSpec } from "./labels.js";
 import { buildLoop, type StageRun } from "./loop.js";
@@ -559,6 +560,21 @@ const dedupe = (list: readonly Diagnostic[]): Diagnostic[] => {
   return out;
 };
 
+/** Sorted ranges with overlapping or touching ones merged. */
+function mergeRanges(
+  list: readonly { readonly t0: number; readonly t1: number }[],
+): { readonly t0: number; readonly t1: number }[] {
+  const out: { t0: number; t1: number }[] = [];
+  for (const r of [...list].sort((a, b) => a.t0 - b.t0 || a.t1 - b.t1)) {
+    const last = out[out.length - 1];
+    if (last !== undefined && r.t0 <= last.t1 + EPS) last.t1 = Math.max(last.t1, r.t1);
+    else out.push({ t0: r.t0, t1: r.t1 });
+  }
+  return out;
+}
+
+const r4n = (v: number): number => Math.round(v * 10000) / 10000 + 0;
+
 const byKey = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 const sortedRecord = <T>(r: Record<string, T>): Record<string, T> =>
@@ -750,6 +766,72 @@ export function buildAssemblyRender(
       opacity: sortedRecord(opacity),
     };
   };
+  // Opacity and placement of the view and level groups at loop time `t` (§7.7, §8.4): the view
+  // in effect cross-fades in over VIEW_FADE at its step's start; a close-up cross-fades in over
+  // the transition into its step (the end of the previous step; step 1: up to its motion window)
+  // and eases from `fromHost(hostAt(k - 1))` (zoom 1: B-3 composes the camera) to its overview.
+  const clk = main.model.clock;
+  const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
+  const levelAtStep = (k: number): string | undefined => {
+    const focus = k < 0 ? undefined : scene.timeline[k]?.focus;
+    return focus === undefined ? undefined : levelOf(levels, focus)?.path;
+  };
+  const tStart = (k: number): number => (k <= 0 ? 0 : (clk[k - 1]?.end ?? 0));
+  const tEnd = (k: number): number => (k <= 0 ? (clk[0]?.open ?? 0) : (clk[k]?.start ?? 0));
+  const groupState = (
+    t: number,
+  ): { transforms: Record<string, string>; opacity: Record<string, number> } => {
+    const transforms: Record<string, string> = {};
+    const opacity: Record<string, number> = {};
+    if (turned.length > 0) {
+      let kv = 0;
+      for (let i = 0; i < clk.length; i++) if ((clk[i]?.start ?? 0) <= t) kv = i;
+      const cur = plan[kv]?.view ?? 0;
+      const prev = kv > 0 ? (plan[kv - 1]?.view ?? 0) : 0;
+      const f = clamp01((t - (clk[kv]?.start ?? 0)) / VIEW_FADE);
+      for (const v of viewRenders) {
+        opacity[v.group] = round2(
+          v.turn === cur ? (v.turn === prev ? 1 : f) : v.turn === prev ? 1 - f : 0,
+        );
+      }
+    }
+    if (lv !== undefined) {
+      let k = 0;
+      for (let i = 0; i < clk.length; i++) if (tStart(i) <= t) k = i;
+      const span = tEnd(k) - tStart(k);
+      const f = span > 1e-9 ? clamp01((t - tStart(k)) / span) : 1;
+      const cur = levelAtStep(k);
+      const prev = levelAtStep(k - 1);
+      for (const l of lv.levels) {
+        const isCur = l.path === cur;
+        const isPrev = l.path === prev;
+        opacity[l.group] = round2(isCur ? (isPrev ? 1 : f) : isPrev ? 1 - f : 0);
+        let a = l.overview;
+        if (isCur && !isPrev) {
+          const e = l.fromHost(l.hostAt(k));
+          a = {
+            scale: e.scale + (a.scale - e.scale) * f,
+            tx: e.tx + (a.tx - e.tx) * f,
+            ty: e.ty + (a.ty - e.ty) * f,
+          };
+        }
+        transforms[l.group] = matrixAttr({
+          scale: r4n(a.scale),
+          tx: round2(a.tx),
+          ty: round2(a.ty),
+        });
+      }
+    }
+    return { transforms, opacity };
+  };
+  const withGroups = (st: AssemblyFrameState, t: number): AssemblyFrameState => {
+    const g = groupState(t);
+    return {
+      ...st,
+      transforms: sortedRecord({ ...st.transforms, ...g.transforms }),
+      opacity: sortedRecord({ ...st.opacity, ...g.opacity }),
+    };
+  };
   const settled = main.model.settled.map((v, i) => {
     const list = all.map((g) => g.settled[i]).filter((x): x is number => x !== undefined);
     return list.length === 0 ? v : Math.max(...list);
@@ -761,21 +843,37 @@ export function buildAssemblyRender(
   const model: AssemblyRenderModelX = {
     ...main.model,
     settled,
-    approximate: all.flatMap((g) => g.approximate),
+    approximate: mergeRanges(all.flatMap((g) => g.approximate)),
     reach: reachRects.length === 0 ? undefined : unionRects(reachRects),
     elements:
       (turned.length === 0 ? main.model.elements : 0) +
       viewRenders.reduce((n, v) => n + v.elements, 0) +
       (lv?.levels.reduce((n, l) => n + l.elements, 0) ?? 0),
-    frameAt: (t) => merge((g) => g.frameAt(t)),
-    stepEnd: (step) => merge((g) => g.stepEnd(step)),
-    focusRect: (step, id) => {
-      if (lv !== undefined) {
-        const f = levelFocusRect(levels, lv, step, id, ctx.focusMargin ?? { side: 0, bottom: 0 });
-        if (f.found) return f.rect;
-      }
-      return main.model.focusRect(step, id);
+    frameAt: (t) => {
+      const w = total > 0 ? ((t % total) + total) % total : 0;
+      return withGroups(
+        merge((g) => g.frameAt(t)),
+        w,
+      );
     },
+    stepEnd: (step) => {
+      const c = main.model.clock[step - 1];
+      return withGroups(
+        merge((g) => g.stepEnd(step)),
+        c === undefined ? 0 : Math.min(c.end, total),
+      );
+    },
+    focusRect: (step, id) => {
+      // levels have their own coordinates (`levelFocusRect`); this is the world only
+      if (levelOf(levels, id) !== undefined) return undefined;
+      const v = plan[step - 1]?.view ?? 0;
+      const inView = v === 0 ? undefined : viewGroups.find((x) => x.turn === v);
+      return (inView?.group.model ?? main.model).focusRect(step, id);
+    },
+    levelFocusRect: (step, id) =>
+      lv === undefined
+        ? undefined
+        : levelFocusRect(levels, lv, step, id, ctx.focusMargin ?? { side: 0, bottom: 0 }).rect,
     ...(lv === undefined ? {} : { levels: lv.levels }),
     ...(turned.length === 0 ? {} : { views: viewRenders }),
   };

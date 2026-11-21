@@ -450,8 +450,17 @@ starts at `enter` (the level's rest bounds contained in the host's rect, centred
 no jump; `fromHost(zoomed)` gives the same for the camera's zoomed rect) and eases to
 `overview`; `hostAt(step)` follows a host that moved. Focus ids inside a level resolve in the
 level's own world through its overview (`focusRect`), margins in viewport pixels. Figure and
-storyboard levels carry the geometry and an empty group. `frameAt`/`stepEnd` merge the states
-of the main scene, every view and every level; timing stays with B-3.
+storyboard levels carry the geometry and an empty group; their fit is a placeholder for R-2.
+`frameAt`/`stepEnd` merge the states of the main scene, every view and every level, including
+the opacity of each view group (linear over 0.3 s at the build step's start) and of each level
+group (linear over the camera transition into its step), and the level groups' placement
+(zoom 1); B-3 still animates them in CSS. Entry rule: a focus transition into step k starts the
+level at `fromHost(camera(hostAt(k - 1)))`; `enter` is that start for a host that never moved.
+Occluders: B-3 cross-fades the main world against the level (at least the host's depth
+neighbours), so nothing of the main scene slides under the level while it zooms in. The
+top-level `focusRect` answers world ids in the view in effect (`plan[step - 1].view`); ids
+inside a level are answered by `levelFocusRect(step, id)` in overlay coordinates and are not in
+`RenderModel.focusRects`. Close-ups and views do not combine (`assembly/view-needs-assembly-only`).
 
 ### 8.5 Size reconciliation
 

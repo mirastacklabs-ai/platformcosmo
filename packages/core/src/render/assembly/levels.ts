@@ -53,7 +53,8 @@ export function containAffine(src: Rect, dst: Rect): AssemblyAffine {
   const dy = Number.isFinite(cy(dst)) ? cy(dst) : 0;
   const sx = Number.isFinite(cx(src)) ? cx(src) : 0;
   const sy = Number.isFinite(cy(src)) ? cy(src) : 0;
-  return { scale: r4(s), tx: round2(dx - s * sx), ty: round2(dy - s * sy) };
+  const s4 = r4(s);
+  return { scale: s4, tx: round2(dx - s4 * sx), ty: round2(dy - s4 * sy) };
 }
 
 /** `a` applied to a rect. */
@@ -67,7 +68,7 @@ export const applyAffine = (a: AssemblyAffine, r: Rect): Rect =>
 
 /** The `transform` attribute of an affine. */
 export const matrixAttr = (a: AssemblyAffine): string =>
-  `matrix(${fmt(a.scale)} 0 0 ${fmt(a.scale)} ${fmt(a.tx)} ${fmt(a.ty)})`;
+  `matrix(${r4(a.scale)} 0 0 ${r4(a.scale)} ${fmt(a.tx)} ${fmt(a.ty)})`;
 
 export interface LevelsDeps {
   readonly projection: Projection;

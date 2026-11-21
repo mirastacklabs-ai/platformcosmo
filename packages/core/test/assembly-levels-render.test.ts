@@ -3,6 +3,9 @@ import { describe, expect, test } from "vitest";
 import {
   buildModel,
   buildScene,
+  emit,
+  type AnimationLayer,
+  type AssemblyFrameState,
   type AssemblyViewRender,
   type PlatformCosmoSpec,
   type RenderModel,
@@ -312,8 +315,12 @@ describe("nested close-up chain (§8.4, §19.4)", () => {
   test("focus targets inside a level resolve in the level's own world through its overview", () => {
     const l2 = lv("hall/srv/closeup/cpu-1/closeup");
     const id = "hall/srv/closeup/cpu-1/closeup/fins";
-    const r = A.focusRect(3, id)!;
+    const r = A.levelFocusRect!(3, id)!;
     expect(r).toBeDefined();
+    // the world focus rect never answers level ids (their coordinates are the level's)
+    expect(A.focusRect(3, id)).toBeUndefined();
+    for (const k of Object.keys(m.focusRects)) expect(k.includes("/closeup")).toBe(false);
+    expect(m.focusRects["hall/srv"]).toBeDefined();
     // independent: the fins' world box at the END of step 3 (the heat sink lifts them 30 mm),
     // projected in the level's own world and placed by the level's overview
     const inst = m.scene.assemblies!.levels!.find((l) => l.path === l2.path)!.assembly!;
@@ -334,16 +341,16 @@ describe("nested close-up chain (§8.4, §19.4)", () => {
     expect(r.height).toBeGreaterThanOrEqual(placed.height + 2 * side - 0.02);
     expect(inside(placed, l2.focus)).toBe(true);
     // not where the main scene would put an id of that name (it has none), nor the host's rect
-    const host = A.focusRect(3, "hall/srv/closeup/cpu-1")!;
+    const host = A.levelFocusRect!(3, "hall/srv/closeup/cpu-1")!;
     expect(host).toBeDefined();
     expect(host).not.toEqual(r);
     expect(A.focusRect(3, "hall/srv")).toEqual(X(m).focusRect(3, "hall/srv"));
     // the instance root is the whole level; a figure level frames its fitted rect
-    expect(A.focusRect(2, "hall/srv/closeup")).toBeDefined();
-    expect(A.focusRect(1, "hall/srv/closeup/fan/closeup")).toEqual(
+    expect(A.levelFocusRect!(2, "hall/srv/closeup")).toBeDefined();
+    expect(A.levelFocusRect!(1, "hall/srv/closeup/fan/closeup")).toEqual(
       lv("hall/srv/closeup/fan/closeup").focus,
     );
-    expect(A.focusRect(1, "hall/srv/closeup/nope")).toBeUndefined();
+    expect(A.levelFocusRect!(1, "hall/srv/closeup/nope")).toBeUndefined();
   });
 
   test("close-up actions animate the instance's own group: its tracks, the merged frames and settled", () => {
@@ -908,6 +915,228 @@ describe("determinism and output safety", () => {
     const ser = [...plain.layers.objects, ...plain.layers.overlay]
       .map((n) => serialize(n))
       .join("");
-    expect(ser).not.toMatch(/-vw_|-lv_/);
+    const ids = idsOf(plain);
+    expect(ser).not.toContain(ids.view(0));
+    expect(ser).not.toContain(ids.level("a/closeup"));
+    expect(ser).not.toContain("__v90");
+  });
+});
+
+// ---- review fixes: view in effect, full group state, entry rule, budget dedupe ----------------------
+
+/** The scene with `view` set on some plan steps (build programs set it from A2-6 on). */
+const withViews = (g: SceneGraph, views: Record<number, number>): SceneGraph =>
+  ({
+    ...g,
+    assemblies: {
+      ...g.assemblies!,
+      plan: g.assemblies!.plan.map((p, i) =>
+        views[i] === undefined ? p : { ...p, view: views[i] },
+      ),
+    },
+  }) as SceneGraph;
+const modelOf = (g: SceneGraph, s: PlatformCosmoSpec): RenderModel =>
+  buildModel({ scene: g, theme: fixtureTheme(), font: "system", prefix: "pc-t", spec: s });
+const layerOfState = (f: AssemblyFrameState): AnimationLayer => {
+  const attrs: Record<string, Record<string, string | number>> = {};
+  for (const [id, t] of Object.entries(f.transforms)) (attrs[id] ??= {}).transform = t;
+  for (const [id, o] of Object.entries(f.opacity)) (attrs[id] ??= {}).opacity = o;
+  return { css: "", defs: [], layers: {}, duration: 0, attrs };
+};
+
+describe("the view in effect (Q01, Q02)", () => {
+  const s = lShape();
+  (s as unknown as { steps: Obj[] }).steps = [
+    {
+      caption: "up",
+      duration: 4,
+      focus: "l/side",
+      assembly: [{ explode: "l", program: "p", to: 1 }],
+    },
+    { caption: "out", duration: 4, focus: "l/side", assembly: [{ explode: "l", program: "p" }] },
+  ];
+  const g = withViews(buildScene(s, {}), { 0: 90, 1: 270 });
+  const m = modelOf(g, s);
+  const A = m.assembly!;
+  const vr = (t: number) => A.views!.find((v) => v.turn === t)!;
+
+  test("focusRect resolves through the view in effect, not the main view", () => {
+    const r90 = vr(90).model.focusRect(1, "l/side")!;
+    expect(r90).toBeDefined();
+    expect(A.focusRect(1, "l/side")).toEqual(r90);
+    expect(A.focusRect(2, "l/side")).toEqual(vr(270).model.focusRect(2, "l/side"));
+    // the views differ, so a main-view lookup would be wrong
+    expect(vr(0).model.focusRect(1, "l/side")).not.toEqual(r90);
+    expect(vr(270).model.focusRect(2, "l/side")).not.toEqual(r90);
+  });
+
+  test("frameAt and stepEnd hold the opacity of every view group", () => {
+    const g0 = A.frameAt(0);
+    const op = (f: AssemblyFrameState, t: number) => f.opacity[vr(t).group];
+    expect([0, 90, 180, 270].map((t) => op(g0, t))).toEqual([1, 0, 0, 0]);
+    const c = A.clock;
+    const mid = A.frameAt(c[0]!.start + 0.15);
+    expect(op(mid, 0)).toBeCloseTo(0.5, 2);
+    expect(op(mid, 90)).toBeCloseTo(0.5, 2);
+    const e1 = A.stepEnd(1);
+    expect([0, 90, 180, 270].map((t) => op(e1, t))).toEqual([0, 1, 0, 0]);
+    const e2 = A.stepEnd(2);
+    expect([0, 90, 180, 270].map((t) => op(e2, t))).toEqual([0, 0, 0, 1]);
+  });
+
+  test("frame mode: the emitted SVG shows only the view in effect", () => {
+    const svg = emit(m, layerOfState(A.stepEnd(1)), { font: "system" });
+    const tagOf = (turn: number): string => {
+      const i = svg.indexOf(`id="${vr(turn).group}"`);
+      return svg.slice(svg.lastIndexOf("<", i), svg.indexOf(">", i));
+    };
+    expect(tagOf(90)).toContain('opacity="1"');
+    expect(tagOf(0)).toContain('opacity="0"');
+    expect(tagOf(270)).toContain('opacity="0"');
+  });
+
+  test("merging states loses no id (no two sub-models share one)", () => {
+    const parts = [A.views!.map((v) => v.model.frameAt(3))].flat();
+    const total = (pick: (f: AssemblyFrameState) => number): number =>
+      parts.reduce((n, f) => n + pick(f), 0);
+    const merged = A.frameAt(3);
+    expect(Object.keys(merged.transforms)).toHaveLength(
+      total((f) => Object.keys(f.transforms).length),
+    );
+    expect(Object.keys(merged.opacity)).toHaveLength(
+      total((f) => Object.keys(f.opacity).length) + A.views!.length,
+    );
+    expect(merged.hidden.length + merged.visible.length).toBe(
+      total((f) => f.hidden.length + f.visible.length),
+    );
+  });
+});
+
+describe("close-up entry and group state (Q02, Q04)", () => {
+  const m = build(story(chainSteps as Obj[]));
+  const A = m.assembly!;
+  const lv = (p: string) => A.levels!.find((l) => l.path === p)!;
+  const l1 = lv("hall/srv/closeup");
+  const l2 = lv("hall/srv/closeup/cpu-1/closeup");
+
+  test("entering after the host moved: fromHost(hostAt(k - 1)) fits the host's drawn rect", () => {
+    // step 2 lifted the cpus; the focus transition into step 3 starts from where they ARE
+    const drawn = l2.hostAt(2);
+    expect(drawn.y).toBeLessThan(l2.hostRect.y - 1);
+    const r = applyAffine(l2.fromHost(drawn), l2.rest);
+    expect(inside(r, drawn)).toBe(true);
+    near(r.x + r.width / 2, drawn.x + drawn.width / 2);
+    near(r.y + r.height / 2, drawn.y + drawn.height / 2);
+    // `enter` is the host-never-moved start: it differs
+    expect(applyAffine(l2.enter, l2.rest).y).not.toBeCloseTo(r.y, 0);
+  });
+
+  test("frameAt holds each level group's opacity and placement through the steps", () => {
+    const ops = (f: AssemblyFrameState) => A.levels!.map((l) => f.opacity[l.group]);
+    expect(ops(A.frameAt(0))).toEqual([0, 0, 0, 0]);
+    const e2 = A.stepEnd(2);
+    expect(ops(e2)).toEqual([1, 0, 0, 0]);
+    expect(e2.transforms[l1.group]).toBe(
+      `matrix(${l1.overview.scale} 0 0 ${l1.overview.scale} ${l1.overview.tx} ${l1.overview.ty})`,
+    );
+    const e3 = A.stepEnd(3);
+    expect(ops(e3)).toEqual([0, 1, 0, 0]);
+    // mid-transition into step 3: both levels half there, the scale between start and overview
+    const c = A.clock;
+    const t = (c[1]!.end + c[2]!.start) / 2;
+    const mid = A.frameAt(t);
+    expect(mid.opacity[l1.group]).toBeCloseTo(0.5, 2);
+    expect(mid.opacity[l2.group]).toBeCloseTo(0.5, 2);
+    const sc = Number(/^matrix\(([-\d.]+)/.exec(mid.transforms[l2.group]!)![1]);
+    const from = l2.fromHost(l2.hostAt(2)).scale;
+    expect(sc).toBeGreaterThan(Math.min(from, l2.overview.scale));
+    expect(sc).toBeLessThan(Math.max(from, l2.overview.scale));
+  });
+
+  test("frame mode accepts the level placement", () => {
+    const svg = emit(m, layerOfState(A.stepEnd(2)), { font: "system" });
+    const i = svg.indexOf(`id="${l1.group}"`);
+    const tag = svg.slice(svg.lastIndexOf("<", i), svg.indexOf(">", i));
+    expect(tag).toContain('opacity="1"');
+    expect(tag).toMatch(/transform="matrix\(/);
+  });
+
+  test("merging level states loses no id", () => {
+    const merged = A.frameAt(1);
+    const parts = [X(m), ...A.levels!.map((l) => l.model!).filter(Boolean)];
+    const sum = parts.reduce((n, g) => n + Object.keys(g.frameAt(1).transforms).length, 0);
+    // the main model is the composed one: remove what it merged from the levels
+    const mainOwn = Object.keys(merged.transforms).filter(
+      (k) => !A.levels!.some((l) => l.group === k),
+    ).length;
+    expect(mainOwn).toBeGreaterThan(0);
+    expect(sum).toBeGreaterThanOrEqual(mainOwn);
+    expect(
+      Object.keys(merged.opacity).filter((k) => A.levels!.some((l) => l.group === k)),
+    ).toHaveLength(4);
+  });
+});
+
+describe("budget/views: one warning (Q08) and a clipped element count (Q12)", () => {
+  test("both the scene's lower bound and the real count trip: exactly one warning remains", async () => {
+    const { createRender } = await import("../src/render/index.js");
+    const { createAnimator } = await import("../src/anim/index.js");
+    const { emit: emitFn } = await import("../src/emit/index.js");
+    const { exportOutputs, rasterize } = await import("../src/export/index.js");
+    const { optimize } = await import("../src/optimize/index.js");
+    const s = spec({
+      assemblies: [
+        {
+          id: "w",
+          units: "tile",
+          parts: [box("p", [0, 0, 0], [1, 1, 1], { count: 400, pitch: [1, 0, 0], shape: "tray" })],
+          programs: [
+            {
+              id: "b",
+              kind: "build",
+              steps: [
+                { add: ["p"], view: 90 },
+                { add: ["p"], view: 180 },
+                { add: ["p"], view: 270 },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const scene = buildScene(s, {});
+    expect(scene.diagnostics.filter((d) => d.code === "budget/views")).toHaveLength(1);
+    const render = createRender({
+      validate: () => ({ valid: true, diagnostics: [], spec: s }) as never,
+      buildScene,
+      createAnimator,
+      exportOutputs,
+      rasterize,
+      emit: emitFn,
+      optimize,
+    });
+    const r = await render(s, { theme: fixtureTheme(), font: "system", outputs: ["static"] });
+    const d = r.diagnostics.filter((x) => x.code === "budget/views");
+    expect(d).toHaveLength(1);
+    expect(d[0]!.params).toMatchObject({ views: 4, limit: 5000 });
+    expect((d[0]!.params as { perView?: number }).perView).toBeUndefined();
+    // the same cause is not reported a second time as `budget/elements`
+    expect(r.diagnostics.filter((x) => x.code === "budget/elements").length).toBeLessThanOrEqual(1);
+  }, 120000);
+
+  test("model.elements is exact for a clipped fixture too (defs included)", () => {
+    const md = readFileSync(new URL("../../../docs/design/assemblies.md", import.meta.url), "utf8");
+    const ex = [...md.matchAll(/```json\n([\s\S]*?)```/g)]
+      .map((x) => JSON.parse(x[1] as string) as Obj)
+      .find(
+        (o) =>
+          typeof o.meta === "object" && (o.meta as { title: string }).title.startsWith("Inline-4"),
+      )!;
+    const m = build(ex as unknown as PlatformCosmoSpec);
+    const clips = m.layers.background.filter((n) => isEl(n) && n.tag === "clipPath");
+    expect(clips.length).toBeGreaterThan(0);
+    expect(m.assembly!.elements).toBe(
+      count(m.layers.objects) + count(m.layers.labels) + count(clips),
+    );
   });
 });

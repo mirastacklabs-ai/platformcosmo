@@ -105,8 +105,14 @@ export function defaultIdPrefix(
 /** Option checks live in Track B's `export/options.ts`; kept under this name for callers and tests. */
 export const validateOptions = validateRenderOptions;
 
-function sortDiagnostics(d: readonly Diagnostic[]): Diagnostic[] {
+function sortDiagnostics(all: readonly Diagnostic[]): Diagnostic[] {
   const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+  // The scene's `budget/views` is a lower bound (it carries `perView`); once the renderer has
+  // counted the real elements it reports its own, and the lower bound is dropped (§13).
+  const real = all.some((x) => x.code === "budget/views" && x.params?.perView === undefined);
+  const d = real
+    ? all.filter((x) => !(x.code === "budget/views" && x.params?.perView !== undefined))
+    : all;
   return [...d].sort((a, b) => cmp(a.path, b.path) || cmp(a.code, b.code));
 }
 
