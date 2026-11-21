@@ -394,7 +394,14 @@ rack, `DcPack.buildAssembly` returns a `SceneAssembly` (source `dc`):
   (faceplate, body, LEDs). Slot ids `frame` are reserved in assembly mode
   (`assembly/reserved-id`).
 - `front` = the rack's front side in world (mirrored rows: `−y`), so `drawer` slides devices
-  out of the front.
+  out of the front. A rack in a mirrored row is **turned half a turn** (a row facing the other
+  way), not reflected: asymmetric details (a single PDU, a device's LED side) change sides
+  relative to the 1.1 look, which reflected only `y`. The DC pack records which racks it
+  mirrored (`buildDcScene` keeps the flag beside the fragment, so the fragment's bytes do not
+  change).
+- A **cover** (door, panel, lid) given `direction: "drawer"` leaves along its own outward normal,
+  not the owner's front: the rear-door heat exchanger goes rear (`−front`), a cover on the front
+  side goes front, so a door never slides through the devices.
 - Built-in program `drawers` (when `racks[].programs` has none): stage 1 doors (`frame/role:cover`,
   `drawer`), stage 2 every slot (`drawer`, `top-down`, stagger 0.1 s). Custom `programs` are
   explode programs only (the schema refuses build programs on racks) and select slot ids,
@@ -407,7 +414,11 @@ rack, `DcPack.buildAssembly` returns a `SceneAssembly` (source `dc`):
 `racks[].slots[].assembly: "<template>"` makes the device a sub-assembly with internals: the DC
 pack builds the device as `tray` + `lid` (role `cover`) + faceplate, and the template's parts
 are placed inside at true scale (template units must be physical; a template larger than the
-interior is a warning `assembly/size-mismatch` and is scaled down uniformly). The slot's own
+interior is a warning `assembly/size-mismatch` and is scaled down uniformly). The interior is
+the 19-inch one, 450 mm wide and centred in the chassis (§8.5); devices are front-mounted, so
+the template's front (its maximum `y`) meets the interior's front and its minimum `x` and `z`
+meet the interior's side and floor. A template with no parts keeps a lid-only `internals`
+program (1 stage) and a `assembly/size-mismatch` warning. The slot's own
 program is `internals`: lid up, then the template's default program (its `program`, else its
 first explode program), so it has 1 + that many stages; if the template's `program` is a build
 program, `internals` has 1 + its step count. Templates do not carry their own chassis or lid.
@@ -560,6 +571,10 @@ omitted. Both copies sit at the same place when they swap, so the
 swap is invisible except for the occlusion change it is meant to cause. Copies ≤ 0.5 × items
 (beyond: epochs merged, `budget/depth-copies` warning). Frame, static and per-step outputs use
 the same DOM with static visibility for their time, so every output agrees with the animation.
+The DOM itself carries the rest frame (`frameAt(0)`) as attributes (hidden, translated and dimmed
+wrappers), so a bare emit shows the rest pose; frame and step overrides write the FULL state of
+every registered wrapper (`AssemblyFrameState` lists every id, `translate(0 0)` and opacity 1
+included). CSS animations override presentation attributes, so loop mode is unaffected.
 Phase 1b ships without copies (epochs that would need one are merged and marked approximate);
 copies land in Phase 3 ([tracks](./assemblies-tracks.md)).
 
@@ -570,11 +585,13 @@ of `a` lies inside or on `b` (flush faces count, so camshafts flush with a cover
 inside it).
 
 Every rule of this section reasons about the faces of a solid's `depthBox`, so only solids that
-**fill** their box take part: one `box`, `plate` or `card` primitive whose box is the
-`depthBox`. A cylinder, shaft, wedge, prism or multi-primitive solid leaves empty box corners
-where a crossing leaf can be visible in front of it, so it never encloses, hides, clips or
-orders by the hidden-face rule; it is ordered by separation or bisection only (approximate where
-those cannot decide).
+**fill** their box take part: a solid fills its `depthBox` when ANY single `box`, `plate` or
+`card` primitive has a box equal to the `depthBox`. Other primitives (studs, bores, lugs, decals,
+flush cylinders) may exist alongside it: the solid region still contains the whole `depthBox`, so
+detailed housings occlude like plain boxes. A solid without such a primitive (a cylinder, shaft,
+wedge, prism or an assembly of smaller pieces) leaves empty box corners where a crossing leaf can
+be visible in front of it, so it never encloses, hides, clips or orders by the hidden-face rule;
+it is ordered by separation or bisection only (approximate where those cannot decide).
 
 - **Enclosed** leaf: its `depthBox` lies inside a `solid` leaf's `depthBox`, or inside the
   **union of touching solids** (solids whose boxes share a face, merged into connected blocks;
@@ -699,6 +716,15 @@ with realpath, walk the relative path one component at a time with `lstat` (no s
 components), then `open` the file **once** with `O_RDONLY | O_NOFOLLOW`, `fstat` that same file
 descriptor (regular file, size ≤ cap) and read from it up to cap + 1 bytes, so there is no
 check-then-use race between the checks and the read.
+After the open the path must still name that file (`lstat` dev/ino, `realpath`), and on Linux the
+kernel's path for the descriptor (`/proc/self/fd/N`) must equal the expected path; elsewhere the
+read is refused when a directory above the file is writable by another user (and not sticky) or
+owned by someone other than the reader or root. A read whose length differs from the `fstat` size
+is refused (`image/unsafe-path`, changed while reading). Components ending in `.` or a space,
+Windows device names, and a `realpath` that differs only by case or Unicode normalization
+(`image/not-found` with a spelling hint) are refused. Residual race: Node has no `openat`, so on a
+platform without `/proc` an owner of a directory above the file can still rename directories
+between the walk and the open; `pcosmo assets doctor` states which guard is active.
 
 ### 11.2 Validation (Track C, pure)
 
@@ -867,8 +893,9 @@ and explains it:
 3. **Stage order**: fasteners first (along their `axis`), then covers (`away` from their
    mating surface), then sub-assemblies as units (`drawer` for rack devices, `away` or `out`
    otherwise), then each sub-assembly's internals (nested program, `lift` when they stack),
-   then remaining loose parts (`out`). One stage per class; split a class larger than 24
-   parts by sub-assembly.
+   then remaining loose parts (`out`). One stage per class (and per direction); split a class larger than 24
+   leaf parts into consecutive stages in spec order. Each sub-assembly's own parts get their
+   own nested program, so a class never has to be split across sub-assemblies.
 4. **Directions**: away from the mating surface; prefer visible directions (`+z`, `+x`, `+y`)
    because parts that travel into hidden directions are covered by the body; when only a
    hidden direction is free (oil pan down, PSU to the rear), use it, stage it late and fade
@@ -920,12 +947,12 @@ suggestions):
 | `assembly/too-deep`                                                                                             | error                                             | path longer than 8 segments (also through `use` and `closeup` templates)                                |
 | `assembly/template-cycle`                                                                                       | error                                             | assemblies reference each other through `use` or `closeup` in a cycle                                   |
 | `assembly/use-ignored`                                                                                          | warning                                           | `use` is ignored because `parts` is set                                                                 |
-| `assembly/diagnostics-capped`                                                                                   | info                                              | a program reported more than 50 warnings; the rest are omitted                                          |
+| `assembly/diagnostics-capped`                                                                                   | info                                              | a program reported more than 50 warnings, a part's placement check more than 8 diagnostics, or placement checks stopped after 20,000 parts; the rest are omitted |
 | `assembly/view-conflict`                                                                                        | info                                              | two actions of one step set different views; the last wins                                              |
 | `assembly/view-needs-assembly-only`                                                                             | error                                             | `view` with nodes or DC content                                                                         |
 | `assembly/storyboard-no-explode`                                                                                | error                                             | explode on a storyboard                                                                                 |
 | `assembly/edge-to-part`                                                                                         | error                                             | edge, flow or cable endpoint is a part path                                                             |
-| `assembly/unknown-shape`                                                                                        | error                                             | `pack:id` shape not installed                                                                           |
+| `assembly/unknown-shape`                                                                                        | error                                             | `pack:id` shape not installed or in the DC pack (validate: only with a registry; `render()` always refuses)                                                      |
 | `assembly/shape-params`                                                                                         | error                                             | unknown or invalid `params` for a shape                                                                 |
 | `assembly/duplicate-part`                                                                                       | error                                             | sibling ids collide (also after `count` expansion)                                                      |
 | `brick/off-grid`                                                                                                | warning                                           | non-integer stud or plate position, `size` or `pitch` (after converting to studs)                       |
@@ -937,6 +964,7 @@ suggestions):
 | `image/icc-ignored`, `image/cmyk`                                                                               | info / warning                                    | colour handling                                                                                         |
 | `image/unknown`                                                                                                 | error                                             | part references an image id not in `images`                                                             |
 | `budget/assembly-parts`, `budget/depth-copies`, `budget/views`, `budget/levels`, `budget/images`, `budget/time` | warning / error                                   | §13                                                                                                     |
+| `options/invalid-png-step`                                                                                      | error                                             | `png.step` is not a positive integer, is given with `png.time`, or is beyond the timeline                                                                        |
 
 ## 19. Examples
 
@@ -1009,6 +1037,10 @@ All examples validate against `schema/v1.json` (checked when this design was wri
   ]
 }
 ```
+
+The first stage's `drawer` on `frame/role:cover` moves the rear-door heat exchanger out of the
+rear (its own outward normal, §8.1), not through the devices; the other stages' slots slide out
+of the front.
 
 ### 19.2 GPU server internals with an image-fed GPU card
 

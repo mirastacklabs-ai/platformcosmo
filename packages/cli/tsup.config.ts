@@ -7,4 +7,6 @@ export default defineConfig({
   clean: true,
   target: "es2022",
   platform: "node",
+  // The private raster package is a devDependency: it ships inside the CLI bundle.
+  noExternal: ["@platformcosmo/assets"],
 });

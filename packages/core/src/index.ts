@@ -6,6 +6,7 @@ export type * from "./contracts/index.js";
 // Stage entry points (stubs until each owning track lands; see contracts/render.ts).
 export { parseSpec, validate } from "./schema/index.js";
 export { buildScene } from "./scene/index.js";
+export { spec, assembly, explode, build, figure } from "./scene/assembly/builder.js";
 export { render } from "./render/index.js";
 export { emit } from "./emit/index.js";
 export { optimize } from "./optimize/index.js";
@@ -60,6 +61,15 @@ export type { Half, PartFace, PartPrimitiveFaces, StudGridOptions } from "./geom
  */
 export { didYouMean } from "./schema/suggest.js";
 export type { ProjectionOptions, Silhouette } from "./geometry/index.js";
+
+/**
+ * @internal For the DC pack's rack assemblies (assemblies.md 8): the A2-3 program resolver and
+ * step planner run over a rack tree exactly as over a spec assembly, and a turned tray's depth
+ * halves are reassigned with core's rule. Not stable API.
+ */
+export { AssemblyPrograms } from "./scene/assembly/plan.js";
+export type { AssemblyProgramsOptions } from "./scene/assembly/plan.js";
+export { reassignSplit } from "./geometry/parts.js";
 
 // Depth ordering and text (Track A1).
 export { depthOrder, compareBoxes, depthKey, orderGroups } from "./depth/index.js";

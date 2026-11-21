@@ -204,6 +204,16 @@ export interface AssemblyProgramsOptions {
   readonly work?: Work;
   /** Budget of the reach sweep (default `SWEEP_CAP`). */
   readonly sweepWork?: Work;
+  /**
+   * Program bodies the spec does not carry, by (assembly id, owner path below it, program id):
+   * the DC pack's built-in rack program `drawers` and the slot `internals` program, which
+   * `schema/assembly-tree.ts` counts but no spec pointer holds (assemblies.md 8.1, 8.2).
+   */
+  readonly synthetic?: (
+    assembly: string,
+    owner: string,
+    id: string,
+  ) => SpecExplodeProgram | undefined;
 }
 
 export class AssemblyPrograms {
@@ -219,12 +229,14 @@ export class AssemblyPrograms {
   private warned = false;
   /** Close-up instances (A2-5): instance path -> id of the template it instances. */
   private readonly templates = new Map<string, string>();
+  private readonly synthetic: AssemblyProgramsOptions["synthetic"];
 
   constructor(
     readonly spec: PlatformCosmoSpec,
     opts: AssemblyProgramsOptions = {},
   ) {
     this.model = new AssemblyModel(spec);
+    this.synthetic = opts.synthetic;
     this.work = opts.work ?? makeWork();
     this.sweepWork = opts.sweepWork ?? makeWork(SWEEP_CAP);
   }
@@ -263,10 +275,18 @@ export class AssemblyPrograms {
     const memo = this.resolved.get(asm.id);
     if (memo !== undefined) return memo ?? undefined;
     const i = this.specIndex(asm.id);
-    const specAsm = i === undefined ? undefined : (this.spec.assemblies ?? [])[i];
+    // a rack in assembly mode (`source: "dc"`): the rack tree, no spec assembly behind it
+    const ri =
+      asm.source === "dc" ? (this.spec.racks ?? []).findIndex((r) => r?.id === asm.id) : -1;
+    const specAsm =
+      ri >= 0
+        ? ({ id: asm.id, parts: [] } as unknown as SpecAssembly)
+        : i === undefined
+          ? undefined
+          : (this.spec.assemblies ?? [])[i];
     let tree: TNode | undefined;
     try {
-      tree = i === undefined ? undefined : this.model.tree(i);
+      tree = ri >= 0 ? this.model.rackTree(ri) : i === undefined ? undefined : this.model.tree(i);
     } catch {
       tree = undefined; // a schema-invalid spec: validation reports it, the scene skips it
     }
@@ -312,7 +332,8 @@ export class AssemblyPrograms {
       const owner = owners.get(rel) as OwnerInfo;
       for (const info of owner.explodes) {
         const pk = `${rel}\0${info.id}`;
-        const spec = atPointer(this.spec, info.ptr) as SpecExplodeProgram | undefined;
+        const spec = (this.synthetic?.(asm.id, rel, info.id) ?? atPointer(this.spec, info.ptr)) as
+          SpecExplodeProgram | undefined;
         if (spec === undefined || !Array.isArray(spec.stages)) {
           unresolved.add(pk);
           continue;
@@ -402,6 +423,7 @@ export class AssemblyPrograms {
       owner: owner.node,
       cache: new Map(),
       degraded,
+      dc: asm.source === "dc",
     };
 
     interface Staged {

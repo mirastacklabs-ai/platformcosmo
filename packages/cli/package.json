@@ -24,6 +24,7 @@
   },
   "files": [
     "dist",
+    "schema",
     "LICENSE",
     "NOTICE"
   ],
@@ -51,9 +52,15 @@
     "@platformcosmo/icons-k8s": "workspace:*",
     "@platformcosmo/icons-lucide": "workspace:*",
     "@platformcosmo/icons-simple": "workspace:*",
-    "@platformcosmo/themes": "workspace:*"
+    "@platformcosmo/parts-auto": "workspace:*",
+    "@platformcosmo/parts-base": "workspace:*",
+    "@platformcosmo/parts-brick": "workspace:*",
+    "@platformcosmo/themes": "workspace:*",
+    "fflate": "0.8.3"
   },
   "devDependencies": {
+    "@platformcosmo/assets": "workspace:*",
+    "ajv": "^8.20.0",
     "esbuild": "0.28.2"
   }
 }
