@@ -39,6 +39,8 @@ export interface Watcher {
 export interface Deps {
   core: CoreApi;
   themes?: ThemeRegistry | undefined;
+  /** Tests only: tighter limits and tool directories for the external PDF renderer (`assets pdf render`). */
+  pdfRender?: import("./pdftool.js").RenderSeam | undefined;
   validateTheme?: ValidateThemeFn | undefined;
   dcPack?: DcPack | undefined;
   /** Installed shape packs (`hw:`, `brick:`, `auto:`); passed to validation and render. */

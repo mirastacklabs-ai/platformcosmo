@@ -851,9 +851,33 @@ describe("program checks", () => {
       ],
     };
     none(run(view), "assembly/view-needs-assembly-only");
-    for (const extra of [{ nodes: [{ id: "n", type: "server" }] }, { racks: [{ id: "r1" }] }]) {
+    for (const extra of [
+      { nodes: [{ id: "n", type: "server" }] },
+      { racks: [{ id: "r1" }] },
+      { figures: [{ id: "f", base: "b", parts: [] }] },
+      { storyboards: [{ id: "sb", frames: [] }] },
+    ]) {
       const e = one(run({ ...view, ...extra }), "assembly/view-needs-assembly-only");
       expect(e.path).toBe("/assemblies/0/programs/0/steps/0/view");
+    }
+  });
+  test("view cannot be combined with close-ups (levels draw the front only)", () => {
+    const base = (extraPart: Record<string, unknown>, asm: Record<string, unknown> = {}) => ({
+      assemblies: [
+        { id: "t", template: true, parts: [{ id: "q" }] },
+        {
+          id: "a",
+          parts: [{ id: "p", ...extraPart }],
+          programs: [{ id: "b", kind: "build", steps: [{ add: ["p"], view: 90 }] }],
+          ...asm,
+        },
+      ],
+    });
+    none(run(base({})), "assembly/view-needs-assembly-only");
+    for (const spec of [base({ closeup: "t" }), base({}, { closeup: "t" })]) {
+      const e = one(run(spec), "assembly/view-needs-assembly-only");
+      expect(e.path).toBe("/assemblies/1/programs/0/steps/0/view");
+      expect(e.message).toContain("close-ups");
     }
   });
   test("stage-out-of-range: explode/implode to, build to/advance, with the valid range", () => {

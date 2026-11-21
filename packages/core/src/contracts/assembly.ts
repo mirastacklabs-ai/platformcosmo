@@ -124,7 +124,12 @@ export interface PartPrimitive {
 export interface PartImagePlacement {
   /** `ImageAsset.key` (spec image id). */
   readonly image: string;
-  /** `billboard`: upright, never skewed; otherwise an affine decal on that face of `bounds`. */
+  /**
+   * `billboard`: upright, never skewed; otherwise an affine decal on that face of `bounds`.
+   * `left`/`right` are faces of the part in the ASSEMBLY-LOCAL frame; the renderer maps them
+   * through `AssemblyFrame.rotate` (also in quarter-turn views, where scenes keep the data and
+   * only the frame changes), so a face turned away is the renderer's to omit, never the scene's.
+   */
   readonly face: "billboard" | FaceName;
   /** Pixel rect (part crop, else image crop, else the whole image). */
   readonly crop: Rect;
@@ -485,6 +490,27 @@ export interface SceneAssembly {
   readonly restBounds: Box3;
   /** World bounds over every reachable pose (layout spacing and focus). */
   readonly reachBounds: Box3;
+  /**
+   * Loop-start opacity fades of build programs whose timeline start differs from the base pose
+   * (§7.4); absent when there are none. Computed with the plan's own opening transition.
+   */
+  readonly loopStart?: LoopStart;
+}
+
+/** One leaf fading at the start of the loop. Times are loop seconds at speed 1. */
+export interface LoopFade {
+  /** Leaf path. */
+  readonly path: string;
+  readonly t0: number;
+  readonly t1: number;
+  /** Opacity at `t0` and at `t1`: 1 -> 0 fades a base-pose part out, 0 -> 1 fades one in. */
+  readonly from: 0 | 1;
+  readonly to: 0 | 1;
+}
+
+export interface LoopStart {
+  /** Sorted by (path). */
+  readonly fades: readonly LoopFade[];
 }
 
 /** A flat document storyboard (tier A, §14) or figure (figure mode, §15). */
@@ -530,6 +556,14 @@ export interface ResolvedAction {
    * as `ProgramLevel`s of ancestor programs.
    */
   readonly implied: readonly ProgramLevel[];
+  /**
+   * View switches of a build/unbuild action (§7.7), in the action's own time (seconds from its
+   * start, speed 1, BEFORE compression like `PartMove.start`; multiply by `scale`): one entry per
+   * build step that sets `view` (a build: the step's start; an unbuild, the exact reverse: the
+   * start of the reversed step, switching back to the view before it). Sorted by `at`. Absent
+   * when the action changes no view. `AssemblyStepPlan.view` is the view at the END of the step.
+   */
+  readonly views?: readonly { readonly at: number; readonly view: QuarterTurn }[];
 }
 
 /** Assembly content of one timeline step (aligned with `SceneGraph.timeline`). */
@@ -555,6 +589,51 @@ export interface SceneAssemblies {
   readonly images: readonly string[];
   /** Credits line entries (§11.6), in first-use order, deduplicated. */
   readonly credits: readonly AssetSource[];
+  /**
+   * Close-up levels (§8.4), sorted by path; absent without close-ups. Instances are NOT in
+   * `assemblies`. `images` and `credits` above include theirs.
+   */
+  readonly levels?: readonly SceneLevel[];
+  /**
+   * Quarter-turn view scenes (§7.7), sorted by turn and including 0; absent when no build step
+   * uses `view`.
+   */
+  readonly views?: readonly SceneView[];
+}
+
+/** One close-up instance (a level of detail, assemblies §8.4). */
+export interface SceneLevel {
+  /** Scene path of the instance: `<host>/closeup`. Unique. */
+  readonly path: string;
+  /** The coarse node (part, sub-assembly, rack slot) the instance replaces when focused. */
+  readonly host: string;
+  /** Id of the assembly, figure or storyboard drawn. */
+  readonly ref: string;
+  readonly kind: "assembly" | "figure" | "storyboard";
+  /** Path of the level the host lives in (an instance path); absent: the main scene. */
+  readonly parent?: string;
+  /** 1 = a close-up of a node of the main scene; at most 4. */
+  readonly depth: number;
+  /** World box of the host in its own level: where the close-up cross-fades in from. */
+  readonly hostBox: Box3;
+  /**
+   * Assemblies only: the instance, in its own world at the origin. `id === root.path === path`.
+   * Focus targets inside it (its node paths) are in this world, not the main scene's.
+   */
+  readonly assembly?: SceneAssembly;
+  /** Quarter turn that aligns the template's front with the host's front in world axes. */
+  readonly turn: QuarterTurn;
+  /** Uniform factor on true scale, at most 1 (shrunk to fit the host's interior, §8.5). */
+  readonly fit: number;
+  /** Per-axis template size relative to the host interior, minus 1 (physical units only). */
+  readonly mismatch?: Vec3;
+}
+
+/** The main scene turned by -`turn` about the centre of the assemblies' rest bounds (§7.7). */
+export interface SceneView {
+  readonly turn: QuarterTurn;
+  /** The placed assemblies of the scene, rotated; turn 0 is `SceneAssemblies.assemblies`. */
+  readonly assemblies: readonly SceneAssembly[];
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -688,6 +767,84 @@ export interface AssemblyStepClock {
   readonly end: number;
 }
 
+/** `p' = scale * p + (tx, ty)`: uniform scale and translation of screen coordinates. */
+export interface AssemblyAffine {
+  readonly scale: number;
+  readonly tx: number;
+  readonly ty: number;
+}
+
+/**
+ * One close-up level group (§8.4, A1-4). All rects are screen rects (user units). A level has
+ * its own coordinates ("local": its world projected, no camera); `overview` places them in the
+ * main viewport. The level group `<g id=group>` sits in the overlay layer (pinned like captions:
+ * a sibling of the camera) with `transform = overview` and `opacity = 0` at rest.
+ *
+ * Entry rule (B-3): for a focus transition into step k the group starts at
+ * `fromHost(camera(hostAt(k - 1)))` (the host's drawn rect after the parent camera's zoom, which
+ * only B-3 knows) and eases to `overview`; `enter` is that start for a host that never moved and
+ * a camera at zoom 1. `AssemblyRenderModel.frameAt` composes it at zoom 1.
+ *
+ * Occluders (B-3): the main world cross-fades against the level (at least the host's depth
+ * neighbours), so nothing of the main scene slides under the level while it zooms in.
+ *
+ * Figure and storyboard levels (`model` absent): `rest`, `reach`, `overview`, `focus` and `enter`
+ * are PLACEHOLDERS derived from the host rect; R-2 owns their real fit to the host's zoomed rect.
+ */
+export interface AssemblyLevelRender {
+  readonly path: string;
+  readonly host: string;
+  readonly kind: "assembly" | "figure" | "storyboard";
+  readonly depth: number;
+  readonly parent?: string;
+  /** `ids.level(path)`. */
+  readonly group: string;
+  /** The level's own model (ids, tracks, epochs, frames in LOCAL coordinates); assemblies only. */
+  readonly model?: AssemblyRenderModel;
+  /** Rest bounds of the level's content, local. Figure and storyboard levels: `hostLocal`. */
+  readonly rest: Rect;
+  /** Everything the level draws (swept boxes, labels, leaders), local. */
+  readonly reach: Rect;
+  /** Screen rect of the host box in its PARENT level's local coordinates, at rest. */
+  readonly hostLocal: Rect;
+  /** The host rect in the main viewport at the parent's overview (no camera). */
+  readonly hostRect: Rect;
+  /** Camera rect that frames the host (in the viewport): `hostRect` plus the focus margins. */
+  readonly hostFocus: Rect;
+  /** Level overview: local -> viewport, the reach contained in the main overview area. */
+  readonly overview: AssemblyAffine;
+  /** Where the overview puts the level's reach in the viewport: the level camera's focus rect. */
+  readonly focus: Rect;
+  /**
+   * Start of the cross-fade for a host that never moved, at zoom 1: local -> viewport with `rest`
+   * contained in `hostRect`. The group eases from here to `overview` while the parent camera
+   * zooms to `hostFocus` (see the entry rule above).
+   */
+  readonly enter: AssemblyAffine;
+  /** `enter` for any (zoomed) host rect: `rest` contained in `zoomed`, centred. */
+  fromHost(zoomed: Rect): AssemblyAffine;
+  /** Host rect (viewport, no camera) at the END pose of a step: the host may have moved. */
+  hostAt(step: number): Rect;
+  /** Elements of the group, its content included. */
+  readonly elements: number;
+}
+
+/** One quarter-turn view group (§7.7, A1-4): the scene turned by -`turn`, drawn on its own. */
+export interface AssemblyViewRender {
+  readonly turn: QuarterTurn;
+  /** `ids.view(turn)`: objects and labels of this view; views other than 0 start at opacity 0. */
+  readonly group: string;
+  /**
+   * This view's model: its own projection, depth epochs, tracks and frames, with ids scoped to the
+   * view (`__v<turn>` suffix on every part, label, clip and fade id; view 0 is unscoped).
+   */
+  readonly model: AssemblyRenderModel;
+  /** Screen rect of the rotated `reachBounds` plus labels: this view's viewBox. */
+  readonly viewBox: Rect;
+  /** Elements of the group, its content included. */
+  readonly elements: number;
+}
+
 /** What A1 adds to `RenderModel` for 1.2.0 content (`RenderModel.assembly`). */
 export interface AssemblyRenderModel {
   readonly ids: AssemblyIdScheme;
@@ -717,15 +874,39 @@ export interface AssemblyRenderModel {
   readonly reach: Rect | undefined;
   /**
    * Focus rect of an id at the END pose of a step (assembly, sub-assembly or part focus);
-   * B uses it instead of `RenderModel.focusRects` when present (§7.4).
+   * B uses it instead of `RenderModel.focusRects` when present (§7.4). WORLD rects only, in the
+   * view in effect at that step (`SceneAssemblies.plan[step - 1].view`); ids inside a close-up
+   * level give undefined (see `levelFocusRect`).
    */
   focusRect(step: number, id: string): Rect | undefined;
-  /** Exact pose at time `t` (loop seconds, speed 1); `t = 0` and outside steps: base pose. */
+  /**
+   * Focus rect of an id inside a close-up level, in OVERLAY (viewport) coordinates: the level's
+   * own rect placed by its overview, with the focus margins. Level paths are not in
+   * `RenderModel.focusRects`. Absent without levels.
+   */
+  levelFocusRect?(step: number, id: string): Rect | undefined;
+  /**
+   * Exact pose at time `t` (loop seconds, speed 1); `t = 0` and outside steps: base pose. With
+   * views or levels it also holds the opacity of every view group and level group, and the
+   * placement (`matrix(s 0 0 s tx ty)`) of every level group, so one state shows the right view
+   * and level (the cross-fades are linear: 0.3 s for views, the camera transition for levels).
+   */
   frameAt(t: number): AssemblyFrameState;
   /** Pose at the end of a step (per-step outputs and reduced-motion keyframes). */
   stepEnd(step: number): AssemblyFrameState;
-  /** Element estimate added by assemblies (copies, labels, leaders, callouts). */
+  /**
+   * Element count added by assemblies (copies, labels, leaders, callouts): every level and every
+   * view included (§13).
+   */
   readonly elements: number;
+  /**
+   * Close-up levels (§8.4), sorted by path; absent without. `frameAt`, `stepEnd`, `focusRect`
+   * and `elements` above already include them; `items`, `tracks`, `epochs` and the rest of this
+   * model describe the main scene (view 0) only.
+   */
+  readonly levels?: readonly AssemblyLevelRender[];
+  /** Quarter-turn views, sorted by turn, view 0 first; absent when no build step uses `view`. */
+  readonly views?: readonly AssemblyViewRender[];
 }
 
 /**
