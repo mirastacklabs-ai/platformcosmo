@@ -47,15 +47,28 @@ export {
   DEFAULT_TILE_WIDTH,
   partGeometryFaces,
   partPrimitiveFaces,
+  partPrimitiveSilhouette,
+  studGrid,
+  STUD_DIAMETER,
+  STUD_HEIGHT,
   halfOf,
 } from "./geometry/index.js";
-export type { Half, PartFace, PartPrimitiveFaces } from "./geometry/index.js";
+export type { Half, PartFace, PartPrimitiveFaces, StudGridOptions } from "./geometry/index.js";
 /**
  * @internal For pack authors that need the same typo hints as core diagnostics. The suggestion
  * text and matching are not stable across releases; do not parse or snapshot them.
  */
 export { didYouMean } from "./schema/suggest.js";
 export type { ProjectionOptions, Silhouette } from "./geometry/index.js";
+
+/**
+ * @internal For the DC pack's rack assemblies (assemblies.md 8): the A2-3 program resolver and
+ * step planner run over a rack tree exactly as over a spec assembly, and a turned tray's depth
+ * halves are reassigned with core's rule. Not stable API.
+ */
+export { AssemblyPrograms } from "./scene/assembly/plan.js";
+export type { AssemblyProgramsOptions } from "./scene/assembly/plan.js";
+export { reassignSplit } from "./geometry/parts.js";
 
 // Depth ordering and text (Track A1).
 export { depthOrder, compareBoxes, depthKey, orderGroups } from "./depth/index.js";

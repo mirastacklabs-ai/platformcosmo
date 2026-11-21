@@ -56,6 +56,10 @@ importers:
       fflate:
         specifier: 0.8.3
         version: 0.8.3
+    devDependencies:
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
 
   packages/cli:
     dependencies:
@@ -144,11 +148,29 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/parts-auto:
+    dependencies:
+      '@platformcosmo/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/parts-base:
     dependencies:
       '@platformcosmo/core':
         specifier: workspace:*
         version: link:../core
+
+  packages/parts-brick:
+    dependencies:
+      '@platformcosmo/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/pdf:
+    dependencies:
+      fflate:
+        specifier: 0.8.3
+        version: 0.8.3
 
   packages/themes:
     dependencies:

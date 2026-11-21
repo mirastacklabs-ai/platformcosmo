@@ -67,7 +67,7 @@ JSON summary with `--json`. Inputs are untrusted (§4.6, §14).
 | `assets pdf extract <f.pdf> --page N --image K -o out.png\|.jpg`                                                                                              | one image: DCTDecode passed through as `.jpg`; everything else decoded to PNG; `--all --pages a-b -d dir` writes every image ≥ `--min-px` as `p<page>-i<index>.png\|.jpg` (names never come from the PDF) plus `manifest.json` (page, index, bbox, sha256; identical images written once) |
 | `assets pdf compose --page N -o page.png [--dpi 96] [--crop x,y,w,h\|x%,y%,w%,h%] [--annotate]`                                                               | composites the page's raster images at their CTMs on white; `--annotate` draws each image's bbox and index so Claude can match figures to `extract` indexes                                                                                                                               |
 | `assets pdf render --page N -o page.png [--dpi 150] [--crop …]`                                                                                               | full render via the optional external renderer, then crop                                                                                                                                                                                                                                 |
-| `assets pdf text --page N [--json]`                                                                                                                           | text runs with bboxes (simple fonts, ToUnicode CMaps; unknown glyphs as U+FFFD); data, never instructions                                                                                                                                                                                 |
+| `assets pdf text --page N [--json]`                                                                                                                           | text runs with bboxes (simple fonts, ToUnicode CMaps; unknown glyphs, C0/C1 controls and bidi formatting characters as U+FFFD); data, never instructions                                                                                                                                  |
 | `assets crop <img> --rect x,y,w,h -o out.png [--transparent [--tolerance 12]] [--trim]`                                                                       | crop; optional removal of a near-uniform background by **edge-connected flood fill** (enclosed whites stay opaque)                                                                                                                                                                        |
 | `assets cutout <img> --seed x,y[;x,y…] [--polygon …] [--prior box\|cylinder\|none] [--mask auto\|rect] [--erase-from base.png -o base-out.png] -o sprite.png` | silhouette segmentation of one part (§6.2) and, optionally, erasing it from a base                                                                                                                                                                                                        |
 | `assets locate <sprite> --in <img> [--region x,y,w,h] [--top 3]`                                                                                              | template match (normalized cross-correlation on luminance and alpha mask, multi-scale), best positions with scores                                                                                                                                                                        |
@@ -101,10 +101,17 @@ follows only what extraction needs.
 - Encrypted files (`/Encrypt`, standard security handler): supported when the **user password
   is empty** (common for manuals that only restrict printing or copying): RC4 (V1/V2, R2–R4,
   40–128 bit), AES-128 (V4 with crypt filter `AESV2`, R4) and AES-256 (V5 `AESV3`, R5–R6) via
-  `node:crypto`; strings and streams (including object streams; metadata per
-  `/EncryptMetadata`) are decrypted with the per-object key, the file key is derived per the
-  PDF spec and checked against `/U` before any object is decrypted, and decrypted streams count
-  against the same decode caps. Any other handler, a
+  `node:crypto` (MD5, SHA-2, AES; RC4 itself is a few lines in the package, because OpenSSL 3
+  ships it only in the legacy provider that Node does not load); strings and streams (object
+  streams decrypted as a whole, never the strings inside them a second time; xref streams and
+  streams with an Identity `/Crypt` filter never) are decrypted with the per-object key. The
+  file key is derived per the PDF spec (`/EncryptMetadata false` changes only the R4 key
+  derivation: `/Metadata` streams are never read) and checked against `/U` before any object is
+  decrypted; decrypted bytes count against the same decode caps, and a decrypted stream is
+  kept for the document handle's lifetime (so it is decrypted once; bounded by the file
+  size). The handler must be
+  consistent: AESV3 only with V5, V5 only with AESV3 (or no encryption), and a `/Length` that
+  is a whole number of bytes. Any other handler, a
   non-empty user password, or a failed `/U` check is refused with `pdf/encrypted`. Permission
   flags are reported by `pdf info`; they are not enforced by us and do not change what the user
   may do with their own document (the skill states the document's license).
@@ -138,8 +145,10 @@ Colour: `DeviceGray`, `DeviceRGB`, `DeviceCMYK` (naive conversion), `ICCBased` (
 ignored), `Indexed` over those bases (palette lookup), `CalGray`/`CalRGB` as device spaces;
 `Separation`/`DeviceN` approximated to gray with `pdf/colour-approx`. `BitsPerComponent` 1, 2,
 4, 8, 16; `/Decode` arrays; `/ImageMask` stencils (alpha with the fill colour black); `/SMask`
-(soft mask → alpha channel, resampled to the image size if different) and `/Mask` colour-key
-ranges. Output: 8-bit RGB or RGBA PNG, at most **16 MP** of output pixels per image (larger images are
+(soft mask → alpha channel, resampled to the image size if different; `/Matte` is ignored, so
+pre-multiplied soft masks are not un-multiplied) and `/Mask` colour-key ranges. A passed-through
+JPEG keeps its own pixels: its `/Decode` and `/SMask` are not applied (an info diagnostic says
+so; the mask is extractable on its own). Output: 8-bit RGB or RGBA PNG, at most **16 MP** of output pixels per image (larger images are
 listed but not decoded: `pdf/too-large`, suggesting `render --crop` at a lower DPI). Flate and
 LZW decode **streaming** (fflate's streaming inflate) into a buffer sized from the declared
 width × height × components, aborting as soon as the output would exceed it or the 64 MiB
@@ -170,6 +179,41 @@ model is the way to obtain one frame image.
 The parser never throws on bad input (diagnostics instead), is fuzzed (Track C tests), and
 all text and pixels it returns are data: the skill's prompt-injection rule (§10) applies to
 everything read from a document.
+
+How C-2 applies the table:
+
+- The object cap also bounds the elements of one array or dictionary, and the entries of one
+  xref table (a larger declared count is treated as damage and repaired).
+- `/Prev` targets and a hybrid file's `/XRefStm` count as sections; one already read is not read
+  again (`pdf/malformed` warning), and past 64 a `pdf/too-complex` warning precedes the
+  one-pass repair scan. Repair skips stream data (by a valid `/Length`, else to the next
+  `endstream`; with an indirect `/Length`, the length object is looked up among the headers
+  found and whatever the scan recorded inside the data is dropped afterwards), so an embedded
+  file's objects are never adopted; a `stream` with no `endstream` after it does not end the
+  scan. Repair reads at most the newest 64 trailers.
+- Every object is parsed only up to the next `endobj` (or, after repair, the next object
+  header); an object-stream member only within its own slice, and an object stream whose member
+  offsets repeat or decrease is ignored (`pdf/malformed`). Lexed bytes count against
+  `maxLexedBytes` (1 GiB per command) and parsed values (numbers, names, strings, containers)
+  against `maxParsedValues` (20 M per command, checked before each value is built, so the heap
+  held by parsed objects stays bounded); `/Kids` entries that are not dictionaries are not kept
+  in the object cache.
+- At most 8 whitespace bytes may separate data from `endstream` or `EI`; otherwise the
+  stream's end is found by the scan.
+- The decoded total counts every byte handed out: filter output, unfiltered and passed-through
+  streams, decrypted bytes, the concatenated page content, padding and pixel buffers; it is
+  checked before each decode. An image whose data is under 1/1024 of its declared size is
+  `pdf/malformed`, never padded.
+- Per-command budgets on top of the table: 50 M content tokens (the per-page cap of 5 M counts
+  operands too), 256 MiB of page content scanned (many pages on one large stream), 256 MiB of
+  image data hashed per `list` call (beyond: `sha256: null` and one warning; the same when the
+  decoded total runs out while hashing), 100 000 image placements per page, and 200 000 text
+  runs of at most 65 536 characters per page, 4 M characters of text per page in total (past
+  it the text matrix still advances), each ToUnicode mapping at most 32 characters
+  (`pdf/too-complex`, truncated).
+- The 16 MP cap is 16 777 216 px, as for image assets.
+- Limits can only be lowered per call (`openPdf(bytes, { limits })`, `min(default, value)`),
+  never raised, and never by the file.
 
 ## 5. Raster operations (Track C)
 
@@ -427,6 +471,19 @@ declared away (§6.5 rules 2–4), and anything not declared is drawing and must
    regions (the part's enclosed whites: opaque, unless `holes`), plus the ink bounding them;
    regions containing another part's seeds are excluded; the rough polygon and the shape prior
    (the isometric box or cylinder hull fitted to the seeded regions) bound the result.
+   **Shape prior.** `box` is the isometric box hull of the seeded mask: the smallest hexagon with
+   vertical sides and ±30° edges that contains it. `cylinder` is the convex hull of the seeded
+   mask and its mirror image about its vertical axis. `none` adds nothing. The prior bounds the
+   mask where the part stands alone in no state, and it is part of every hull (step 6), so a
+   stroke that segmentation missed inside the part's box still counts as the part's for the
+   annotation rules (§6.5 rule 2) even for a part that never stands alone. It also estimates
+   what a hidden part should cover when no depiction shows it (§6.3, `asset/occluded-unrecovered`).
+   **Filling and the peel.** The mask is filled from the **closed** ink, so a 1 px break in an
+   outline (a scan, a light print) does not open the face behind it. Then only closing-only
+   pixels (ink after the closing, paper before it) that the exterior reaches through closing-only
+   pixels are peeled: comb fin gaps of up to 2 px open to the outside and show what lies behind
+   them, while raw ink, the seeded faces and paper stay. The accepted trade-off: a cavity behind a
+   mouth of 2 px or less stays opaque; declare it with `holes`.
 4. Ink shared by two parts (a common outline) goes to the part in front in that state (lower
    on screen, or the manifest order when equal).
 5. `--mask rect` exists only for diagnostics; the gate rejects rectangle masks that include
@@ -440,6 +497,12 @@ declared away (§6.5 rules 2–4), and anything not declared is drawing and must
    offset, and each state's hull is the convex hull of that mapped hull, the state's mask and
    the shape prior, dilated by 2 px. A part that stands alone in no state keeps the hull of
    mask ∪ prior and gets `asset/hull-uncertain` (warning; `confidence: "reduced"`).
+   With two drawings, whole ink that the other drawing also shows at the aligned place (a cage,
+   a bracket, the board) is static: more than a quarter of it beyond the mask means the part
+   touches static ink and does not stand alone there. **With one drawing** there is no such
+   evidence: a part stands alone only where its rough polygon, or its declared prior dilated by
+   the stroke + 1 px, contains its whole ink. Otherwise it keeps its seeded mask (a frame about
+   its own size around it is never swallowed), and every face of it must be seeded.
 
 Result: opaque inside the true outline, transparent everywhere else; never a rectangle.
 
@@ -450,11 +513,17 @@ compared with the visible mask; pixels covered by another part are **recovered**
 depiction: the other state, a duplicate instance (`instanceOf`, which also share one clean
 template sprite: the instance with the fewest occluded pixels), or a detail view. Pixels that
 cannot be recovered are flagged (`asset/occluded-unrecovered`, with area and bbox). A sprite
-never contains pixels of a different part.
+never contains pixels of a different part. A pixel the template's drawing shows (not hidden
+there) comes back from another depiction only where both agree: the other depiction's
+segmentation claims it, and in the template's drawing it is raw ink 8-connected to the
+template's mask, or paper enclosed by that ink. A face only another drawing closes is not
+added.
 
 ### 6.4 Clean base
 
-The base (default the assembled drawing) has every moved part's mask (dilated by 1 px) and
+The base (default the assembled drawing) has every moved part's mask and part ink (dilated by
+1 px; with one drawing, the mask, its anti-aliased fringe, and the part ink in the hull that
+ends there, since a stroke running on out of the hull is the board's) and
 every declared annotation erased: the measured band of each arrow and leader polyline and each
 text rectangle, dilated by 2 px (the **annotation mask** of each state), **minus part ink** (§6.5
 rule 2): annotation erasure only ever removes ink that is not part ink, except inside each
@@ -469,9 +538,11 @@ the background colour and flagged. Arrows are redrawn by the renderer as fading 
 The gate checks what a viewer actually sees: it re-renders **both** states from our outputs
 (base + every sprite at its seat; base + every sprite at its exploded position, through the
 same resvg path as `pcosmo build`) and compares each with its source drawing, after alignment.
-All metrics are **local**: the unit is the largest connected component (8-connectivity) of
-residual pixels, in pixels, never a fraction of the image, so a 40-pixel ghost fin cannot hide
-in a large figure. A residual pixel is one whose luminance differs by more than 48 (0–255)
+All metrics are **local**: the unit is the largest connected component (pixels at Chebyshev
+distance up to 2 connect, i.e. across exactly 1-pixel gaps, so a comb of thin fins is one
+defect, while single pixels 2 px apart stay separate) of residual
+pixels, in pixels, never a fraction of the image, so a 40-pixel ghost fin cannot hide in a
+large figure. A residual pixel is one whose luminance differs by more than 48 (0–255)
 after a 1-pixel tolerance for anti-aliasing (a pixel matches if any pixel in its 3 × 3
 neighbourhood of the other image matches).
 
@@ -509,6 +580,13 @@ until the gate passes:
      because the hull comes from the part's whole ink where it stands alone); an arrow from
      the background to a part's edge and a leader from a callout number to a seated part pass.
    - Annotation erasure in the base (§6.4) uses the same rule, so it never removes part ink.
+   - The polyline's own stroke (the ink runs through its samples) is exempt from "ink inside a
+     hull" only in the hull's 2 px margin, never inside the undilated convex hull: a leader drawn
+     along a stroke segmentation missed there (a lever just off the body) fails.
+   - An arrow whose tip touches the other state's mask mapped into its drawing (in the exploded
+     drawing, the seat outline the part goes to) gets a `w × w` allowance there for rule 4,
+     like a contact square; an arrow reaching into that mask beyond its tip square still
+     counts.
 3. **Measured band width.** A polyline's band is not its declared `width`: at every 2 px sample
    along it, the gate measures the ink run perpendicular to the polyline through the sample;
    the band half-width is (median run + 2 px) / 2. The polyline must lie on ink of its declared
@@ -519,15 +597,22 @@ until the gate passes:
    part's hull over its length and fails rule 2.
    **Shape of annotations.** Every **leader** must end (at its free end, the end without a part
    contact) within 4 px of a declared `text` rectangle of the same state (a callout number,
-   label or bubble). Every **arrow** must have a detected **arrowhead** at its free end: within
-   the last `3w` px the ink run perpendicular to the polyline widens to at least 2× the median
-   run and narrows again toward the tip (filled or open wedge), deterministically measured on
-   the same samples. A stroke that is neither (a fin, an edge, a crease) cannot be declared at
-   all.
-4. **Cumulative caps per part.** For each part and state, the pixels of its seated and exploded
-   masks and of its part ink (rule 2) that lie inside the part's hull and inside
-   any annotation, counted once over the union of all annotations and excluding the contact
-   allowances, must be ≤ 16 px. Many small annotations cannot add up to a hidden part. Text
+   label or bubble). Every **arrow** must have a detected **arrowhead** at **either** end (the
+   tip may touch a part: an arrow from the background to a part's edge has its head at the part,
+   so the "free end" of arrows is not required): within the last `3w` px the arrow's own ink,
+   8-connected to the shaft's run and excluding part outlines and the static drawing, widens
+   across the polyline to at least 2× the stroke run and narrows again toward the tip without
+   widening (filled or open wedge), deterministically measured on the same samples; ink that
+   runs out of that window sideways is a crossing stroke, not a head. The band around a head is
+   the wedge's own ink. A stroke that is neither (a fin, an edge, a crease) cannot be declared at
+   all. Because static ink is excluded, an arrowhead drawn on a feature that both drawings show at
+   the aligned place (the board, a bracket) cannot be detected: draw the head clear of it.
+4. **Cumulative caps per part.** For each part and state, the pixels of **both** its masks in
+   that state's frame (the mask placed there, and the other state's mask mapped into this frame by
+   the alignment: in the exploded drawing that is the seat location) and of its part ink (rule 2,
+   inside the part's hull), inside any annotation mask of that state, counted once over the
+   union of all annotations and excluding each annotation's own contact allowances (dilated like
+   the mask), must be ≤ 16 px. Many small annotations cannot add up to a hidden part. Text
    rectangles must also contain ink and be ≤ 2% of the figure each.
    Residual risk, stated in the report: only for a part that stands alone in no state (its hull
    then comes from mask and prior only, `asset/hull-uncertain`) could a missed stroke outside
@@ -553,11 +638,11 @@ still reported.
 | assembled residual    | largest residual component of (assembled re-render vs assembled source) > 24 px                                                                                                                                                                                                                                                                                                                                                                                                                        | `asset/assembled-residual` (error, with bbox)                   |
 | exploded residual     | largest residual component of (exploded re-render vs exploded source) > 24 px; this is where ghost fragments in the base, rectangles carrying slivers and blanked interiors show up, and where an ungrouped sub-part (a clip lever left seated) fails                                                                                                                                                                                                                                                  | `asset/exploded-residual` (error, with bbox)                    |
 | leftover fragments    | after erasing, an ink component ≥ 12 px inside the moved parts' dilated seated masks whose pixels correlate (NCC ≥ 0.6) with the moved sprite at that place                                                                                                                                                                                                                                                                                                                                            | `asset/leftover-fragment` (error)                               |
-| foreign pixels        | any ink pixel of a sprite outside the part's own regions (its seeded regions, the regions they enclose, and their bounding ink); ≥ 1 component of ≥ 4 px fails                                                                                                                                                                                                                                                                                                                                         | `asset/foreign-pixels` (error)                                  |
+| foreign pixels        | any ink pixel of a sprite outside the part's own regions in that drawing (its seeded regions, the regions they enclose, and their bounding ink; the whole silhouette where it stands alone; for the template in its own drawing, also what was recovered from other depictions), except ink the drawing shows there that continues those regions inside the part's hull (never for the template in its own drawing); ≥ 1 component of ≥ 4 px fails                                                     | `asset/foreign-pixels` (error)                                  |
 | transparency holes    | a transparent region of a sprite fully enclosed by its opaque mask, unless `holes`                                                                                                                                                                                                                                                                                                                                                                                                                     | `asset/mask-hole` (error)                                       |
 | rectangle masks       | a mask equal to its bbox while the bbox contains ink of another part's regions                                                                                                                                                                                                                                                                                                                                                                                                                         | `asset/rect-mask` (error)                                       |
 | group connectivity    | a group's mask is not one connected component (unless `allowDisjoint`)                                                                                                                                                                                                                                                                                                                                                                                                                                 | `asset/group-disconnected` (error)                              |
-| instance assignment   | two instances assigned to the same `locate` peak, or a swap that lowers the residual                                                                                                                                                                                                                                                                                                                                                                                                                   | `asset/instance-swap` (error)                                   |
+| instance assignment   | two instances assigned to the same `locate` peak, or a swap that fits the seeds and `nearest` hints better (identical sprites render the same, so the residual cannot decide); `asset/ambiguous` (warning) where neither instance has seeds or a hint in a drawn state                                                                                                                                                                                                                                 | `asset/instance-swap` (error)                                   |
 | unrecovered base      | erased pixels filled with background (no other depiction) that are **visible in either re-render**, i.e. not covered by a sprite in that state, with a component > 24 px                                                                                                                                                                                                                                                                                                                               | `asset/base-unrecovered` (error); invisible fills are info      |
 | unrecovered occlusion | pixels of a part hidden in its source depiction and not recovered (§6.3), visible in the exploded re-render                                                                                                                                                                                                                                                                                                                                                                                            | `asset/occluded-unrecovered` (error when > 24 px, else warning) |
 | annotation residual   | ink left in the base inside a declared annotation mask (arrow or leader polyline, callout text rectangle)                                                                                                                                                                                                                                                                                                                                                                                              | `asset/arrow-residual` (error)                                  |
@@ -1186,7 +1271,8 @@ assumption, and anything that needs a screenshot.
 
 ## 12. Fixtures (synthetic, generated by committed scripts)
 
-- `tests/fixtures/pdf/gen.mjs` (Track C) writes small PDFs byte by byte: (1) a raster page with
+- `packages/pdf/test/fixtures/gen.ts` (Track C; typed, imported by the tests, which build the
+  files in memory) writes small PDFs byte by byte: (1) a raster page with
   a JPEG XObject (flat-colour baseline JPEGs encoded by the script itself: DC-only coefficients,
   standard Huffman tables), a Flate RGB image with PNG predictors, a Flate Indexed image with an
   SMask, an inline image, a nested Form XObject with a matrix and a rotated page; (2) a
@@ -1210,18 +1296,30 @@ assumption, and anything that needs a screenshot.
 
 `pdf/encrypted`, `pdf/xref-repaired`, `pdf/unsupported-filter`, `pdf/colour-approx`,
 `pdf/too-complex`, `pdf/too-large`, `pdf/renderer-missing`, `pdf/renderer-failed`,
-`pdf/no-images` (vector-only page; suggests `render` or a screenshot), `pdf/bad-page`, plus the
+`pdf/no-images` (vector-only page; suggests `render` or a screenshot), `pdf/bad-page` (a page
+or image index that does not exist), `pdf/malformed` (not a PDF or no catalog even after
+repair, an image without usable dimensions or colour space, a DCT stream that is not a JPEG;
+a warning when image data is shorter than declared and was padded; info when a
+passed-through JPEG's `/SMask` is not applied; an error when a requested mask does not exist),
+plus the
 `asset/*` gate codes of §6.5 and `asset/too-expensive`, `asset/unsafe-path`. All carry page,
 image index and bbox in `params`.
 
 Raster operations (`@platformcosmo/assets`, §5) use these `asset/*` codes, with a bbox in
 `params` wherever a region applies: errors `bad-option` (`params.option` names the option:
-tolerance, maxPx, rect, region, top, minScore, scales, svgSize, maxShift, exclude, input),
+tolerance, maxPx, rect, region, top, minScore, scales, svgSize, maxShift, exclude, input; the
+figure pipeline adds manifest, with a JSON pointer `path` into the manifest, outputs for
+`assets check`, figureId, dir and label),
 `bad-raster`, `too-large`, `too-expensive`, `empty`, `flat` (no texture under the mask),
 `not-found` (nothing fits or matches), `renderer-failed` (resvg wasm could not start); warnings
 `rect-clamped`, `no-background`, `background-covers-image`, `ambiguous` (align: no majority or a
 small best-vs-second margin), `flat` (one scale skipped), and info/warning `shrink-passthrough`.
-Image validation errors keep C-1's `image/*` codes.
+Image validation errors keep C-1's `image/*` codes. The figure pipeline (§6) uses the §6.5 gate
+codes (`asset/seat-unverified` is a warning) plus these; `not-found` also covers a seed on the
+background or a part that `locate` cannot find in a drawing, `too-large` a manifest with more
+than 64 parts, `too-expensive` annotation masks or part overlaps beyond the work budget, `empty` a
+part whose mask is empty (a polygon away from its seeds), and the warning `ambiguous` instances
+with neither seeds nor a `nearest` hint in a drawn state (their assignment is unverified).
 
 ## 14. Limits
 

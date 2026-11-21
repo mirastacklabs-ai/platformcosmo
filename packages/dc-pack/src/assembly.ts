@@ -32,13 +32,7 @@ import { registry } from "./registry.js";
 import { depthSort } from "./sort.js";
 import { U_MM } from "./units.js";
 import { partKind, tileToMm, unitMm } from "./shapes.js";
-import {
-  resolveProgram,
-  toPNode,
-  type ProgramIn,
-  type ResolveResult,
-  type StageIn,
-} from "./programs.js";
+import { AssemblyPrograms, reassignSplit } from "@platformcosmo/core";
 import type {
   AssemblyFrame,
   Box3,
@@ -48,9 +42,8 @@ import type {
   PartPrimitive,
   PartRole,
   PlatformCosmoSpec,
-  ResolvedExplodeProgram,
   ResolvedProgram,
-  ResolvedStage,
+  SpecStage,
   SceneAssembly,
   SceneAssemblyNode,
   ScenePart,
@@ -77,7 +70,6 @@ const RESERVED = ["tray", "lid", "faceplate", "rear"] as const;
 
 const rnd = (v: number): number => Math.round(v * 1e9) / 1e9 + 0;
 const r6 = (v: number): number => Math.round(v * 1e6) / 1e6 + 0;
-const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 // ---------------------------------------------------------------------------------------------
 // Boxes
@@ -181,40 +173,15 @@ function turnGeometry(g: PartGeometry, size: Vec3): PartGeometry {
       ? { rotate: ((((p.rotate ?? 0) / 90 + 2) % 4) * 90) as 0 | 90 | 180 | 270 }
       : {}),
   }));
-  const bounds = flip(g.bounds);
-  const depthBox = flip(g.depthBox);
-  let split = g.split;
-  if (split !== undefined) {
-    const ids = new Set([...split.back, ...split.front]);
-    const cx = bounds.origin.x + bounds.size.x / 2;
-    const cy = bounds.origin.y + bounds.size.y / 2;
-    const old = new Set(split.front);
-    const back: string[] = [];
-    const front: string[] = [];
-    for (const p of primitives) {
-      if (!ids.has(p.id)) continue;
-      let isFront: boolean;
-      if (p.kind === "box") {
-        // as core's reassignSplit: the floor and every -x / -y wall draw behind
-        isFront =
-          p.box.origin.x + p.box.size.x / 2 > cx + 1e-9 ||
-          p.box.origin.y + p.box.size.y / 2 > cy + 1e-9;
-      } else {
-        isFront = !old.has(p.id); // a ring half swaps with the other half
-      }
-      (isFront ? front : back).push(p.id);
-    }
-    split = { back, front };
-  }
   const images = g.images?.filter((im) => im.face === "billboard" || im.face === "top");
-  return {
+  // the turned tray's walls change depth halves: core's rule reassigns them, as for a quarter turn
+  return reassignSplit({
     ...g,
     primitives,
-    bounds,
-    depthBox,
-    ...(split === undefined ? {} : { split }),
+    bounds: flip(g.bounds),
+    depthBox: flip(g.depthBox),
     ...(images === undefined ? {} : { images }),
-  };
+  });
 }
 
 function scaleGeometry(g: PartGeometry, s: Vec3): PartGeometry {
@@ -574,6 +541,10 @@ function defaultTemplateProgram(a: SpecAssembly): {
   };
 }
 
+type StageIn = Omit<SpecStage, "parts" | "except"> & {
+  parts: string[];
+  except?: string[];
+};
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 const fin = (v: unknown): number | undefined =>
   typeof v === "number" && Number.isFinite(v) ? v : undefined;
@@ -727,7 +698,6 @@ export function buildRackAssembly(
   const D = tileToMm(built.bounds.size.y);
   const mirror = isMirrored(fragment, rackId);
   const pl: Placer = { origin: rackObj.box.origin, mirror, w: W, d: D };
-  const front: Vec3 = mirror ? { x: 0, y: -1, z: 0 } : { x: 0, y: 1, z: 0 };
   const frontSide = mirror ? "-y" : "+y";
 
   // ---- frame ----
@@ -962,9 +932,6 @@ export function buildRackAssembly(
   };
   const draft = subNode(rackId, [frameNode, ...slotKids], rootInit);
   const root = place(draft, pl);
-  const resolved = resolvePrograms(rack, base, root, slots, front, diagnostics);
-  if (resolved === undefined) return { diagnostics };
-
   const leaves = leavesOf(root);
   const rest = unionOf(
     (function collect(n: SceneAssemblyNode, out: Box3[]): Box3[] {
@@ -974,7 +941,6 @@ export function buildRackAssembly(
     })(root, []),
   );
   const restBounds = rest ?? root.world;
-  const reach = unionOf([restBounds, ...resolved.reach.map((b) => worldBox(b, pl))]) ?? restBounds;
   const frame: AssemblyFrame = {
     units: "mm",
     scale: { x: 1 / MM, y: 1 / MM, z: 1 / MM },
@@ -982,23 +948,207 @@ export function buildRackAssembly(
     rotate: 0,
     front: frontSide,
   };
-  const programs = [...resolved.programs].sort((a, b) => cmp(a.owner, b.owner) || cmp(a.id, b.id));
-  return {
-    assembly: {
-      id: rackId,
-      source: "dc",
-      ...(rack.label === undefined ? {} : { label: rack.label }),
-      frame,
-      root,
-      leaves,
-      programs,
-      ...(resolved.defaultProgram === undefined ? {} : { defaultProgram: resolved.defaultProgram }),
-      basePose: [],
-      restBounds,
-      reachBounds: reach,
-    },
-    diagnostics,
+  const bare: SceneAssembly = {
+    id: rackId,
+    source: "dc",
+    ...(rack.label === undefined ? {} : { label: rack.label }),
+    frame,
+    root,
+    leaves,
+    programs: [],
+    basePose: [],
+    restBounds,
+    reachBounds: restBounds,
   };
+
+  // programs, base pose and reach: core's planner over the rack tree
+  const synthetic = syntheticPrograms(slots, rackId);
+  const planner = makePlanner(spec, rackId, synthetic);
+  const attached = planner.attach({
+    assemblies: [bare],
+    boards: [],
+    plan: [],
+    images: [],
+    credits: [],
+  }).assemblies[0] as SceneAssembly;
+  const swept = planner.reach(bare);
+  diagnostics.push(...planner.diagnostics);
+
+  const customIds = customProgramIds(rack);
+  const slotPtr = new Map([...slots].map(([p, s]) => [p, s.internals?.ptr]));
+  const floor = restBounds.origin.z;
+  const low = belowFloor(attached.programs, root, floor, (p) =>
+    p.id === "internals"
+      ? `${slotPtr.get(p.owner) ?? base}/assembly`
+      : p.id === "drawers" && customIds.length === 0
+        ? base
+        : `${base}/programs/${Math.max(0, customIds.indexOf(p.id))}`,
+  );
+  if (low.length > 0) return { diagnostics: [...diagnostics, ...low] };
+
+  const reach = unionOf(swept === undefined ? [restBounds] : [restBounds, swept]) ?? restBounds;
+  const defaultProgram = customIds[0] ?? "drawers";
+  const assembly: SceneAssembly = { ...attached, defaultProgram, reachBounds: reach };
+  SYNTHETIC.set(assembly, synthetic);
+  return { assembly, diagnostics };
+}
+
+const SYNTHETIC = new WeakMap<SceneAssembly, Synthetic>();
+
+/** Core's planner over a rack tree; `synthetic` holds the bodies the spec does not carry. */
+function makePlanner(
+  spec: PlatformCosmoSpec,
+  rackId: string,
+  synthetic: Synthetic,
+): AssemblyPrograms {
+  // core's model reads the whole spec: garbage entries (validation reports them) are neutralised
+  // in place, so every JSON pointer keeps its index
+  const racks: readonly unknown[] = Array.isArray(spec.racks) ? spec.racks : [];
+  const planSpec = {
+    ...spec,
+    assemblies: (Array.isArray(spec.assemblies) ? (spec.assemblies as readonly unknown[]) : [])
+      .map((a) => (isObj(a) ? a : { id: "", template: true, parts: [] }))
+      .slice(0, 50),
+    racks: racks.map((r) =>
+      isObj(r)
+        ? {
+            ...r,
+            slots: (Array.isArray(r["slots"]) ? (r["slots"] as unknown[]) : []).map((x) =>
+              isObj(x) ? x : { at: 0, type: "" },
+            ),
+          }
+        : { id: "" },
+    ),
+  } as unknown as PlatformCosmoSpec;
+  return new AssemblyPrograms(planSpec, {
+    synthetic: (asm, owner, id) => (asm === rackId ? synthetic.get(`${owner}\0${id}`) : undefined),
+  });
+}
+
+/**
+ * A fresh core planner (programs, level machine, `plan()` with implicit access) for an assembly
+ * `buildAssembly` returned: it resolves the rack's programs exactly as it does a spec
+ * assembly. Undefined for any other assembly.
+ */
+export function assemblyPlanner(
+  spec: PlatformCosmoSpec,
+  assembly: SceneAssembly,
+): AssemblyPrograms | undefined {
+  const synthetic = SYNTHETIC.get(assembly);
+  return synthetic === undefined ? undefined : makePlanner(spec, assembly.id, synthetic);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Programs: core's A2-3 planner resolves them (selectors, directions, distances, timing, levels,
+// implicit access); the pack only supplies the bodies the spec does not carry.
+// ---------------------------------------------------------------------------------------------
+
+type Synthetic = Map<string, SpecExplodeProgram>;
+
+/** Ids the pack owns inside a slot with internals, as `except` selectors of template stages. */
+const OWN_PARTS = [...RESERVED, "faceplate/**", "rear/**"];
+
+/**
+ * The built-in rack program `drawers` (assemblies.md 8.1) and one `internals` per slot with a
+ * template (8.2): the lid up, then the template's default program, its distances converted from
+ * the template's units to millimetres (per axis, after the fit). A template whose default program
+ * is a build program gives empty stages (1 + steps, as validation counts them).
+ */
+function syntheticPrograms(slots: ReadonlyMap<string, SlotBuild>, rackId: string): Synthetic {
+  const out: Synthetic = new Map();
+  out.set("\0drawers", {
+    id: "drawers",
+    label: "Drawers",
+    stages: [
+      // a cover leaves along its own outward normal: the rear door goes rear (8.1)
+      { label: "Doors", parts: ["frame/role:cover"], direction: "drawer", labels: "hide" },
+      {
+        label: "Drawers",
+        parts: ["type:*"],
+        direction: "drawer",
+        order: "top-down",
+        stagger: 0.1,
+      },
+    ],
+  } as unknown as SpecExplodeProgram);
+  for (const [path, s] of slots) {
+    const ix = s.internals;
+    if (ix === undefined) continue;
+    const um = unitMm(ix.template.units ?? "mm");
+    const k: Vec3 = { x: um.x * ix.factor, y: um.y * ix.factor, z: um.z * ix.factor };
+    const def = defaultTemplateProgram(ix.template);
+    const gap = fin(def.explode?.gap);
+    const rest: unknown[] =
+      def.explode !== undefined
+        ? def.explode.stages.slice(0, 32).map((st) => {
+            const sx = stageOf(st, k);
+            return { ...sx, except: [...(sx.except ?? []), ...OWN_PARTS] };
+          })
+        : Array.from({ length: def.steps }, (_, i) => ({
+            parts: [],
+            ...(def.labels[i] === undefined ? {} : { label: def.labels[i] }),
+          }));
+    out.set(`${path.slice(rackId.length + 1)}\0internals`, {
+      id: "internals",
+      ...(gap === undefined ? {} : { gap: gap * k.x }),
+      stages: [{ label: "Lid", parts: ["lid"], direction: "up" }, ...rest],
+    } as unknown as SpecExplodeProgram);
+  }
+  return out;
+}
+
+/** Programs of the rack's own `programs`, in spec order (the model's rule: an array of stages). */
+function customProgramIds(rack: SpecRack): string[] {
+  const list: readonly unknown[] = Array.isArray(rack.programs) ? rack.programs : [];
+  return list
+    .filter(isObj)
+    .filter((p) => Array.isArray(p["stages"]) && typeof p["id"] === "string")
+    .slice(0, 8)
+    .map((p) => p["id"] as string);
+}
+
+/**
+ * Rack or slot moves that end below the floor (the rack's rest minimum z), over the resolved
+ * programs: a node's displacement is the sum of its own and its ancestors' moves in a program.
+ */
+function belowFloor(
+  programs: readonly ResolvedProgram[],
+  root: SceneAssemblyNode,
+  floor: number,
+  ptrOf: (p: ResolvedProgram) => string,
+): Diagnostic[] {
+  const nodes = new Map<string, SceneAssemblyNode>();
+  (function index(n: SceneAssemblyNode): void {
+    nodes.set(n.path, n);
+    for (const c of n.children) index(c);
+  })(root);
+  const out: Diagnostic[] = [];
+  for (const p of programs) {
+    if (p.kind !== "explode") continue;
+    const dz = new Map<string, number>();
+    for (const st of p.stages)
+      for (const m of st.moves) dz.set(m.path, (dz.get(m.path) ?? 0) + m.offset.z);
+    for (const [path, own] of dz) {
+      const n = nodes.get(path);
+      if (n === undefined) continue;
+      let total = own;
+      for (let q = path.lastIndexOf("/"); q > 0; q = path.lastIndexOf("/", q - 1)) {
+        total += dz.get(path.slice(0, q)) ?? 0;
+      }
+      const z = n.world.origin.z + total;
+      if (z < floor - 1e-6) {
+        out.push(
+          err(
+            "assembly/below-ground",
+            ptrOf(p),
+            `"${path}" would move below the floor (${Math.round((z - floor) * MM * 10) / 10} mm).`,
+            { part: path, z: r6((z - floor) * MM) },
+          ),
+        );
+      }
+    }
+  }
+  return out;
 }
 
 /** World box of everything a leaf draws (its geometry bounds). */
@@ -1016,254 +1166,4 @@ function boundsWorld(n: SceneAssemblyNode, pl: Placer): Box3 {
     ),
     pl,
   );
-}
-
-// ---------------------------------------------------------------------------------------------
-// Programs
-// ---------------------------------------------------------------------------------------------
-
-interface Resolved {
-  readonly programs: ResolvedProgram[];
-  /** Local boxes (mm, final pose) of every leaf at every program's end pose. */
-  readonly reach: Box3[];
-  /** The rack's first program in spec order (validation's default). */
-  readonly defaultProgram: string | undefined;
-}
-
-function resolvePrograms(
-  rack: SpecRack,
-  base: string,
-  turned: SceneAssemblyNode,
-  slots: ReadonlyMap<string, SlotBuild>,
-  front: Vec3,
-  diagnostics: Diagnostic[],
-): Resolved | undefined {
-  const owner = toPNode(turned);
-  const programs: ResolvedProgram[] = [];
-  const reach: Box3[] = [];
-  const nodeBox = new Map<string, Box3>();
-  const parentOf = new Map<string, string>();
-  (function index(n: SceneAssemblyNode): void {
-    nodeBox.set(n.path, n.local);
-    for (const c of n.children) {
-      parentOf.set(c.path, n.path);
-      index(c);
-    }
-  })(turned);
-
-  const ancestorsOf = (path: string): string[] => {
-    const out: string[] = [];
-    for (let p: string | undefined = path; p !== undefined; p = parentOf.get(p)) out.push(p);
-    return out;
-  };
-  const add = (b: Box3, v: Vec3): Box3 =>
-    box(b.origin.x + v.x, b.origin.y + v.y, b.origin.z + v.z, b.size.x, b.size.y, b.size.z);
-  const sum = (a: Vec3, b: Vec3 | undefined): Vec3 =>
-    b === undefined ? a : { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
-
-  // below the floor (z < 0 in rack-local mm): every moved node at the end of its program
-  let below = false;
-  const checkFloor = (res: ResolveResult, ptr: string, lift: ReadonlyMap<string, Vec3>): void => {
-    for (const [path, v] of res.shifts) {
-      const b = nodeBox.get(path);
-      if (b === undefined) continue;
-      let total = v;
-      for (const a of ancestorsOf(path).slice(1)) total = sum(total, res.shifts.get(a));
-      for (const a of ancestorsOf(path)) total = sum(total, lift.get(a));
-      const z = b.origin.z + total.z;
-      if (z < -EPS) {
-        below = true;
-        diagnostics.push(
-          err(
-            "assembly/below-ground",
-            ptr,
-            `"${path}" would move below the floor (${Math.round(z * 10) / 10} mm).`,
-            { part: path, z: r6(z) },
-          ),
-        );
-      }
-    }
-  };
-  const leafReach = (res: ReadonlyMap<string, Vec3>, within: SceneAssemblyNode): void => {
-    (function walk(n: SceneAssemblyNode): void {
-      if (n.kind === "leaf") {
-        let v: Vec3 = { x: 0, y: 0, z: 0 };
-        for (const a of ancestorsOf(n.path)) v = sum(v, res.get(a));
-        const g = n.geometry;
-        reach.push(
-          add(
-            g === undefined
-              ? n.local
-              : box(
-                  n.local.origin.x + g.bounds.origin.x,
-                  n.local.origin.y + g.bounds.origin.y,
-                  n.local.origin.z + g.bounds.origin.z,
-                  g.bounds.size.x,
-                  g.bounds.size.y,
-                  g.bounds.size.z,
-                ),
-            v,
-          ),
-        );
-      } else for (const c of n.children) walk(c);
-    })(within);
-  };
-
-  // ---- rack programs ----
-  const custom = (Array.isArray(rack.programs) ? (rack.programs as readonly unknown[]) : [])
-    .filter(isObj)
-    .filter((p) => Array.isArray(p["stages"]) && typeof p["id"] === "string")
-    .slice(0, 8) as unknown as SpecExplodeProgram[];
-  const rackIns: ProgramIn[] =
-    custom.length > 0
-      ? custom.map((p, i) => ({
-          id: p.id,
-          ...(typeof p.label === "string" ? { label: p.label.slice(0, 200) } : {}),
-          ...(fin(p.gap) === undefined ? {} : { gap: fin(p.gap) as number }),
-          stages: p.stages.slice(0, 32).map((st) => stageOf(st, { x: 1, y: 1, z: 1 })),
-          ptr: `${base}/programs/${i}`,
-        }))
-      : [
-          {
-            id: "drawers",
-            label: "Drawers",
-            ptr: base,
-            stages: [
-              {
-                label: "Doors",
-                parts: ["frame/role:cover"],
-                // a cover leaves along its own outward normal: the rear door goes rear
-                direction: "drawer",
-                labels: "hide",
-              },
-              {
-                label: "Drawers",
-                parts: ["type:*"],
-                direction: "drawer",
-                order: "top-down",
-                stagger: 0.1,
-              },
-            ],
-          },
-        ];
-  const rackRes = rackIns.map((p) => resolveProgram(p, { owner, exclude: new Set(), front }));
-  rackRes.forEach((r, i) => {
-    // the built-in program has no doors on a rack without a rear-door heat exchanger
-    diagnostics.push(
-      ...r.diagnostics.filter((d) => custom.length > 0 || d.code !== "assembly/selector-empty"),
-    );
-    programs.push(r.program);
-    checkFloor(r, (rackIns[i] as ProgramIn).ptr, new Map());
-    leafReach(r.shifts, turned);
-  });
-  // the default program's shifts: a slot's own program plays on top of its drawer
-  const drawerShifts = rackRes[0]?.shifts ?? new Map<string, Vec3>();
-
-  // ---- slot internals ----
-  const turnedByPath = new Map<string, SceneAssemblyNode>();
-  (function walk(n: SceneAssemblyNode): void {
-    turnedByPath.set(n.path, n);
-    for (const c of n.children) walk(c);
-  })(turned);
-  for (const [path, s] of slots) {
-    const ix = s.internals;
-    if (ix === undefined) continue;
-    const slot = turnedByPath.get(path);
-    if (slot === undefined) continue;
-    const pnode = toPNode(slot);
-    const um = unitMm(ix.template.units ?? "mm");
-    const k: Vec3 = { x: um.x * ix.factor, y: um.y * ix.factor, z: um.z * ix.factor };
-    const def = ix.empty ? { steps: 0, labels: [] } : defaultTemplateProgram(ix.template);
-    const exclude = ix.exclude;
-    const env = { owner: pnode, exclude, front };
-    const stagesFor = (): ResolveResult | undefined =>
-      def.explode === undefined
-        ? undefined
-        : resolveProgram(
-            {
-              id: "internals",
-              ptr: `${ix.ptr}/assembly`,
-              ...(fin(def.explode.gap) === undefined
-                ? {}
-                : { gap: (fin(def.explode.gap) as number) * k.x }),
-              stages: def.explode.stages.slice(0, 32).map((st) => stageOf(st, k)),
-            },
-            env,
-          );
-    const tplRes = stagesFor();
-    if (tplRes !== undefined) diagnostics.push(...tplRes.diagnostics);
-    // lid: up, clearing the tallest pose of the internals
-    const lidNode = turnedByPath.get(ix.lid);
-    const lidStage = (distance: number | string): StageIn => ({
-      label: "Lid",
-      parts: ["lid"],
-      direction: "up",
-      distance,
-    });
-    const lidAuto = resolveProgram(
-      { id: "internals", ptr: "", stages: [lidStage("auto")] },
-      { owner: pnode, exclude: new Set([...exclude].filter((p) => !p.endsWith("/lid"))), front },
-    );
-    let need = lidAuto.shifts.get(ix.lid)?.z ?? 0;
-    if (tplRes !== undefined && lidNode !== undefined) {
-      const declared = fin(def.explode?.gap);
-      const gap =
-        declared !== undefined
-          ? declared * k.x
-          : Math.max(slot.local.size.x, slot.local.size.y, slot.local.size.z) * 0.1;
-      for (const [p, v] of tplRes.shifts) {
-        const b = nodeBox.get(p);
-        if (b === undefined) continue;
-        need = Math.max(need, b.origin.z + b.size.z + v.z - lidNode.local.origin.z + gap);
-      }
-    }
-    const lidRes = resolveProgram(
-      { id: "internals", ptr: "", stages: [lidStage(need)] },
-      { owner: pnode, exclude: new Set([...exclude].filter((p) => !p.endsWith("/lid"))), front },
-    );
-    const lidStageOut = lidRes.program.stages[0] as ResolvedStage;
-    const shift = lidStageOut.end;
-    const tplStages: ResolvedStage[] =
-      tplRes !== undefined
-        ? tplRes.program.stages.map((st) => ({
-            ...st,
-            index: st.index + 1,
-            start: rnd(st.start + shift),
-            end: rnd(st.end + shift),
-            moves: st.moves.map((m) => ({ ...m, start: rnd(m.start + shift) })),
-          }))
-        : Array.from({ length: def.steps }, (_, i) => ({
-            // a build program as default: stages exist (1 + steps) but carry no moves here
-            index: i + 2,
-            ...(def.labels[i] === undefined ? {} : { label: def.labels[i] }),
-            moves: [],
-            start: shift,
-            end: shift,
-            labels: "show" as const,
-            leaders: true,
-            details: false,
-            fade: "none" as const,
-          }));
-    const prog: ResolvedExplodeProgram = {
-      kind: "explode",
-      id: "internals",
-      owner: path,
-      stages: [lidStageOut, ...tplStages],
-    };
-    programs.push(prog);
-    const shifts = new Map<string, Vec3>(lidRes.shifts);
-    for (const [p, v] of tplRes?.shifts ?? []) shifts.set(p, v);
-    checkFloor({ program: prog, shifts, diagnostics: [] }, `${ix.ptr}/assembly`, drawerShifts);
-    // the slot sits where its drawer left it
-    const lift = new Map<string, Vec3>();
-    for (const a of ancestorsOf(path)) {
-      const v = drawerShifts.get(a);
-      if (v !== undefined) lift.set(a, v);
-    }
-    const merged = new Map<string, Vec3>([...lift, ...shifts]);
-    for (const [p, v] of lift) merged.set(p, sum(v, shifts.get(p)));
-    leafReach(merged, slot);
-  }
-  if (below) return undefined;
-  return { programs, reach, defaultProgram: rackIns[0]?.id };
 }

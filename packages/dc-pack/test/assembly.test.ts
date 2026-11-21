@@ -9,7 +9,7 @@ import type {
   SceneAssemblyNode,
 } from "@platformcosmo/core";
 import { registry as hwRegistry } from "@platformcosmo/parts-base";
-import { dcPack } from "../src/index.js";
+import { dcPack, assemblyPlanner } from "../src/index.js";
 import { MAX_LEAVES } from "../src/assembly.js";
 
 type Json = Record<string, unknown>;
@@ -582,7 +582,7 @@ describe("custom rack programs (assemblies.md 19.1)", () => {
     expect(s3[2]!.start - s3[1]!.start).toBeCloseTo(0.15, 6);
   });
 
-  it("selector-empty, moved-twice and ignored malformed selectors", () => {
+  it("empty and repeated selections move nothing extra, malformed selectors are ignored", () => {
     const s = loaded({});
     (s.racks![0] as unknown as Json)["programs"] = [
       {
@@ -596,8 +596,12 @@ describe("custom rack programs (assemblies.md 19.1)", () => {
     ];
     const r = build(s, "r1");
     const codes = r.diagnostics.map((d) => `${d.severity}:${d.code}:${d.path}`);
-    expect(codes).toContain("warning:assembly/selector-empty:/racks/0/programs/0/stages/0/parts");
-    expect(codes).toContain("error:assembly/moved-twice:/racks/0/programs/0/stages/2/parts");
+    // the planner resolves what it can; empty and repeated selections are validation's to report
+    expect(codes.filter((c) => c.startsWith("error:"))).toEqual([]);
+    const p = program(r.assembly!, "r1", "p");
+    expect(p.stages[0]!.moves).toEqual([]);
+    expect(p.stages[1]!.moves.map((m) => m.path)).toEqual(["r1/c1"]);
+    expect(p.stages[2]!.moves).toEqual([]); // c1 already moved
   });
 
   it("direction, number distances, except and overrides", () => {
@@ -638,9 +642,9 @@ describe("custom rack programs (assemblies.md 19.1)", () => {
     expect(m("r/a").offset.z * MM).toBeCloseTo(100, 6);
     expect(m("r/b").offset.z * MM).toBeCloseTo(250, 6);
     expect(m("r/c").offset.x * MM).toBeCloseTo(60, 6);
-    // a has override order 5, so b ranks first: b starts at its delay, a half a second later
-    expect(m("r/b").start).toBeCloseTo(1, 6);
-    expect(m("r/a").start).toBeCloseTo(0.5, 6);
+    // core ranks a part with an order override first: a starts at 0, b after it plus its delay
+    expect(m("r/a").start).toBeCloseTo(0, 6);
+    expect(m("r/b").start).toBeCloseTo(1.5, 6);
     // `with: previous` starts together with stage 1, plus its own delay
     expect(m("r/c").start).toBeCloseTo(0.25, 6);
     expect(p.stages[1]!.start).toBeCloseTo(0.25, 6);
@@ -1144,7 +1148,9 @@ describe("review round", () => {
     expect(Date.now() - t0).toBeLessThan(2000);
     const a = must(r.assembly);
     expect(a.leaves.filter((l) => l.startsWith("r/s/")).length).toBeGreaterThan(1000);
-    expect(r.diagnostics.filter((d) => d.code === "assembly/selector-empty")).toHaveLength(3);
+    // the selectors match nothing: the stages exist and move nothing (validation reports them)
+    const stages = program(a, "r/s", "internals").stages;
+    expect(stages.slice(1).map((st) => st.moves.length)).toEqual([0, 0, 0]);
     // and a matching deep selector still finds its parts
     const hit = spec({
       assemblies: [
@@ -1363,6 +1369,83 @@ describe("review round", () => {
       const b = dcPack.buildAssembly!(s, rack, copy, {}).assembly!;
       expect(b.frame.front).toBe(a.frame.front);
     }
+  });
+});
+
+describe("core's planner over a rack (implicit access, assemblies.md 8.3)", () => {
+  const onlyStep = (target: string, mirrored: boolean): PlatformCosmoSpec => {
+    const base = nested();
+    const s = {
+      ...base,
+      steps: [{ assembly: [{ explode: target }] }],
+      ...(mirrored
+        ? {
+            racks: [...(base.racks ?? []), { id: "other" }],
+            rows: [
+              { id: "ra", members: ["other"] },
+              { id: "rb", members: ["r1"] },
+            ],
+            aisles: [{ id: "c", kind: "cold", rows: ["ra", "rb"] }],
+          }
+        : {}),
+    };
+    return s as unknown as PlatformCosmoSpec;
+  };
+
+  for (const mirrored of [false, true]) {
+    it(`explode "r1/srv" opens only that slot's drawer (${mirrored ? "mirrored" : "upright"} rack)`, () => {
+      const s = onlyStep("r1/srv", mirrored);
+      const frag = dcPack.buildScene(s);
+      const a = dcPack.buildAssembly!(s, "r1", frag, {
+        "srv-internals": template(s, "srv-internals"),
+      }).assembly!;
+      if (mirrored) {
+        // r1 faces the cold aisle from the row behind it: it is the one that turned
+        const front = a.frame.front;
+        expect(front).toBe("-y");
+      }
+      const planner = assemblyPlanner(s, a)!;
+      expect(planner).toBeDefined();
+      const { plan, diagnostics } = planner.plan([a], new Map(), [undefined]);
+      const action = plan[0]!.actions[0]!;
+      expect(action.target).toBe("r1/srv");
+      expect(action.program).toBe("internals");
+      // the access move: the target's own move in the rack's default program, nothing else
+      expect(action.implied).toEqual([{ program: "drawers", level: 2, only: ["r1/srv"] }]);
+      expect(diagnostics.map((d) => d.code)).toContain("assembly/implicit-access");
+      const drawers = program(a, "r1", "drawers").stages[1]!.moves;
+      const own = drawers.find((m) => m.path === "r1/srv")!;
+      expect(action.accessLength).toBeGreaterThan(0);
+      expect(action.accessLength).toBeLessThanOrEqual(own.duration + 1e-9);
+      expect(action.length).toBeGreaterThan(action.accessLength!);
+      // after the step: the rack program is at level 0 with only r1/srv opened; internals fully open
+      const pose = plan[0]!.poses["r1"]!;
+      expect(pose).toContainEqual({ program: "drawers", level: 0, only: ["r1/srv"] });
+      expect(pose).toContainEqual({ program: "srv/internals", level: 3 });
+      // the other slots stay where they are: the drawer move of r1/srv is a single PartMove
+      expect(drawers.filter((m) => m.path !== "r1/srv").length).toBe(drawers.length - 1);
+      expect(own.offset.y * (a.frame.front === "+y" ? 1 : -1)).toBeGreaterThan(1);
+    });
+  }
+
+  it("explicit explode of the rack takes the opening over; implode closes the access", () => {
+    const s = {
+      ...nested(),
+      steps: [
+        { assembly: [{ explode: "r1/srv", to: 1 }] },
+        { assembly: [{ explode: "r1", to: 2 }] },
+        { assembly: [{ implode: "r1/srv" }, { implode: "r1" }] },
+      ],
+    } as unknown as PlatformCosmoSpec;
+    const frag = dcPack.buildScene(s);
+    const a = dcPack.buildAssembly!(s, "r1", frag, {
+      "srv-internals": template(s, "srv-internals"),
+    }).assembly!;
+    const { plan } = assemblyPlanner(s, a)!.plan([a], new Map(), [undefined, undefined, undefined]);
+    expect(plan[0]!.actions[0]!.implied).toHaveLength(1);
+    // the rack's explicit explode does not replay the drawer that is already open
+    expect(plan[1]!.actions[0]!.opened).toEqual(["r1/srv"]);
+    expect(plan[2]!.poses["r1"]!.every((l) => l.level === 0)).toBe(true);
   });
 });
 
