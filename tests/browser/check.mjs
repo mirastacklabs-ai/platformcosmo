@@ -1,4 +1,4 @@
-/* global document, matchMedia, getComputedStyle, Image, setTimeout, fetch, URL, Buffer */
+/* global document, matchMedia, getComputedStyle, Image, setTimeout, fetch, URL, Buffer, window */
 /**
  * Browser check (PLAN M2 exit): loads each SVG of the input directory in <img>, inline and
  * <object> in chromium, firefox and webkit (over http://127.0.0.1) and checks that it animates,
@@ -84,6 +84,7 @@ async function open(page, mode, file, strip = false) {
     );
   }
   await page.evaluate(() => document.fonts.ready);
+  if (mode !== "img") await decodeImages(page, mode);
   return page.locator("#host").boundingBox();
 }
 
@@ -93,6 +94,37 @@ const shot = async (page, box) =>
       clip: { x: box.x, y: box.y, width: box.width, height: box.height },
     })
   ).toString("base64");
+
+/**
+ * Waits (bounded, 5 s) until every SVG <image> of the diagram is decoded, in the document that
+ * renders it (assembly diagrams embed rasters as data URIs; a lazily decoded one would repaint
+ * between two seeks to one time). An SVGImageElement has no decode() in most engines, so the
+ * href is decoded by an Image of that same document's realm; elements that do have decode() are
+ * awaited directly. A timeout is logged, not fatal.
+ */
+async function decodeImages(page, mode) {
+  const timedOut = await page.evaluate(async (m) => {
+    const doc = m === "object" ? document.getElementById("el").contentDocument : document;
+    const win = doc.defaultView;
+    const waits = [...doc.querySelectorAll("image")].map((el) => {
+      if (typeof el.decode === "function") return el.decode().catch(() => undefined);
+      const href = el.getAttribute("href") ?? el.getAttribute("xlink:href");
+      if (!href || !href.startsWith("data:")) return Promise.resolve();
+      const img = new win.Image();
+      img.src = href;
+      return img.decode().catch(() => undefined);
+    });
+    let timer;
+    const limit = new Promise((r) => {
+      timer = setTimeout(() => r(true), 5000);
+    });
+    const done = Promise.all(waits).then(() => false);
+    const out = await Promise.race([done, limit]);
+    globalThis.clearTimeout(timer);
+    return out;
+  }, mode);
+  if (timedOut) console.warn(`check: SVG images were not decoded within 5 s (${mode})`);
+}
 
 /** Deterministic time for inline and <object>: pause SMIL and CSS animations at `t` seconds. */
 async function seek(page, mode, t) {
@@ -112,6 +144,16 @@ async function seek(page, mode, t) {
     [mode, t],
   );
   await sleep(250);
+  // two animation frames, so the browser has painted the seeked state before a screenshot
+  await page.evaluate(
+    ([m]) => {
+      const win = m === "object" ? document.getElementById("el").contentWindow : window;
+      return new Promise((resolve) =>
+        win.requestAnimationFrame(() => win.requestAnimationFrame(resolve)),
+      );
+    },
+    [mode],
+  );
 }
 
 /** Pixel analysis in a scratch page of the same browser (decodes PNG via canvas). */
@@ -249,21 +291,29 @@ async function checkAnimates(name, browser, blocked, file, mode, probe) {
   }
   return withPage(browser, blocked, { reducedMotion: "no-preference" }, async (page) => {
     const box = await open(page, mode, file);
-    await seek(page, mode, 0.5);
+    // Assembly diagrams (B-2) carry two times known to differ (rest vs mid-move) in fixture.json.
+    const [ta, tb] = info?.assemblies?.[file]?.animate ?? [0.5, 1.7];
+    await seek(page, mode, ta);
     const a = await shot(page, box);
-    await seek(page, mode, 1.7);
+    await seek(page, mode, tb);
     const b = await shot(page, box);
-    await seek(page, mode, 0.5);
+    await seek(page, mode, ta);
     const c = await shot(page, box);
     const scratch = await scratchOf(page);
-    rec(name, file, mode, "animates (frames at 0.5 s and 1.7 s differ)", a !== b ? "pass" : "fail");
+    rec(
+      name,
+      file,
+      mode,
+      `animates (frames at ${ta} s and ${tb} s differ)`,
+      a !== b ? "pass" : "fail",
+    );
     // Same time, same frame (Chromium SMIL can move a particle by a sub-pixel between seeks).
     const same = await pixels(scratch, a, c);
     rec(
       name,
       file,
       mode,
-      "time control is deterministic (0.5 s twice: <0.1% of pixels differ)",
+      "time control is deterministic (same time twice: <0.1% of pixels differ)",
       same.diff < 0.001 ? "pass" : "fail",
       `${(same.diff * 100).toFixed(3)}% differ`,
     );
@@ -290,6 +340,8 @@ async function checkReduced(name, browser, blocked, file, mode, expected) {
       "image documents ignore emulated reduced motion (see probe); covered by inline and object",
     );
   }
+  const steps = info?.assemblies?.[file];
+  if (steps) return checkReducedDiscrete(name, browser, blocked, file, mode, steps.mids);
   return withPage(browser, blocked, { reducedMotion: "reduce" }, async (page) => {
     const box = await open(page, mode, file);
     await sleep(500);
@@ -312,6 +364,54 @@ async function checkReduced(name, browser, blocked, file, mode, expected) {
         `size match ${px.sameSize}, ${(px.diff * 100).toFixed(2)}% of pixels differ (limit 4%)`,
       );
     }
+  });
+}
+
+/**
+ * Assembly diagrams under reduced motion (assemblies.md 12): each step shows its end pose for the
+ * whole step, so two frames inside one step are equal (no tween), the poses of different steps
+ * differ somewhere (the discrete poses are really shown), and there is content.
+ */
+async function checkReducedDiscrete(name, browser, blocked, file, mode, mids) {
+  return withPage(browser, blocked, { reducedMotion: "reduce" }, async (page) => {
+    const box = await open(page, mode, file);
+    const scratch = await scratchOf(page);
+    const poses = [];
+    const tweened = [];
+    let worst = 0;
+    for (const [k, mid] of mids.entries()) {
+      await seek(page, mode, mid);
+      const a = await shot(page, box);
+      await seek(page, mode, mid + 0.15);
+      const b = await shot(page, box);
+      poses.push(a);
+      // Equal frames; WebKit may repaint an image or antialiased edge by a few pixels, so up to
+      // 0.1% of the pixels may differ (a tween over 0.15 s moves far more than that).
+      const d = a === b ? 0 : (await pixels(scratch, a, b)).diff;
+      worst = Math.max(worst, d);
+      if (d >= 0.001) tweened.push(k + 1);
+    }
+    rec(
+      name,
+      file,
+      mode,
+      "reduced motion: discrete poses (frames inside a step are equal)",
+      tweened.length === 0 ? "pass" : "fail",
+      tweened.length
+        ? `steps that change inside: ${tweened.join(",")}`
+        : `largest difference inside a step: ${(worst * 100).toFixed(3)}% of pixels`,
+    );
+    const distinct = new Set(poses).size;
+    rec(
+      name,
+      file,
+      mode,
+      "reduced motion: step poses differ (not a single frozen frame)",
+      distinct > 1 ? "pass" : "fail",
+      `${distinct} distinct poses over ${poses.length} steps`,
+    );
+    const px = await pixels(scratch, poses[0]);
+    rec(name, file, mode, "reduced motion: has content", px.ink > 0.01 ? "pass" : "fail");
   });
 }
 
@@ -352,7 +452,7 @@ async function checkDark(name, browser, blocked, file, mode) {
       const img = await shot(page, box);
       const px = await pixels(await scratchOf(page), img);
       let fill;
-      if (mode === "inline" && info?.bg) {
+      if (mode === "inline" && info?.bg && file === info.loop) {
         fill = await page.evaluate(
           (sel) => getComputedStyle(document.querySelector(sel)).fill,
           info.bg,
@@ -381,7 +481,7 @@ async function checkDark(name, browser, blocked, file, mode) {
     changed ? "pass" : ownDark && frames.diff < 0.01 ? "limited" : "fail",
     `${(frames.diff * 100).toFixed(1)}% of pixels differ; corner pixel light ${light.corner}, dark ${dark.corner}${ownDark ? " (the diagram's own theme is dark)" : ""}`,
   );
-  if (info?.bg && mode === "inline") {
+  if (info?.bg && mode === "inline" && file === info.loop) {
     rec(
       name,
       file,

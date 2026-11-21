@@ -701,14 +701,14 @@ describe("action targets and the guard (tracks §0)", () => {
     }
   });
 
-  test("validate with phase1a lifted keeps the guard error and adds unknown-target for the rest", () => {
+  test("validate with phases 1a and 1b lifted keeps the guard error and adds unknown-target for racks", () => {
     const r = validate({
       ...spec,
-      steps: [{ assembly: [{ explode: "heat-sink" }, { explode: "box" }] }],
+      steps: [{ assembly: [{ explode: "heat-sink" }, { implode: "r1/s" }] }],
     });
     const errors = codes(r.diagnostics.filter((d) => d.severity === "error"));
     expect(errors).toContain("assembly/unsupported@/steps/0/assembly/1");
-    expect(errors).toContain("assembly/unknown-target@/steps/0/assembly/1/explode");
+    expect(errors).toContain("assembly/unknown-target@/steps/0/assembly/1/implode");
     expect(errors.filter((e) => e.includes("/steps/0/assembly/0"))).toEqual([]);
   });
 });

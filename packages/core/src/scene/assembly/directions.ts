@@ -199,6 +199,8 @@ export interface DirectionContext {
   readonly cache?: Map<SceneAssemblyNode, Map<string, SceneAssemblyNode>>;
   /** Counts parts whose full sibling scan was skipped (groups over `INFER_CAP`). */
   readonly degraded?: { count: number };
+  /** A rack in assembly mode: a cover given `drawer` leaves along its own outward normal (8.1). */
+  readonly dc?: boolean;
 }
 
 /** `out` (§6.2): the horizontal axis with the larger |c|, signed; ties +y, then +x; c = 0: up. */
@@ -230,6 +232,16 @@ const SIMPLE: Readonly<Record<string, Dir>> = {
 function ownAxis(n: SceneAssemblyNode): 0 | 1 | 2 {
   const a = n.geometry?.primitives.find((p) => p.axis !== undefined)?.axis;
   return a === "x" ? 0 : a === "y" ? 1 : 2;
+}
+
+/**
+ * A cover of a rack (rear door, lid) leaves along its own outward normal: toward the front when
+ * it lies on the front side of the owner's centre (`c` = part centre - owner centre), else toward
+ * the rear (assemblies.md 8.1).
+ */
+function coverNormal(front: Dir, c: readonly [number, number, number]): Dir {
+  const side = c[0] * front[0] + c[1] * front[1];
+  return side < 0 ? [-front[0], -front[1], 0] : front;
 }
 
 /** The unit direction (local frame) of `dir` for one part. Never throws; unknown names mean `away`. */
@@ -265,7 +277,9 @@ export function resolveDirection(
       return d;
     }
     case "drawer":
-      return localFront(ctx.frame);
+      return ctx.dc === true && item.node.role === "cover"
+        ? coverNormal(localFront(ctx.frame), c)
+        : localFront(ctx.frame);
     default:
       return away(item, ctx, box);
   }

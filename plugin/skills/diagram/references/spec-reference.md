@@ -1,7 +1,7 @@
 # Spec reference (format major 1, schema revision 1.1.0)
 
 Source of truth: `https://platformcosmo.io/schema/v1.json`. Unknown fields are rejected.
-A spec needs at least one of `nodes`, `racks`, `equipment`.
+A spec needs at least one of `nodes`, `racks`, `equipment`, `figures` (figure-only specs have no nodes).
 
 ## Root
 
@@ -52,6 +52,25 @@ At least one of: `caption`, `set`, `flows`, `metrics`, `focus`; plus `duration` 
 - `set`: `{ "<node id or rack/slot>": "<state>" }`
 - `focus`: an object id to zoom to (use for large diagrams and DC hall to rack to server drill-downs)
 - Per-step SVGs: `pcosmo build x.cosmo.json --steps` writes `x.steps/step-01.svg`, ...
+
+## images[] and figures[] (figure mode)
+
+Written by `pcosmo assets figure` (see [from a figure](from-figure.md)); a spec may hold only `meta`, `images`,
+`figures` and `steps` (no `nodes`).
+
+- `images[]`: `id`, `src` (a PNG, JPEG or SVG path relative to the spec: no `..`, no absolute path, no URL),
+  optional `alt`, `crop`, and `source` (`document`, `page`, `figure`, `license`, `attribution`, `url`). Credits show
+  when `attribution` or `license` is set.
+- `figures[]`: `id`, `base` (an image id: the figure with every moving part erased), `parts[]`, optional `label`,
+  `width` (grid tiles, default 8), `pose` (`assembled` default, or `exploded`: the pose of the static output and
+  the start of the loop), `stages[]`, `source`.
+- `figures[].parts[]`: `id`, `image` (the part's sprite, an image id), `seat` `[x, y]` (the sprite's top-left corner in
+  the base's pixels when seated), `exploded` `[x, y]` (same, when lifted; default straight up), optional `label`,
+  `detail` (lines), `z` (draw-order override).
+- `figures[].stages[]`: `parts` (selectors such as `"hs-*"`), `order` (`spec | top-down | bottom-up`), `stagger`,
+  `delay`, `duration` (seconds), `easing`, `labels` (`show | hide`). Default: one stage moving every part.
+- Motion in `steps[].assembly`: `[{ "explode": "<figure id>" }]` lifts the parts to `exploded`, `[{ "implode":
+"<figure id>" }]` seats them. An action that matches the current pose logs `assembly/no-op-action` (info).
 
 ## Endpoints
 

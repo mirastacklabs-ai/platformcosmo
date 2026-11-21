@@ -1,4 +1,10 @@
-import type { DcPack, Diagnostic, IconResolver, PartShapeRegistry } from "../contracts/index.js";
+import type {
+  DcPack,
+  Diagnostic,
+  IconResolver,
+  PartPlacementCheck,
+  PartShapeRegistry,
+} from "../contracts/index.js";
 import { DEFAULT_RACK_U, SLOT_HEIGHT_U, footprintOf } from "../scene/sizes.js";
 import type { PlatformCosmoSpec, SpecFlow } from "./types.gen.js";
 import { closest, didYouMean, q } from "./suggest.js";
@@ -26,6 +32,8 @@ export interface SemanticContext {
   readonly dc?: DcPack;
   /** Schema 1.2.0: installed pack shapes; unknown `pack:id` shapes become errors. */
   readonly parts?: PartShapeRegistry;
+  /** Pack placement check, called once per spec part with a pack shape (`brick/off-grid`). */
+  readonly placement?: PartPlacementCheck;
 }
 
 export function particleCount(flows: readonly SpecFlow[]): number {

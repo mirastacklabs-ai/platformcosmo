@@ -60,6 +60,7 @@ import type {
   ImageAsset,
   ImageAssetResolver,
   PartShapeRegistry,
+  PartPlacementCheck,
 } from "./assembly.js";
 import type { DcPack } from "./dc.js";
 import type { Diagnostic, ValidationReport } from "./diagnostics.js";
@@ -116,7 +117,7 @@ export type MotionMode = "smil" | "css";
 /**
  * Options. Invalid values produce `error` diagnostics (`options/*`) and no outputs:
  * `idPrefix` must match `^[a-z][a-z0-9-]{0,31}$`; `name` must match `^[A-Za-z0-9._-]{1,64}$`;
- * `speed` must be in (0, 10]; `png.scale` in (0, 8]; `video.fps` in [1, 60];
+ * `speed` must be in (0, 10]; `png.scale` in (0, 8]; `png.step` a positive integer, not together with `png.time`; `video.fps` in [1, 60];
  * `video.durationSec` in (0, 120]; `motion` must be `smil` or `css`.
  */
 export interface RenderOptions {
@@ -158,6 +159,11 @@ export interface RenderOptions {
     readonly scale?: number;
     /** Animation time in seconds to capture, default 0. */
     readonly time?: number;
+    /**
+     * 1-based step whose end pose to capture (the pose a `steps` output shows, with that step's
+     * camera). Exclusive with `time`; must be an integer within the timeline (`options/invalid-png-step`).
+     */
+    readonly step?: number;
   };
   readonly video?: {
     /** Default 24. */
@@ -171,6 +177,8 @@ export interface RenderOptions {
   readonly images?: ImageAssetResolver;
   /** Part shape packs (`dc:`, `hw:`, `auto:`, `brick:`), wired by the CLI like icons (D4). */
   readonly parts?: PartShapeRegistry;
+  /** Pack placement check (`brick/off-grid`) run during validation; wired by the CLI. */
+  readonly placement?: PartPlacementCheck;
 }
 
 export interface RenderOutput {
@@ -231,6 +239,7 @@ export type ValidateFn = (
     /** Schema 1.2.0: unknown image ids / shape refs become errors with did-you-mean. */
     readonly images?: ImageAssetResolver;
     readonly parts?: PartShapeRegistry;
+    readonly placement?: PartPlacementCheck;
   },
 ) => ValidationReport<PlatformCosmoSpec>;
 
@@ -418,6 +427,8 @@ export interface AnimationLayer {
    * attributes rather than CSS transforms.
    */
   readonly attrs?: Readonly<Record<string, Readonly<Record<string, string | number>>>>;
+  /** Budget warnings found while animating (assemblies: tracks or wrappers above the bounds). */
+  readonly diagnostics?: readonly Diagnostic[];
 }
 
 export interface AnimateOptions {
