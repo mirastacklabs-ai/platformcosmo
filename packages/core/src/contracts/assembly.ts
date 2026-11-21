@@ -424,6 +424,12 @@ export interface ProgramLevel {
   /** Program id; a figure's stage list is the program `"stages"`. */
   readonly program: string;
   readonly level: number;
+  /**
+   * Implicit access (§8.3). In `ResolvedAction.implied`: only the moves of these node paths (the
+   * target's own move in the program) play, not the whole stage. In `AssemblyStepPlan.poses`:
+   * the pose of `level` plus these individually opened moves. Absent: the whole level.
+   */
+  readonly only?: readonly string[];
 }
 
 /**
@@ -478,6 +484,17 @@ export interface ResolvedAction {
   readonly length: number;
   /** Compression applied so the action fits the window (1 = none, §7.3). */
   readonly scale: number;
+  /**
+   * Seconds of `length` (compressed like it, floored) taken by the implied access moves. On an explode
+   * they play first, then the target's own program; on an implode the target's program plays
+   * first and the access moves are undone last. 0 or absent without `implied`.
+   */
+  readonly accessLength?: number;
+  /**
+   * Node paths whose moves implicit access had already opened before this action: its segment
+   * does not play them again, they stay where they are.
+   */
+  readonly opened?: readonly string[];
   /**
    * Access moves prepended for nested targets (a slot's drawer before its internals, §8.3),
    * as `ProgramLevel`s of ancestor programs.
