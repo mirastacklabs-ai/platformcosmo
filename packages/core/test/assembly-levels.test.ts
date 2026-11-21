@@ -1055,9 +1055,10 @@ describe("existing output is unchanged", () => {
     "assemblies.md 2U GPU server internals": "6ec32493bc488708", // hw: shapes from main
     "assemblies.md Inline-4 engine teardown": "37582f18c42ebc76",
     "assemblies.md Rack to server to internals": "b6f4978ff28ce3db",
-    // Brick rover uses build-step views: its scene is unchanged except `assemblies.views`
-    "assemblies.md Brick rover": "c1de99110ff760b4",
-    "document-ingestion.md Generic 2OU server from a spec document": "3251238436cc3bba",
+    // The two specs with build programs changed in A2-6 (build programs, plan views and the
+    // build poses now exist); re-recorded there. Every other hash is the A2-3 record.
+    "assemblies.md Brick rover": "66eb5eeacbcdee62",
+    "document-ingestion.md Generic 2OU server from a spec document": "1f5f211ceae50a37",
     "document-ingestion.md Heat-sink installation figure": "0210858f1ee3bae2",
     "document-ingestion.md From the hall to the heat sink": "51d21be6488c12ce",
     "document-ingestion.md Booklet storyboard": "c1fbfa2da67efd3d",
