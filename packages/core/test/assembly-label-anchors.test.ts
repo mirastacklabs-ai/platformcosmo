@@ -1,7 +1,14 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { buildModelWithDiagnostics } from "../src/render/model.js";
-import { buildScene, type PlatformCosmoSpec, type RenderModel, type Vec2 } from "../src/index.js";
+import {
+  buildScene,
+  type PlatformCosmoSpec,
+  type RenderModel,
+  type SvgElement,
+  type SvgNode,
+  type Vec2,
+} from "../src/index.js";
 import { createProjection, boxCorners } from "../src/geometry/index.js";
 import type { Box3 } from "../src/contracts/index.js";
 import type { AssemblyRenderModelX, LabelTrack } from "../src/render/assembly/types.js";
@@ -27,7 +34,9 @@ const fixture = (name: string): PlatformCosmoSpec =>
   ) as PlatformCosmoSpec;
 
 function build(name: string) {
-  const spec = fixture(name);
+  return build2(fixture(name));
+}
+function build2(spec: PlatformCosmoSpec) {
   const scene = buildScene(spec, {});
   const r = buildModelWithDiagnostics({
     scene,
@@ -123,7 +132,7 @@ describe("leader ends lie on the part's projected geometry at every step end", (
 });
 
 describe("leaders end on what shows, not on what covers it", () => {
-  test("engine: the piston leaders end outside the head and gasket outlines in the last explode step", () => {
+  test("engine: the piston leaders end at least 3 px clear of the head and gasket outlines in the last explode step", () => {
     const { a, leaves, index, model } = anchored("engine");
     const steps = model.scene.timeline.length;
     const t = stepEndTime(a.clock[steps - 2]!.end); // "Crankshaft and oil pan"
@@ -135,7 +144,7 @@ describe("leaders end on what shows, not on what covers it", () => {
       for (const cover of ["engine/head", "engine/head-gasket"]) {
         const l = leaves.find((q) => q.path === cover)!;
         expect(
-          inHull(hull([l.geometry.bounds], index.displacement(cover, t)), p, 0),
+          inHull(hull([l.geometry.bounds], index.displacement(cover, t)), p, 3),
           `${lt.id} under ${cover}`,
         ).toBe(false);
       }
@@ -152,15 +161,35 @@ describe("leaders end on what shows, not on what covers it", () => {
 });
 
 describe("a requested label is drawn or reported", () => {
-  test("gpu: the chassis tray never moves, so its label is reported", () => {
-    const { diagnostics, a } = build("gpu");
-    const d = diagnostics.find(
+  test("parts no stage moves are labelled too: chassis tray and cylinder block", () => {
+    for (const [name, part] of [
+      ["gpu", "srv/chassis"],
+      ["engine", "engine/block"],
+    ] as const) {
+      const { a, model } = build(name);
+      const lt = tracksOf(a).find((t) => t.path === part);
+      expect(lt, part).toBeDefined();
+      expect(lt!.motion).toEqual([]);
+      // shown once the first stage has arrived, hidden again at the start
+      expect(evalOpacity(lt!.opacity, 0)).toBe(0);
+      const last = model.scene.timeline.length - 1; // the implode step
+      expect(evalOpacity(lt!.opacity, stepEndTime(a.clock[last - 1]!.end))).toBe(1);
+      expect(evalOpacity(lt!.opacity, a.loop)).toBe(0);
+    }
+  });
+
+  test("a labelled part of an assembly with no labels: show stage is reported", () => {
+    const spec = fixture("gpu") as unknown as {
+      assemblies: { programs: { stages: { labels?: string }[] }[] }[];
+    };
+    for (const st of spec.assemblies[0]!.programs[0]!.stages) st.labels = "hide";
+    const r = build2(spec as unknown as PlatformCosmoSpec);
+    const d = r.diagnostics.find(
       (x) =>
         x.code === "assembly/label-omitted" &&
         (x.params as { part?: string }).part === "srv/chassis",
     );
     expect(d).toBeDefined();
-    expect(tracksOf(a).some((t) => t.path === "srv/chassis")).toBe(false);
   });
 
   test("every labelled node is shown or reported", () => {
@@ -188,6 +217,96 @@ describe("a requested label is drawn or reported", () => {
   });
 });
 
+describe("labels do not cover each other or each other's leader ends", () => {
+  for (const name of ["board", "engine", "gpu"]) {
+    test(name, () => {
+      const { a, model } = build(name);
+      const groups = new Map<string, SvgElement>();
+      const walk = (nodes: readonly SvgNode[]): void => {
+        for (const n of nodes)
+          if (typeof n === "object" && "tag" in n) {
+            if (typeof n.attrs?.id === "string") groups.set(n.attrs.id, n);
+            walk(n.children ?? []);
+          }
+      };
+      walk(model.layers.labels);
+      let pairs = 0;
+      for (let n = 1; n <= model.scene.timeline.length; n++) {
+        const t = stepEndTime(a.clock[n - 1]!.end);
+        const up = tracksOf(a)
+          .filter((lt) => lt.kind === "leader" && evalOpacity(lt.opacity, t) >= 1)
+          .map((lt) => {
+            const o = evalOffset(lt.motion, t);
+            const rect = (groups.get(lt.id)!.children ?? []).find(
+              (c) => typeof c === "object" && "tag" in c && c.tag === "rect",
+            ) as SvgElement;
+            const at = (k: string): number => Number(rect.attrs![k]);
+            return {
+              id: lt.id,
+              box: { x: at("x") + o.x, y: at("y") + o.y, width: at("width"), height: at("height") },
+              anchor:
+                lt.anchor === undefined
+                  ? undefined
+                  : { x: lt.anchor.x + o.x, y: lt.anchor.y + o.y },
+            };
+          });
+        for (const p of up) {
+          for (const q of up) {
+            if (p === q) continue;
+            if (p.id < q.id) {
+              const w =
+                Math.min(p.box.x + p.box.width, q.box.x + q.box.width) - Math.max(p.box.x, q.box.x);
+              const hh =
+                Math.min(p.box.y + p.box.height, q.box.y + q.box.height) -
+                Math.max(p.box.y, q.box.y);
+              expect(w > 0 && hh > 0 ? w * hh : 0, `${p.id} / ${q.id} step ${n}`).toBeLessThan(1);
+              pairs++;
+            }
+            if (q.anchor !== undefined) {
+              const b = p.box;
+              const inside =
+                q.anchor.x >= b.x &&
+                q.anchor.x <= b.x + b.width &&
+                q.anchor.y >= b.y &&
+                q.anchor.y <= b.y + b.height;
+              expect(inside, `${p.id} covers the leader end of ${q.id} step ${n}`).toBe(false);
+            }
+          }
+        }
+      }
+      expect(pairs).toBeGreaterThan(10);
+    });
+  }
+});
+
+describe("the emitted leader starts at the recorded anchor", () => {
+  test("M point of every leader path equals LabelTrack.anchor", () => {
+    const { a, model } = build("engine");
+    const groups = new Map<string, SvgElement>();
+    const walk = (nodes: readonly SvgNode[]): void => {
+      for (const n of nodes)
+        if (typeof n === "object" && "tag" in n) {
+          if (typeof n.attrs?.id === "string") groups.set(n.attrs.id, n);
+          walk(n.children ?? []);
+        }
+    };
+    walk(model.layers.labels);
+    let seen = 0;
+    for (const lt of tracksOf(a)) {
+      if (lt.anchor === undefined) continue;
+      const path = (groups.get(lt.id)!.children ?? []).find(
+        (c) => typeof c === "object" && "tag" in c && c.tag === "path",
+      ) as SvgElement;
+      const [x, y] = String(path.attrs!.d)
+        .match(/-?\d+(\.\d+)?/g)!
+        .map(Number);
+      expect([x, y]).toEqual([lt.anchor.x, lt.anchor.y]);
+      seen++;
+    }
+    expect(seen).toBeGreaterThan(8);
+  });
+});
+
 describe("frame and track agree", () => {
   test("label transforms and opacities at sampled times", () => {
     const { a } = build("gpu");
@@ -203,4 +322,44 @@ describe("frame and track agree", () => {
       }
     }
   });
+});
+
+describe("placement cost is bounded", () => {
+  test("500 labelled parts in 30 stages cost a bounded multiple of the same build without labels", () => {
+    const make = (labels: "show" | "hide"): PlatformCosmoSpec => {
+      const parts = Array.from({ length: 500 }, (_, i) => ({
+        id: `p${i}`,
+        shape: "box",
+        at: [(i % 25) * 12, Math.floor(i / 25) * 12, 0],
+        size: [10, 10, 4 + (i % 3)],
+        label: `Part ${i}`,
+      }));
+      const stages = Array.from({ length: 30 }, (_, k) => ({
+        label: `Stage ${k}`,
+        parts: parts.slice(k * 16, k * 16 + 16).map((p) => p.id),
+        direction: "+z",
+        distance: "auto",
+        duration: 0.6,
+        labels,
+      }));
+      return {
+        meta: { version: "1" },
+        assemblies: [
+          { id: "big", units: "mm", parts, programs: [{ id: "p", stages }], program: "p" },
+        ],
+        steps: [{ caption: "Up", duration: 20, assembly: [{ explode: "big", program: "p" }] }],
+      } as unknown as PlatformCosmoSpec;
+    };
+    const time = (spec: PlatformCosmoSpec) => {
+      const t0 = performance.now();
+      const r = build2(spec);
+      return { ms: performance.now() - t0, r };
+    };
+    // measured: labels add about 1.7x the build without them; the unbounded occlusion pass
+    // added 40-70x. A ratio is robust to a loaded machine.
+    const base = time(make("hide"));
+    const full = time(make("show"));
+    expect(tracksOf(full.r.a).length).toBeGreaterThan(400);
+    expect(full.ms).toBeLessThan(8 * base.ms + 2000);
+  }, 180_000);
 });
