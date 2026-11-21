@@ -615,8 +615,11 @@ export interface TrackKey {
   readonly t: number;
   /** Screen translation relative to rest, user units (already projected). */
   readonly offset: Vec2;
-  /** Easing of the segment that STARTS at this key; `step` = hold until the next key. */
-  readonly easing: SpecEasing | "step";
+  /**
+   * Easing of the segment that STARTS at this key; `step` = hold until the next key; a 4-tuple is
+   * a CSS `cubic-bezier(x1, y1, x2, y2)` (the camera's curve of the loop closure, §7.4).
+   */
+  readonly easing: SpecEasing | "step" | readonly [number, number, number, number];
 }
 
 /** Visibility key (copy swaps, enclosure hiding, build appearance): always a step change. */
@@ -663,14 +666,46 @@ export interface PartTrack {
   readonly opacity: readonly OpacityKey[];
 }
 
-/** Pose of every motion group at one time (frame mode, per-step outputs, static). */
+/**
+ * FULL pose of every wrapper at one time (frame mode, per-step outputs, static, and the DOM's own
+ * attributes at t = 0). Every registered id is listed: attribute overrides must write the whole
+ * state, because the DOM carries the t = 0 pose as attributes and an omitted id would keep it.
+ */
 export interface AssemblyFrameState {
-  /** `partHost` / `partMotion` id → SVG `transform` value (`translate(x y)`), only when non-zero. */
+  /** Every `partHost` / `partMotion` / label group id → `translate(x y)` (`translate(0 0)` included). */
   readonly transforms: Readonly<Record<string, string>>;
   /** `partVisible` ids hidden at this time (unused copies, enclosed or not-yet-built parts). */
   readonly hidden: readonly string[];
-  /** `partFade` ids with opacity < 1, rounded to 2 decimals. */
+  /** Every `partFade` / static fade / label group id → opacity 0..1 (1 included), 2 decimals. */
   readonly opacity: Readonly<Record<string, number>>;
+  /** `partVisible` ids visible at this time (the complement of `hidden`, so overrides are total). */
+  readonly visible: readonly string[];
+}
+
+/** Label group (leader or top-face label) of a part and its tracks. */
+export interface AssemblyLabelTrack {
+  readonly id: string;
+  /** Total screen translation of the node the label rides. */
+  readonly motion: readonly TrackKey[];
+  readonly opacity: readonly OpacityKey[];
+}
+
+/** A non-assembly object wrapped in `ids.fadeWrap` because a stage fades `others`. */
+export interface AssemblyStaticFade {
+  readonly key: string;
+  readonly id: string;
+  readonly opacity: readonly OpacityKey[];
+}
+
+export interface AssemblyStepClock {
+  /** 1-based. */
+  readonly step: number;
+  readonly start: number;
+  readonly duration: number;
+  /** Motion window opens. */
+  readonly open: number;
+  /** Closing hold ends: the END pose of the step is shown here. */
+  readonly end: number;
 }
 
 /** What A1 adds to `RenderModel` for 1.2.0 content (`RenderModel.assembly`). */
@@ -684,8 +719,22 @@ export interface AssemblyRenderModel {
   readonly tracks: readonly PartTrack[];
   /** Loop length at speed 1 (= sum of step durations), or 0 without steps. */
   readonly loop: number;
-  /** Per step (1-based index − 1): time at which the step's motion has settled (§7.5). */
-  readonly settled: readonly number[];
+  /** Per step (1-based index − 1): when its actions have settled (§7.5); undefined without actions. */
+  readonly settled: readonly (number | undefined)[];
+  /** Label groups, sorted by id. */
+  readonly labelTracks: readonly AssemblyLabelTrack[];
+  /** Statics wrapped in a fade group (only when a stage fades `others`). */
+  readonly staticFades: readonly AssemblyStaticFade[];
+  /** Image assets used by decals and billboards, by hash (the emitter encodes them). */
+  readonly assets: ReadonlyMap<string, ImageAsset>;
+  /** One entry per timeline step. */
+  readonly clock: readonly AssemblyStepClock[];
+  /** Fast return of the loop closure (§7.4), when some program ends away from its base level. */
+  readonly closure?: { readonly t0: number; readonly t1: number };
+  /** Approximate depth time ranges (`assembly/depth-approx`). */
+  readonly approximate: readonly { readonly t0: number; readonly t1: number }[];
+  /** Union of the swept screen boxes of every leaf (reach bounds, §10). */
+  readonly reach: Rect | undefined;
   /**
    * Focus rect of an id at the END pose of a step (assembly, sub-assembly or part focus);
    * B uses it instead of `RenderModel.focusRects` when present (§7.4).
@@ -747,7 +796,12 @@ export interface AssemblyIdScheme {
 export interface PartsBuilder {
   part(id: string, fields?: Omit<SpecPart, "id">): this;
   /** Sub-assembly; `build` adds its children and programs (selectors relative to it). */
-  sub(id: string, fields: Omit<SpecPart, "id" | "parts">, build: (b: PartsBuilder) => void): this;
+  sub(
+    id: string,
+    fields: Omit<SpecPart, "id" | "parts" | "programs">,
+    build: (b: PartsBuilder) => void,
+  ): this;
+  /** A builder passed here is snapshotted (its `toJSON()` is taken) when this is called. */
   program(program: SpecProgram | ProgramBuilder | BuildProgramBuilder): this;
 }
 
@@ -776,12 +830,25 @@ export interface FigureBuilder {
 }
 
 /**
+ * Top-level spec fields the builder has no method for (canvas, legend, nodes, edges, flows,
+ * equipment, rows, aisles, cables, facility, ...). Passed through unchanged by `spec(meta, rest)`.
+ */
+export type SpecRest = Partial<
+  Omit<
+    PlatformCosmoSpec,
+    "$schema" | "meta" | "images" | "figures" | "storyboards" | "assemblies" | "racks" | "steps"
+  >
+>;
+
+/**
  * Whole-spec builder; `toJSON()` output still goes through `validate`. Output equality is
  * defined on RFC 8785 (JCS) canonical JSON, so key order is irrelevant; arrays keep call order.
  */
 export interface SpecBuilder {
+  /** A builder passed here is snapshotted (its `toJSON()` is taken) when this is called. */
   assembly(a: SpecAssembly | AssemblyBuilder): this;
   rack(rack: SpecRack): this;
+  /** A builder passed here is snapshotted (its `toJSON()` is taken) when this is called. */
   figure(f: SpecFigure | FigureBuilder): this;
   storyboard(s: SpecStoryboard): this;
   image(image: SpecImage): this;
@@ -791,11 +858,15 @@ export interface SpecBuilder {
 
 /**
  * Builder entry points exported by `@platformcosmo/core` (A2, `scene/assembly/builder.ts`):
- * `spec(meta)`, `assembly(id, fields)`, `explode(id, fields)`. No I/O, no scene, no defaults
- * filled in (the engine applies schema defaults).
+ * `spec(meta, rest?)`, `assembly(id, fields)`, `explode(id, fields)`. No I/O, no scene, no
+ * defaults filled in (the engine applies schema defaults).
+ *
+ * `toJSON()` output is unvalidated: run `validate()` before rendering. Empty builders emit
+ * invalid empty arrays on purpose (`parts: []`, `stages: []`, `steps: []`) so the schema reports
+ * them, instead of the builder throwing.
  */
 export interface AssemblyBuilders {
-  spec(meta: Omit<PlatformCosmoSpec["meta"], "version">): SpecBuilder;
+  spec(meta: Omit<PlatformCosmoSpec["meta"], "version">, rest?: SpecRest): SpecBuilder;
   assembly(id: string, fields?: Omit<SpecAssembly, "id" | "parts" | "programs">): AssemblyBuilder;
   explode(id: string, fields?: Omit<SpecExplodeProgram, "id" | "stages" | "kind">): ProgramBuilder;
   build(id: string, fields?: Omit<SpecBuildProgram, "id" | "steps" | "kind">): BuildProgramBuilder;

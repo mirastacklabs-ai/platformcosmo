@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platformcosmo.io/schema/figure-manifest.v1.json",
+  "title": "FigureManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sources", "parts"],
+  "properties": {
+    "sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "exploded": {
+          "$ref": "#/$defs/file"
+        },
+        "assembled": {
+          "$ref": "#/$defs/file"
+        }
+      }
+    },
+    "regions": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "exploded": {
+          "$ref": "#/$defs/rect"
+        },
+        "assembled": {
+          "$ref": "#/$defs/rect"
+        }
+      }
+    },
+    "background": {
+      "type": "string",
+      "pattern": "^(auto|#[0-9a-fA-F]{6})$"
+    },
+    "base": {
+      "enum": ["assembled", "exploded"]
+    },
+    "erase": {
+      "enum": ["recover", "fill"]
+    },
+    "parts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "seeds"],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "group": {
+            "$ref": "#/$defs/id"
+          },
+          "instanceOf": {
+            "$ref": "#/$defs/id"
+          },
+          "seeds": {
+            "$ref": "#/$defs/perState"
+          },
+          "polygon": {
+            "$ref": "#/$defs/perStatePolygon"
+          },
+          "prior": {
+            "enum": ["box", "cylinder", "none"]
+          },
+          "nearest": {
+            "$ref": "#/$defs/perStatePoint"
+          },
+          "holes": {
+            "type": "boolean"
+          },
+          "allowDisjoint": {
+            "type": "boolean"
+          },
+          "z": {
+            "type": "integer",
+            "minimum": -1000,
+            "maximum": 1000
+          }
+        }
+      }
+    },
+    "annotations": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "state", "polyline"],
+            "properties": {
+              "kind": {
+                "enum": ["arrow", "leader"]
+              },
+              "state": {
+                "enum": ["assembled", "exploded"]
+              },
+              "polyline": {
+                "$ref": "#/$defs/points"
+              },
+              "width": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 32
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "state", "rect"],
+            "properties": {
+              "kind": {
+                "const": "text"
+              },
+              "state": {
+                "enum": ["assembled", "exploded"]
+              },
+              "rect": {
+                "$ref": "#/$defs/rect"
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "maxLength": 64
+    },
+    "file": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^(?![/\\\\])(?!.*(^|/)\\.\\.(/|$))[A-Za-z0-9._ /-]+\\.(png|jpg|jpeg|PNG|JPG|JPEG)$"
+    },
+    "point": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 16384
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "points": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/point"
+      },
+      "minItems": 2,
+      "maxItems": 256
+    },
+    "rect": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 16384
+      },
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "perState": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "exploded": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/point"
+          },
+          "minItems": 1,
+          "maxItems": 32
+        },
+        "assembled": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/point"
+          },
+          "minItems": 1,
+          "maxItems": 32
+        }
+      }
+    },
+    "perStatePolygon": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "exploded": {
+          "$ref": "#/$defs/points"
+        },
+        "assembled": {
+          "$ref": "#/$defs/points"
+        }
+      }
+    },
+    "perStatePoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "exploded": {
+          "$ref": "#/$defs/point"
+        },
+        "assembled": {
+          "$ref": "#/$defs/point"
+        }
+      }
+    }
+  }
+}

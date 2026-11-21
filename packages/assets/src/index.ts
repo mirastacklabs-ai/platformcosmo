@@ -15,3 +15,36 @@ export { locate, nccAt, scaleSprite, luminancePlane, DEFAULT_SCALES } from "./lo
 export type { LocateOptions, LocateResult, LuminancePlane, Match, ScaledSprite } from "./locate.js";
 export { align } from "./align.js";
 export type { AlignOptions, Alignment } from "./align.js";
+export {
+  runFigure,
+  checkFigure,
+  cutout,
+  fragmentOf,
+  outputsFromFragment,
+  exclusionOverlay,
+  stableStringify,
+  validateManifest,
+  MANIFEST_LIMITS,
+} from "./figure/index.js";
+export type {
+  FigureManifest,
+  ManifestPart,
+  Annotation,
+  FigureState,
+  FigureOptions,
+  FigureSources,
+  FigureLimits,
+  FigureOutputs,
+  FigureOutputPart,
+  FigureReport,
+  CheckEntry,
+  CheckItem,
+  CheckStatus,
+  RunFigureOptions,
+  FigureFragment,
+  FigureFile,
+  FigureResult,
+  FigureSourceInfo,
+  CutoutOptions,
+  CutoutResult,
+} from "./figure/index.js";

@@ -553,7 +553,7 @@ export function planFigureSteps(
   // Levels do not depend on the windows, so a first pass tells whether the loop must close
   // (the last step ends away from the base pose, §7.4); if so the last step reserves its
   // closing window and the plan is made again with it (compression and suggestions agree).
-  // A2-3: `opts.closeLoop` (an assembly ends away from its base pose) closes it from the start.
+  // `opts.closeLoop` (A2-3: an assembly ends away from its base pose) forces the closing window.
   if (opts.closeLoop === true) return planPass(spec, figures, views, opts, true);
   const first = planPass(spec, figures, views, opts, false);
   return closesLoop(figures.values(), first.plan)
