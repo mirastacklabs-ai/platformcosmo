@@ -306,13 +306,15 @@ export interface Component {
 /**
  * 8- (or 4-) connected components of the pixels where `fg` is set, inside the box `b`. When
  * `weight` is given, a component's `pixels` counts only the pixels where weight is set (the
- * excluded-but-connective rule of the gate), while connectivity runs over all of `fg`.
+ * excluded-but-connective rule of the gate), while connectivity runs over all of `fg`. `reach`
+ * 2 (with 8-connectivity) joins pixels at Chebyshev distance up to 2: across exactly 1 px gaps.
  */
 export function components(
   b: Box,
   fg: (gx: number, gy: number) => boolean,
   connectivity: 4 | 8 = 8,
   weight?: (gx: number, gy: number) => boolean,
+  reach: 1 | 2 = 1,
 ): Component[] {
   const { x: bx, y: by, w, h } = b;
   if (w <= 0 || h <= 0) return [];
@@ -350,9 +352,10 @@ export function components(
           if (j > y1) y1 = j;
         }
       }
-      for (let dj = -1; dj <= 1; dj++) {
-        for (let di = -1; di <= 1; di++) {
+      for (let dj = -reach; dj <= reach; dj++) {
+        for (let di = -reach; di <= reach; di++) {
           if ((di === 0 && dj === 0) || (connectivity === 4 && di !== 0 && dj !== 0)) continue;
+          if (connectivity === 4 && (di < -1 || di > 1 || dj < -1 || dj > 1)) continue;
           const a = i + di;
           const c = j + dj;
           if (a < 0 || c < 0 || a >= w || c >= h) continue;

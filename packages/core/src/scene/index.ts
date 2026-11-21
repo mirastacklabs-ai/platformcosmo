@@ -31,6 +31,8 @@ import { labelFontSizeFor } from "../text/index.js";
 import { particleCount, PARTICLE_LIMIT } from "../schema/semantic.js";
 import type { PlatformCosmoSpec, SpecFlow, SpecNode } from "../schema/types.gen.js";
 import { boardOverlapDiagnostics, buildFigureScene, figureFocusIds } from "./boards.js";
+import { AssemblyPrograms } from "./assembly/plan.js";
+import { stepViews } from "./assembly/timing.js";
 import {
   assemblyFocusTargets,
   assemblyStates,
@@ -524,10 +526,13 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
   for (const m of spec.metrics ?? []) metricVals[m.id] = m.value;
   // ---- assemblies (schema 1.2.0): a row +x of nodes and the DC hall; 1.1 specs skip this ----
   let assemblyScene: ReturnType<typeof buildAssemblies> | undefined;
+  let programs: AssemblyPrograms | undefined;
   if ((spec.assemblies?.length ?? 0) > 0) {
+    programs = new AssemblyPrograms(spec);
     const pre = unionBox([...boxes.values(), ...(frag ? [frag.bounds] : [])]);
     const dcShapes = context.dc?.shapes;
     assemblyScene = buildAssemblies(spec, {
+      reach: programs.reach,
       origin: {
         x: pre.size.x > 0 ? r2(pre.origin.x + pre.size.x + DC_GAP) : 0,
         y: pre.size.x > 0 ? pre.origin.y : 0,
@@ -536,6 +541,7 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
       ...(context.parts === undefined ? {} : { parts: context.parts }),
       ...(dcShapes === undefined ? {} : { dcShapes }),
     });
+    assemblyScene = programs.attach(assemblyScene);
     diagnostics.push(...assemblyScene.diagnostics);
     for (const [path, state] of assemblyStates(assemblyScene.assemblies)) states[path] ??= state;
   }
@@ -707,6 +713,17 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
     for (const k of [...focusSource.keys()].sort()) focusTargets[k] = focusSource.get(k)!;
   }
 
+  // Assemblies: one plan for figure and assembly actions (shared windows and compression, §7.3)
+  let assemblyPlan: ReturnType<AssemblyPrograms["plan"]> | undefined;
+  if (assemblyScene !== undefined && programs !== undefined) {
+    assemblyPlan = programs.plan(
+      assemblyScene.assemblies,
+      figureScene?.figures ?? new Map(),
+      stepViews(spec, (id) => Object.hasOwn(focusTargets, id)),
+    );
+    diagnostics.push(...programs.diagnostics, ...assemblyPlan.diagnostics);
+  }
+
   const outDiagnostics = diagnostics.sort(
     (a, b) =>
       (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) ||
@@ -738,6 +755,16 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
       ? figureScene === undefined
         ? {}
         : { assemblies: figureScene.assemblies }
-      : { assemblies: mergeSceneAssemblies(assemblyScene, figureScene?.assemblies) }),
+      : {
+          assemblies: mergeSceneAssemblies(
+            { ...assemblyScene, plan: assemblyPlan?.plan ?? assemblyScene.plan },
+            figureScene === undefined
+              ? undefined
+              : {
+                  ...figureScene.assemblies,
+                  plan: assemblyPlan?.plan ?? figureScene.assemblies.plan,
+                },
+          ),
+        }),
   };
 };

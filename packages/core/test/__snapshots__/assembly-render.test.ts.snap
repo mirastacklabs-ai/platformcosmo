@@ -1,0 +1,53 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`snapshots of the Phase 1b examples > GPU server (§19.2) 1`] = `
+{
+  "assets": 1,
+  "end3": "28e747a0d3275f2e",
+  "epochs": 3,
+  "items": 41,
+  "labels": 35,
+  "loop": 21,
+  "rest": "69c67ab370e298f0",
+  "settled": [
+    undefined,
+    4,
+    8.04,
+    13.81,
+    20.7994,
+  ],
+  "tracks": 41,
+  "viewBox": {
+    "height": 654.33,
+    "width": 616.82,
+    "x": -492.66,
+    "y": -271.41,
+  },
+}
+`;
+
+exports[`snapshots of the Phase 1b examples > engine teardown (§19.3) 1`] = `
+{
+  "closure": undefined,
+  "end3": "feb053386615edfd",
+  "epochs": 31,
+  "items": 26,
+  "labels": 13,
+  "loop": 18,
+  "rest": "0c4aaf1553ce390e",
+  "settled": [
+    undefined,
+    2.96,
+    5.96,
+    10.4,
+    16.32,
+  ],
+  "tracks": 26,
+  "viewBox": {
+    "height": 729.89,
+    "width": 665.62,
+    "x": -321.94,
+    "y": -437.64,
+  },
+}
+`;

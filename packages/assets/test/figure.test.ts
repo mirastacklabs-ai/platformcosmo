@@ -22,7 +22,14 @@ import { check, clone, eachInMask, errorCodes, maskHas, run, sourcesOf } from ".
 
 const HS_DUAL = ["main", "arrows", "leaders", "callout-text", "busy-callout"];
 const DUAL = [...HS_DUAL, "twins", "occluded", "cage", "screw", "dense"];
-const SINGLE = ["exploded-only", "assembled-only", "dense-exploded", "dense-assembled"];
+const SINGLE = [
+  "exploded-only",
+  "assembled-only",
+  "dense-exploded",
+  "dense-assembled",
+  "cage-assembled",
+  "screw-assembled",
+];
 /** Every preset at stroke 2; every preset but the 1 px comb at stroke 5; main anti-aliased. */
 const VARIANTS: [string, string][] = [
   ...[...DUAL, ...SINGLE].map((n) => [n, ""] as [string, string]),
@@ -121,6 +128,9 @@ describe("trap figures pass the gate", () => {
     for (const name of ["cage", "screw"]) {
       const { f, result } = run(name);
       expect(result.report.parts[0]!.standalone).toBe("exploded");
+      // Seated in the cage or bracket it is not alone (that ink is static, in both drawings).
+      const an = analyzeFigure(f.manifest, sourcesOf(f)).value!;
+      expect(an.units[0]!.dep.assembled!.standalone, name).toBe(false);
       const sp = result.outputs.sprites[0]!;
       const gt = f.sprites[f.units[0]!]!.raster;
       expect([sp.width, sp.height]).toEqual([gt.width, gt.height]);
@@ -491,7 +501,7 @@ describe("local metrics", () => {
 
 describe("re-render", () => {
   it.each(["main", "twins"])(
-    "%s: the gate's composite equals resvg's rendering of the same base and sprites (twins overlap)",
+    "%s: the gate's composite equals resvg's rendering of the same base and sprites",
     { timeout: 60_000 },
     async (name) => {
       const f = figure(name);
@@ -590,7 +600,15 @@ describe("cutout", () => {
     const seeds = f.manifest.parts
       .filter((p: { group: string }) => p.group === "hs-1")
       .flatMap((p: { seeds: { exploded: number[][] } }) => p.seeds.exploded);
-    const c = cutout(E, { seeds });
+    // One image: the part stands alone (its whole ink) only inside a polygon or a declared prior.
+    const t0 = f.states.exploded!.truth.units["hs-1"]!.full;
+    const polygon: [number, number][] = [
+      [t0.x - 2, t0.y - 2],
+      [t0.x + t0.w + 1, t0.y - 2],
+      [t0.x + t0.w + 1, t0.y + t0.h + 1],
+      [t0.x - 2, t0.y + t0.h + 1],
+    ];
+    const c = cutout(E, { seeds, polygon });
     expect(c.value).toBeDefined();
     const gt = f.sprites["hs-1"]!.raster;
     expect(Buffer.from(c.value!.sprite.data).equals(Buffer.from(gt.data))).toBe(true);
