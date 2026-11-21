@@ -23,6 +23,7 @@ import {
 } from "../../src/anim/assembly.js";
 import { evalOffset as evalOffsetOrig, translateFull } from "../../src/render/assembly/tracks.js";
 import { Keyframes } from "../../src/anim/css.js";
+import { zoomFor } from "../../src/anim/timeline.js";
 import { fixtureTheme } from "../fixtures/theme.js";
 import { realPng, resolverOf } from "../figure-fixtures.js";
 import { buildFixture } from "./fixtures/render-model.js";
@@ -204,6 +205,11 @@ function expectedAttrs(f: AssemblyFrameState): Record<string, Record<string, str
   return out;
 }
 
+/** A board whose USB lifts at exactly the instant step 2 ends (labels: always). */
+const boardLabels = (): PlatformCosmoSpec =>
+  JSON.parse(
+    readFileSync(new URL("../fixtures/assembly/board-labels.cosmo.json", import.meta.url), "utf8"),
+  ) as PlatformCosmoSpec;
 const specs: [string, () => PlatformCosmoSpec][] = [
   ["Inline-4 engine (19.3)", engine],
   ["2U GPU server (19.2)", gpu],
@@ -417,54 +423,62 @@ describe("frame mode is the CSS pose at the same time", () => {
 });
 
 describe("every output path writes the assembly state", () => {
-  test.each(specs)("%s: static, steps, frames and GIF frames (CSS stripped)", (_n, make) => {
-    const model = build(make());
-    const am = A(model);
-    const check = (
-      layer: AnimationLayer,
-      expected: AssemblyFrameState,
-      raster: boolean,
-      label: string,
-    ) => {
-      const svg = stripStyle(svgOf(model, layer, raster));
-      const want = expectedAttrs(expected);
-      let seen = 0;
-      for (const [id, set] of Object.entries(want)) {
-        for (const [name, value] of Object.entries(set)) {
-          const got = attrOf(svg, id, name);
-          // an attribute equal to the SVG default may be omitted by the emitter
-          const dflt =
-            name === "opacity" ? "1" : name === "visibility" ? "visible" : "translate(0 0)";
-          expect(got ?? dflt, `${label} ${id} ${name}`).toBe(String(value));
-          seen++;
+  test.each([...specs, ["Board labels", boardLabels]] as typeof specs)(
+    "%s: static, steps, frames and GIF frames (CSS stripped)",
+    (_n, make) => {
+      const model = build(make());
+      const am = A(model);
+      const check = (
+        layer: AnimationLayer,
+        expected: AssemblyFrameState,
+        raster: boolean,
+        label: string,
+      ) => {
+        const svg = stripStyle(svgOf(model, layer, raster));
+        const want = expectedAttrs(expected);
+        let seen = 0;
+        for (const [id, set] of Object.entries(want)) {
+          for (const [name, value] of Object.entries(set)) {
+            const got = attrOf(svg, id, name);
+            // an attribute equal to the SVG default may be omitted by the emitter
+            const dflt =
+              name === "opacity" ? "1" : name === "visibility" ? "visible" : "translate(0 0)";
+            expect(got ?? dflt, `${label} ${id} ${name}`).toBe(String(value));
+            seen++;
+          }
         }
+        expect(seen, label).toBeGreaterThan(_n === "Board labels" ? 30 : 50);
+      };
+      // static / default PNG: the rest frame
+      check(animate(model, { speed: 1, mode: "frame", time: 0 }), am.frameAt(0), false, "static");
+      check(animate(model, { speed: 1, mode: "frame", time: 0 }), am.frameAt(0), true, "png");
+      // --steps: the end pose of each step
+      for (let k = 1; k <= am.clock.length; k++) {
+        check(
+          animate(model, { speed: 1, mode: "step", step: k, motion: "css" }),
+          am.stepEnd(k),
+          false,
+          `step ${k}`,
+        );
       }
-      expect(seen, label).toBeGreaterThan(50);
-    };
-    // static / default PNG: the rest frame
-    check(animate(model, { speed: 1, mode: "frame", time: 0 }), am.frameAt(0), false, "static");
-    check(animate(model, { speed: 1, mode: "frame", time: 0 }), am.frameAt(0), true, "png");
-    // --steps: the end pose of each step
-    for (let k = 1; k <= am.clock.length; k++) {
-      check(
-        animate(model, { speed: 1, mode: "step", step: k, motion: "css" }),
-        am.stepEnd(k),
-        false,
-        `step ${k}`,
+      // frames (GIF/MP4): raster
+      for (const t of [0.4, 2.7, 6.1, 11.3]) {
+        check(
+          animate(model, { speed: 1, mode: "frame", time: t }),
+          am.frameAt(t),
+          true,
+          `gif ${t}`,
+        );
+      }
+      // the step poses differ (the test would pass on a constant otherwise)
+      const poses = new Set(
+        am.clock.map((_, i) =>
+          JSON.stringify(animate(model, { speed: 1, mode: "step", step: i + 1 }).attrs),
+        ),
       );
-    }
-    // frames (GIF/MP4): raster
-    for (const t of [0.4, 2.7, 6.1, 11.3]) {
-      check(animate(model, { speed: 1, mode: "frame", time: t }), am.frameAt(t), true, `gif ${t}`);
-    }
-    // the step poses differ (the test would pass on a constant otherwise)
-    const poses = new Set(
-      am.clock.map((_, i) =>
-        JSON.stringify(animate(model, { speed: 1, mode: "step", step: i + 1 }).attrs),
-      ),
-    );
-    expect(poses.size).toBeGreaterThan(2);
-  });
+      expect(poses.size).toBeGreaterThan(2);
+    },
+  );
 
   test("step mode without a timeline falls back to the rest frame", () => {
     const spec = engine() as unknown as { steps?: unknown };
@@ -523,9 +537,38 @@ describe("reduced motion", () => {
     }
   });
 
-  test("the camera stays on the overview and particles-style 1.1 behaviour is kept for the rest", () => {
-    const model = build(engine());
-    const { reduced } = splitReduced(animate(model, { speed: 1, mode: "loop", motion: "css" }).css);
+  test("reduced motion shows each step's end pose: a label of a part that lifts as the step ends stays", () => {
+    const model = build(boardLabels());
+    const css = animate(model, { speed: 1, mode: "loop", motion: "css" }).css;
+    const { reduced } = splitReduced(css);
+    const id = A(model).labelTracks.find((t) => t.id.endsWith("pl_board.usb__top"))!.id;
+    const esc = id.replace(/[.\\]/g, "\\$&");
+    const names = [...reduced.matchAll(/([^{}]+)\{animation:([^}]*)\}/g)]
+      .filter((m) => (m[1] as string).split(",").includes(`#${esc}`))
+      .flatMap((m) => (m[2] as string).split(",").map((a) => a.trim().split(" ")[0] as string));
+    expect(names.length).toBeGreaterThan(0);
+    const kfs = parseKeyframes(css);
+    const steps = A(model).clock;
+    for (const n of names) {
+      const stops = kfs.get(n)!;
+      // step 2 spans clock[1]: the opacity stop that covers it is 1
+      const t = steps[1]!.start / A(model).loop;
+      const cover = [...stops].reverse().find((st) => st.p <= t + 1e-9)!;
+      expect(cover.decl).toContain("opacity:1");
+    }
+  });
+
+  test("a focus on one part zooms the live camera; reduced motion drops it", () => {
+    const spec = engine() as unknown as { steps: Obj[] };
+    for (const st of spec.steps) if (st.focus !== undefined) st.focus = "engine/oil-pan";
+    const model = build(spec as unknown as PlatformCosmoSpec);
+    const focused = model.scene.timeline.filter((s) => s.focus !== undefined);
+    expect(focused.length).toBeGreaterThan(0);
+    for (const s of focused) expect(zoomFor(model, s)).toBeDefined();
+    const { live, reduced } = splitReduced(
+      animate(model, { speed: 1, mode: "loop", motion: "css" }).css,
+    );
+    expect(live).toMatch(/transform:matrix|transform:translate\([^)]*\)\s*scale|scale\(/);
     expect(reduced).toContain("transform:none");
   });
 

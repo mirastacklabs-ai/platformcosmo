@@ -226,6 +226,8 @@ interface Ctx {
   readonly stack: number[];
   readonly diagnostics: Diagnostic[];
   readonly units: AssemblyUnits;
+  /** `code|pointer` of image diagnostics already reported: once per spec part, not per copy. */
+  readonly reported: Set<string>;
 }
 
 const vec = (v: readonly number[] | undefined, d: number): [number, number, number] => [
@@ -452,7 +454,12 @@ function orientBox(b: Box3, q: number, size: Vec3): Box3 {
 }
 
 /** Turns a pack shape's geometry (built unrotated, size `unrot`) by `q` quarter turns. */
-function orientGeometry(g: PartGeometry, q: number, unrot: Vec3): PartGeometry {
+function orientGeometry(
+  g: PartGeometry,
+  q: number,
+  unrot: Vec3,
+  onDropped?: (im: PartImagePlacement) => void,
+): PartGeometry {
   if (q % 4 === 0) return g;
   const primitives: PartPrimitive[] = g.primitives.map((p) => ({
     ...p,
@@ -464,7 +471,7 @@ function orientGeometry(g: PartGeometry, q: number, unrot: Vec3): PartGeometry {
       ? { rotate: ((((p.rotate ?? 0) / 90 + q) % 4) * 90) as QuarterTurn }
       : {}),
   }));
-  const images = turnImages(g.images, q);
+  const images = turnImages(g.images, q, onDropped);
   return reassignSplit({
     ...g,
     primitives,
@@ -479,10 +486,14 @@ const FACE_CYCLE = ["+x", "+y", "-x", "-y"] as const;
 
 /**
  * Decal faces follow a turn: `right` (+x) and `left` (+y) move round the cycle; a decal whose
- * face turns away from the viewer (-x, -y) cannot be drawn and is dropped. Billboards and
+ * face turns away from the viewer (-x, -y) cannot be drawn: it is dropped and reported. Billboards and
  * `top` are unaffected.
  */
-function turnImages(images: PartGeometry["images"], q: number): PartGeometry["images"] | undefined {
+function turnImages(
+  images: PartGeometry["images"],
+  q: number,
+  onDropped?: (im: PartImagePlacement) => void,
+): PartGeometry["images"] | undefined {
   if (images === undefined) return undefined;
   const out: PartImagePlacement[] = [];
   for (const im of images) {
@@ -494,6 +505,7 @@ function turnImages(images: PartGeometry["images"], q: number): PartGeometry["im
     const to = FACE_CYCLE[(at + q) % 4];
     if (to === "+x") out.push({ ...im, face: "right" });
     else if (to === "+y") out.push({ ...im, face: "left" });
+    else onDropped?.(im);
   }
   return out;
 }
@@ -512,7 +524,15 @@ function credit(used: Used, s: AssetSource | undefined): void {
   used.credits.push(s);
 }
 
-function placement(ctx: Ctx, p: SpecPart, used: Used): PartImagePlacement | undefined {
+/** Pushes a part-image diagnostic once per spec part: copies and `use` instances share it. */
+function reportOnce(ctx: Ctx, d: Diagnostic): void {
+  const key = `${d.code}|${d.path}`;
+  if (ctx.reported.has(key)) return;
+  ctx.reported.add(key);
+  ctx.diagnostics.push(d);
+}
+
+function placement(ctx: Ctx, p: SpecPart, used: Used, d: Draft): PartImagePlacement | undefined {
   const img = p.image;
   if (img === undefined) return undefined;
   const ref = typeof img === "string" ? img : img.ref;
@@ -523,13 +543,26 @@ function placement(ctx: Ctx, p: SpecPart, used: Used): PartImagePlacement | unde
   const own = typeof img === "string" ? undefined : img;
   const c = own?.crop ?? spec.crop;
   const asset = ctx.opts.images?.get(ref);
+  if (asset === undefined) {
+    // Never silent, with or without a crop (the renderer reports the same code before the scene).
+    reportOnce(ctx, {
+      severity: "error",
+      code: "image/not-found",
+      path: `${d.ptr}/image`,
+      message: `Image "${ref}" of part ${JSON.stringify(d.path)} was not provided to the renderer`,
+      suggestion:
+        "Load it with the CLI (the path is relative to the spec's directory) or pass it in RenderOptions.images",
+      params: { id: ref, part: d.path },
+    });
+  }
+  // A crop places the image without the asset; a whole-image crop needs the asset's size.
   const crop: Rect | undefined =
     c !== undefined
       ? { x: c[0], y: c[1], width: c[2], height: c[3] }
       : asset !== undefined
         ? { x: 0, y: 0, width: asset.width, height: asset.height }
         : undefined;
-  if (crop === undefined) return undefined; // whole-image crop needs the asset's size
+  if (crop === undefined) return undefined;
   return { image: ref, face: own?.face ?? "billboard", crop, fit: own?.fit ?? "contain" };
 }
 
@@ -546,7 +579,7 @@ function leafGeometry(ctx: Ctx, d: Draft, used: Used): PartGeometry | undefined 
   const unrot = odd ? { x: rot.y, y: rot.x, z: rot.z } : rot;
   const tone = p.tone ?? "base";
   const color = p.color === undefined ? undefined : (ctx.opts.color ?? plainColor)(p.color);
-  const image = placement(ctx, p, used);
+  const image = placement(ctx, p, used, d);
   const images = image === undefined ? undefined : [image];
   const axis = p.axis ?? "z";
   try {
@@ -560,7 +593,16 @@ function leafGeometry(ctx: Ctx, d: Draft, used: Used): PartGeometry | undefined 
         ...(color === undefined ? {} : { color }),
         state: d.state,
       });
-      const o = orientGeometry(g, d.turns, unrot);
+      const o = orientGeometry(g, d.turns, unrot, (im) =>
+        reportOnce(ctx, {
+          severity: "info",
+          code: "assembly/image-unresolved",
+          path: d.ptr,
+          message: `Part ${JSON.stringify(d.path)}: the "${im.face}" decal of image "${im.image}" faces away from the viewer after the part's turn, so it is not drawn`,
+          suggestion: "Turn the part back, or show the image on a face that stays visible",
+          params: { part: d.path, image: im.image, face: im.face },
+        }),
+      );
       return images !== undefined && o.images === undefined ? { ...o, images } : o;
     }
     const ref = p.shape ?? "box";
@@ -838,7 +880,7 @@ export function buildTemplateInstance(
   const diagnostics: Diagnostic[] = [];
   const used: Used = { images: new Set(), credits: [], creditKeys: new Set() };
   const units = (a.units ?? "mm") as AssemblyUnits;
-  const ctx: Ctx = { spec, model, opts, stack: [], diagnostics, units };
+  const ctx: Ctx = { spec, model, opts, stack: [], diagnostics, units, reported: new Set() };
   const prep = prepare(ctx, i, used, path);
   if (prep === undefined) return undefined;
   const base = (a.rotate ?? 0) as QuarterTurn;
@@ -919,6 +961,7 @@ export function buildAssemblies(
   }
   const model = new AssemblyModel(spec);
   let budget = LEAF_ERROR;
+  const reported = new Set<string>();
   let cx = opts.origin?.x ?? 0;
   const cy = opts.origin?.y ?? 0;
 
@@ -928,7 +971,7 @@ export function buildAssemblies(
     if (!model.fits(i) || leaves > budget) return; // reported by validation (budget/assembly-parts)
     budget -= leaves;
     const units = (a.units ?? "mm") as AssemblyUnits;
-    const ctx: Ctx = { spec, model, opts, stack: [], diagnostics, units };
+    const ctx: Ctx = { spec, model, opts, stack: [], diagnostics, units, reported };
     const prep = prepare(ctx, i, used);
     if (prep === undefined) return;
 

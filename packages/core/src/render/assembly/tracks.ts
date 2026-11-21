@@ -54,6 +54,17 @@ const sameCurve = (a: BezierMove, b: BezierMove): boolean =>
     ? b.bezier === undefined
     : b.bezier !== undefined && a.bezier.every((v, i) => v === (b.bezier as readonly number[])[i]));
 
+/**
+ * A step is `[start, next start)`: its end pose is the LEFT limit at its end time, so a move or
+ * hide key that begins exactly there (a part lifting at the next step's first instant, its
+ * top-face label hiding) has not happened yet. Invariant: `EPS` (1e-9) < STEP_END_LEFT < half
+ * the 1e-4 grid of key times (`r4`), so the instant never crosses a key.
+ */
+export const STEP_END_LEFT = 1e-6;
+
+/** Time at which the end pose of a step whose closing hold ends at `end` is read. */
+export const stepEndTime = (end: number): number => Math.max(0, end - STEP_END_LEFT);
+
 export const round2 = (v: number): number => Math.round(v * 100) / 100 + 0;
 
 export interface SignedMove {
