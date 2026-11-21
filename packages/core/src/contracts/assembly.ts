@@ -490,6 +490,27 @@ export interface SceneAssembly {
   readonly restBounds: Box3;
   /** World bounds over every reachable pose (layout spacing and focus). */
   readonly reachBounds: Box3;
+  /**
+   * Loop-start opacity fades of build programs whose timeline start differs from the base pose
+   * (§7.4); absent when there are none. Computed with the plan's own opening transition.
+   */
+  readonly loopStart?: LoopStart;
+}
+
+/** One leaf fading at the start of the loop. Times are loop seconds at speed 1. */
+export interface LoopFade {
+  /** Leaf path. */
+  readonly path: string;
+  readonly t0: number;
+  readonly t1: number;
+  /** Opacity at `t0` and at `t1`: 1 -> 0 fades a base-pose part out, 0 -> 1 fades one in. */
+  readonly from: 0 | 1;
+  readonly to: 0 | 1;
+}
+
+export interface LoopStart {
+  /** Sorted by (path). */
+  readonly fades: readonly LoopFade[];
 }
 
 /** A flat document storyboard (tier A, §14) or figure (figure mode, §15). */
@@ -535,6 +556,14 @@ export interface ResolvedAction {
    * as `ProgramLevel`s of ancestor programs.
    */
   readonly implied: readonly ProgramLevel[];
+  /**
+   * View switches of a build/unbuild action (§7.7), in the action's own time (seconds from its
+   * start, speed 1, BEFORE compression like `PartMove.start`; multiply by `scale`): one entry per
+   * build step that sets `view` (a build: the step's start; an unbuild, the exact reverse: the
+   * start of the reversed step, switching back to the view before it). Sorted by `at`. Absent
+   * when the action changes no view. `AssemblyStepPlan.view` is the view at the END of the step.
+   */
+  readonly views?: readonly { readonly at: number; readonly view: QuarterTurn }[];
 }
 
 /** Assembly content of one timeline step (aligned with `SceneGraph.timeline`). */

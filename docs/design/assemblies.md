@@ -268,6 +268,16 @@ as `count × thumbnail` (thumbnail = the leaf drawn at a fixed callout scale, or
 `view` rotates the view a quarter turn from that step on (§7.7). `unbuild` plays steps in
 reverse (time-reversed, §7.2).
 
+Within a step the added nodes move **bottom-up**: ordered by their lowest face, ties by spec
+order, then path; each starts `stagger` after the previous. Distances stack as in §6.3 against
+the parts placed so far (the base and earlier steps), so a part never starts inside one that is
+already seated. A node added by a later step that overlaps an earlier step's selection by
+ancestor or descendant (a sub-assembly after one of its parts, or the reverse) adds only the
+leaves not yet added, which move together as one rigid unit; validation reports it as
+`assembly/moved-twice`. `build-path-blocked` tests each moving node's footprint box against the
+placed parts entirely above its seat, so a sub-assembly whose footprint is L-shaped can be
+reported although a clear column exists (a false positive; use a side origin).
+
 ### 6.6 Labels, leaders, details, fade
 
 When a stage has `labels: "show"`, each moved leaf (or moved sub-assembly) shows its `label`
@@ -334,7 +344,10 @@ number of seconds with `D − lead(D) − tr(D) − 0.2 ≥ L_i`, where `lead(D)
   every assembly in its base pose (default `assembled`; `pose: "exploded"` gives an exploded
   poster), full view, step-1 states.
 - **Loop start**: when a build program's timeline start level differs from the base pose,
-  the parts not present at that level fade out during `[0, max(lead_1, 0.4)]`.
+  the parts not present at that level fade out during `[0, max(lead_1, 0.4)]`, and the parts
+  present at that level but not in the base pose (`pose: "empty"` with a build starting at 3)
+  fade in over the same window. The scene lists these as `SceneAssembly.loopStart`, computed
+  with the plan's own `lead_1`.
 - **Loop closure**: during the last step's closing transition `tr_n` (with the camera's ease
   back to the overview) every program returns to its base level: explode levels by a fast
   implode (all moves reversed together, no stagger, compressed into `tr_n`); build levels by
@@ -911,7 +924,7 @@ suggestions):
 | `assembly/unknown-target`                                                                                       | error                                             | action, focus, `set`, `overrides`, `mates`, `inserts`, `use`, `closeup` matches nothing                                                                          |
 | `assembly/unknown-program`                                                                                      | error                                             | program id not found on the target (action, `program`, `subBuild`) or of the wrong kind                                                                          |
 | `assembly/selector-empty`                                                                                       | warning                                           | selector matches no part                                                                                                                                         |
-| `assembly/moved-twice`                                                                                          | error (info in the scene, through inferred roles) | a node moved by two stages of one program                                                                                                                        |
+| `assembly/moved-twice`                                                                                          | error (info in the scene, through inferred roles) | a node moved by two stages of one program, or added by two build steps (also by ancestor or descendant)                                                          |
 | `assembly/stage-out-of-range`                                                                                   | error                                             | `to` beyond the program's stages or steps                                                                                                                        |
 | `assembly/build-backwards`                                                                                      | error                                             | `build` to a lower level                                                                                                                                         |
 | `assembly/unbuild-forwards`                                                                                     | error                                             | `unbuild` to a higher level (use `build`)                                                                                                                        |
@@ -935,6 +948,7 @@ suggestions):
 | `assembly/template-cycle`                                                                                       | error                                             | assemblies reference each other through `use` or `closeup` in a cycle                                                                                            |
 | `assembly/use-ignored`                                                                                          | warning                                           | `use` is ignored because `parts` is set                                                                                                                          |
 | `assembly/diagnostics-capped`                                                                                   | info                                              | a program reported more than 50 warnings, a part's placement check more than 8 diagnostics, or placement checks stopped after 20,000 parts; the rest are omitted |
+| `assembly/view-conflict`                                                                                        | info                                              | two actions of one step set different views; the last wins                                                                                                       |
 | `assembly/view-needs-assembly-only`                                                                             | error                                             | `view` with nodes or DC content                                                                                                                                  |
 | `assembly/storyboard-no-explode`                                                                                | error                                             | explode on a storyboard                                                                                                                                          |
 | `assembly/edge-to-part`                                                                                         | error                                             | edge, flow or cable endpoint is a part path                                                                                                                      |
