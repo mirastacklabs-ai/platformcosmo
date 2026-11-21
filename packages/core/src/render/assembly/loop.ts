@@ -80,12 +80,42 @@ function moveOfPath(program: ResolvedExplodeProgram, path: string, from: number)
   return undefined;
 }
 
+/**
+ * The assembly an action target belongs to: the longest assembly id that is the target or a
+ * prefix of it (close-up instances are rooted at multi-segment paths, `r2/srv/closeup`). A longer
+ * `foreign` path (an instance built in its own group) owns the target instead: undefined.
+ */
+export function ownerOf<T>(
+  byId: ReadonlyMap<string, T>,
+  target: string,
+  foreign: readonly string[] = [],
+): T | undefined {
+  let best: string | undefined;
+  const take = (id: string): void => {
+    if (
+      (target === id || target.startsWith(`${id}/`)) &&
+      (best === undefined || id.length > best.length)
+    ) {
+      best = id;
+    }
+  };
+  for (const id of byId.keys()) take(id);
+  const own = best;
+  best = undefined;
+  for (const id of foreign) take(id);
+  if (best !== undefined && (own === undefined || (best as string).length > own.length)) {
+    return undefined;
+  }
+  return own === undefined ? undefined : byId.get(own);
+}
+
 export function buildLoop(
   assemblies: readonly SceneAssembly[],
   plan: readonly AssemblyStepPlan[],
   times: readonly StepTime[],
   total: number,
   closeLast: boolean,
+  foreign: readonly string[] = [],
 ): LoopBuild {
   const moves: BezierMove[] = [];
   const runs: StageRun[] = [];
@@ -117,7 +147,7 @@ export function buildLoop(
     if (st === undefined) return;
     let end = st.start;
     for (const a of sp.actions) {
-      const asm = byId.get(a.target.split("/")[0] as string);
+      const asm = ownerOf(byId, a.target, foreign);
       if (asm === undefined) continue;
       const found = programOf(
         asm,
@@ -192,7 +222,7 @@ export function buildLoop(
       end = Math.max(end, segStart + a.length);
     }
     settled.push(
-      sp.actions.some((a) => byId.has(a.target.split("/")[0] as string))
+      sp.actions.some((a) => ownerOf(byId, a.target, foreign) !== undefined)
         ? r4(Math.min(end, st.end))
         : undefined,
     );
@@ -251,4 +281,4 @@ export function buildLoop(
 
 /** Whether an action plays anything for assemblies (figure actions have other targets). */
 export const isAssemblyAction = (a: ResolvedAction, ids: ReadonlySet<string>): boolean =>
-  ids.has(a.target.split("/")[0] as string);
+  ownerOf(new Map([...ids].map((i) => [i, i])), a.target) !== undefined;

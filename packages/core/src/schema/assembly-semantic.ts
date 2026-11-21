@@ -1102,6 +1102,16 @@ function explodeProgram(c: Check, owner: TNode, prog: SpecExplodeProgram, pp: st
   });
 }
 
+/** Whether any assembly, part or rack slot names a close-up (levels and views do not combine yet). */
+function hasCloseups(spec: PlatformCosmoSpec): boolean {
+  const walk = (parts: readonly SpecPart[] | undefined): boolean =>
+    (parts ?? []).some((p) => p.closeup !== undefined || walk(p.parts));
+  return (
+    (spec.assemblies ?? []).some((a) => a.closeup !== undefined || walk(a.parts)) ||
+    (spec.racks ?? []).some((r) => (r.slots ?? []).some((sl) => sl.closeup !== undefined))
+  );
+}
+
 function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string): void {
   const addedBy = new Map<string, number>();
   /** Proper ancestors of added nodes, with the first step that added something below them. */
@@ -1167,6 +1177,17 @@ function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string
           `${sp}/view`,
           "Quarter-turn views need an assembly-only spec (no nodes, DC content, figures or storyboards)",
           'Remove "view", or move the nodes and racks to another spec',
+        ),
+      );
+    }
+    if (st.view !== undefined && !mixed && hasCloseups(spec)) {
+      c.out.push(
+        mk(
+          "error",
+          "assembly/view-needs-assembly-only",
+          `${sp}/view`,
+          "Quarter-turn views cannot be combined with close-ups: a close-up level is drawn from the front only",
+          'Remove "view", or remove the "closeup" references from this spec',
         ),
       );
     }
