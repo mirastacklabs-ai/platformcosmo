@@ -16,7 +16,7 @@ import {
 } from "../src/index.js";
 import { DEFAULT_IMAGE_LIMITS } from "../src/assets/prepare.js";
 import { boardsAt, poseAt, fadeAt } from "../src/anim/boards.js";
-import type { BoardIdScheme } from "../src/emit/index.js";
+import type { BoardIdScheme } from "../src/emit/ids.js";
 import { decodePng } from "../src/export/png.js";
 import { checkSpecImages } from "../src/render/boards/images.js";
 import { boardsOf } from "../src/render/boards/types.js";
