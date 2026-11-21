@@ -48,9 +48,13 @@ export {
   DEFAULT_TILE_WIDTH,
   partGeometryFaces,
   partPrimitiveFaces,
+  partPrimitiveSilhouette,
+  studGrid,
+  STUD_DIAMETER,
+  STUD_HEIGHT,
   halfOf,
 } from "./geometry/index.js";
-export type { Half, PartFace, PartPrimitiveFaces } from "./geometry/index.js";
+export type { Half, PartFace, PartPrimitiveFaces, StudGridOptions } from "./geometry/index.js";
 /**
  * @internal For pack authors that need the same typo hints as core diagnostics. The suggestion
  * text and matching are not stable across releases; do not parse or snapshot them.
