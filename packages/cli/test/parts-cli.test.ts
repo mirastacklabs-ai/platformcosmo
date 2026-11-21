@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- test helpers walk untyped spec JSON */
 /**
  * D-1: shape packs, --png-step and validate --suggest through the real wiring and the built
  * bin (assemblies.md sections 5, 12, 17, 18).

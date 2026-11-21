@@ -8,6 +8,9 @@ import {
   type VideoEncoder,
 } from "../../src/index.js";
 import { decodePng } from "../../src/export/png.js";
+import { DEFAULT_IMAGE_LIMITS } from "../../src/assets/prepare.js";
+import { checkFigureImages } from "../../src/render/boards/images.js";
+import type { ImageAsset, PartShapeDef, PartShapeRegistry } from "../../src/contracts/index.js";
 import { fixtureTheme } from "../fixtures/theme.js";
 import { realPng, resolverOf } from "../figure-fixtures.js";
 
@@ -52,8 +55,31 @@ const same = (a: Uint8Array, b: Uint8Array): boolean =>
   a.length === b.length && a.every((v, i) => v === b[i]);
 const pixels = (r: RenderResult): Uint8Array =>
   decodePng(r.outputs.find((o) => o.kind === "png")!.data as Uint8Array).data;
+/** Stand-in for the `hw:` pack (the real one is @platformcosmo/parts-base, wired by the CLI). */
+const stubShape = (id: string): PartShapeDef => ({
+  id,
+  label: id,
+  type: id,
+  defaultSize: { x: 20, y: 20, z: 10 },
+  defaultUnits: "mm",
+  defaults: {},
+  readParams: () => ({ params: {}, diagnostics: [] }),
+  build: (_p, ctx) => {
+    const box = { origin: { x: 0, y: 0, z: 0 }, size: ctx.size };
+    return {
+      primitives: [{ id: "body", kind: "box" as const, box, tone: ctx.tone }],
+      bounds: box,
+      depthBox: box,
+      solid: true,
+    };
+  },
+});
+const HW = new Map(
+  ["dimm", "e1s", "fan", "heatsink", "nic-ocp3"].map((id) => [`hw:${id}`, stubShape(id)]),
+);
+const hwRegistry: PartShapeRegistry = { get: (r) => HW.get(r), list: () => [...HW.keys()] };
 const run = (spec: Obj, o: RenderOptions = {}): Promise<RenderResult> =>
-  render(spec, { theme: THEME, font: "system", images: images(), ...o });
+  render(spec, { theme: THEME, font: "system", images: images(), parts: hwRegistry, ...o });
 const text = (r: RenderResult, kind: string): string =>
   r.outputs.find((o) => o.kind === kind)!.data as string;
 
@@ -128,14 +154,35 @@ describe("Phase 1b design examples through render()", () => {
   test("the engine: gif/mp4 frames follow frameAt; first frame is the rest frame", async () => {
     const spec = example("Inline-4 engine teardown");
     const { frames, encoder } = frameCollector();
-    const rest = await run(spec, { outputs: ["png"], png: { scale: 1 } });
+    // Reference: the `static` output is the rest frame written by a different path (the loop's
+    // static CSS-free layer). resvg cannot read its CSS variables, so compare what matters: every
+    // motion wrapper in it sits at rest (no offset), while a later frame has moved wrappers.
+    const staticSvg = text(await run(spec, { outputs: ["static"] }), "static");
+    const wrappers = [...staticSvg.matchAll(/<g[^>]*id="[^"]*-p[hm]_[^"]*"[^>]*>/g)].map(
+      (m) => m[0],
+    );
+    expect(wrappers.length).toBeGreaterThan(5);
+    for (const w of wrappers) {
+      const t = /transform="translate\(([^)]*)\)"/.exec(w)?.[1];
+      if (t !== undefined)
+        expect(
+          t
+            .split(/[ ,]+/)
+            .map(Number)
+            .every((v) => v === 0),
+          w,
+        ).toBe(true);
+    }
     const r = await run(spec, {
       outputs: ["mp4"],
       video: { fps: 2, durationSec: 12, encoder },
     });
     expect(r.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
     expect(frames).toHaveLength(24);
+    // frame 0 is the rest frame (png at t=0), and the clip then leaves it
+    const rest = await run(spec, { outputs: ["png"], png: { scale: 1 } });
     expect(same(frames[0]!, pixels(rest))).toBe(true);
+    expect(frames.some((f) => !same(f, frames[0]!))).toBe(true);
     // the engine moves: more than a few distinct frames
     expect(
       new Set(frames.map((f) => f.reduce((a, b) => (a * 31 + b) | 0, 7))).size,
@@ -183,5 +230,139 @@ describe("Phase 1b design examples through render()", () => {
     const s2 = await run(spec, { outputs: ["png"], png: { scale: 1, step: 2 } });
     expect(s1.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
     expect(same(pixels(s1), pixels(s2))).toBe(false);
+  });
+});
+
+describe("assembly images and pack shapes are checked before anything is rendered", () => {
+  const asset = (key: string, bytes: number): ImageAsset => ({
+    key,
+    format: "png",
+    mime: "image/png",
+    width: 100,
+    height: 100,
+    orientation: 1,
+    hash: `h-${key}`,
+    data: new Uint8Array(bytes),
+  });
+  const MiB = 1024 ** 2;
+  const resolver = (list: ImageAsset[]) => ({
+    get: (k: string) => list.find((a) => a.key === k),
+    keys: () => list.map((a) => a.key).sort(),
+  });
+  const withImages = (): Obj => ({
+    meta: { version: "1" },
+    images: [
+      { id: "a", src: "a.png" },
+      { id: "b", src: "b.png" },
+      { id: "c", src: "c.png" },
+    ],
+    assemblies: [
+      {
+        id: "box",
+        parts: [
+          { id: "p", size: [4, 4, 4], image: "a" },
+          {
+            id: "grp",
+            parts: [{ id: "q", at: [5, 0, 0], size: [4, 4, 4], image: { ref: "b", face: "top" } }],
+          },
+          { id: "r", at: [10, 0, 0], size: [4, 4, 4], image: "c" },
+        ],
+      },
+    ],
+  });
+
+  test("images on assembly parts count toward the 8 MiB total and name a spec pointer", async () => {
+    // three 2 MiB assets (each at the per-file cap): 8 MiB of base64 text plus one more, over 8 MiB
+    const spec = withImages();
+    (spec.images as Obj[]).push({ id: "d", src: "d.png" });
+    ((spec.assemblies as Obj[])[0]!.parts as Obj[]).push({
+      id: "s",
+      at: [15, 0, 0],
+      size: [4, 4, 4],
+      image: "d",
+    });
+    const r = await render(spec, {
+      theme: THEME,
+      font: "system",
+      images: resolver([
+        asset("a", 2 * MiB),
+        asset("b", 2 * MiB),
+        asset("c", 2 * MiB),
+        asset("d", 1000),
+      ]),
+      outputs: ["animated", "png"],
+    });
+    expect(r.outputs).toEqual([]);
+    const big = r.diagnostics.filter((d) => d.code === "image/too-large");
+    expect(big.map((d) => d.path)).toEqual(["/images"]);
+  });
+
+  test("a missing or oversized image points at the part that uses it, nested parts included", async () => {
+    const missing = await render(withImages(), {
+      theme: THEME,
+      font: "system",
+      images: resolver([asset("a", 10), asset("c", 10)]),
+    });
+    expect(missing.outputs).toEqual([]);
+    expect(
+      missing.diagnostics.filter((d) => d.code === "image/not-found").map((d) => d.path),
+    ).toEqual(["/assemblies/0/parts/1/parts/0/image/ref"]);
+    const huge = await render(withImages(), {
+      theme: THEME,
+      font: "system",
+      images: resolver([asset("a", 10), asset("b", 10), asset("c", 20 * MiB)]),
+    });
+    expect(huge.outputs).toEqual([]);
+    expect(huge.diagnostics.filter((d) => d.code === "image/too-large").map((d) => d.path)).toEqual(
+      ["/assemblies/0/parts/2/image"],
+    );
+  });
+
+  test("the distinct-image cap applies to assembly images (checkFigureImages)", () => {
+    const spec = validate(withImages()).spec!;
+    const limits = { ...DEFAULT_IMAGE_LIMITS, maxImages: 2 };
+    const d = checkFigureImages(
+      spec,
+      resolver([asset("a", 10), asset("b", 10), asset("c", 10)]),
+      limits,
+    );
+    expect(d.map((x) => x.code)).toEqual(["image/too-many"]);
+  });
+
+  const dimmSpec = (): Obj => ({
+    meta: { version: "1" },
+    assemblies: [{ id: "m", parts: [{ id: "d", shape: "hw:dimm" }] }],
+  });
+
+  test("an unresolved pack shape is refused at render, never drawn as a box", async () => {
+    let opened = 0;
+    const encoder: VideoEncoder = {
+      encode: async () => new Uint8Array(),
+      open: () => {
+        opened++;
+        return {
+          write: async () => undefined,
+          finish: async () => new Uint8Array([1]),
+          abort: async () => undefined,
+        };
+      },
+    };
+    // validation without a registry leaves the ref unchecked ...
+    expect(validate(dimmSpec()).diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    // ... but render refuses it, before animating or encoding anything
+    const r = await render(dimmSpec(), {
+      theme: THEME,
+      font: "system",
+      outputs: ["animated", "mp4"],
+      video: { encoder },
+    });
+    expect(r.outputs).toEqual([]);
+    expect(opened).toBe(0);
+    expect(
+      r.diagnostics.filter((d) => d.code === "assembly/unknown-shape").map((d) => d.path),
+    ).toEqual(["/assemblies/0/parts/0/shape"]);
+    const ok = await run(dimmSpec(), { outputs: ["animated"] });
+    expect(ok.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(ok.outputs).toHaveLength(1);
   });
 });

@@ -15,7 +15,7 @@ import type {
 import { IMAGE_DEF_TAG, unsafeSvgBody } from "../../emit/index.js";
 import { h } from "../../emit/xml.js";
 import { fmt } from "../../geometry/index.js";
-import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
+import type { PlatformCosmoSpec, SpecPart } from "../../schema/types.gen.js";
 
 /** Bytes of an asset's SVG body in UTF-8 (the text is embedded as is). */
 const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
@@ -46,30 +46,45 @@ function overCap(a: ImageAsset, limits: ImageLimits): string | undefined {
 }
 
 /**
- * Image ids the figures of a spec use, in first-use order (base, then parts), with the index of
- * their declaration in `images` (for diagnostics). Ids that are not declared are left out
- * (`validate` reports them as `image/unknown`).
+ * Image ids a spec uses, in first-use order: figures (base, then parts), then assembly parts
+ * (billboards and decals, recursively through `parts`; a `use` template is an assembly of its
+ * own, so its parts are walked there). `index` is the declaration in `images` and `at` the
+ * pointer diagnostics should name: the declaration for a figure use, the first part that uses it
+ * for an assembly. Ids that are not declared are left out (`validate` reports `image/unknown`).
  */
-export function figureImageUses(spec: PlatformCosmoSpec): { id: string; index: number }[] {
+export function imageUses(spec: PlatformCosmoSpec): { id: string; index: number; at: string }[] {
   const declared = new Map<string, number>();
   (spec.images ?? []).forEach((img, i) => {
     if (!declared.has(img.id)) declared.set(img.id, i);
   });
-  const out: { id: string; index: number }[] = [];
+  const out: { id: string; index: number; at: string }[] = [];
   const seen = new Set<string>();
+  const add = (id: string, at: (index: number) => string): void => {
+    const index = declared.get(id);
+    if (index === undefined || seen.has(id)) return;
+    seen.add(id);
+    out.push({ id, index, at: at(index) });
+  };
   for (const f of spec.figures ?? []) {
-    for (const id of [f.base, ...f.parts.map((p) => p.image)]) {
-      const index = declared.get(id);
-      if (index === undefined || seen.has(id)) continue;
-      seen.add(id);
-      out.push({ id, index });
-    }
+    for (const id of [f.base, ...f.parts.map((p) => p.image)]) add(id, (i) => `/images/${i}/src`);
   }
+  const walk = (parts: readonly SpecPart[] | undefined, base: string): void => {
+    (parts ?? []).forEach((part, j) => {
+      const at = `${base}/parts/${j}`;
+      const im = part.image;
+      if (im !== undefined) {
+        if (typeof im === "string") add(im, () => `${at}/image`);
+        else add(im.ref, () => `${at}/image/ref`);
+      }
+      walk(part.parts, at);
+    });
+  };
+  (spec.assemblies ?? []).forEach((a, i) => walk(a.parts, `/assemblies/${i}`));
   return out;
 }
 
 /**
- * Checks the images the figures use against the resolver, before any asset is read, hashed or
+ * Checks the images the figures and assemblies use against the resolver, before any asset is read, hashed or
  * encoded: every used image must be present (`image/not-found`), at most `maxImages` distinct
  * ones (`image/too-many`), and the embedded total stays under the cap (`image/too-large`, error)
  * and the warning level (`budget/images`). Cheap: sizes only, no bytes are touched.
@@ -79,18 +94,18 @@ export function checkFigureImages(
   images: ImageAssetResolver | undefined,
   limits: ImageLimits = DEFAULT_IMAGE_LIMITS,
 ): Diagnostic[] {
-  const uses = figureImageUses(spec);
+  const uses = imageUses(spec);
   if (uses.length === 0) return [];
   const out: Diagnostic[] = [];
   let total = 0;
   const present = new Set<string>();
-  for (const { id, index } of uses) {
+  for (const { id, at } of uses) {
     const a = images?.get(id);
     if (a === undefined) {
       out.push({
         severity: "error",
         code: "image/not-found",
-        path: `/images/${index}/src`,
+        path: at,
         message: `Image "${id}" was not provided to the renderer`,
         suggestion:
           "Load it with the CLI (the path is relative to the spec's directory) or pass it in RenderOptions.images",
@@ -103,7 +118,7 @@ export function checkFigureImages(
       out.push({
         severity: "error",
         code: "image/too-large",
-        path: `/images/${index}/src`,
+        path: at,
         message: `Image "${id}" is too large: ${big}`,
         suggestion: "Shrink or crop the image (pcosmo assets shrink)",
         params: { id },
@@ -116,7 +131,7 @@ export function checkFigureImages(
       out.push({
         severity: "error",
         code: "image/format",
-        path: `/images/${index}/src`,
+        path: at,
         message: `Image "${id}" is an SVG the renderer will not embed (${unsafe})`,
         suggestion:
           "Export it without scripts, links, animation or external references, or convert it to PNG",
@@ -133,7 +148,7 @@ export function checkFigureImages(
       severity: "error",
       code: "image/too-many",
       path: "/images",
-      message: `The figures use ${present.size} distinct images (limit ${limits.maxImages})`,
+      message: `The spec uses ${present.size} distinct images (limit ${limits.maxImages})`,
       suggestion: "Share sprites between parts or split the figures over several specs",
       params: { count: present.size, limit: limits.maxImages },
     });

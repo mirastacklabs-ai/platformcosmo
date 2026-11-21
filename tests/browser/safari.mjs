@@ -365,6 +365,14 @@ try {
           }
           if (!ready) throw new Error("object document did not load");
         }
+        // every SVG <image> decoded before any frame is taken (data-URI rasters decode lazily)
+        await wd("POST", s("/execute/async"), {
+          script: `const m = arguments[0], done = arguments[arguments.length - 1];
+            const doc = m === 'object' ? document.getElementById('el').contentDocument : document;
+            const hrefs = [...doc.querySelectorAll('image')].map((i) => i.getAttribute('href') || i.getAttribute('xlink:href')).filter((h) => h && h.startsWith('data:'));
+            Promise.all(hrefs.map((h) => { const i = new Image(); i.src = h; return i.decode().catch(() => undefined); })).then(() => done(true));`,
+          args: [mode],
+        }).catch(() => undefined);
         await sleep(300);
         await diag(`${file}/${mode}`);
         let animated = false;

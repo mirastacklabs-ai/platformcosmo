@@ -4,6 +4,7 @@
  * `render()` only wires them up. All outputs are deterministic (mp4 depends on the system ffmpeg).
  */
 import { r2, t4 } from "../anim/css.js";
+import { assemblyAnim } from "../anim/assembly.js";
 import { windows } from "../anim/timeline.js";
 import type {
   AnimationLayer,
@@ -221,13 +222,20 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
 
   /**
    * `png.step`: the end pose of step k as `steps` shows it. A raster cannot run the step layer's
-   * SMIL particles, so the layer is the frame layer just before the step ends (flows frozen
-   * mid-traversal, step state rules) with the step layer's camera and pose attributes.
+   * SMIL particles, so flows and state come from the frame layer at the END of the step's hold
+   * (the assembly clock's `ends[k]`; plain specs: just before the step window closes), and the
+   * camera and pose come from the step layer. The pose must stay in `attrs` (resvg ignores CSS
+   * transforms), so the pose is taken from the step layer and never rebuilt from CSS.
    */
   const stepLayer = (step: number): AnimationLayer => {
     const w = windows(model.scene.timeline, speed);
     const k = step - 1;
-    const t = (w.starts[k] ?? 0) + (w.durations[k] ?? 0) * 0.999;
+    const start = w.starts[k] ?? 0;
+    const dur = w.durations[k] ?? 0;
+    const close = start + dur;
+    const hold = model.assembly ? assemblyAnim(model.assembly, speed).ends[k] : undefined;
+    // never into the next step's window
+    const t = Math.min(hold ?? close - dur * 0.001, close - 1e-6);
     const frame = deps.animator.animate(model, { speed, mode: "frame", time: t });
     const at = deps.animator.animate(model, { speed, motion, mode: "step", step });
     return {
