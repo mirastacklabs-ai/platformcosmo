@@ -6,10 +6,12 @@ import type {
   Diagnostic,
   FlowKind,
   LegendEntry,
+  LoopStart,
   ObjectState,
   SceneEdge,
   SceneFlow,
   SceneAssemblies,
+  SceneAssembly,
   SceneGraph,
   SceneGroup,
   SceneObject,
@@ -571,6 +573,7 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
       color: resolveColor as (c: string) => string | undefined,
       ...(context.parts === undefined ? {} : { parts: context.parts }),
       ...(dcShapes === undefined ? {} : { dcShapes }),
+      ...(context.images ? { images: context.images } : {}),
     });
     assemblyScene = programs.attach(assemblyScene);
     diagnostics.push(...assemblyScene.diagnostics);
@@ -788,6 +791,17 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
         : {},
     );
     diagnostics.push(...programs.diagnostics, ...assemblyPlan.diagnostics);
+    // loop-start fades (§7.4) ride on the assemblies, in every view
+    const ls = assemblyPlan.loopStart;
+    if (ls.size > 0) {
+      const add = (list: readonly SceneAssembly[]): SceneAssembly[] =>
+        list.map((x) => (ls.has(x.id) ? { ...x, loopStart: ls.get(x.id) as LoopStart } : x));
+      assemblyScene = { ...assemblyScene, assemblies: add(assemblyScene.assemblies) };
+      const main = assemblyScene.assemblies;
+      viewList = viewList?.map((v) =>
+        v.turn === 0 ? { ...v, assemblies: main } : { ...v, assemblies: add(v.assemblies) },
+      );
+    }
   }
 
   const outDiagnostics = diagnostics.sort(

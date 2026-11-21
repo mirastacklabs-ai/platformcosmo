@@ -175,8 +175,17 @@ function imageDefOf(asset: ImageAsset, id: string): SvgNode {
 
 /** Animation attribute overrides (`AnimationLayer.attrs`): only these, with these values. */
 const TRANSLATE_RE = /^translate\(-?\d+(?:\.\d+)? -?\d+(?:\.\d+)?\)$/;
+const NUM = "-?\\d+(?:\\.\\d+)?";
+/** `matrix(s 0 0 s tx ty)`: the uniform placement of a close-up level group (A1-4). */
+const PLACE_RE = new RegExp(`^matrix\\(${NUM} 0 0 ${NUM} ${NUM} ${NUM}\\)$`);
 function checkedAttr(name: string, value: string | number): string | number {
-  if (name === "transform" && typeof value === "string" && TRANSLATE_RE.test(value)) return value;
+  if (
+    name === "transform" &&
+    typeof value === "string" &&
+    (TRANSLATE_RE.test(value) || PLACE_RE.test(value))
+  ) {
+    return value;
+  }
   if (name === "visibility" && (value === "hidden" || value === "visible")) return value;
   if (name === "opacity" && typeof value === "number" && value >= 0 && value <= 1) return value;
   throw new Error(`animation attribute ${name} is not allowed`);

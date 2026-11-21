@@ -266,7 +266,9 @@ describe("expansion: count, pitch, use", () => {
 
   test("every design-example assembly builds cleanly with finite boxes inside its bounds", () => {
     for (const ex of examples("assemblies.md")) {
-      const built = buildAssemblies(spec(ex));
+      const built = buildAssemblies(spec(ex), {
+        images: { get: () => ({ width: 640, height: 240 }) as never, keys: () => [] },
+      });
       expect(built.diagnostics).toEqual([]);
       for (const a of built.assemblies) {
         expect(a.leaves.length).toBeGreaterThan(0);
@@ -912,6 +914,8 @@ describe("never throws; deterministic", () => {
     );
     const a = noAsset.assemblies[0] as SceneAssembly;
     expect(node(a, "a/card").geometry?.images).toBeUndefined();
+    // both parts name an asset that was not provided: one error each, never silent
+    expect(noAsset.diagnostics.filter((d) => d.code === "image/not-found")).toHaveLength(2);
     expect(node(a, "a/decal").geometry?.images).toEqual([
       { image: "pic", face: "top", crop: { x: 1, y: 2, width: 3, height: 4 }, fit: "cover" },
     ]);
@@ -1188,6 +1192,96 @@ describe("turned pack geometry", () => {
     expect(faces(90)).toEqual(["left", "top"]);
     expect(faces(180)).toEqual(["top"]);
     expect(faces(270)).toEqual(["right", "top"]);
+  });
+});
+
+describe("part images are never dropped silently", () => {
+  const images = [{ id: "pic", src: "p.png" }];
+  const codes = (r: ReturnType<typeof asms>, code: string) =>
+    r.diagnostics.filter((d) => d.code === code);
+
+  test.each(["billboard", "top", "left", "right"])(
+    "face %s without the asset: one image/not-found error per spec part, however many copies",
+    (face) => {
+      const r = buildAssemblies(
+        spec({
+          images,
+          assemblies: [
+            {
+              id: "a",
+              units: "tile",
+              parts: [
+                {
+                  id: "p",
+                  count: 3,
+                  pitch: [3, 0, 0],
+                  size: [2, 2, 2],
+                  image: { ref: "pic", face, crop: [0, 0, 4, 4] },
+                },
+                { id: "q", size: [2, 2, 2], at: [0, 9, 0], image: { ref: "pic", face } },
+              ],
+            },
+          ],
+        }),
+      );
+      const errs = codes(r, "image/not-found");
+      expect(errs.map((d) => [d.severity, d.path])).toEqual([
+        ["error", "/assemblies/0/parts/0/image"],
+        ["error", "/assemblies/0/parts/1/image"],
+      ]);
+    },
+  );
+
+  test("an image on a template used twice is reported once, not per instance", () => {
+    const r = buildAssemblies(
+      spec({
+        images,
+        assemblies: [
+          { id: "t", units: "tile", parts: [{ id: "i", size: [2, 2, 2], image: "pic" }] },
+          {
+            id: "host",
+            units: "tile",
+            parts: [
+              { id: "u1", use: "t" },
+              { id: "u2", use: "t", at: [9, 0, 0] },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(codes(r, "image/not-found")).toHaveLength(1);
+  });
+
+  test("a pack decal turned away from the viewer is reported (info), once per part", () => {
+    const def = shapeDef({
+      build: (_p, ctx) => ({
+        ...boxGeometry(ctx.size),
+        images: [
+          { image: "pic", face: "left", crop: { x: 0, y: 0, width: 1, height: 1 }, fit: "contain" },
+        ],
+      }),
+    });
+    const r = buildAssemblies(
+      spec({
+        images,
+        assemblies: [
+          {
+            id: "a",
+            units: "tile",
+            parts: [
+              { id: "p", shape: "t:s", size: [2, 2, 1], rotate: 180, count: 2, pitch: [3, 0, 0] },
+            ],
+          },
+        ],
+      }),
+      {
+        parts: registryOf(def),
+        images: { get: () => ({ width: 4, height: 4 }) as never, keys: () => [] },
+      },
+    );
+    const d = codes(r, "assembly/image-unresolved");
+    expect(d).toHaveLength(1);
+    expect(d[0]).toMatchObject({ severity: "info", params: { image: "pic", face: "left" } });
   });
 });
 

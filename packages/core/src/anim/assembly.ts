@@ -25,7 +25,7 @@ import type {
   TrackKey,
   VisibilityKey,
 } from "../contracts/index.js";
-import { keyProgress, round2 } from "../render/assembly/tracks.js";
+import { keyProgress, round2, stepEndTime } from "../render/assembly/tracks.js";
 import { Keyframes, pct, t4 } from "./css.js";
 
 type Attrs = Record<string, Record<string, string | number>>;
@@ -416,7 +416,7 @@ export function assemblyStepEnd(
   if (am === undefined) return undefined;
   const a = assemblyAnim(am, speed);
   if (a.props.length === 0) return undefined;
-  return attrsAtLoop(a, a.ends[step - 1] ?? 0);
+  return attrsAtLoop(a, stepEndTime(a.ends[step - 1] ?? 0));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -565,7 +565,7 @@ export function assemblyLoop(
   const discrete = (decl: (t: number) => string): [number, string][] => {
     const stops: [number, string][] = [];
     a.starts.forEach((s, i) => {
-      const d = decl(a.ends[i] as number);
+      const d = decl(stepEndTime(a.ends[i] as number));
       const last = stops[stops.length - 1];
       if (last === undefined || last[1] !== d) stops.push([s / a.loop, d]);
     });

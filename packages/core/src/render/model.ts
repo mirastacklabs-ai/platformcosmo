@@ -19,6 +19,7 @@ import type {
 } from "../contracts/index.js";
 import { depthOrder, orderGroups } from "../depth/index.js";
 import type { PlatformCosmoSpec } from "../schema/types.gen.js";
+import { levelOf } from "../scene/assembly/levels.js";
 import { buildAssemblyRender } from "./assembly/index.js";
 import { buildBoards } from "./boards/index.js";
 import { createIds, iconDef } from "../emit/index.js";
@@ -760,6 +761,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     layers.background.push(...asmBuild.defs);
     layers.objects.push(...asmBuild.objects);
     extents.push(...asmBuild.extents);
+    // Close-up levels (§8.4): first in the overlay layer, so captions and tiles draw above them.
+    if (asmBuild.levelNodes !== undefined) layers.overlay.push(...asmBuild.levelNodes);
   }
 
   // ---- Viewbox, overlays ---------------------------------------------------------------
@@ -1009,7 +1012,10 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
 
   // ---- Focus rects, glyph coverage -----------------------------------------------------
   const focusRects: Record<string, Rect> = {};
+  // Close-up targets live in their level's own coordinates: `assembly.levelFocusRect` has them.
+  const levelList = scene.assemblies?.levels ?? [];
   for (const id of Object.keys(scene.focusTargets).sort()) {
+    if (levelList.length > 0 && levelOf(levelList, id) !== undefined) continue;
     const r = projectBoxBounds(projection, scene.focusTargets[id] as Box3);
     focusRects[id] = {
       x: round2(r.x - MARGIN_FOCUS),

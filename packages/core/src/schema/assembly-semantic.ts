@@ -1111,8 +1111,20 @@ function explodeProgram(c: Check, owner: TNode, prog: SpecExplodeProgram, pp: st
   });
 }
 
+/** Whether any assembly, part or rack slot names a close-up (levels and views do not combine yet). */
+function hasCloseups(spec: PlatformCosmoSpec): boolean {
+  const walk = (parts: readonly SpecPart[] | undefined): boolean =>
+    (parts ?? []).some((p) => p.closeup !== undefined || walk(p.parts));
+  return (
+    (spec.assemblies ?? []).some((a) => a.closeup !== undefined || walk(a.parts)) ||
+    (spec.racks ?? []).some((r) => (r.slots ?? []).some((sl) => sl.closeup !== undefined))
+  );
+}
+
 function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string): void {
   const addedBy = new Map<string, number>();
+  /** Proper ancestors of added nodes, with the first step that added something below them. */
+  const below = new Map<string, number>();
   const { spec } = c;
   const mixed =
     (spec.nodes?.length ?? 0) +
@@ -1132,9 +1144,21 @@ function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string
       for (const p of evalSelector(c, owner, s, `${sp}/add/${i}`)) sel.add(p);
     });
     const added = [...sel];
-    const twice = added.filter((p) => addedBy.has(p));
+    // overlap by leaf set: the same node, an ancestor of an earlier add, or a node below one
+    // (a descendant of a node selected in this very step is not a conflict)
+    const firstStep = (p: string): number | undefined => {
+      const hit = addedBy.get(p) ?? below.get(p);
+      if (hit !== undefined) return hit;
+      const segs = p.split("/");
+      for (let k = segs.length - 1; k > 0; k--) {
+        const up = addedBy.get(segs.slice(0, k).join("/"));
+        if (up !== undefined) return up;
+      }
+      return undefined;
+    };
+    const twice = added.filter((p) => firstStep(p) !== undefined);
     if (twice.length > 0) {
-      const first = addedBy.get(twice[0] as string) as number;
+      const first = firstStep(twice[0] as string) as number;
       c.out.push(
         mk(
           "error",
@@ -1146,7 +1170,14 @@ function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string
         ),
       );
     }
-    for (const p of added) if (!addedBy.has(p)) addedBy.set(p, j);
+    for (const p of added) {
+      if (!addedBy.has(p)) addedBy.set(p, j);
+      const segs = p.split("/");
+      for (let k = 1; k < segs.length; k++) {
+        const up = segs.slice(0, k).join("/");
+        if (!below.has(up)) below.set(up, j);
+      }
+    }
     if (st.view !== undefined && mixed) {
       c.out.push(
         mk(
@@ -1155,6 +1186,17 @@ function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string
           `${sp}/view`,
           "Quarter-turn views need an assembly-only spec (no nodes, DC content, figures or storyboards)",
           'Remove "view", or move the nodes and racks to another spec',
+        ),
+      );
+    }
+    if (st.view !== undefined && !mixed && hasCloseups(spec)) {
+      c.out.push(
+        mk(
+          "error",
+          "assembly/view-needs-assembly-only",
+          `${sp}/view`,
+          "Quarter-turn views cannot be combined with close-ups: a close-up level is drawn from the front only",
+          'Remove "view", or remove the "closeup" references from this spec',
         ),
       );
     }

@@ -1052,12 +1052,13 @@ describe("existing output is unchanged", () => {
   const DOC_GOLDEN: Record<string, string> = {
     "assemblies.md Two-part box": "be7ad58b82ee947c",
     "assemblies.md Loaded rack: service view": "ac8fb18af1133528",
-    "assemblies.md 2U GPU server internals": "6ec32493bc488708", // hw: shapes from main
+    "assemblies.md 2U GPU server internals": "96b61a933e360e5e", // hw: shapes from main
     "assemblies.md Inline-4 engine teardown": "37582f18c42ebc76",
     "assemblies.md Rack to server to internals": "b6f4978ff28ce3db",
-    // Brick rover uses build-step views: its scene is unchanged except `assemblies.views`
-    "assemblies.md Brick rover": "c1de99110ff760b4",
-    "document-ingestion.md Generic 2OU server from a spec document": "3251238436cc3bba",
+    // The two specs with build programs changed in A2-6 (build programs, plan views and the
+    // build poses now exist); re-recorded there. Every other hash is the A2-3 record.
+    "assemblies.md Brick rover": "c60fc74324613b75",
+    "document-ingestion.md Generic 2OU server from a spec document": "ccca9f57caea9bd6",
     "document-ingestion.md Heat-sink installation figure": "0210858f1ee3bae2",
     "document-ingestion.md From the hall to the heat sink": "51d21be6488c12ce",
     // R-2: the scene now carries the storyboard (boards, plan, images) the guard used to refuse

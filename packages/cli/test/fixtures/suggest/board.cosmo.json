@@ -1,0 +1,155 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "Mainboard layout",
+    "description": "Isometric reconstruction of the mainboard plan, scaled from the 13 in dimension line."
+  },
+  "assemblies": [
+    {
+      "id": "board",
+      "label": "Mainboard",
+      "units": "mm",
+      "fit": 14,
+      "labels": "always",
+      "parts": [
+        {
+          "id": "mainboard",
+          "shape": "plate",
+          "at": [0, 0, 0],
+          "size": [330.2, 228.6, 1.6],
+          "role": "body"
+        },
+        {
+          "id": "power",
+          "type": "connector",
+          "at": [12.7, 12.7, 1.6],
+          "size": [25.4, 38.1, 9],
+          "label": "Power",
+          "tone": "base"
+        },
+        {
+          "id": "cpu-1",
+          "type": "cpu",
+          "at": [50.8, 25.4, 1.6],
+          "size": [50.8, 50.8, 8],
+          "label": "CPU 1",
+          "tone": "metal"
+        },
+        {
+          "id": "dimm-a",
+          "type": "dimm",
+          "at": [114.3, 25.4, 1.6],
+          "size": [12.7, 63.5, 10],
+          "label": "DIMM A",
+          "tone": "muted"
+        },
+        {
+          "id": "dimm-b",
+          "type": "dimm",
+          "at": [131.2, 25.4, 1.6],
+          "size": [12.7, 63.5, 10],
+          "label": "DIMM B",
+          "tone": "muted"
+        },
+        {
+          "id": "cpu-2",
+          "type": "cpu",
+          "at": [50.8, 139.7, 1.6],
+          "size": [50.8, 50.8, 8],
+          "label": "CPU 2",
+          "tone": "metal"
+        },
+        {
+          "id": "dimm-c",
+          "type": "dimm",
+          "at": [114.3, 127.0, 1.6],
+          "size": [12.7, 63.5, 10],
+          "label": "DIMM C",
+          "tone": "muted"
+        },
+        {
+          "id": "dimm-d",
+          "type": "dimm",
+          "at": [131.2, 127.0, 1.6],
+          "size": [12.7, 63.5, 10],
+          "label": "DIMM D",
+          "tone": "muted"
+        },
+        {
+          "id": "pcie-x16-1",
+          "type": "slot",
+          "at": [173.6, 16.9, 1.6],
+          "size": [143.9, 10.2, 11],
+          "label": "PCIe x16 1",
+          "tone": "muted"
+        },
+        {
+          "id": "pcie-x16-2",
+          "type": "slot",
+          "at": [173.6, 38.1, 1.6],
+          "size": [143.9, 10.2, 11],
+          "label": "PCIe x16 2",
+          "tone": "muted"
+        },
+        {
+          "id": "pcie-x8",
+          "type": "slot",
+          "at": [173.6, 59.3, 1.6],
+          "size": [143.9, 10.2, 11],
+          "label": "PCIe x8",
+          "tone": "muted"
+        },
+        {
+          "id": "bridge",
+          "type": "chip",
+          "at": [173.6, 76.2, 1.6],
+          "size": [42.3, 42.3, 3],
+          "label": "Bridge",
+          "tone": "accent"
+        },
+        {
+          "id": "bios",
+          "type": "chip",
+          "at": [232.8, 88.9, 1.6],
+          "size": [29.6, 21.2, 3],
+          "label": "BIOS",
+          "tone": "accent"
+        },
+        {
+          "id": "battery",
+          "type": "battery",
+          "shape": "cylinder",
+          "at": [275.2, 88.9, 1.6],
+          "size": [25.4, 25.4, 3],
+          "label": "Battery",
+          "tone": "base"
+        },
+        {
+          "id": "jp1",
+          "type": "jumper",
+          "at": [249.8, 148.2, 1.6],
+          "size": [12.7, 12.7, 6],
+          "label": "JP1",
+          "tone": "base"
+        },
+        {
+          "id": "sata",
+          "type": "connector",
+          "at": [182.0, 182.0, 1.6],
+          "size": [63.5, 16.9, 9],
+          "label": "SATA",
+          "tone": "base"
+        },
+        {
+          "id": "usb",
+          "type": "connector",
+          "at": [266.7, 182.0, 1.6],
+          "size": [46.6, 16.9, 9],
+          "label": "USB",
+          "tone": "base"
+        }
+      ]
+    }
+  ]
+}
