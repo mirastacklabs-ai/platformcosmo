@@ -21,8 +21,8 @@ import type {
   PartShapeRegistry,
 } from "../contracts/index.js";
 import { planFigureSteps, resolveFigure, stepViews, type ResolvedFigure } from "../scene/boards.js";
-import { AssemblyPrograms } from "../scene/assembly/plan.js";
-import { buildRackAssemblies, rackTargeted, targetedRacks } from "../scene/assembly/racks.js";
+import { planScene } from "../scene/assembly/plan-scene.js";
+import { rackTargeted, targetedRacks } from "../scene/assembly/racks.js";
 import { MAX_LEVEL_DEPTH } from "../scene/assembly/levels.js";
 import { UNRENDERED, type GuardGroup } from "./unsupported.js";
 import { globMatch } from "./glob.js";
@@ -364,20 +364,20 @@ function builtRackTrees(
     racks.some((r) => r.id === id && r.programs !== undefined),
   );
   if (wanted.length === 0) return out;
-  try {
-    const built = buildRackAssemblies(spec, dc, dc.buildScene(spec), {
-      planner: new AssemblyPrograms(spec),
-      ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
-      ...(dc.shapes === undefined ? {} : { dcShapes: dc.shapes }),
-    });
-    for (const a of built.assemblies) {
-      const ri = racks.findIndex((r) => r.id === a.id);
-      if (ri < 0 || !wanted.includes(a.id)) continue;
-      const t = model.builtRackTree(ri, a.root);
-      if (t !== undefined) out.set(ri, t);
-    }
-  } catch {
-    out.clear(); // the DC pack failed: `closeupDiagnostics` (validate) and the render report it
+  // the racks only, built as the scene builds them (`planScene`); a failing pack leaves the
+  // opaque tree (`closeupDiagnostics`, in validate, and the render report the failure)
+  const planned = planScene(spec, {
+    dc,
+    ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
+    assemblies: false,
+    closeups: false,
+    guard: true,
+  });
+  for (const a of planned.racks?.assemblies ?? []) {
+    const ri = racks.findIndex((r) => r.id === a.id);
+    if (ri < 0 || !wanted.includes(a.id)) continue;
+    const t = model.builtRackTree(ri, a.root);
+    if (t !== undefined) out.set(ri, t);
   }
   return out;
 }
@@ -1484,7 +1484,24 @@ function checkSteps(c: Check): void {
         c.out.push(unresolved(c, `${at}/${kind}`, `${kind} target`, target, w, segs));
         return;
       }
-      if (w.opaque && w.node.progs.length === 0) return; // parts come from the DC pack
+      if (w.opaque && w.node.progs.length === 0) {
+        // a slot without `assembly`, a part of it or of the frame: the DC pack gives it no program
+        // of its own, so the scene would make the rack an assembly and then do nothing (§8.3)
+        // (a path through a close-up names the close-up instance: not this case)
+        if (rk === "rack" && !segs.includes("closeup", 1)) {
+          c.out.push(
+            mk(
+              "error",
+              "assembly/unknown-program",
+              `${at}/${kind}`,
+              `Cannot ${kind} ${q(target)}: it has no program (only a slot with "assembly" has one, "internals"; a plain slot moves with its rack's programs)`,
+              `${upper(kind)} ${q(root)} (its "drawers" program slides the slots out), or give the slot internals with "assembly"`,
+              { id: target },
+            ),
+          );
+        }
+        return;
+      }
       assemblyAction(c, a, kind, target, w.node, asm, segs.length === 1, at, machine);
     });
   });

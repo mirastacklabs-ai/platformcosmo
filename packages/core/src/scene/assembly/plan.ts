@@ -31,7 +31,6 @@
 import type {
   AssemblyStepPlan,
   Box3,
-  DcPack,
   Diagnostic,
   PartMove,
   ProgramLevel,
@@ -40,8 +39,6 @@ import type {
   ResolvedStage,
   SceneAssemblies,
   SceneAssembly,
-  PartShapePack,
-  PartShapeRegistry,
   LoopStart,
   QuarterTurn,
   ResolvedBuildProgram,
@@ -65,8 +62,6 @@ import type {
 import { createProjection, projectBoxBounds } from "../../geometry/index.js";
 import {
   planFigureSteps,
-  resolveFigure,
-  stepViews,
   type ForeignAction,
   type PlanOptions,
   type ResolvedFigure,
@@ -88,8 +83,6 @@ import {
   viewAt,
   viewSwitches,
 } from "./build.js";
-import { buildRackAssemblies, targetedRacks } from "./racks.js";
-import { buildAssemblies } from "./tree.js";
 import {
   OwnerSelectors,
   indexOwner,
@@ -1151,60 +1144,4 @@ const leavesOf = (n: SceneAssemblyNode): SceneAssemblyNode[] =>
 
 function worldCentre(b: Box3): [number, number, number] {
   return [b.origin.x + b.size.x / 2, b.origin.y + b.size.y / 2, b.origin.z + b.size.z / 2];
-}
-
-// ---------------------------------------------------------------------------------------------
-// Validation entry point
-// ---------------------------------------------------------------------------------------------
-
-export interface AssemblyPlanContext {
-  readonly parts?: PartShapeRegistry;
-  readonly dcShapes?: PartShapePack;
-  /** DC pack: racks a step action targets plan beside the assemblies, as in the scene. */
-  readonly dc?: DcPack;
-  /** Which `steps[].focus` ids zoom the camera (the scene's rule). */
-  readonly isFocusTarget: (id: string) => boolean;
-  readonly gated?: PlanOptions["gated"];
-}
-
-/**
- * `assembly/compressed` of the whole step plan (assemblies and figures through one step loop),
- * for `validate`: the scene computes the same plan with the same helpers but does not report it,
- * so a diagnostic never appears twice. Empty without assemblies or steps.
- */
-export function assemblyPlanDiagnostics(
-  spec: PlatformCosmoSpec,
-  ctx: AssemblyPlanContext,
-): Diagnostic[] {
-  const dc = ctx.dc;
-  const targeted = dc?.buildAssembly === undefined ? [] : targetedRacks(spec);
-  if ((spec.steps?.length ?? 0) === 0) return [];
-  if ((spec.assemblies?.length ?? 0) === 0 && targeted.length === 0) return [];
-  // the scene's single planner and order: targeted racks, then the spec assemblies
-  const programs = new AssemblyPrograms(spec);
-  const dcShapes = ctx.dcShapes ?? dc?.shapes;
-  const shared = {
-    ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
-    ...(dcShapes === undefined ? {} : { dcShapes }),
-  };
-  let racks: readonly SceneAssembly[] = [];
-  if (dc !== undefined && targeted.length > 0) {
-    try {
-      racks = buildRackAssemblies(spec, dc, dc.buildScene(spec), {
-        planner: programs,
-        ...shared,
-      }).assemblies;
-    } catch {
-      racks = []; // the DC pack failed: `closeupDiagnostics` (validate) and the render report it
-    }
-  }
-  const built = programs.attach(buildAssemblies(spec, { reach: programs.reach, ...shared }));
-  const figures = new Map<string, ResolvedFigure>();
-  (spec.figures ?? []).forEach((f, i) => {
-    const { figure } = resolveFigure(f, i);
-    if (!figures.has(figure.id)) figures.set(figure.id, figure);
-  });
-  const views = stepViews(spec, ctx.isFocusTarget);
-  const all = [...built.assemblies, ...racks].sort((p, q) => cmp(p.id, q.id));
-  return programs.plan(all, figures, views, ctx.gated ? { gated: ctx.gated } : {}).compression;
 }

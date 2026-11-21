@@ -17,7 +17,8 @@ import { buildAssemblies, assemblyNodes } from "../src/scene/assembly/tree.js";
 import { BEZIER, REVERSED_EASING, fitDuration, mirrorBezier } from "../src/scene/boards.js";
 import { OwnerSelectors, indexOwner, makeWork } from "../src/scene/assembly/selectors.js";
 import { programSegment } from "../src/scene/assembly/timing.js";
-import { AssemblyPrograms, assemblyPlanDiagnostics } from "../src/scene/assembly/plan.js";
+import { AssemblyPrograms } from "../src/scene/assembly/plan.js";
+import { assemblyPlanDiagnostics } from "../src/scene/assembly/plan-scene.js";
 import { transitionSeconds } from "../src/anim/timeline.js";
 
 // A2-3: explode programs and the step plan (docs/design/assemblies.md §6, §7, §8.3, §10).

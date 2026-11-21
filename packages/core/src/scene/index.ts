@@ -35,14 +35,13 @@ import { particleCount, PARTICLE_LIMIT } from "../schema/semantic.js";
 import type { PlatformCosmoSpec, SpecFlow, SpecNode } from "../schema/types.gen.js";
 import { boardOverlapDiagnostics, buildFigureScene, figureFocusIds } from "./boards.js";
 import { AssemblyPrograms } from "./assembly/plan.js";
-import { buildCloseups, type CloseupBuild, type CloseupHost } from "./assembly/closeup.js";
-import { buildRackAssemblies, hasSlotCloseups, targetedRacks } from "./assembly/racks.js";
+import type { CloseupBuild } from "./assembly/closeup.js";
+import { needsRacks, planScene } from "./assembly/plan-scene.js";
 import { levelFocusTargets } from "./assembly/levels.js";
 import { usedViews, viewScenes } from "./assembly/views.js";
 import { stepViews } from "./assembly/timing.js";
 import {
   assemblyFocusTargets,
-  assemblyNodes,
   assemblyStates,
   buildAssemblies,
   mergeSceneAssemblies,
@@ -563,71 +562,40 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
   let viewList: SceneAssemblies["views"];
   // Racks a step action targets become assemblies (§8.1) and slots with `closeup` host levels
   // (§8.4); every other rack keeps its 1.1 objects, and a spec without either skips this.
-  const dc = context.dc;
-  const withRacks =
-    frag !== undefined &&
-    dc !== undefined &&
-    ((dc.buildAssembly !== undefined && targetedRacks(spec).length > 0) ||
-      (dc.slotHosts !== undefined && hasSlotCloseups(spec)));
+  const withRacks = frag !== undefined && needsRacks(spec, context.dc);
   /** Racks drawn as assemblies: their 1.1 objects leave the object list. */
   let rackIds: ReadonlySet<string> = new Set();
-  let hosts: readonly CloseupHost[] = [];
   if ((spec.assemblies?.length ?? 0) > 0 || withRacks) {
-    // ONE planner for the racks, the spec assemblies and the close-up instances: one work budget,
-    // one level machine, one step plan (W-1)
-    programs = new AssemblyPrograms(spec);
-    const dcShapes = context.dc?.shapes;
-    let rackAssemblies: readonly SceneAssembly[] = [];
-    if (withRacks && frag !== undefined) {
-      const racks = buildRackAssemblies(spec, dc, frag, {
-        planner: programs,
-        ...(context.parts === undefined ? {} : { parts: context.parts }),
-        ...(dcShapes === undefined ? {} : { dcShapes }),
-      });
-      diagnostics.push(...racks.diagnostics);
-      rackAssemblies = racks.assemblies;
-      rackIds = new Set(racks.assemblies.map((a) => a.id));
-      hosts = racks.hosts;
-    }
-    // spec assemblies stand +x of everything, the racks' drawer travel included
-    const pre = unionBox([
-      ...boxes.values(),
-      ...(frag ? [frag.bounds] : []),
-      ...rackAssemblies.map((a) => a.reachBounds),
-    ]);
-    assemblyScene = buildAssemblies(spec, {
-      reach: programs.reach,
-      origin: {
-        x: pre.size.x > 0 ? r2(pre.origin.x + pre.size.x + DC_GAP) : 0,
-        y: pre.size.x > 0 ? pre.origin.y : 0,
-      },
-      color: resolveColor as (c: string) => string | undefined,
+    // ONE planner for the racks, the spec assemblies and the close-up instances (`planScene`):
+    // one work budget, one level machine, one step plan
+    const planned = planScene(spec, {
       ...(context.parts === undefined ? {} : { parts: context.parts }),
-      ...(dcShapes === undefined ? {} : { dcShapes }),
+      ...(context.dc?.shapes === undefined ? {} : { dcShapes: context.dc.shapes }),
       ...(context.images ? { images: context.images } : {}),
+      color: resolveColor as (c: string) => string | undefined,
+      ...(withRacks && context.dc !== undefined
+        ? { dc: context.dc, frag: frag as DcSceneFragment }
+        : {}),
+      // spec assemblies stand +x of everything, the racks' drawer travel included
+      origin: (rackReach) => {
+        const pre = unionBox([...boxes.values(), ...(frag ? [frag.bounds] : []), ...rackReach]);
+        return {
+          x: pre.size.x > 0 ? r2(pre.origin.x + pre.size.x + DC_GAP) : 0,
+          y: pre.size.x > 0 ? pre.origin.y : 0,
+        };
+      },
     });
-    assemblyScene = programs.attach(assemblyScene);
-    if (rackAssemblies.length > 0) {
-      assemblyScene = {
-        ...assemblyScene,
-        assemblies: [...assemblyScene.assemblies, ...rackAssemblies].sort(byId),
-      };
-    }
+    programs = planned.programs;
+    const built = planned.built as NonNullable<typeof planned.built>;
+    diagnostics.push(...(planned.racks?.diagnostics ?? []));
+    rackIds = new Set((planned.racks?.assemblies ?? []).map((a) => a.id));
+    assemblyScene = { ...built, assemblies: planned.assemblies };
     diagnostics.push(...assemblyScene.diagnostics);
     for (const [path, state] of assemblyStates(assemblyScene.assemblies)) states[path] ??= state;
     // close-up levels (§8.4) and quarter-turn views (§7.7): only when the spec has them, so a
     // spec without keeps its scene byte for byte
-    if (
-      hosts.length > 0 ||
-      assemblyScene.assemblies.some((a) => assemblyNodes(a).some((n) => n.closeup !== undefined))
-    ) {
-      closeups = buildCloseups(spec, assemblyScene.assemblies, {
-        programs,
-        hosts,
-        color: resolveColor as (c: string) => string | undefined,
-        ...(context.parts === undefined ? {} : { parts: context.parts }),
-        ...(dcShapes === undefined ? {} : { dcShapes }),
-      });
+    closeups = planned.closeups;
+    if (closeups !== undefined) {
       diagnostics.push(...closeups.diagnostics);
       for (const l of closeups.levels) {
         if (l.assembly === undefined) continue;
