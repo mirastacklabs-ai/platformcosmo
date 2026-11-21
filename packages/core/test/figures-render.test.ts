@@ -21,7 +21,7 @@ import { assertDataHref, orientationMatrix, unsafeSvgBody } from "../src/emit/in
 import { decodePng } from "../src/export/png.js";
 import { boardsOf } from "../src/render/boards/types.js";
 import { drawOrder, layoutFigure, stackLabels } from "../src/render/boards/layout.js";
-import { checkFigureImages, creditsLine } from "../src/render/boards/images.js";
+import { checkSpecImages, creditsLine } from "../src/render/boards/images.js";
 import { JPEG_METADATA, makeJpeg } from "./assets-fixtures.js";
 import { heatSinkImages, realPng, resolverOf } from "./figure-fixtures.js";
 import { fixtureTheme } from "./fixtures/theme.js";
@@ -1260,10 +1260,10 @@ describe("images: presence and caps before anything is encoded (§11.4)", () => 
   test("the total counts base64 bytes: 6 MiB raw is 8 MiB embedded, the cap's edge (Q07)", () => {
     // 2 x 3 MiB raw = 2 x 4 MiB of base64 = exactly 8 MiB: not over the cap, over the warning
     expect(
-      checkFigureImages(spec, resolver([fake("base", 3 * MiB), fake("spr", 3 * MiB)]), loose),
+      checkSpecImages(spec, resolver([fake("base", 3 * MiB), fake("spr", 3 * MiB)]), loose),
     ).toEqual([expect.objectContaining({ code: "budget/images", severity: "warning" })]);
     // one raw byte more per file pushes the encoded total over 8 MiB (raw would not have)
-    const over = checkFigureImages(
+    const over = checkSpecImages(
       spec,
       resolver([fake("base", 3 * MiB + 1), fake("spr", 3 * MiB + 1)]),
       loose,
@@ -1272,13 +1272,13 @@ describe("images: presence and caps before anything is encoded (§11.4)", () => 
     expect(over[0]!.params!.bytes).toBe(2 * 4 * Math.ceil((3 * MiB + 1) / 3));
     // the same bytes under two ids are embedded once
     expect(
-      checkFigureImages(
+      checkSpecImages(
         spec,
         resolver([fake("base", 5 * MiB, "same"), fake("spr", 5 * MiB, "same")]),
         loose,
       ).map((d) => d.code),
     ).toEqual(["budget/images"]);
-    expect(checkFigureImages(spec, resolver([fake("base", 10), fake("spr", 10)]))).toEqual([]);
+    expect(checkSpecImages(spec, resolver([fake("base", 10), fake("spr", 10)]))).toEqual([]);
   });
 
   test("an SVG counts its UTF-8 bytes, not its UTF-16 length", () => {
@@ -1295,12 +1295,12 @@ describe("images: presence and caps before anything is encoded (§11.4)", () => 
     });
     // 3-byte characters: 90_000 chars = 270_000 bytes, over the 256 KiB SVG cap, 90_000 < cap
     const body = `<text>${"€".repeat(90_000)}</text>`;
-    const d = checkFigureImages(spec, resolver([svgAsset("base", body), fake("spr", 10)]));
+    const d = checkSpecImages(spec, resolver([svgAsset("base", body), fake("spr", 10)]));
     expect(d.map((x) => [x.code, x.path])).toEqual([["image/too-large", "/images/0/src"]]);
   });
 
   test("per-file caps are re-checked from the asset's sizes (caller-built images)", () => {
-    const d = (a: ImageAsset) => checkFigureImages(spec, resolver([a, fake("spr", 10)]));
+    const d = (a: ImageAsset) => checkSpecImages(spec, resolver([a, fake("spr", 10)]));
     expect(d(fake("base", 3 * MiB)).map((x) => x.code)).toEqual(["image/too-large"]);
     expect(d({ ...fake("base", 10), width: 9000 }).map((x) => x.code)).toEqual(["image/too-large"]);
     expect(d({ ...fake("base", 10), width: 8000, height: 8000 }).map((x) => x.code)).toEqual([
@@ -1393,11 +1393,11 @@ describe("images: presence and caps before anything is encoded (§11.4)", () => 
 
   test("more distinct images than the cap is image/too-many (from sizes, no bytes touched)", () => {
     const limits = { ...DEFAULT_IMAGE_LIMITS, maxImages: 1 };
-    const d = checkFigureImages(spec, resolver([fake("base", 1), fake("spr", 1)]), limits);
+    const d = checkSpecImages(spec, resolver([fake("base", 1), fake("spr", 1)]), limits);
     expect(d.map((x) => [x.code, x.severity])).toEqual([["image/too-many", "error"]]);
     // the same bytes under two ids count once
     expect(
-      checkFigureImages(spec, resolver([fake("base", 1, "same"), fake("spr", 1, "same")]), limits),
+      checkSpecImages(spec, resolver([fake("base", 1, "same"), fake("spr", 1, "same")]), limits),
     ).toEqual([]);
   });
 
