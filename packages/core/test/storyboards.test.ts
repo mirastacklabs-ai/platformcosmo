@@ -606,7 +606,6 @@ describe("motion: frame mode = CSS = tracks; reduced motion; unbuild; closure", 
   const loop = scene.timeline.reduce((s, x) => s + x.duration, 0);
   const layer = animate(model, { speed: 1, mode: "loop" });
   const rules = parseRules(layer.css);
-  const kf = parseKeyframes(layer.css);
   const ids = [...rules.keys()].filter((i) => /-bi_book__/.test(i));
 
   test("every animated element of the board has a rule; the loop is the steps' sum", () => {
