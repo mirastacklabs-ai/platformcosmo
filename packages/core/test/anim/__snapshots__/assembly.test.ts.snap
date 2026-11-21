@@ -42,13 +42,13 @@ exports[`keyframes per wrapper property (snapshots) > 2U GPU server (19.2) 1`] =
       "kind": "label",
     },
   ],
-  "sha": "139fb0ddfd5119b3",
+  "sha": "512cd566f464acb0",
 }
 `;
 
 exports[`keyframes per wrapper property (snapshots) > Inline-4 engine (19.3) 1`] = `
 {
-  "animatedIds": 74,
+  "animatedIds": 58,
   "keyframes": 68,
   "loopSeconds": 18,
   "samples": [
@@ -81,6 +81,6 @@ exports[`keyframes per wrapper property (snapshots) > Inline-4 engine (19.3) 1`]
       "kind": "label",
     },
   ],
-  "sha": "8f821beabdee8718",
+  "sha": "d32f4e14cd97102e",
 }
 `;

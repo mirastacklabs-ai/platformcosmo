@@ -10,7 +10,7 @@
  * screen motion vector, then clockwise. The first box that covers no other showing label (at its
  * pose then), no showing label's leader end and no other part's projected hull (carriers that
  * hold the node's own hull excepted) with a leader of at most 54 px wins, else the cheapest
- * (leader ends > labels > parts, then leader length). The leader is a 1 px line from an ANCHOR
+ * (leader ends, crossings, labels, then parts and leader length). The leader is a 1 px line from an ANCHOR
  * to the label box: the sample of the node's visible surface (not behind another part along the
  * view ray, at the pose it shows in and at the end of each later stage while it is up; interior
  * of what shows when possible) nearest to the label, so it ends on the part's own geometry even
@@ -59,6 +59,7 @@ import {
   rayHits,
   rectArea,
   rectsOverlap,
+  segmentHitsRect,
   type Sample,
 } from "./anchors.js";
 import type { StageRun } from "./loop.js";
@@ -437,7 +438,7 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
   // moved ones (it is placed after them). A leaf of a `labels: always` assembly has its top-face
   // label instead.
   const moved = new Set(runs.flatMap((run) => run.moves.map((mv) => mv.path)));
-  const statics = [...info.keys()].sort().filter((path) => {
+  const unmoved = [...info.keys()].sort().filter((path) => {
     const inf = info.get(path) as NodeInfo;
     const leaf = inf.leaves.length === 1 && inf.leaves[0]?.path === path;
     return !moved.has(path) && !(leaf && ctx.labelMode(inf.assembly) === "always");
@@ -453,6 +454,20 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       params: { part: path, label: inf.label },
     });
   };
+  // an unmoved node under a labelled ancestor is named by that ancestor's label: no label of its own
+  const statics: string[] = [];
+  for (const path of unmoved) {
+    const up = [...info.keys()]
+      .filter((a) => path.startsWith(`${a}/`))
+      .sort((x, y) => y.length - x.length)[0];
+    if (up === undefined) statics.push(path);
+    else
+      omit(
+        path,
+        `it moves only as part of ${JSON.stringify(up)} (${JSON.stringify((info.get(up) as NodeInfo).label)}), whose label names it`,
+        "Move it in a stage of its own to give it a leader label, or label only the group",
+      );
+  }
   const upState = new Map<string, boolean>();
   for (const run of [...runs].sort((a, b) => a.t0 - b.t0)) {
     const asm = run.assembly;
@@ -488,15 +503,20 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     readonly box: Rect;
     readonly at: number;
     readonly anchor: Vec2 | undefined;
+    /** The leader segment at the pose of `at` (anchor on the part to the box). */
+    readonly leader: readonly [Vec2, Vec2] | undefined;
     keys: readonly OpacityKey[];
     /** Screen displacement of the node relative to its pose at `at`, by time (memo). */
     readonly shifts: Map<number, Vec2>;
   }
   const placed: Placed[] = [];
-  /** Boxes and leader ends of the placed labels that are showing at `t`, at their pose then. */
-  const placedAt = (t: number): { boxes: Rect[]; anchors: Vec2[] } => {
+  /** Boxes, leader ends and leaders of the placed labels showing (even fading) at `t`, at their pose then. */
+  const placedAt = (
+    t: number,
+  ): { boxes: Rect[]; anchors: Vec2[]; leaders: (readonly [Vec2, Vec2])[] } => {
     const boxes: Rect[] = [];
     const anchors: Vec2[] = [];
+    const leaders: (readonly [Vec2, Vec2])[] = [];
     for (const p of placed) {
       if (evalOpacity(p.keys, t) <= 0) continue;
       let sh = p.shifts.get(t);
@@ -508,8 +528,15 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       }
       boxes.push({ ...p.box, x: p.box.x + sh.x, y: p.box.y + sh.y });
       if (p.anchor !== undefined) anchors.push({ x: p.anchor.x + sh.x, y: p.anchor.y + sh.y });
+      if (p.leader !== undefined) {
+        const [a, b] = p.leader;
+        leaders.push([
+          { x: a.x + sh.x, y: a.y + sh.y },
+          { x: b.x + sh.x, y: b.y + sh.y },
+        ]);
+      }
     }
-    return { boxes, anchors };
+    return { boxes, anchors, leaders };
   };
 
   const size = ctx.labelSize;
@@ -583,8 +610,17 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       return { shift, hulls, now: placedAt(t) };
     });
     const start = preferred(vec);
-    const leaderLen = (c: Rect): number =>
-      pts.length === 0 ? 0 : Math.min(...pts.map((q) => toRect(q, c).d));
+    /** The leader a candidate would have: nearest sample to the box, and the box point it meets. */
+    const leaderOf = (c: Rect): { len: number; seg: readonly [Vec2, Vec2] | undefined } => {
+      let nearest: { d: number; from: Vec2; to: Vec2 } | undefined;
+      for (const q of pts) {
+        const n = toRect(q, c);
+        if (nearest === undefined || n.d < nearest.d - EPS) nearest = { d: n.d, from: q, to: n.at };
+      }
+      return nearest === undefined
+        ? { len: 0, seg: undefined }
+        : { len: nearest.d, seg: [nearest.from, nearest.to] };
+    };
     // first free candidate in preference order; else the one covering the least
     let box: Rect | undefined;
     let bestCost = Infinity;
@@ -595,18 +631,29 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       let labels = 0;
       let parts = 0;
       let covers = 0;
+      let crosses = 0;
+      const lead = leaderOf(c);
       for (const q of poses) {
         const cc = { ...c, x: c.x + q.shift.x, y: c.y + q.shift.y };
+        // the leader must not cross a showing label, nor a showing leader this box
+        if (leaders && lead.seg !== undefined) {
+          const [a, b] = lead.seg;
+          const sa = { x: a.x + q.shift.x, y: a.y + q.shift.y };
+          const sb = { x: b.x + q.shift.x, y: b.y + q.shift.y };
+          crosses += q.now.boxes.filter((bx) => segmentHitsRect(sa, sb, bx)).length;
+        }
+        crosses += q.now.leaders.filter(([a, b]) => segmentHitsRect(a, b, cc)).length;
         labels += q.now.boxes.reduce((sum, b) => sum + rectArea(b, cc), 0);
         for (const hu of q.hulls) if (rectsOverlap(hu.rect, cc)) parts += clipArea(hu.hull, cc);
         covers += q.now.anchors.filter((a) => containsPoint(cc, a)).length;
       }
-      const len = leaderLen(c);
-      if (labels < 1 && parts < 1 && covers === 0 && len <= MAX_LEADER) {
+      const len = lead.len;
+      if (labels < 1 && parts < 1 && covers === 0 && crosses === 0 && len <= MAX_LEADER) {
         box = c;
         break;
       }
-      const cost = 1e6 * covers + 4 * labels + parts + 20 * Math.max(0, len - MAX_LEADER);
+      const cost =
+        1e6 * covers + 5000 * crosses + 50 * labels + parts + 20 * Math.max(0, len - MAX_LEADER);
       if (cost < bestCost - EPS) {
         bestCost = cost;
         best = c;
@@ -622,6 +669,7 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     let leaderRect: Rect | undefined;
     let anchor: Vec2 | undefined;
     let anchorNow: Vec2 | undefined;
+    let leaderNow: readonly [Vec2, Vec2] | undefined;
     if (leaders) {
       let nearest: { d: number; from: Vec2; to: Vec2 } | undefined;
       for (const q of pts) {
@@ -630,6 +678,7 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       }
       const cl = nearest === undefined ? closest(bb, box) : { a: nearest.from, b: nearest.to };
       anchorNow = cl.a;
+      leaderNow = [cl.a, cl.b];
       anchor = { x: r(cl.a.x - sx), y: r(cl.a.y - sy) };
       kids.push(
         h("path", {
@@ -715,7 +764,15 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       y: q.y - sy,
     }));
     shown.push({ path, rest, motion, keys });
-    placed.push({ path, box, at: show.t, anchor: anchorNow, keys, shifts: new Map() });
+    placed.push({
+      path,
+      box,
+      at: show.t,
+      anchor: anchorNow,
+      leader: leaderNow,
+      keys,
+      shifts: new Map(),
+    });
     const stamps = [...new Set([...motion.map((k) => k.t), ...keys.map((k) => k.t)])];
     for (const t of stamps) {
       const seen =

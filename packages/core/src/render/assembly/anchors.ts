@@ -185,3 +185,24 @@ export function rectArea(a: Rect, b: Rect): number {
   const h = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
   return w > 0 && h > 0 ? w * h : 0;
 }
+
+/** Whether the segment `a`-`b` passes through the interior of `r` (Liang-Barsky). */
+export function segmentHitsRect(a: Vec2, b: Vec2, r: Rect): boolean {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  let lo = 0;
+  let hi = 1;
+  const clip = (p: number, q: number): boolean => {
+    if (Math.abs(p) < 1e-12) return q > 0;
+    const t = q / p;
+    if (p < 0) lo = Math.max(lo, t);
+    else hi = Math.min(hi, t);
+    return hi - lo > 1e-9;
+  };
+  return (
+    clip(-dx, a.x - r.x - 0.5) &&
+    clip(dx, r.x + r.width - 0.5 - a.x) &&
+    clip(-dy, a.y - r.y - 0.5) &&
+    clip(dy, r.y + r.height - 0.5 - a.y)
+  );
+}

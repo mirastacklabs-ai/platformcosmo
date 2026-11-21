@@ -19,8 +19,15 @@ import {
   round2,
   stepEndTime,
 } from "../src/render/assembly/tracks.js";
+import { segmentHitsRect } from "../src/render/assembly/anchors.js";
 import { worldLeaves } from "../src/render/assembly/world.js";
+import { themeRegistry } from "../../themes/src/index.js";
+import * as partsAuto from "../../parts-auto/src/index.js";
+import * as partsBase from "../../parts-base/src/index.js";
+import { combineRegistries } from "../../cli/src/parts.js";
+import type { ThemeTokens } from "../src/contracts/index.js";
 import { fixtureTheme } from "./fixtures/theme.js";
+import { realPng, resolverOf } from "./figure-fixtures.js";
 
 // A leader label's leader ends ON its part's visible geometry at every instant the label shows
 // (assemblies §6.6); a requested label is drawn or reported (§18).
@@ -36,12 +43,20 @@ const fixture = (name: string): PlatformCosmoSpec =>
 function build(name: string) {
   return build2(fixture(name));
 }
-function build2(spec: PlatformCosmoSpec) {
-  const scene = buildScene(spec, {});
+function build2(
+  spec: PlatformCosmoSpec,
+  font: "system" | "embed" = "system",
+  theme: ThemeTokens = fixtureTheme(),
+) {
+  // the real hw: and auto: packs (core has no dependency on them; the CLI wires them): without
+  // them the parts are stand-in boxes and the poses differ from the CLI's
+  const scene = buildScene(spec, {
+    parts: combineRegistries([partsBase.registry, partsAuto.registry]),
+  });
   const r = buildModelWithDiagnostics({
     scene,
-    theme: fixtureTheme(),
-    font: "system",
+    theme,
+    font,
     prefix: "pc-t",
     spec,
   });
@@ -217,66 +232,134 @@ describe("a requested label is drawn or reported", () => {
   });
 });
 
-describe("labels do not cover each other or each other's leader ends", () => {
-  for (const name of ["board", "engine", "gpu"]) {
-    test(name, () => {
-      const { a, model } = build(name);
-      const groups = new Map<string, SvgElement>();
-      const walk = (nodes: readonly SvgNode[]): void => {
-        for (const n of nodes)
-          if (typeof n === "object" && "tag" in n) {
-            if (typeof n.attrs?.id === "string") groups.set(n.attrs.id, n);
-            walk(n.children ?? []);
-          }
-      };
-      walk(model.layers.labels);
-      let pairs = 0;
-      for (let n = 1; n <= model.scene.timeline.length; n++) {
-        const t = stepEndTime(a.clock[n - 1]!.end);
-        const up = tracksOf(a)
-          .filter((lt) => lt.kind === "leader" && evalOpacity(lt.opacity, t) >= 1)
-          .map((lt) => {
-            const o = evalOffset(lt.motion, t);
-            const rect = (groups.get(lt.id)!.children ?? []).find(
-              (c) => typeof c === "object" && "tag" in c && c.tag === "rect",
-            ) as SvgElement;
-            const at = (k: string): number => Number(rect.attrs![k]);
-            return {
-              id: lt.id,
-              box: { x: at("x") + o.x, y: at("y") + o.y, width: at("width"), height: at("height") },
-              anchor:
-                lt.anchor === undefined
-                  ? undefined
-                  : { x: lt.anchor.x + o.x, y: lt.anchor.y + o.y },
-            };
-          });
-        for (const p of up) {
-          for (const q of up) {
-            if (p === q) continue;
-            if (p.id < q.id) {
-              const w =
-                Math.min(p.box.x + p.box.width, q.box.x + q.box.width) - Math.max(p.box.x, q.box.x);
-              const hh =
-                Math.min(p.box.y + p.box.height, q.box.y + q.box.height) -
-                Math.max(p.box.y, q.box.y);
-              expect(w > 0 && hh > 0 ? w * hh : 0, `${p.id} / ${q.id} step ${n}`).toBeLessThan(1);
-              pairs++;
+describe("labels do not cover each other, each other's leader ends, or cross each other's leaders", () => {
+  // fixtureTheme with the system font, and the CLI's default: the light theme, embedded font
+  const modes = [
+    ["fixture theme, system font", "system", () => fixtureTheme()],
+    ["fixture theme, embedded font", "embed", () => fixtureTheme()],
+    ["light theme, embedded font", "embed", () => themeRegistry.get("light") as ThemeTokens],
+  ] as const;
+  for (const [label, font, theme] of modes) {
+    for (const name of ["board", "engine", "gpu"]) {
+      test(`${name} (${label})`, () => {
+        const { a, model } = build2(fixture(name), font, theme());
+        const groups = new Map<string, SvgElement>();
+        const walk = (nodes: readonly SvgNode[]): void => {
+          for (const n of nodes)
+            if (typeof n === "object" && "tag" in n) {
+              if (typeof n.attrs?.id === "string") groups.set(n.attrs.id, n);
+              walk(n.children ?? []);
             }
-            if (q.anchor !== undefined) {
-              const b = p.box;
-              const inside =
-                q.anchor.x >= b.x &&
-                q.anchor.x <= b.x + b.width &&
-                q.anchor.y >= b.y &&
-                q.anchor.y <= b.y + b.height;
-              expect(inside, `${p.id} covers the leader end of ${q.id} step ${n}`).toBe(false);
+        };
+        walk(model.layers.labels);
+        const child = (id: string, tag: string): SvgElement | undefined =>
+          (groups.get(id)!.children ?? []).find(
+            (c) => typeof c === "object" && "tag" in c && c.tag === tag,
+          ) as SvgElement | undefined;
+        let pairs = 0;
+        for (let n = 1; n <= model.scene.timeline.length; n++) {
+          const t = stepEndTime(a.clock[n - 1]!.end);
+          // fading labels count too
+          const up = tracksOf(a)
+            .filter((lt) => lt.kind === "leader" && evalOpacity(lt.opacity, t) > 0)
+            .map((lt) => {
+              const o = evalOffset(lt.motion, t);
+              const rect = child(lt.id, "rect")!;
+              const at = (k: string): number => Number(rect.attrs![k]);
+              const d = child(lt.id, "path");
+              const nums =
+                d === undefined
+                  ? undefined
+                  : String(d.attrs!.d)
+                      .match(/-?\d+(\.\d+)?/g)!
+                      .map(Number);
+              return {
+                id: lt.id,
+                box: {
+                  x: at("x") + o.x,
+                  y: at("y") + o.y,
+                  width: at("width"),
+                  height: at("height"),
+                },
+                seg:
+                  nums === undefined
+                    ? undefined
+                    : ([
+                        { x: nums[0]! + o.x, y: nums[1]! + o.y },
+                        { x: nums[2]! + o.x, y: nums[3]! + o.y },
+                      ] as const),
+              };
+            });
+          for (const p of up) {
+            for (const q of up) {
+              if (p === q) continue;
+              if (p.id < q.id) {
+                const w =
+                  Math.min(p.box.x + p.box.width, q.box.x + q.box.width) -
+                  Math.max(p.box.x, q.box.x);
+                const hh =
+                  Math.min(p.box.y + p.box.height, q.box.y + q.box.height) -
+                  Math.max(p.box.y, q.box.y);
+                expect(w > 0 && hh > 0 ? w * hh : 0, `${p.id} / ${q.id} step ${n}`).toBeLessThan(1);
+                pairs++;
+              }
+              if (q.seg !== undefined) {
+                const [e0, e1] = q.seg;
+                expect(
+                  segmentHitsRect(e0, e1, p.box),
+                  `${q.id}'s leader crosses the label ${p.id} at step ${n}`,
+                ).toBe(false);
+              }
             }
           }
         }
-      }
-      expect(pairs).toBeGreaterThan(10);
-    });
+        expect(pairs).toBeGreaterThan(10);
+      });
+    }
   }
+});
+
+describe("unmoved parts under a labelled group are named by it", () => {
+  const examples = (): PlatformCosmoSpec[] => {
+    const md = readFileSync(new URL("../../../docs/design/assemblies.md", import.meta.url), "utf8");
+    return [...md.matchAll(/```json\n([\s\S]*?)```/g)]
+      .map((m) => JSON.parse(m[1] as string) as { meta?: { title: string } })
+      .filter((x) => typeof x.meta === "object") as unknown as PlatformCosmoSpec[];
+  };
+  const example = (prefix: string): PlatformCosmoSpec =>
+    examples().find((x) => (x.meta as { title: string }).title.startsWith(prefix))!;
+  const render = (spec: PlatformCosmoSpec) => {
+    const imgs = resolverOf({ "gpu-photo": realPng(640, 240, (x, y) => [x % 256, y, 120, 255]) });
+    const scene = buildScene(spec, {
+      images: imgs,
+      parts: combineRegistries([partsBase.registry, partsAuto.registry]),
+    });
+    const r = buildModelWithDiagnostics({
+      scene,
+      theme: fixtureTheme(),
+      font: "system",
+      prefix: "pc-t",
+      spec,
+      images: imgs,
+    });
+    return { ...r, a: r.model.assembly as AssemblyRenderModelX };
+  };
+
+  test("the engine example has 14 leader labels; its valves and piston parts are reported", () => {
+    const { a, diagnostics } = render(example("Inline-4"));
+    expect(tracksOf(a).filter((t) => t.kind === "leader")).toHaveLength(14);
+    const omitted = diagnostics.filter((d) => d.code === "assembly/label-omitted");
+    expect(omitted.length).toBeGreaterThanOrEqual(16);
+    expect(omitted.map((d) => (d.params as { part: string }).part)).toContain(
+      "engine/head/valve-1",
+    );
+    expect(omitted.some((d) => d.message.includes("whose label names it"))).toBe(true);
+  });
+
+  test("the GPU example keeps its 39 leader labels", () => {
+    const { a } = render(example("2U GPU"));
+    expect(tracksOf(a).filter((t) => t.kind === "leader")).toHaveLength(39);
+  });
 });
 
 describe("the emitted leader starts at the recorded anchor", () => {
@@ -311,13 +394,16 @@ describe("frame and track agree", () => {
   test("label transforms and opacities at sampled times", () => {
     const { a } = build("gpu");
     for (let k = 0; k <= 40; k++) {
-      const t = (a.loop * k) / 40;
-      const f = a.frameAt(t);
+      const f = a.frameAt((a.loop * k) / 40);
+      // frameAt wraps with this formula; the tracks are read at the same instant it reads them
+      const t = ((((a.loop * k) / 40) % a.loop) + a.loop) % a.loop;
       for (const lt of tracksOf(a)) {
         expect(f.opacity[lt.id]).toBe(round2(evalOpacity(lt.opacity, t)));
         if (lt.motion.length > 0) {
           const v = evalOffset(lt.motion, t);
-          expect(f.transforms[lt.id]).toBe(`translate(${round2(v.x)} ${round2(v.y)})`);
+          expect(f.transforms[lt.id], `${lt.id} @${t}`).toBe(
+            `translate(${round2(v.x)} ${round2(v.y)})`,
+          );
         }
       }
     }
