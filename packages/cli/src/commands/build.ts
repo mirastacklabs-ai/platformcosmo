@@ -11,6 +11,7 @@ import type {
 } from "@platformcosmo/core";
 import { type Parsed, flag, num, parse, str } from "../args.js";
 import { loadSpec, makeResolver, resolveTheme, specBaseName } from "../common.js";
+import { loadSpecImages } from "../images.js";
 import { type Ctx, EXIT, UsageError } from "../deps.js";
 import { errorDiagnostic, formatDiagnostics, hasErrors, plural } from "../format.js";
 
@@ -174,6 +175,11 @@ export async function buildOnce(ctx: Ctx, s: BuildSettings): Promise<number> {
   const { resolver, diagnostics: packDiag } = await makeResolver(ctx);
   diagnostics.push(...packDiag);
   options.icons = resolver;
+  // Schema 1.2.0 images: read through the path guard (images.ts); nothing changes without them.
+  const imgs = await loadSpecImages(spec, dirname(resolve(ctx.deps.cwd, s.file)));
+  diagnostics.push(...imgs.diagnostics);
+  if (hasErrors(imgs.diagnostics)) return finish(EXIT.failed);
+  if (imgs.resolver) options.images = imgs.resolver;
   if (s.font) options.font = s.font;
   if (s.speed !== undefined) options.speed = s.speed;
   if (s.motion !== undefined) options.motion = s.motion;

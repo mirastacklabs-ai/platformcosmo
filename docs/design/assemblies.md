@@ -684,6 +684,15 @@ with realpath, walk the relative path one component at a time with `lstat` (no s
 components), then `open` the file **once** with `O_RDONLY | O_NOFOLLOW`, `fstat` that same file
 descriptor (regular file, size ≤ cap) and read from it up to cap + 1 bytes, so there is no
 check-then-use race between the checks and the read.
+After the open the path must still name that file (`lstat` dev/ino, `realpath`), and on Linux the
+kernel's path for the descriptor (`/proc/self/fd/N`) must equal the expected path; elsewhere the
+read is refused when a directory above the file is writable by another user (and not sticky) or
+owned by someone other than the reader or root. A read whose length differs from the `fstat` size
+is refused (`image/unsafe-path`, changed while reading). Components ending in `.` or a space,
+Windows device names, and a `realpath` that differs only by case or Unicode normalization
+(`image/not-found` with a spelling hint) are refused. Residual race: Node has no `openat`, so on a
+platform without `/proc` an owner of a directory above the file can still rename directories
+between the walk and the open; `pcosmo assets doctor` states which guard is active.
 
 ### 11.2 Validation (Track C, pure)
 
@@ -911,7 +920,7 @@ suggestions):
 | `assembly/unknown-shape`                                                                                        | error                                             | `pack:id` shape not installed                                                              |
 | `assembly/shape-params`                                                                                         | error                                             | unknown or invalid `params` for a shape                                                    |
 | `assembly/duplicate-part`                                                                                       | error                                             | sibling ids collide (also after `count` expansion)                                         |
-| `brick/off-grid`                                                                                                | warning                                           | non-integer stud or plate position                                                         |
+| `brick/off-grid`                                                                                                | warning                                           | non-integer stud or plate position, `size` or `pitch` (after converting to studs)          |
 | `image/not-found`, `image/unsafe-path`                                                                          | error                                             | CLI path resolution (did-you-mean over files in the directory)                             |
 | `image/format`, `image/format-mismatch`                                                                         | error                                             | not PNG, JPEG or SVG by magic bytes (WebP: convert to PNG or JPEG) / differ from extension |
 | `image/too-large`, `image/too-many`                                                                             | error                                             | §11.4 caps                                                                                 |
