@@ -81,6 +81,15 @@ importers:
       '@platformcosmo/icons-simple':
         specifier: workspace:*
         version: link:../icons-simple
+      '@platformcosmo/parts-auto':
+        specifier: workspace:*
+        version: link:../parts-auto
+      '@platformcosmo/parts-base':
+        specifier: workspace:*
+        version: link:../parts-base
+      '@platformcosmo/parts-brick':
+        specifier: workspace:*
+        version: link:../parts-brick
       '@platformcosmo/pdf':
         specifier: workspace:*
         version: link:../pdf
@@ -131,6 +140,10 @@ importers:
       '@platformcosmo/core':
         specifier: workspace:*
         version: link:../core
+    devDependencies:
+      '@platformcosmo/parts-base':
+        specifier: workspace:*
+        version: link:../parts-base
 
   packages/icons-base:
     dependencies:
