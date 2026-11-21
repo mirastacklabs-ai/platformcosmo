@@ -1,7 +1,6 @@
 import type {
   CreateIconResolverFn,
   DcPack,
-  Diagnostic,
   FetchIconPackFn,
   IconHttpClient,
   LoadedIconPack,
