@@ -4,11 +4,14 @@
  * Leader labels. A stage with `labels: "show"` shows the label of each moved node once it
  * arrives (fade in over the last 20% of its move); the label hides at the start of the reverse
  * move and when the loop closes. Placement is computed once per node, at the pose it first
- * shows in: eight candidate boxes around the node's screen box at 18 px, preferring the side
+ * shows in: eight candidate boxes around the node's visible screen extent at 18 px, preferring the side
  * of its screen motion vector, then clockwise; the first box that overlaps neither a placed
  * label nor another part's box at that pose wins, else the preferred one nudged by the existing
- * `nudgeLabel` (injected). The leader is a 1 px line between the closest points of the two
- * boxes. The label group is authored in REST coordinates and rides the node's total track.
+ * `nudgeLabel` (injected). The leader is a 1 px line from an ANCHOR to the label box: the sample
+ * point of the node's visible surface (not hidden behind another part along the view ray, at the
+ * pose it shows in and at the end of each later stage while it is up) nearest to the label, so it
+ * ends on the part's own geometry even where the part's screen box is mostly empty (thin plates)
+ * or covered (parts lifted under a plate). Candidates whose leader would be long are passed over. The label group is authored in REST coordinates and rides the node's total track.
  *
  * Top-face labels (`labels: "always"`): each labelled leaf's text upright on its projected top
  * face, truncated to fit, visible while the leaf is at its base pose.
@@ -17,6 +20,7 @@
  * depends on object identity. Work: one pass over the leaves per placed label.
  */
 import type {
+  Box3,
   Diagnostic,
   IdScheme,
   OpacityKey,
@@ -26,6 +30,8 @@ import type {
   SvgElement,
   SvgNode,
   TrackKey,
+  Vec2,
+  Vec3,
 } from "../../contracts/index.js";
 import type { AssemblyIdScheme } from "../../contracts/index.js";
 import { movesPath } from "../../depth/epochs.js";
@@ -61,6 +67,8 @@ export interface LabelTrack {
   readonly opacity: readonly OpacityKey[];
   /** Opacity at t = 0. */
   readonly initial: number;
+  /** Leader end on the part, in the group's REST coordinates (leader labels with a leader). */
+  readonly anchor?: { readonly x: number; readonly y: number };
 }
 
 export interface TextSpec {
@@ -114,6 +122,66 @@ interface NodeInfo {
   readonly label: string;
   readonly detail: readonly string[];
   readonly leaves: readonly WorldLeaf[];
+}
+
+/** Longest leader a candidate may have before the next candidate is tried (§6.6). */
+const MAX_LEADER = 3 * GAP;
+const SAMPLE_STEPS = [1 / 6, 3 / 6, 5 / 6] as const;
+const NEAR = 1e-6;
+/** Most surface samples considered per node. */
+const MAX_SAMPLES = 1200;
+
+interface Sample {
+  readonly world: Vec3;
+  /** Which leaf of the node it lies on. */
+  readonly leaf: number;
+}
+
+/** Bounding rect of points (`fallback` when there are none). */
+function unionPoints(pts: readonly Vec2[], fallback: Rect): Rect {
+  if (pts.length === 0) return fallback;
+  const xs = pts.map((q) => q.x);
+  const ys = pts.map((q) => q.y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+
+/** Distance from a point to a rect (0 inside) and the point of the rect nearest to it. */
+function toRect(p: Vec2, r: Rect): { d: number; at: Vec2 } {
+  const x = Math.min(Math.max(p.x, r.x), r.x + r.width);
+  const y = Math.min(Math.max(p.y, r.y), r.y + r.height);
+  return { d: Math.hypot(p.x - x, p.y - y), at: { x, y } };
+}
+
+/** Whether the ray `p + s·dir` (s > 0) passes through the interior of `box`. */
+function rayHits(p: Vec3, dir: Vec3, box: Box3): boolean {
+  let lo = 0;
+  let hi = Infinity;
+  const axes = ["x", "y", "z"] as const;
+  for (const a of axes) {
+    const a0 = box.origin[a] + NEAR;
+    const a1 = box.origin[a] + box.size[a] - NEAR;
+    if (a1 <= a0) return false;
+    const t0 = (a0 - p[a]) / dir[a];
+    const t1 = (a1 - p[a]) / dir[a];
+    lo = Math.max(lo, Math.min(t0, t1));
+    hi = Math.min(hi, Math.max(t0, t1));
+    if (hi - lo <= NEAR) return false;
+  }
+  return hi > NEAR;
+}
+
+/** Nine points on each of the three faces of a box that face the viewer (+x, +y, +z). */
+function faceSamples(b: Box3, leaf: number, out: Sample[]): void {
+  const { origin: o, size: s } = b;
+  for (const u of SAMPLE_STEPS) {
+    for (const v of SAMPLE_STEPS) {
+      out.push({ world: { x: o.x + s.x, y: o.y + u * s.y, z: o.z + v * s.z }, leaf });
+      out.push({ world: { x: o.x + u * s.x, y: o.y + s.y, z: o.z + v * s.z }, leaf });
+      out.push({ world: { x: o.x + u * s.x, y: o.y + v * s.y, z: o.z + s.z }, leaf });
+    }
+  }
 }
 
 const overlaps = (a: Rect, b: Rect): boolean =>
@@ -203,6 +271,59 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     });
   };
 
+  // ---- anchors --------------------------------------------------------------------------
+  /** Direction toward the viewer: the screen position of a point is the same along it. */
+  const view: Vec3 = { x: 1, y: 1, z: projection.tileWidth / 2 / projection.zScale };
+  const hollow = new Set(["ring", "tray", "sprite"]);
+  const occluders = (own: ReadonlySet<string>, t: number): Box3[] => {
+    const out: Box3[] = [];
+    for (const l of ctx.leaves) {
+      if (own.has(l.path)) continue;
+      const d = index.displacement(l.path, t);
+      for (const p of l.geometry.primitives) {
+        if (hollow.has(p.kind)) continue;
+        const o = p.box.origin;
+        out.push({ origin: { x: o.x + d.x, y: o.y + d.y, z: o.z + d.z }, size: p.box.size });
+      }
+    }
+    return out;
+  };
+  /**
+   * Surface samples of `leaves` (world, rest pose) that are in view at the first of `times` and,
+   * among those, in view at the most of the later times. `total` is the number of samples.
+   */
+  const anchorPool = (
+    leaves: readonly WorldLeaf[],
+    own: ReadonlySet<string>,
+    times: readonly number[],
+  ): { pool: Sample[]; total: number } => {
+    let all: Sample[] = [];
+    leaves.forEach((l, i) => {
+      for (const p of l.geometry.primitives) if (p.kind !== "sprite") faceSamples(p.box, i, all);
+    });
+    if (all.length > MAX_SAMPLES) {
+      const stride = Math.ceil(all.length / MAX_SAMPLES);
+      all = all.filter((_, i) => i % stride === 0);
+    }
+    const visibleAt = (t: number): boolean[] => {
+      const occ = occluders(own, t);
+      const d = leaves.map((l) => index.displacement(l.path, t));
+      return all.map((q) => {
+        const o = d[q.leaf] as Vec3;
+        const p = { x: q.world.x + o.x, y: q.world.y + o.y, z: q.world.z + o.z };
+        return !occ.some((b) => rayHits(p, view, b));
+      });
+    };
+    const first = visibleAt(times[0] as number);
+    let idx = all.map((_, i) => i).filter((i) => first[i]);
+    if (idx.length === 0) return { pool: all, total: all.length };
+    const later = times.slice(1).map(visibleAt);
+    const score = (i: number): number => later.filter((v) => v[i]).length;
+    const top = Math.max(...idx.map(score));
+    idx = idx.filter((i) => score(i) === top);
+    return { pool: idx.map((i) => all[i] as Sample), total: all.length };
+  };
+
   // ---- leader labels --------------------------------------------------------------------
   interface Event {
     readonly t: number;
@@ -239,6 +360,24 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     }
   }
 
+  // a labelled node that no stage moves (or moves only through an ancestor) never shows its
+  // leader label: say so (a leaf of a `labels: always` assembly has its top-face label)
+  const moved = new Set(runs.flatMap((run) => run.moves.map((mv) => mv.path)));
+  for (const path of [...info.keys()].sort()) {
+    const inf = info.get(path) as NodeInfo;
+    const leaf = inf.leaves.length === 1 && inf.leaves[0]?.path === path;
+    if (moved.has(path) || (leaf && ctx.labelMode(inf.assembly) === "always")) continue;
+    diagnostics.push({
+      severity: "info",
+      code: "assembly/label-omitted",
+      path: "",
+      message: `The label of part ${JSON.stringify(path)} (${JSON.stringify(inf.label)}) is not drawn: no stage moves it, and leader labels mark moved parts`,
+      suggestion:
+        "Move it in a stage with labels: show, or set the assembly's labels to always to print it on its top face",
+      params: { part: path, label: inf.label },
+    });
+  }
+
   const placed: Rect[] = [];
   const size = ctx.labelSize;
   const lineH = size * 1.25;
@@ -265,15 +404,39 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     const vec = { x: mv.x - mv0.x, y: mv.y - mv0.y };
     const own = new Set(inf.leaves.map((l) => l.path));
     const obstacles = ctx.leaves.filter((l) => !own.has(l.path)).map((l) => leafBounds(l, show.t));
+    // anchors: surface points of the node that stay in view while its label shows
+    const hideAt = Math.min(
+      ctx.loop,
+      ctx.closure?.t0 ?? Infinity,
+      ...(events.get(path) ?? []).filter((e) => e.kind === "out" && e.t > show.t).map((e) => e.t),
+    );
+    const times = [
+      show.t,
+      ...[...new Set(runs.filter((r) => r.t1 > show.t + EPS && r.t1 < hideAt).map((r) => r.t1))],
+    ].sort((p1, p2) => p1 - p2);
+    const { pool, total } = anchorPool(inf.leaves, own, times);
+    const at0 = inf.leaves.map((l) => index.displacement(l.path, show.t));
+    const pts = pool.map((q) => {
+      const d = at0[q.leaf] as Vec3;
+      return projection.project({ x: q.world.x + d.x, y: q.world.y + d.y, z: q.world.z + d.z });
+    });
+    // a node with part of its surface hidden is placed around what shows
+    const shown0 = pts.length < total ? unionPoints(pts, bb) : bb;
     const start = preferred(vec);
+    const leaderLen = (c: Rect): number =>
+      pts.length === 0 ? 0 : Math.min(...pts.map((q) => toRect(q, c).d));
     let box: Rect | undefined;
+    let best: { c: Rect; len: number } | undefined;
     for (let k = 0; k < 8 && box === undefined; k++) {
-      const c = candidate(DIRS[(start + k) % 8] as (typeof DIRS)[number], bb, w, hgt);
+      const c = candidate(DIRS[(start + k) % 8] as (typeof DIRS)[number], shown0, w, hgt);
       if (placed.some((p) => overlaps(p, c)) || obstacles.some((o) => overlaps(o, c))) continue;
-      box = c;
+      const len = leaderLen(c);
+      if (len <= MAX_LEADER) box = c;
+      else if (best === undefined || len < best.len - EPS) best = { c, len };
     }
+    box ??= best?.c;
     if (box === undefined) {
-      const c = candidate(DIRS[start] as (typeof DIRS)[number], bb, w, hgt);
+      const c = candidate(DIRS[start] as (typeof DIRS)[number], shown0, w, hgt);
       const { dy } = ctx.nudge(c, placed);
       box = { ...c, y: c.y + dy };
     }
@@ -285,8 +448,16 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     const r = (n: number): number => Number(fmt(n));
     const kids: SvgNode[] = [];
     let leaderRect: Rect | undefined;
+    let anchor: Vec2 | undefined;
     if (leaders) {
-      const cl = closest(bb, box);
+      let nearest: { d: number; from: Vec2; to: Vec2 } | undefined;
+      for (const q of pts) {
+        const n = toRect(q, box);
+        if (nearest === undefined || n.d < nearest.d - EPS) nearest = { d: n.d, from: q, to: n.at };
+      }
+      // no sample at all (a node without solids): the closest points of the two boxes
+      const cl = nearest === undefined ? closest(bb, box) : { a: nearest.from, b: nearest.to };
+      anchor = { x: r(cl.a.x - sx), y: r(cl.a.y - sy) };
       kids.push(
         h("path", {
           class: `${P}-leader`,
@@ -355,7 +526,15 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       put(ctx.loop, (keys[keys.length - 1] as OpacityKey).opacity, "linear");
     }
     const motion = offsetTrack(plain(index.chain(path)), ctx.loop, projection);
-    tracks.push({ id, path, kind: "leader", motion, opacity: keys, initial: 0 });
+    tracks.push({
+      id,
+      path,
+      kind: "leader",
+      motion,
+      opacity: keys,
+      initial: 0,
+      ...(anchor === undefined ? {} : { anchor }),
+    });
     // the label's boxes over its visible window: the part's track moves them (§10)
     const rest = [box, ...(leaderRect === undefined ? [] : [leaderRect])].map((q) => ({
       ...q,
