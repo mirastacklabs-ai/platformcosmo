@@ -2,9 +2,9 @@
 // Phase 2 is still gated: the real wiring is checked for `assembly/unsupported`, and the checks
 // themselves run with the guard lifted by dropping that error from the core's validate (the CLI
 // and the scene are the real ones; `render` is rebuilt around the lifted validate).
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import * as core from "@platformcosmo/core";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { defaultDeps, run } from "../src/index.js";
@@ -269,6 +269,29 @@ describe("slots[].assembly through the CLI (DC pack wired)", () => {
     });
     const { diags } = await validateJson(body);
     expect(only(diags, "assembly/size-mismatch")).toHaveLength(1);
+  });
+
+  test("build draws the targeted rack as its assembly: no 1.1 rack object, slot internals drawn", async () => {
+    const body = rack([300, 300, 20]);
+    body["racks"] = [
+      ...(body["racks"] as Obj[]),
+      { id: "r2", slots: [{ at: 1, type: "server-1u" }] },
+    ];
+    const f = await file(body);
+    const r = await run(["build", f, "--out", dir, "--no-optimize", "--json"], lifted());
+    const j = JSON.parse(r.stdout) as {
+      outputs: { kind: string; path: string }[];
+      diagnostics: Diag[];
+    };
+    expect(j.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(r.code).toBe(0);
+    const out = j.outputs.find((o) => o.path.endsWith(".svg"))!;
+    const svg = await readFile(isAbsolute(out.path) ? out.path : join(dir, out.path), "utf8");
+    expect(svg).not.toMatch(/-o_r1"/); // the 1.1 rack object is gone
+    expect(svg).toMatch(/-o_r2"/); // the untargeted rack keeps it
+    expect(svg).not.toMatch(/-o_r1_5ffront"/);
+    expect(svg).toMatch(/-o_r1\.srv\.lid"/); // the slot's lid and the template's part are drawn
+    expect(svg).toMatch(/-o_r1\.srv\.b"/);
   });
 
   test("a fitting template reports nothing; the gate rejects it by default", async () => {
