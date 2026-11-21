@@ -165,6 +165,33 @@ excludes studs, so stacked bricks do not interpenetrate (§9.6). Colors: spec `c
 and axles at angles, curved slopes; the skill says so and approximates or skips with an
 assumption note.
 
+### 5.2 Engine anchors (`@platformcosmo/parts-auto`, Track E-2b)
+
+At default sizes the `auto:` engine shapes compose without interpenetration when placed as
+below (`engineLayout(cylinders)` in `@platformcosmo/parts-auto` returns every `at`). Millimetres,
+block min corner = origin, x along the crankshaft, +y the intake side, z up. For `n` cylinders:
+bore pitch `105 = 420 / n`, bore `i` (0-based) centred at `x = (i + 0.5) * pitch`, `y = 115`.
+
+| Part (`auto:`)        | `at` (n = 4)                         | Notes                                                                                                          |
+| --------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `block-i4`            | `[0, 0, 0]`                          | 420 x 230 x 260; deck (top face) at z 260; bores 82 mm at pitch 105, y 115                                     |
+| `crankshaft`          | `[-40, 55, 14]`                      | 500 x 120 x 120 (40 mm nose and stub outside the block); axis y 115, z 74; throw i centred on bore i           |
+| `rod` (cylinder i)    | `[boreX - 12, 90, pinZ - 25]`        | 24 x 50 x 156; big-end centre = pin centre; small-end centre 117 above it; big end and lower beam are not core |
+| `piston` (cylinder i) | `[boreX - 41, 74, pinZ + 90]`        | 82 x 82 x 66; gudgeon 27 above its base, so up-throw pistons end flush with the deck (z 260)                   |
+| `oil-pan`             | `[0, 0, -90]`                        | open-top tray, top edge at the block's bottom face                                                             |
+| head gasket (`plate`) | `[0, 12, 260]`, size `[420, 206, 4]` | the block core's footprint (y 12..218)                                                                         |
+| `head`                | `[0, 0, 264]`                        | 420 x 230 x 100; ports centred on the bores                                                                    |
+| `valve-cover`         | `[0, 15, 364]`                       | 420 x 200 x 70                                                                                                 |
+| `intake` / `exhaust`  | `[0, 230, 269]` / `[0, -90, 274]`    | 420 long, runners / primaries centred on the bores and on the head ports                                       |
+| `camshaft` (x 2)      | `[0, 60, 314]` / `[0, 130, 314]`     | 420 x 40 x 40, inside the head                                                                                 |
+
+Crank pin heights: axis z 74 +/- 30, in flat-plane order down, up, up, down: `pinZ` = 44, 104, 104, 44
+(`+ 30` for up throws). For more than five cylinders (pitch under 84 mm) size each piston
+`[bore, bore, 66]` with `bore = floor(0.8 * pitch)` and each rod `[floor(0.3 * pitch), 50, 156]`.
+The `timing-belt` is not anchored (decorative). The `oil-pan` is an open tray (never solid, like
+`hw:chassis-2u`): a crank lowered into it stays visible. Pistons, rods, crank and camshafts are
+`internal` and sit inside the block or head core (enclosed, so hidden at rest).
+
 ## 6. Programs
 
 ### 6.1 Selectors
