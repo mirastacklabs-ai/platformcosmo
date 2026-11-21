@@ -1,0 +1,60 @@
+{
+  "sources": {
+    "exploded": "fig1-exploded.png",
+    "assembled": "fig1-assembled.png"
+  },
+  "background": "auto",
+  "parts": [
+    {
+      "id": "hs-1",
+      "group": "hs-1",
+      "instanceOf": "heatsink",
+      "seeds": {
+        "exploded": [
+          [212, 140],
+          [236, 188]
+        ],
+        "assembled": [[205, 402]]
+      },
+      "prior": "box",
+      "nearest": {
+        "exploded": [210, 260]
+      }
+    },
+    {
+      "id": "clip-1",
+      "group": "hs-1",
+      "seeds": {
+        "exploded": [[180, 120]]
+      },
+      "prior": "none"
+    },
+    {
+      "id": "hs-2",
+      "group": "hs-2",
+      "instanceOf": "heatsink",
+      "seeds": {
+        "exploded": [[402, 150]],
+        "assembled": [[398, 410]]
+      },
+      "prior": "box"
+    }
+  ],
+  "annotations": [
+    {
+      "kind": "arrow",
+      "state": "exploded",
+      "polyline": [
+        [230, 240],
+        [230, 330]
+      ]
+    },
+    {
+      "kind": "text",
+      "state": "exploded",
+      "rect": [40, 20, 120, 18]
+    }
+  ],
+  "base": "assembled",
+  "erase": "recover"
+}

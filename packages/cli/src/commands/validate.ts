@@ -1,6 +1,8 @@
+import { dirname, resolve } from "node:path";
 import type { Diagnostic } from "@platformcosmo/core";
 import { flag, parse } from "../args.js";
 import { loadSpec, makeResolver } from "../common.js";
+import { loadSpecImages } from "../images.js";
 import { type Ctx, EXIT, UsageError } from "../deps.js";
 import { formatDiagnostics, hasErrors, plural } from "../format.js";
 
@@ -24,8 +26,11 @@ export async function validateCommand(ctx: Ctx, args: string[]): Promise<number>
   if (!hasErrors(parseDiag) && spec !== undefined) {
     const { resolver, diagnostics: packDiag } = await makeResolver(ctx);
     all.push(...packDiag);
+    const imgs = await loadSpecImages(spec, dirname(resolve(ctx.deps.cwd, file)));
+    all.push(...imgs.diagnostics);
     const report = ctx.deps.core.validate(spec, {
       icons: resolver,
+      ...(imgs.resolver ? { images: imgs.resolver } : {}),
       ...(ctx.deps.dcPack ? { dc: ctx.deps.dcPack } : {}),
     });
     all.push(...report.diagnostics);

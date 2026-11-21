@@ -46,6 +46,8 @@ export interface Alignment {
   readonly tried: number;
   /** The winning patch of `a`. */
   readonly patch: Rect;
+  /** Multiply-adds spent (all patches), for callers sharing one budget. */
+  readonly multiplyAdds: number;
 }
 
 const MIN_VARIANCE = 4;
@@ -293,6 +295,7 @@ export function align(a: Raster, b: Raster, options: AlignOptions = {}): OpResul
       support: bestSupport,
       tried: hits.length,
       patch: win.patch,
+      multiplyAdds: spent,
     },
     diagnostics,
   };
