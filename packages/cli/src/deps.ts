@@ -1,4 +1,6 @@
 import type {
+  AssemblyBuild,
+  AssemblyBuildOptions,
   CreateIconResolverFn,
   DcPack,
   FetchIconPackFn,
@@ -23,6 +25,8 @@ export interface CoreApi {
   createIconResolver: CreateIconResolverFn;
   sanitizeSvg: SvgSanitizer;
   fetchIconPack: FetchIconPackFn;
+  /** The resolved assembly tree; `validate --suggest` reads effective placement from it. */
+  buildAssemblies?: (spec: never, opts?: AssemblyBuildOptions) => AssemblyBuild;
   /** Built-in GIF encoder; passed to render for `--gif` when the core does not use it implicitly. */
   gifEncoder?: VideoEncoder;
 }

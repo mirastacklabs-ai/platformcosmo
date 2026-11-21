@@ -64,6 +64,7 @@ import {
   MoveIndex,
   evalOffset,
   evalOpacity,
+  stepEndTime,
   evalVisible,
   offsetTrack,
   plain,
@@ -297,6 +298,7 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     loop: total,
     ...(loopBuild.closure === undefined ? {} : { closure: loopBuild.closure }),
   });
+  diagnostics.push(...labels.diagnostics);
   const labelTracks = [...labels.tracks].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   // ---- tracks and wrappers per item -------------------------------------------------------
@@ -476,7 +478,7 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
   // the END of a step is read where its closing hold ends, which may be the loop's end: no wrap
   const stepEnd = (step: number): AssemblyFrameState => {
     const c = clock[step - 1];
-    return stateAt(c === undefined ? 0 : Math.min(c.end, total));
+    return stateAt(c === undefined ? 0 : stepEndTime(Math.min(c.end, total)));
   };
 
   // ---- focus rects at the END pose (§7.4) -------------------------------------------------
@@ -497,15 +499,18 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     const c = clock[step - 1];
     const list = nodeLeaves.get(id);
     if (c === undefined || list === undefined) return undefined;
+    const at = stepEndTime(Math.min(c.end, total));
     const rects = list.map((l) => {
-      const d = index.displacement(l.path, c.end);
+      const d = index.displacement(l.path, at);
       const b = l.geometry.bounds;
       return projectBoxBounds(projection, {
         origin: { x: b.origin.x + d.x, y: b.origin.y + d.y, z: b.origin.z + d.z },
         size: b.size,
       });
     });
-    return unionRects(rects);
+    // what the camera frames also holds the labels and leaders shown during this step (the
+    // camera's lead sits inside it, boards/timeline.ts; the previous step's tail is not framed)
+    return unionRects([...rects, ...labels.rectsUnder(id, c.start, at)]);
   };
   const focusRect = (step: number, id: string): Rect | undefined => {
     const r = nodeRect(step, id);
@@ -851,7 +856,7 @@ export function buildAssemblyRender(
       const c = main.model.clock[step - 1];
       return withGroups(
         merge((g) => g.stepEnd(step)),
-        c === undefined ? 0 : Math.min(c.end, total),
+        c === undefined ? 0 : stepEndTime(Math.min(c.end, total)),
       );
     },
     focusRect: (step, id) => {
