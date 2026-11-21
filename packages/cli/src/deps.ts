@@ -5,6 +5,8 @@ import type {
   IconHttpClient,
   LoadedIconPack,
   ParseSpecFn,
+  PartPlacementCheck,
+  PartShapeRegistry,
   RenderFn,
   SvgSanitizer,
   ThemeRegistry,
@@ -35,6 +37,10 @@ export interface Deps {
   themes?: ThemeRegistry | undefined;
   validateTheme?: ValidateThemeFn | undefined;
   dcPack?: DcPack | undefined;
+  /** Installed shape packs (`hw:`, `brick:`, `auto:`); passed to validation and render. */
+  parts?: PartShapeRegistry | undefined;
+  /** Pack placement check (`brick/off-grid`), passed to validation and render. */
+  placement?: PartPlacementCheck | undefined;
   /** Packs shipped inside the CLI (icons-base, …); they win over user packs on duplicate ids. */
   bundledPacks: readonly LoadedIconPack[];
   http: IconHttpClient;

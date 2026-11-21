@@ -165,6 +165,8 @@ export function createRender(deps: RenderDeps): RenderFn {
       const report = deps.validate(spec, {
         ...(options.icons ? { icons: options.icons } : {}),
         ...(options.dc ? { dc: options.dc } : {}),
+        ...(options.parts ? { parts: options.parts } : {}),
+        ...(options.placement ? { placement: options.placement } : {}),
       });
       diagnostics.push(...report.diagnostics);
       if (!options.dc && hasDcContent(spec)) {
@@ -232,6 +234,7 @@ export function createRender(deps: RenderDeps): RenderFn {
         ...(options.icons ? { icons: options.icons } : {}),
         ...(options.dc ? { dc: options.dc } : {}),
         ...(options.images ? { images: options.images } : {}),
+        ...(options.parts ? { parts: options.parts } : {}),
       });
       diagnostics.push(...scene.diagnostics);
       if (diagnostics.some((d) => d.severity === "error")) return fail(diagnostics, scene);

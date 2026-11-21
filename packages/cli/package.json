@@ -51,6 +51,9 @@
     "@platformcosmo/icons-k8s": "workspace:*",
     "@platformcosmo/icons-lucide": "workspace:*",
     "@platformcosmo/icons-simple": "workspace:*",
+    "@platformcosmo/parts-auto": "workspace:*",
+    "@platformcosmo/parts-base": "workspace:*",
+    "@platformcosmo/parts-brick": "workspace:*",
     "@platformcosmo/themes": "workspace:*"
   },
   "devDependencies": {

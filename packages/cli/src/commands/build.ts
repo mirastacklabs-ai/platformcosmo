@@ -30,6 +30,7 @@ export const BUILD_OPTIONS = {
   name: { type: "string" },
   scale: { type: "string" },
   time: { type: "string" },
+  "png-step": { type: "string" },
   fps: { type: "string" },
   duration: { type: "string" },
   "no-optimize": { type: "boolean" },
@@ -59,6 +60,7 @@ Options:
   -o, --out <dir>   output directory (default: the spec's directory)
   --name <name>     base file name (default: spec file name without .cosmo.json)
   --scale <n>       PNG scale (default 2)      --time <s>      PNG animation time (default 0)
+  --png-step <n>    PNG of the end pose of step n (1..steps; implies --png; not with --time)
   --fps <n>         gif/mp4 frame rate (24)    --duration <s>  gif/mp4 length in seconds
   --no-optimize     skip the SVGO pass
   --id-prefix <p>   SVG id prefix, ^[a-z][a-z0-9-]{0,31}$ (default derived from the spec)
@@ -80,6 +82,7 @@ export interface BuildSettings {
   name: string;
   scale?: number | undefined;
   time?: number | undefined;
+  pngStep?: number | undefined;
   fps?: number | undefined;
   duration?: number | undefined;
   optimize: boolean;
@@ -87,13 +90,30 @@ export interface BuildSettings {
   json: boolean;
 }
 
+/** `--png-step N`: a positive integer, not with `--time`. Range is checked against the spec. */
+function parsePngStep(p: Parsed): number | undefined {
+  const raw = str(p, "png-step");
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  if (!/^[0-9]+$/.test(raw.trim()) || !Number.isSafeInteger(n) || n < 1) {
+    throw new UsageError(
+      `options/invalid-png-step: --png-step must be a positive integer (1-based step number), got "${raw}"`,
+    );
+  }
+  if (str(p, "time") !== undefined) {
+    throw new UsageError("options/invalid-png-step: --png-step and --time are exclusive");
+  }
+  return n;
+}
+
 export function settingsFrom(ctx: Ctx, p: Parsed): BuildSettings {
   if (p.positionals.length !== 1) throw new UsageError("build needs exactly one spec file");
   const file = p.positionals[0]!;
   const outputs: OutputKind[] = [];
+  const pngStep = parsePngStep(p);
   if (!flag(p, "no-animated")) outputs.push("animated");
   for (const k of ["static", "steps", "interactive", "png", "gif", "mp4"] as const) {
-    if (flag(p, k)) outputs.push(k);
+    if (flag(p, k) || (k === "png" && pngStep !== undefined)) outputs.push(k);
   }
   if (outputs.length === 0)
     throw new UsageError("--no-animated needs at least one other output flag");
@@ -117,6 +137,7 @@ export function settingsFrom(ctx: Ctx, p: Parsed): BuildSettings {
     name: str(p, "name") ?? specBaseName(file),
     scale: num(p, "scale"),
     time: num(p, "time"),
+    pngStep,
     fps: num(p, "fps"),
     duration: num(p, "duration"),
     optimize: !flag(p, "no-optimize"),
@@ -158,6 +179,23 @@ export async function buildOnce(ctx: Ctx, s: BuildSettings): Promise<number> {
 
   if (hasErrors(parseDiag) || spec === undefined) return finish(EXIT.failed);
 
+  if (s.pngStep !== undefined) {
+    const steps = (spec as { steps?: unknown }).steps;
+    const count = Array.isArray(steps) ? steps.length : 0;
+    if (s.pngStep > count) {
+      diagnostics.push(
+        errorDiagnostic(
+          "options/invalid-png-step",
+          count === 0
+            ? "--png-step needs a spec with steps; this one has none"
+            : `--png-step ${s.pngStep} is beyond the ${count} step(s) of the spec`,
+          count === 0 ? "use --time, or omit it" : `use a step from 1 to ${count}`,
+        ),
+      );
+      return finish(EXIT.usage);
+    }
+  }
+
   const options: { -readonly [K in keyof RenderOptions]: RenderOptions[K] } = {
     outputs: s.outputs,
     name: s.name,
@@ -165,6 +203,8 @@ export async function buildOnce(ctx: Ctx, s: BuildSettings): Promise<number> {
   };
   if (ctx.deps.themes) options.themes = ctx.deps.themes;
   if (ctx.deps.dcPack) options.dc = ctx.deps.dcPack;
+  if (ctx.deps.parts) options.parts = ctx.deps.parts;
+  if (ctx.deps.placement) options.placement = ctx.deps.placement;
   if (s.themeArg !== undefined) {
     const t = await resolveTheme(ctx, s.themeArg);
     diagnostics.push(...t.diagnostics);
@@ -178,8 +218,9 @@ export async function buildOnce(ctx: Ctx, s: BuildSettings): Promise<number> {
   if (s.speed !== undefined) options.speed = s.speed;
   if (s.motion !== undefined) options.motion = s.motion;
   if (s.idPrefix !== undefined) options.idPrefix = s.idPrefix;
-  if (s.scale !== undefined || s.time !== undefined) {
+  if (s.scale !== undefined || s.time !== undefined || s.pngStep !== undefined) {
     options.png = {
+      ...(s.pngStep === undefined ? {} : { step: s.pngStep }),
       ...(s.scale === undefined ? {} : { scale: s.scale }),
       ...(s.time === undefined ? {} : { time: s.time }),
     };

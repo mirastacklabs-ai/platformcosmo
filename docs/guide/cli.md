@@ -13,8 +13,18 @@ Templates include the starter and the [lesson templates](./lessons).
 
 ## validate
 
-`pcosmo validate <spec> [--json] [--strict]` runs schema and semantic checks. Diagnostics have a stable code, a
+`pcosmo validate <spec> [--json] [--strict] [--suggest]` runs schema and semantic checks. Diagnostics have a stable code, a
 JSON pointer into the spec and, where possible, a suggestion. `--strict` treats warnings as errors.
+
+Shape packs are installed with the CLI: `hw:` (server internals), `brick:` (stud-grid bricks) and `auto:` (engine parts), plus the
+`dc:` shapes of the data-center pack. A `pack:id` that is not installed is `assembly/unknown-shape` with a did-you-mean, shape
+`params` are checked against the pack, and `brick:` parts off the stud grid give `brick/off-grid` warnings.
+
+`--suggest` proposes an explode program and a story for every assembly that has no program (assemblies design, section 17): the
+body never moves, fasteners go first, then covers, sub-assemblies, internals and loose parts, with hidden-side covers last. Parts
+are classified from `role`, `type`, the pack shape and, where `at` and `size` are given, geometry. The text output ends with a spec
+fragment (`programs`, `steps`) to paste; with `--json` the same data is under `suggestions`. It is advice only: it never changes the
+exit code or the spec.
 
 ## build
 
@@ -25,7 +35,7 @@ JSON pointer into the spec and, where possible, a suggestion. `--strict` treats 
 | `--static`      | `<name>.static.svg`, the first frame                                    |
 | `--steps`       | `<name>.steps/step-NN.svg`, one per step                                |
 | `--interactive` | `<name>.interactive.svg` with Play, Pause and Step (works when inlined) |
-| `--png`         | `<name>.png` (`--scale`, `--time`)                                      |
+| `--png`         | `<name>.png` (`--scale`, `--time`, `--png-step`)                        |
 | `--gif`         | `<name>.gif` (`--fps`, `--duration`)                                    |
 | `--mp4`         | `<name>.mp4`, needs `ffmpeg` on PATH                                    |
 | `--no-animated` | skip `<name>.svg`                                                       |
@@ -40,6 +50,9 @@ JSON pointer into the spec and, where possible, a suggestion. `--strict` treats 
 | `--no-optimize`                                | skip the SVGO pass                                       |
 | `--id-prefix <p>`                              | prefix for SVG ids; the default is derived from the spec |
 | `--json`                                       | machine-readable result                                  |
+
+`--png-step <n>` writes the PNG of the end pose of step `n` (with that step's camera) and implies `--png`; `n` must be an integer from 1
+to the number of steps and cannot be combined with `--time`. Otherwise it fails with `options/invalid-png-step` and exit code 2.
 
 `--motion css` replaces the SMIL particle animation (`<animateMotion>`) with CSS `offset-path` keyframes, so the SVG has no
 SMIL elements. Use it when the host strips SMIL but keeps `<style>`; timing, particle counts and reduced-motion

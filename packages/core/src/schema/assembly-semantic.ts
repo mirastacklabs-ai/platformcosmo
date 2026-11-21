@@ -12,7 +12,14 @@
  * guard still gates that target's phase (tracks §0), so a Phase 1a build never resolves such
  * a target. Figure ids are camera focus targets.
  */
-import type { DcPack, Diagnostic, PartShapeDef, PartShapeRegistry } from "../contracts/index.js";
+import type {
+  DcPack,
+  Diagnostic,
+  PartPlacement,
+  PartPlacementCheck,
+  PartShapeDef,
+  PartShapeRegistry,
+} from "../contracts/index.js";
 import { planFigureSteps, resolveFigure, stepViews, type ResolvedFigure } from "../scene/boards.js";
 import { UNRENDERED, type GuardGroup } from "./unsupported.js";
 import { globMatch } from "./glob.js";
@@ -115,6 +122,8 @@ export interface AssemblyContext {
   readonly parts?: PartShapeRegistry;
   /** `dc:` shapes come from the DC pack when no registry names them. */
   readonly dc?: DcPack;
+  /** Pack placement check (`brick/off-grid`), called once per spec part with a pack shape. */
+  readonly placement?: PartPlacementCheck;
 }
 
 const PRIMITIVES = [
@@ -228,6 +237,8 @@ interface Check {
   readonly matches: Map<TNode, Map<string, { paths: readonly string[]; hint?: string | null }>>;
   /** Sorted installed shape refs, built once on first use. */
   known?: readonly string[];
+  /** Placement-check calls made so far. */
+  placed?: number;
 }
 
 /** Candidates for a did-you-mean search, bounded (deterministic: the first ones in order). */
@@ -603,7 +614,37 @@ function shapeLookup(c: Check, ref: string): PartShapeDef | undefined | "uncheck
   return registry === undefined ? "unchecked" : undefined;
 }
 
-function checkShape(c: Check, p: SpecPart, ptr: string): void {
+/** Diagnostics kept per placement call, and calls made per validation run. */
+const PLACEMENT_DIAG_CAP = 8;
+const PLACEMENT_CALL_CAP = 20_000;
+
+/** Runs the pack's placement check for one spec part; never throws, output is capped. */
+function checkPlacement(c: Check, p: SpecPart, ptr: string, shape: string, units: string): void {
+  const fn = c.ctx.placement;
+  if (fn === undefined) return;
+  c.placed = (c.placed ?? 0) + 1;
+  if (c.placed > PLACEMENT_CALL_CAP) return;
+  const req: PartPlacement = {
+    path: ptr,
+    shape,
+    units,
+    ...(p.at === undefined ? {} : { at: p.at }),
+    ...(p.pitch === undefined ? {} : { pitch: p.pitch }),
+    ...(p.count === undefined ? {} : { count: p.count }),
+    ...(p.size === undefined ? {} : { size: p.size }),
+    ...(p.axis === undefined ? {} : { axis: p.axis }),
+    ...(p.params === undefined ? {} : { params: p.params }),
+  };
+  try {
+    const ds = fn(req);
+    if (!Array.isArray(ds)) return;
+    for (const d of ds.slice(0, PLACEMENT_DIAG_CAP)) c.out.push(d);
+  } catch {
+    // A pack's placement check must not throw; if it does, it reports nothing.
+  }
+}
+
+function checkShape(c: Check, p: SpecPart, ptr: string, units: string): void {
   const shape = p.shape;
   if (shape === undefined || (PRIMITIVES as readonly string[]).includes(shape)) {
     if (p.params !== undefined) {
@@ -650,6 +691,7 @@ function checkShape(c: Check, p: SpecPart, ptr: string): void {
     );
     return;
   }
+  checkPlacement(c, p, ptr, shape, units);
   if (p.params === undefined) return;
   try {
     for (const d of def.readParams(p.params).diagnostics) {
@@ -692,11 +734,17 @@ function checkAssembly(c: Check, a: SpecAssembly, i: number): void {
       ),
     );
   }
-  checkParts(c, a.parts, `${base}/parts`, 1);
+  checkParts(c, a.parts, `${base}/parts`, 1, a.units ?? "mm");
   if (root !== undefined) checkPrograms(c, root, a.programs, `${base}/programs`);
 }
 
-function checkParts(c: Check, parts: readonly SpecPart[], base: string, level: number): void {
+function checkParts(
+  c: Check,
+  parts: readonly SpecPart[],
+  base: string,
+  level: number,
+  units: string,
+): void {
   parts.forEach((p, k) => {
     const ptr = `${base}/${k}`;
     if (p.id === "closeup") {
@@ -711,7 +759,7 @@ function checkParts(c: Check, parts: readonly SpecPart[], base: string, level: n
         ),
       );
     }
-    checkShape(c, p, ptr);
+    checkShape(c, p, ptr, units);
     const image = p.image;
     if (image !== undefined) {
       const ref = typeof image === "string" ? image : image.ref;
@@ -763,7 +811,7 @@ function checkParts(c: Check, parts: readonly SpecPart[], base: string, level: n
             { depth: level + 2, limit: MAX_DEPTH },
           ),
         );
-      } else checkParts(c, p.parts, `${ptr}/parts`, level + 1);
+      } else checkParts(c, p.parts, `${ptr}/parts`, level + 1, units);
     }
     if (here !== undefined) checkPrograms(c, here.node, p.programs, `${ptr}/programs`);
   });
