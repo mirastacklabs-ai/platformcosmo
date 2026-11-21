@@ -52,6 +52,11 @@ export interface LocateOptions {
    * below the part's size) need a higher value: **C-4 should pass about 0.8**.
    */
   readonly nmsIoU?: number;
+  /**
+   * The image's `luminancePlane`, computed once by the caller and reused across calls (same
+   * scores). Ignored unless its size equals the image's.
+   */
+  readonly plane?: LuminancePlane;
 }
 
 export interface Match {
@@ -495,7 +500,13 @@ export function locate(
   }
   if (estimate > cap) return { diagnostics: [...diagnostics, tooExpensive(estimate, cap, region)] };
 
-  const L = Float32Array.from(luminanceOverWhite(image));
+  const L =
+    options.plane &&
+    options.plane.width === image.width &&
+    options.plane.height === image.height &&
+    validPlane(options.plane)
+      ? options.plane.data
+      : Float32Array.from(luminanceOverWhite(image));
   let coarseL: { data: Float32Array; w: number } | undefined;
   let spent = 0;
   let refineSpent = 0;
