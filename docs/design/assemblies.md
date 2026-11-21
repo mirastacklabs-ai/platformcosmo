@@ -867,32 +867,47 @@ and explains it:
 
 1. **Body**: the part with `role: body`, else the one most others mate with, else the largest
    volume (a pack's default role `body` does not count). It never moves. Boxes are the
-   **effective** placement the resolved tree gives (`pcosmo validate --suggest` reads it), not
-   only the `at`/`size` the spec states, so omitting `at` on a tray does not hand the pick to a
-   small lid.
-2. **Classify** the rest: covers (thin parts on the outer bounds whose largest face touches the
-   body and spans at least half of the body's face on that side: lids, panels, valve covers,
-   pans, doors; a flat part such as a DIMM or a chip on a board is thin too but covers nothing),
-   fasteners (small, repeated, `type` screw, bolt, clip, pin), shells (open containers),
-   sub-assemblies, internals (enclosed or seated inside a shell, or inside the body on another
-   part), **components** (parts sitting on the body's top face: a board's chips, DIMMs,
-   connectors; also anything stacked above them).
+   **effective** placement the resolved tree gives (`pcosmo validate --suggest` reads it,
+   including a pack shape's default size and `dc:` shapes), not only the `at`/`size` the spec
+   states, so omitting `at` or `size` does not hand the pick to a small lid. The volume of a
+   counted part is that of one instance (`id-1`), never of the whole row.
+2. **Classify** the rest (per part; a counted part is judged by one instance, but placed,
+   enclosed and carried by the union of its instances):
+   - covers: a type or role of lid, panel, cover, pan, door or a compound `...-cap`
+     (a bare `cap` is a capacitor), or a thin part (smallest extent at most 20% of the
+     largest) lying flat against the body: its thin axis is the side's axis, it touches
+     that face of the body and spans at least half of it. A flat part on a board (a DIMM, a
+     chip, a row of them) is thin but covers nothing, and a thin sheet floating above the body
+     is not a cover;
+   - fasteners (small, repeated, `type` screw, bolt, clip, pin);
+   - shells (open containers), sub-assemblies;
+   - internals: enclosed or seated inside a shell, or inside the body on another part;
+   - components: parts sitting on the body's top face (a board's chips, DIMMs, connectors),
+     and anything stacked above them.
 3. **Stage order**: fasteners first (along their `axis`), then covers (`away` from their
    mating surface), then sub-assemblies as units (`drawer` for rack devices, `away` or `out`
    otherwise), then each sub-assembly's internals (nested program, `lift` when they stack),
-   then components, then remaining loose parts (`out`). One stage per class (and per
-   direction); split a class larger than 24 leaf parts into consecutive stages in spec order.
-   Each sub-assembly's own parts get their own nested program, so a class never has to be split
-   across sub-assemblies. Nested owners are imploded before the root.
-   - **Mounting depth**: a part carried by another (its bottom at or above the carrier's top,
-     over its footprint: a heat sink on a CPU on a board; a card on a board in a case) leaves in
-     an earlier stage than its carrier, top-most first, so the carrier never passes through it
-     (`assembly/transit-collision`). Stages of one class are split by level and named
-     `Internals (level n)` / `Components (level n)` (level 0 sits on the body or a seat); with
+   then components, then remaining loose parts (`out`), then covers on a hidden side. One
+   stage per class (and per direction); split a class larger than 24 leaf parts into
+   consecutive stages in spec order. Each sub-assembly's own parts get their own nested
+   program, so a class never has to be split across sub-assemblies. Nested owners are
+   imploded before the root.
+   - **Mounting depth.** A part carried by another (its bottom touches the carrier's top,
+     over its footprint, the carrier having height: a heat sink on a CPU on a board; a card on
+     a board in a case; a sensor on a lid) leaves before its carrier, top-most first, so the
+     carrier never passes through it (`assembly/transit-collision`). A carried part is never
+     left in a later class than its carrier: it joins the carrier's class (a component on a
+     lid is a cover; a part on a component that overhangs the body is a component), except
+     under a cover on a hidden side, which leaves last anyway. Within a class the stages are
+     split by level and named `Internals (level n)`, `Components (level n)`, `Covers (level
+n)` (level 0 sits on the body or a seat, levels are counted among parts of the class). With
      several levels the internals use `+z` instead of `lift` (`lift` layers equal-height parts
-     together and can sort a board below its heat sinks). A stage whose parts interpenetrate
-     at rest (a crank through its rods) moves them rigidly: `+z`, one number (the body's top
-     above the lowest part plus the default gap) and `stagger: 0`.
+     together and can sort a board below its heat sinks).
+   - **Moving as one.** Parts of an internals level that interpenetrate at rest (a crank
+     through its rods) form a separate stage `Internals (moving as one)`: `+z`, one number
+     (the top of the body and of every shell over them, above the lowest of them, plus the
+     default gap), `stagger: 0`, never split into chunks of 24, so no transit collision can
+     arise between them. The other parts of the level move normally.
    - **Components** are one `+z` lift with a clearly visible distance, nothing sideways, named
      "Components" (not "Covers"). The distance is a number (§6.3): a quarter of the body's
      larger footprint extent, or 1.5 times the tallest component if more; each mounting level
@@ -902,8 +917,9 @@ and explains it:
    because parts that travel into hidden directions are covered by the body; when only a
    hidden direction is free (oil pan down, PSU to the rear), use it, stage it late and fade
    others.
-5. **Timing**: stagger 0.06–0.12 s `outside-in`, durations 0.6–1.0 s, and a step `duration`
-   that fits (validator `assembly/compressed` tells).
+5. **Timing**: stagger 0.06–0.12 s `outside-in` (0 for a stage of parts that move as one,
+   §17.3), durations 0.6–1.0 s, and a step `duration` that fits (validator
+   `assembly/compressed` tells).
 6. **Labels**: a stage's labels are `show` when it moves ≤ 12 parts, or when every part in it has
    a `label` (the author named them to be read; §6.6 hides labels only where the stage says
    `hide`); `hide` otherwise. Details only on the focused stage.

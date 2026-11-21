@@ -2,9 +2,10 @@
  * `pcosmo validate --suggest`: proposes an explode program and a story for assemblies that have
  * none, following docs/design/assemblies.md section 17 (the skill prints the same). Pure and
  * deterministic: the proposal depends only on the spec and the installed shape registry, never on
- * time, randomness or the environment. It works from what the spec states (role, type, shape,
- * `at`, `size`, `axis`, `mates`), so a part without an explicit `size` takes no part in geometric
- * rules (thin covers, enclosure), and the rules fall back to roles and types.
+ * time, randomness or the environment. Geometry (body pick, covers, enclosure, mounting) uses the
+ * effective boxes the resolved assembly tree gives (`PlacedBoxes`, from core), falling back to the
+ * `at`/`size` the spec states; a part with neither takes no part in geometric rules, and the
+ * rules fall back to roles, types, `axis` and `mates`.
  */
 import type { PartShapeRegistry } from "@platformcosmo/core";
 
@@ -94,7 +95,8 @@ const TOL = 1e-6;
 const PROGRAM_ID = "suggested";
 
 const FASTENER = /^(screw|bolt|clip|pin|nut|washer|rivet|fastener)s?$/;
-const COVER = /(^|-)(lid|panel|cover|pan|door|cap)$/;
+// a bare `cap` is a capacitor; only a compound (`dust-cap`) is a cover
+const COVER = /(^|-)(lid|panel|cover|pan|door)$|-cap$/;
 const RACK_DEVICE = /^(server|storage|switch|psu|router|firewall|chassis)/;
 
 type Box = PlacedBox;
@@ -109,7 +111,10 @@ interface Item {
   id: string;
   isGroup: boolean;
   count: number;
+  /** All instances of a counted part (their union), else the part's own box. */
   box?: Box;
+  /** The first instance (`id-1`) of a counted part: what one part looks like (volume, thinness). */
+  inst?: Box;
   cls: PartClass;
   /** Mounting level within its stage class: 0 sits on the body or a seat, n on a part of level n-1. */
   level: number;
@@ -125,21 +130,27 @@ function boxOf(p: P): Box | undefined {
   return { min: at, max: [at[0] + size[0], at[1] + size[1], at[2] + size[2]] };
 }
 
-/** The placement the scene tree resolved (a counted part: the union of its instances), else the stated one. */
+/**
+ * The placement the scene tree resolved, else the stated one: `box` is the union of a counted
+ * part's instances, `inst` its first instance.
+ */
 function placedBox(
   p: P,
   id: string,
   path: string,
   placed: PlacedBoxes | undefined,
-): Box | undefined {
-  if (!placed || isGroup(p)) return boxOf(p);
+): { box?: Box; inst?: Box } {
+  const stated = boxOf(p);
+  if (!placed || isGroup(p)) return stated ? { box: stated, inst: stated } : {};
   const n = countOf(p);
   const names =
     n > 1 ? Array.from({ length: Math.min(n, 1024) }, (_, k) => `${id}-${k + 1}`) : [id];
   let u: Box | undefined;
+  let first: Box | undefined;
   for (const name of names) {
     const b = placed.get(`${path}/${name}`);
     if (!b) continue;
+    first ??= { min: [...b.min], max: [...b.max] };
     const a = u;
     u = a
       ? {
@@ -148,7 +159,8 @@ function placedBox(
         }
       : { min: [...b.min], max: [...b.max] };
   }
-  return u ?? boxOf(p);
+  if (u && first) return { box: u, inst: first };
+  return stated ? { box: stated, inst: stated } : {};
 }
 
 /** Area of the overlap of two boxes in the horizontal plane. */
@@ -162,27 +174,24 @@ function overlapXY(a: Box, b: Box): number {
 const onTop = (b: Box, body: Box): boolean =>
   b.min[2] >= body.max[2] - TOL && overlapXY(b, body) > 0;
 
-/** Some two boxes of the group interpenetrate at rest. */
-function overlapEach(g: Item[]): boolean {
-  for (const [i, a] of g.entries()) {
-    for (const b of g.slice(i + 1)) {
-      if (!a.box || !b.box) continue;
-      if (
-        [0, 1, 2].every(
-          (k) => a.box!.min[k]! < b.box!.max[k]! - TOL && b.box!.min[k]! < a.box!.max[k]! - TOL,
-        )
-      )
-        return true;
-    }
-  }
-  return false;
+const interpenetrate = (a: Box, b: Box): boolean =>
+  [0, 1, 2].every((k) => a.min[k]! < b.max[k]! - TOL && b.min[k]! < a.max[k]! - TOL);
+
+/** The parts of the group that interpenetrate another part of it at rest (a crank through rods). */
+function linked(g: Item[]): Item[] {
+  return g.filter((a) =>
+    g.some(
+      (b) => b !== a && a.box !== undefined && b.box !== undefined && interpenetrate(a.box, b.box),
+    ),
+  );
 }
 
 /**
- * One distance that takes the whole group out of the body (top of the body above its lowest
- * part) plus the default gap (10% of the owner's largest extent), so it moves as one.
+ * One distance that takes the whole group out of its seat (the top of the body, and of every
+ * shell over a member, above the lowest part) plus the default gap (10% of the owner's largest
+ * extent), so it moves as one. With neither body nor shell there is nothing to clear: the gap.
  */
-function rigidLift(g: Item[], body: Item | undefined, all: Item[]): number {
+function rigidLift(g: Item[], body: Item | undefined, shells: Item[], all: Item[]): number {
   const boxes = all.flatMap((it) => (it.box ? [it.box] : []));
   const ext = Math.max(
     0,
@@ -190,8 +199,12 @@ function rigidLift(g: Item[], body: Item | undefined, all: Item[]): number {
       (k) => Math.max(...boxes.map((b) => b.max[k]!)) - Math.min(...boxes.map((b) => b.min[k]!)),
     ),
   );
-  const low = Math.min(...g.flatMap((it) => (it.box ? [it.box.min[2]] : [])));
-  const out = body?.box ? Math.max(0, body.box.max[2] - low) : 0;
+  const mine = g.flatMap((it) => (it.box ? [it.box] : []));
+  const low = Math.min(...mine.map((b) => b.min[2]));
+  const tops = [body, ...shells].flatMap((o) =>
+    o?.box && mine.some((b) => overlapXY(b, o.box!) > 0) ? [o.box.max[2]] : [],
+  );
+  const out = Math.max(0, ...tops.map((t) => t - low));
   return Math.round((out + 0.1 * ext) * 100) / 100;
 }
 
@@ -212,8 +225,8 @@ function levels(group: Item[]): void {
       }
     }
     const v = carrier ? 1 + level(carrier, new Set(seen).add(it)) : 0;
-    memo.set(it, v);
-    return v;
+    if (!memo.has(it)) memo.set(it, v);
+    return memo.get(it)!;
   };
   for (const it of group) it.level = level(it, new Set());
 }
@@ -250,13 +263,18 @@ function sideOf(b: Box, body: Box): string | undefined {
 }
 
 /**
- * A cover is thin AND spans at least half of the body's face on its side: a flat part on top of
- * a board (a DIMM, a chip) is thin too, but covers nothing.
+ * A cover (`b` is one part, not a row of them) is thin, lies flat against the body (its thin axis
+ * is the side's axis and it touches that face) and spans at least half of the body's face: a flat
+ * part on a board (a DIMM, a chip) is thin too, but covers nothing.
  */
 function coversBody(b: Box, body: Box): boolean {
   const side = sideOf(b, body);
   if (side === undefined) return false;
   const k = AXIS_INDEX[side[1] as "x" | "y" | "z"];
+  const ext = [0, 1, 2].map((a) => b.max[a]! - b.min[a]!);
+  if (ext[k]! > Math.min(...ext) + TOL) return false;
+  const gap = side[0] === "+" ? b.min[k]! - body.max[k]! : body.min[k]! - b.max[k]!;
+  if (Math.abs(gap) > TOL) return false;
   const [i, j] = [0, 1, 2].filter((a) => a !== k) as [number, number];
   const w = Math.min(b.max[i]!, body.max[i]!) - Math.max(b.min[i]!, body.min[i]!);
   const d = Math.min(b.max[j]!, body.max[j]!) - Math.max(b.min[j]!, body.min[j]!);
@@ -282,7 +300,8 @@ function classify(it: Item, reg: PartShapeRegistry | undefined, ctx: Ctx): PartC
   );
   if (words.some((w) => FASTENER.test(w))) return "fastener";
   if (words.some((w) => COVER.test(w))) return "cover";
-  if (it.box && ctx.body?.box && thin(it.box) && coversBody(it.box, ctx.body.box)) return "cover";
+  if (it.inst && ctx.body?.box && thin(it.inst) && coversBody(it.inst, ctx.body.box))
+    return "cover";
   if (it.box && ctx.shells.some((s) => s !== it && s.box && inside(it.box!, s.box!)))
     return "internal";
   if (it.box && ctx.body?.box && onTop(it.box, ctx.body.box)) return "mounted";
@@ -304,12 +323,13 @@ interface Ctx {
   items: Item[];
 }
 
-/** `q` holds `it` on its top face: `it` starts at or above `q`'s top, over its footprint. */
+/** `q` holds `it` on its top face: `it` starts at `q`'s top (touching), over its footprint. */
 const carries = (q: Item, it: Item): boolean =>
   q.box !== undefined &&
   it.box !== undefined &&
   !q.isGroup &&
-  it.box.min[2] >= q.box.max[2] - TOL &&
+  q.box.max[2] > q.box.min[2] + TOL &&
+  Math.abs(it.box.min[2] - q.box.max[2]) <= TOL &&
   overlapXY(it.box, q.box) > 0;
 
 const sel = (it: Item): string => (it.count > 1 ? `${it.id}-*` : it.id);
@@ -320,7 +340,7 @@ function direction(it: Item, cls: PartClass, body: Item | undefined, internals: 
     case "fastener":
       return p.axis === "x" || p.axis === "y" ? `+${p.axis}` : "+z";
     case "cover":
-      return (it.box && body?.box ? sideOf(it.box, body.box) : undefined) ?? "away";
+      return (it.inst && body?.box ? sideOf(it.inst, body.box) : undefined) ?? "away";
     case "unit":
       if (
         (p.shape?.startsWith("dc:") ?? false) ||
@@ -372,7 +392,8 @@ function suggestOwner(
       id,
       isGroup: isGroup(p),
       count: countOf(p),
-      ...(b ? { box: b } : {}),
+      ...(b.box ? { box: b.box } : {}),
+      ...(b.inst ? { inst: b.inst } : {}),
       cls: "loose" as PartClass,
       level: 0,
     };
@@ -408,7 +429,7 @@ function suggestOwner(
   if (!body) {
     let best = 0;
     for (const it of items) {
-      const v = volume(it.box);
+      const v = volume(it.inst);
       if (v > best) {
         best = v;
         body = it;
@@ -429,6 +450,27 @@ function suggestOwner(
   };
   if (body) ctx.body = body;
   for (const it of items) it.cls = it === body ? "body" : classify(it, reg, ctx);
+  // A part leaves before its carrier, so it cannot be left in a later class than the one that
+  // carries it (a component on a lid, a part on a component that overhangs the body): it joins
+  // the carrier's class, where mounting levels order the two.
+  const RANK: PartClass[] = ["fastener", "cover", "unit", "internal", "mounted", "loose"];
+  const FOLD = new Set<PartClass>(["cover", "internal", "mounted"]);
+  for (let pass = 0; pass < items.length; pass++) {
+    let changed = false;
+    for (const it of items) {
+      if (it === body || it.isGroup || it.cls === "body") continue;
+      for (const q of items) {
+        if (q === it || q === body || !FOLD.has(q.cls) || !carries(q, it)) continue;
+        // a cover on a hidden side leaves last, after everything it carries
+        if (q.cls === "cover" && hidden(direction(q, "cover", body, []))) continue;
+        if (RANK.indexOf(q.cls) < RANK.indexOf(it.cls)) {
+          it.cls = q.cls;
+          changed = true;
+        }
+      }
+    }
+    if (!changed) break;
+  }
   const of = (c: PartClass): Item[] => items.filter((it) => it.cls === c);
   const classes = {
     fastener: of("fastener"),
@@ -438,25 +480,28 @@ function suggestOwner(
     mounted: of("mounted"),
     loose: of("loose"),
   };
-  levels([...classes.internal, ...classes.mounted, ...classes.loose]);
+  // a carrier in an earlier class took its carried parts in above, so levels are per class
+  for (const g of Object.values(classes)) levels(g.filter((it) => !it.isGroup));
 
-  // 3-4. One stage per class and direction (a class larger than STAGE_MAX is split in order);
-  // covers on a hidden side go last, with the others faded.
+  // 3-4. One stage per class, direction and mounting level (a class larger than STAGE_MAX is
+  // split in order); covers on a hidden side go last, with the others faded.
   const stages: SuggestedStage[] = [];
   const counts: number[] = [];
+  let rigid = false;
   const push = (
     name: string,
     group: Item[],
     dir: string,
     distance: SuggestedStage["distance"] = "auto",
     stagger = STAGGER,
+    chunk = true,
   ): void => {
     if (group.length === 0) return;
     const chunks: Item[][] = [];
     let cur: Item[] = [];
     let n = 0;
     for (const it of group) {
-      if (cur.length > 0 && n + it.count > STAGE_MAX) {
+      if (chunk && cur.length > 0 && n + it.count > STAGE_MAX) {
         chunks.push(cur);
         cur = [];
         n = 0;
@@ -493,17 +538,7 @@ function suggestOwner(
     }
     return m;
   };
-  for (const [d, g] of byDirection(classes.fastener, "fastener"))
-    push(d === "+z" ? "Fasteners" : `Fasteners (${d})`, g, d);
-  const covers = byDirection(classes.cover, "cover");
-  const late: [string, Item[]][] = [];
-  for (const [d, g] of covers) {
-    if (hidden(d)) late.push([d, g]);
-    else push(covers.size === 1 ? "Covers" : `Covers (${d})`, g, d);
-  }
-  for (const [d, g] of byDirection(classes.unit, "unit"))
-    push(d === "drawer" ? "Devices" : "Sub-assemblies", g, d);
-  // Parts mounted on another part leave in an earlier stage than their carrier: deepest first.
+  // A part mounted on another leaves in an earlier stage than its carrier: deepest level first.
   const byLevel = (group: Item[]): [number, Item[]][] => {
     const top = Math.max(...group.map((it) => it.level));
     const out: [number, Item[]][] = [];
@@ -513,19 +548,55 @@ function suggestOwner(
     }
     return out;
   };
+  const named = (base: string, tags: string[]): string =>
+    tags.length > 0 ? `${base} (${tags.join(", ")})` : base;
+  /** One stage per mounting level of `group`; `each` is given the level's parts and its tags. */
+  const pushLevels = (
+    base: string,
+    tags: string[],
+    group: Item[],
+    each: (name: (extra?: string) => string, g: Item[], l: number) => void,
+  ): void => {
+    const lv = byLevel(group);
+    for (const [l, g] of lv)
+      each(
+        (extra) =>
+          named(base, [
+            ...tags,
+            ...(lv.length > 1 ? [`level ${l}`] : []),
+            ...(extra ? [extra] : []),
+          ]),
+        g,
+        l,
+      );
+  };
+  for (const [d, g] of byDirection(classes.fastener, "fastener"))
+    pushLevels("Fasteners", d === "+z" ? [] : [d], g, (name, grp) => push(name(), grp, d));
+  const covers = byDirection(classes.cover, "cover");
+  const late: [string, Item[]][] = [];
+  for (const [d, g] of covers) {
+    if (hidden(d)) late.push([d, g]);
+    else pushLevels("Covers", covers.size === 1 ? [] : [d], g, (name, grp) => push(name(), grp, d));
+  }
+  for (const [d, g] of byDirection(classes.unit, "unit"))
+    push(d === "drawer" ? "Devices" : "Sub-assemblies", g, d);
   if (classes.internal.length > 0) {
-    const lv = byLevel(classes.internal);
     // `lift` stacks parts of equal rest height as one layer, which can sort a carrier above what
     // it carries (a board with the fans beside it, under its heat sinks): with several levels a
     // stage uses plain +z, whose stacking follows the footprints (6.3). Parts that interpenetrate
-    // at rest (a crank through its rods) must move as one: a single number clears them all and
-    // the stage has no stagger.
+    // at rest (a crank through its rods) must move as one: a single number clears them all, the
+    // stage has no stagger and is never split; the other parts of the level move normally.
     const base = direction(classes.internal[0]!, "internal", body, classes.internal);
-    for (const [l, g] of lv) {
-      const name = lv.length === 1 ? "Internals" : `Internals (level ${l})`;
-      if (overlapEach(g)) push(name, g, "+z", rigidLift(g, body, items), 0);
-      else push(name, g, lv.length > 1 && base === "lift" ? "+z" : base);
-    }
+    const multi = byLevel(classes.internal).length > 1;
+    pushLevels("Internals", [], classes.internal, (name, g) => {
+      const tied = linked(g);
+      const rest = g.filter((it) => !tied.includes(it));
+      push(name(), rest, multi && base === "lift" ? "+z" : base);
+      if (tied.length > 0) {
+        rigid = true;
+        push(name("moving as one"), tied, "+z", rigidLift(tied, body, ctx.shells, items), 0, false);
+      }
+    });
   }
   if (classes.mounted.length > 0) {
     // One lift off the body's top face, clearly visible: a quarter of the body's footprint (or
@@ -535,17 +606,13 @@ function suggestOwner(
     const foot = Math.max(bb.max[0] - bb.min[0], bb.max[1] - bb.min[1]);
     const tall = Math.max(...classes.mounted.map((it) => it.box!.max[2] - it.box!.min[2]));
     const step = Math.round(Math.max(0.25 * foot, 1.5 * tall) * 100) / 100;
-    const lv = byLevel(classes.mounted);
-    for (const [l, g] of lv)
-      push(
-        lv.length === 1 ? "Components" : `Components (level ${l})`,
-        g,
-        "+z",
-        Math.round(step * (l + 1) * 100) / 100,
-      );
+    pushLevels("Components", [], classes.mounted, (name, g, l) =>
+      push(name(), g, "+z", Math.round(step * (l + 1) * 100) / 100),
+    );
   }
   push("Other parts", classes.loose, "out");
-  for (const [d, g] of late) push(`Covers (${d}, hidden side)`, g, d);
+  for (const [d, g] of late)
+    pushLevels("Covers", [d, "hidden side"], g, (name, grp) => push(name(), grp, d));
 
   if (stages.length === 0) {
     return "no stages: no part other than the body is movable";
@@ -557,7 +624,7 @@ function suggestOwner(
   const explanation = [
     ...why,
     `${stages.length} stage${stages.length === 1 ? "" : "s"}: fasteners first, then covers, sub-assemblies, internals, parts mounted on the body and loose parts; parts mounted on another part leave before it; hidden-side covers last with the rest faded`,
-    `timing: stagger ${STAGGER} s outside-in, ${DURATION} s per part; a step of ${stepDuration} s plays the whole program`,
+    `timing: stagger ${STAGGER} s outside-in${rigid ? ", 0 for parts that move as one" : ""}, ${DURATION} s per part; a step of ${stepDuration} s plays the whole program`,
     `labels shown for stages with ${LABELS_MAX} parts or fewer, or whose parts all have a label`,
   ];
   return {

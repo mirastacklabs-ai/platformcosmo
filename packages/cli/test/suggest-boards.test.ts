@@ -222,13 +222,251 @@ describe("mounting depth: board-mounted parts leave before the board", () => {
     const spec = await fixture("engine");
     const rep = await suggestOf(spec, "engine");
     expect(brief(rep.suggestions[0]!.program.stages)).toEqual([
-      ["Covers (+z)", "+z", "auto", "show", "gasket,head,valve-cover"],
+      ["Covers (+z, level 2)", "+z", "auto", "show", "valve-cover"],
+      ["Covers (+z, level 1)", "+z", "auto", "show", "head"],
+      ["Covers (+z, level 0)", "+z", "auto", "show", "gasket"],
       ["Internals (level 1)", "+z", "auto", "show", "piston-*"],
-      ["Internals (level 0)", "+z", 241.6, "show", "intake,exhaust,rod-*,crank"],
+      ["Internals (level 0)", "+z", "auto", "show", "intake,exhaust"],
+      ["Internals (level 0, moving as one)", "+z", 241.6, "show", "rod-*,crank"],
       ["Covers (-z, hidden side)", "-z", "auto", "show", "oil-pan"],
     ]);
-    expect(rep.suggestions[0]!.program.stages.map((x) => x.stagger)).toEqual([0.08, 0.08, 0, 0.08]);
+    expect(rep.suggestions[0]!.program.stages.map((x) => x.stagger)).toEqual([
+      0.08, 0.08, 0.08, 0.08, 0.08, 0, 0.08,
+    ]);
     const m = await mergedDiagnostics(spec, rep, "engine");
     expect(m).toEqual({ codes: [], vCode: 0, bCode: 0 });
   }, 120_000);
+});
+
+const wrap = (assemblies: unknown[]) => ({
+  $schema: "https://platformcosmo.io/schema/v1.json",
+  meta: { version: "1", title: "t" },
+  assemblies,
+});
+const stagesOf = (rep: SuggestReport, k = 0): unknown[] =>
+  brief(rep.suggestions[k]!.program.stages);
+
+describe("counted parts: one instance decides volume and thinness", () => {
+  test("a counted row whose union is larger than the body does not take the body pick", async () => {
+    const spec = wrap([
+      {
+        id: "a",
+        units: "mm",
+        parts: [
+          { id: "base", at: [0, 0, 0], size: [100, 100, 10] },
+          { id: "fan", count: 4, at: [0, 0, 10], size: [20, 20, 20], pitch: [110, 0, 0] },
+        ],
+      },
+    ]);
+    expect((await suggestOf(spec, "row-body")).suggestions[0]!.body).toBe("base");
+    expect(suggest(spec).suggestions[0]!.body).toBe("base");
+  });
+
+  test("a row of flat parts is not a cover even when the row spans the body", async () => {
+    const spec = wrap([
+      {
+        id: "a",
+        units: "mm",
+        parts: [
+          { id: "base", role: "body", at: [0, 0, 0], size: [100, 16, 5] },
+          { id: "chip", count: 8, at: [0, 3, 5], size: [10, 10, 1], pitch: [11, 0, 0] },
+        ],
+      },
+    ]);
+    const s = (await suggestOf(spec, "row-chips")).suggestions[0]!;
+    expect(s.classes.cover).toEqual([]);
+    expect(s.classes.mounted).toEqual(["chip"]);
+  });
+});
+
+describe("effective sizes through validate", () => {
+  test("a dc: part without size resolves to the DC pack's default size", async () => {
+    const spec = wrap([
+      {
+        id: "a",
+        units: "mm",
+        parts: [
+          { id: "box", at: [0, 0, 0], size: [100, 100, 100] },
+          { id: "srv", shape: "dc:server-2u", at: [0, 0, 0] },
+        ],
+      },
+    ]);
+    expect((await suggestOf(spec, "dc-size")).suggestions[0]!.body).toBe("srv");
+  });
+
+  test("a pack shape without size takes its default size", async () => {
+    const spec = wrap([
+      {
+        id: "a",
+        units: "mm",
+        parts: [
+          { id: "small", at: [0, 0, 0], size: [100, 100, 50] },
+          { id: "chassis", shape: "hw:chassis-2u" },
+        ],
+      },
+    ]);
+    expect(suggest(spec).suggestions[0]!.body).toBe("small");
+    expect((await suggestOf(spec, "hw-size")).suggestions[0]!.body).toBe("chassis");
+  });
+
+  test("a nested owner uses the tree's placement too", async () => {
+    const spec = wrap([
+      {
+        id: "a",
+        units: "mm",
+        parts: [
+          { id: "frame", role: "body", at: [0, 0, 0], size: [500, 500, 10] },
+          {
+            id: "unit",
+            parts: [
+              { id: "lid", at: [0, 0, 40], size: [20, 20, 3] },
+              { id: "tray", shape: "tray", size: [200, 100, 40] },
+            ],
+          },
+        ],
+      },
+    ]);
+    const rep = await suggestOf(spec, "nested-at");
+    expect(rep.suggestions.map((x) => [x.owner, x.body])).toEqual([
+      ["a", "frame"],
+      ["a/unit", "tray"],
+    ]);
+  });
+});
+
+describe("rigid groups", () => {
+  const shelled = (body: unknown) =>
+    wrap([
+      {
+        id: "a",
+        units: "mm",
+        parts: [
+          body,
+          { id: "case", shape: "tray", at: [0, 0, 0], size: [200, 100, 60] },
+          { id: "p", role: "internal", at: [10, 10, 10], size: [50, 50, 20] },
+          { id: "q", role: "internal", at: [30, 30, 15], size: [50, 50, 20] },
+          { id: "r", role: "internal", at: [150, 10, 10], size: [20, 20, 20] },
+        ],
+      },
+    ]);
+
+  test("only the interpenetrating parts move as one; the shell's top is cleared (no body box)", () => {
+    const s = suggest(shelled({ id: "frame", role: "body" })).suggestions[0]!;
+    expect(brief(s.program.stages)).toEqual([
+      ["Internals", "lift", "auto", "show", "r"],
+      ["Internals (moving as one)", "+z", 70, "show", "p,q"],
+      ["Other parts", "out", "auto", "show", "case"],
+    ]);
+    expect(s.program.stages[1]!.stagger).toBe(0);
+    expect(s.explanation.join("\n")).toContain("0 for parts that move as one");
+  });
+
+  test("a body whose top is lower than the shell's does not shorten the lift", () => {
+    const s = suggest(shelled({ id: "frame", role: "body", at: [0, 0, 0], size: [200, 100, 10] }));
+    expect(s.suggestions[0]!.program.stages[1]!.distance).toBe(70);
+  });
+
+  test("a rigid group is never split into 24-part chunks", () => {
+    const rep = suggest({
+      assemblies: [
+        {
+          id: "a",
+          parts: [
+            { id: "base", role: "body", at: [0, 0, -10], size: [3000, 20, 10] },
+            {
+              id: "pin",
+              role: "internal",
+              count: 30,
+              at: [0, 0, 0],
+              size: [10, 10, 10],
+              pitch: [100, 0, 0],
+            },
+            { id: "rail", role: "internal", at: [0, 0, 0], size: [3000, 10, 10] },
+          ],
+        },
+      ],
+    });
+    const st = rep.suggestions[0]!.program.stages;
+    expect(st).toHaveLength(1);
+    expect(st[0]).toMatchObject({ label: "Internals (moving as one)", parts: ["pin-*", "rail"] });
+  });
+});
+
+describe("carried parts never leave after their carrier", () => {
+  test("a component on a lid joins the covers, above it", () => {
+    const rep = suggest({
+      assemblies: [
+        {
+          id: "a",
+          parts: [
+            { id: "plate", role: "body", at: [0, 0, 0], size: [100, 100, 2] },
+            { id: "lid", type: "lid", at: [0, 0, 2], size: [100, 100, 2] },
+            { id: "sensor", at: [10, 10, 4], size: [10, 10, 5] },
+          ],
+        },
+      ],
+    });
+    expect(rep.suggestions[0]!.classes.cover).toEqual(["lid", "sensor"]);
+    expect(stagesOf(rep)).toEqual([
+      ["Covers (level 1)", "+z", "auto", "show", "sensor"],
+      ["Covers (level 0)", "+z", "auto", "show", "lid"],
+    ]);
+  });
+
+  test("a part on a component that overhangs the body joins the components", () => {
+    const rep = suggest({
+      assemblies: [
+        {
+          id: "a",
+          parts: [
+            { id: "plate", role: "body", at: [0, 0, 0], size: [100, 100, 2] },
+            { id: "deck", at: [50, 50, 2], size: [100, 100, 5] },
+            { id: "tower", at: [120, 120, 7], size: [10, 10, 5] },
+          ],
+        },
+      ],
+    });
+    expect(rep.suggestions[0]!.classes.loose).toEqual([]);
+    expect(stagesOf(rep)).toEqual([
+      ["Components (level 1)", "+z", 50, "show", "tower"],
+      ["Components (level 0)", "+z", 25, "show", "deck"],
+    ]);
+  });
+
+  test("a zero-height part carries nothing", () => {
+    const rep = suggest({
+      assemblies: [
+        {
+          id: "a",
+          parts: [
+            { id: "plate", role: "body", at: [0, 0, 0], size: [100, 100, 2] },
+            { id: "film", at: [0, 0, 2], size: [100, 100, 0] },
+            { id: "chip", at: [10, 10, 2], size: [5, 5, 5] },
+          ],
+        },
+      ],
+    });
+    expect(stagesOf(rep).map((x) => (x as unknown[])[0])).toEqual(["Covers", "Components"]);
+  });
+});
+
+describe("cover wording", () => {
+  test("a bare `cap` is a capacitor, `dust-cap` a cover; a thin sheet floating above is not a cover", () => {
+    const rep = suggest({
+      assemblies: [
+        {
+          id: "a",
+          parts: [
+            { id: "base", role: "body", at: [0, 0, 0], size: [100, 100, 10] },
+            { id: "c1", type: "cap", at: [0, 0, 10], size: [10, 10, 2] },
+            { id: "dc", type: "dust-cap", at: [50, 50, 10], size: [10, 10, 2] },
+            { id: "sheet", at: [0, 0, 30], size: [100, 100, 1] },
+          ],
+        },
+      ],
+    });
+    const s = rep.suggestions[0]!;
+    expect(s.classes.cover).toEqual(["dc"]);
+    expect(s.classes.mounted).toEqual(["c1", "sheet"]);
+  });
 });

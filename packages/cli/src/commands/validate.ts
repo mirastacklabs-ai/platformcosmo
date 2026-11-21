@@ -31,7 +31,10 @@ function placedBoxes(spec: unknown, deps: Deps): PlacedBoxes | undefined {
   if (!deps.core.buildAssemblies) return undefined;
   const out = new Map<string, PlacedBox>();
   try {
-    const built = deps.core.buildAssemblies(spec as never, deps.parts ? { parts: deps.parts } : {});
+    const built = deps.core.buildAssemblies(spec as never, {
+      ...(deps.parts ? { parts: deps.parts } : {}),
+      ...(deps.dcPack?.shapes ? { dcShapes: deps.dcPack.shapes } : {}),
+    });
     const walk = (n: (typeof built.assemblies)[number]["root"]): void => {
       const { origin: o, size: z } = n.local;
       out.set(n.path, {
