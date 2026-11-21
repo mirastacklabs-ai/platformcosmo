@@ -1104,6 +1104,8 @@ function explodeProgram(c: Check, owner: TNode, prog: SpecExplodeProgram, pp: st
 
 function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string): void {
   const addedBy = new Map<string, number>();
+  /** Proper ancestors of added nodes, with the first step that added something below them. */
+  const below = new Map<string, number>();
   const { spec } = c;
   const mixed =
     (spec.nodes?.length ?? 0) +
@@ -1123,9 +1125,21 @@ function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string
       for (const p of evalSelector(c, owner, s, `${sp}/add/${i}`)) sel.add(p);
     });
     const added = [...sel];
-    const twice = added.filter((p) => addedBy.has(p));
+    // overlap by leaf set: the same node, an ancestor of an earlier add, or a node below one
+    // (a descendant of a node selected in this very step is not a conflict)
+    const firstStep = (p: string): number | undefined => {
+      const hit = addedBy.get(p) ?? below.get(p);
+      if (hit !== undefined) return hit;
+      const segs = p.split("/");
+      for (let k = segs.length - 1; k > 0; k--) {
+        const up = addedBy.get(segs.slice(0, k).join("/"));
+        if (up !== undefined) return up;
+      }
+      return undefined;
+    };
+    const twice = added.filter((p) => firstStep(p) !== undefined);
     if (twice.length > 0) {
-      const first = addedBy.get(twice[0] as string) as number;
+      const first = firstStep(twice[0] as string) as number;
       c.out.push(
         mk(
           "error",
@@ -1137,7 +1151,14 @@ function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string
         ),
       );
     }
-    for (const p of added) if (!addedBy.has(p)) addedBy.set(p, j);
+    for (const p of added) {
+      if (!addedBy.has(p)) addedBy.set(p, j);
+      const segs = p.split("/");
+      for (let k = 1; k < segs.length; k++) {
+        const up = segs.slice(0, k).join("/");
+        if (!below.has(up)) below.set(up, j);
+      }
+    }
     if (st.view !== undefined && mixed) {
       c.out.push(
         mk(
