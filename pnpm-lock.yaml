@@ -84,7 +84,16 @@ importers:
       '@platformcosmo/themes':
         specifier: workspace:*
         version: link:../themes
+      fflate:
+        specifier: 0.8.3
+        version: 0.8.3
     devDependencies:
+      '@platformcosmo/assets':
+        specifier: workspace:*
+        version: link:../assets
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
