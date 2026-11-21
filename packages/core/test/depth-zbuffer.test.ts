@@ -760,6 +760,49 @@ function nestedScene(rand: () => number): Scene | undefined {
   return { items, moves, loop };
 }
 
+describe("depth copies (§9.4, A1-2b)", () => {
+  // a starts under b, moves out beside it, rises and comes back above it, then returns the same
+  // way: a before b, then b before a (copy 1 of a), then a before b again (copy 0 reused).
+  const swap: Scene = {
+    items: [
+      { key: "a", path: "a", box: box(0, 0, 0, 1, 1, 0.9), solid: true, fills: true },
+      { key: "b", path: "b", box: box(0, 0, 1, 1, 1, 1), solid: true, fills: true },
+    ],
+    moves: [
+      { path: "a", t0: 0, t1: 1, from: v(0, 0, 0), to: v(1.5, 0, 0), easing: "ease-in-out" },
+      { path: "a", t0: 1, t1: 2, from: v(0, 0, 0), to: v(0, 0, 2.2), easing: "linear" },
+      { path: "a", t0: 2, t1: 3, from: v(0, 0, 0), to: v(-1.5, 0, 0), easing: "ease" },
+      { path: "a", t0: 3, t1: 4, from: v(0, 0, 0), to: v(1.5, 0, 0), easing: "ease" },
+      { path: "a", t0: 4, t1: 5, from: v(0, 0, 0), to: v(0, 0, -2.2), easing: "linear" },
+      { path: "a", t0: 5, t1: 6, from: v(0, 0, 0), to: v(-1.5, 0, 0), easing: "ease-in-out" },
+    ],
+    loop: 6,
+  };
+
+  it("exact at every sample and on both sides of every swap; one copy", async () => {
+    const r = solve(swap);
+    expect(r.stats.copies).toBe(1);
+    expect(r.approximate).toEqual([]);
+    const view = viewOf(swap, samples(6, 12), 2);
+    const swaps = r.epochs.slice(1).map((e) => e.t0);
+    expect(swaps).toHaveLength(2);
+    const times = [...samples(6, 12), ...swaps.flatMap((t) => [t - 1e-3, t, t + 1e-3])];
+    await expectExact(swap, r, times, view);
+  });
+
+  it("the comparison is sensitive: the merged order (no copy) is wrong in some epoch", async () => {
+    const merged = depthEpochs(swap.items, swap.moves, swap.loop, {
+      budgets: { maxCopyRatio: 0 },
+    });
+    expect(merged.diagnostics.map((d) => d.code)).toContain("budget/depth-copies");
+    const view = viewOf(swap, samples(6, 12), 2);
+    let worst = 0;
+    for (const t of samples(6, 12))
+      worst = Math.max(worst, (await check(swap, merged, t, view)).fraction);
+    expect(worst).toBeGreaterThan(0.01);
+  });
+});
+
 describe("randomized property: painter's order of sampled frames vs z-buffer", () => {
   it(
     "free boxes: exact (≤ EXACT, per-item cap) except approximate epochs",
@@ -770,11 +813,13 @@ describe("randomized property: painter's order of sampled frames vs z-buffer", (
       let frames = 0;
       let skipped = 0;
       let worst = 0;
+      let copies = 0;
       for (let attempt = 0; attempt < 400 && scenes < 40; attempt++) {
         const s = randomScene(rand);
         if (!s) continue;
         scenes++;
         const r = solve(s);
+        copies += r.stats.copies;
         const view = viewOf(s, samples(s.loop, 9), 1);
         for (const t of samples(s.loop, 6)) {
           if (inApprox(r, t)) {
@@ -789,9 +834,10 @@ describe("randomized property: painter's order of sampled frames vs z-buffer", (
         }
       }
       console.info(
-        `property (free): ${scenes} scenes, ${frames} frames, ${skipped} approximate skipped, worst ${(worst * 100).toFixed(4)}% of covered px`,
+        `property (free): ${scenes} scenes, ${frames} frames, ${skipped} approximate skipped, ${copies} depth copies, worst ${(worst * 100).toFixed(4)}% of covered px`,
       );
       expect(scenes).toBe(40);
+      expect(copies).toBeGreaterThan(0); // the painter draws copies (A1-2b)
       expect(frames).toBeGreaterThan(150);
     },
   );

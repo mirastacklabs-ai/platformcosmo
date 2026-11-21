@@ -562,8 +562,18 @@ The DOM itself carries the rest frame (`frameAt(0)`) as attributes (hidden, tran
 wrappers), so a bare emit shows the rest pose; frame and step overrides write the FULL state of
 every registered wrapper (`AssemblyFrameState` lists every id, `translate(0 0)` and opacity 1
 included). CSS animations override presentation attributes, so loop mode is unaffected.
-Phase 1b ships without copies (epochs that would need one are merged and marked approximate);
-copies land in Phase 3 ([tracks](./assemblies-tracks.md)).
+Implementation (A1-2b, [tracks](./assemblies-tracks.md)): a pair whose certified or forced
+direction changes in the loop is what needs a copy (a heuristic direction yields, as before). The
+final intervals are grouped greedily into maximal runs in which no such pair changes direction;
+each group is ordered by the static algorithm over the loop-wide edges, its own directions and a
+chain that keeps the static items in one fixed order (taken from the loop-wide edges alone; the
+chain is never dropped by the cycle rule), so static items never need a copy. Epochs then break
+at group boundaries too, and the construction above embeds every epoch. A clipped item's copies
+all carry its clip (one shared `clipPath`). A spec without such a pair takes the one-order path
+unchanged (byte-identical to Phase 1b). Beyond the copy budget, or when the orders would exceed
+the work budget (`budget/time`), the epochs are merged into one order as in Phase 1b: the
+direction held shorter (then later) is dropped and its intervals are approximate
+(`assembly/depth-approx` with `copy: true`).
 
 ### 9.5 Enclosure, insertion and face-exit clipping
 
@@ -628,16 +638,18 @@ it is ordered by separation or bisection only (approximate where those cannot de
   itself may move (its total track rides on `partHost`). If the relative motion has a ⊥ `u`
   component anywhere in the loop (the piston later slides sideways once clear, or an insert is
   pulled out obliquely): Phase 1b falls back to hiding the leaf until clear for the crossing
-  epochs (`assembly/clip-fallback`, info); Phase 3 uses two copies instead, a clipped copy
+  epochs (`assembly/clip-fallback`, info); Phase 3 is to use two copies instead, a clipped copy
   visible only during the crossing epochs and an unclipped copy for the rest of the loop,
-  swapped by visibility like any other copy (§9.4).
+  swapped by visibility like any other copy (§9.4). A1-2b does not do this yet: such leaves keep
+  the hidden-until-clear fallback (a follow-up track).
 - Regression fixture: the engine example (§19.3) exercises all three: valves inserted in the
   casting and enclosed by casting ∪ cover at rest, camshafts flush in the cover, pistons
   crossing the block deck.
 - **Note for A1-3 (Phase 1b):** a drawer that moves inside the loop (the built-in `drawers`
-  program, §19.4) is approximate until copies (A1-2b): an open device at rest is behind the
-  device above it, and its internals lifted on the pulled drawer are in front of it, which no
-  single DOM order satisfies (reported as `assembly/depth-approx` with `copy: true`).
+  program, §19.4) needs copies (A1-2b): an open device at rest is behind the device above it,
+  and its internals lifted on the pulled drawer are in front of it, which no single DOM order
+  satisfies. The internals get depth copies; beyond the copy budget the epochs are merged and
+  approximate (`assembly/depth-approx` with `copy: true`).
 
 ### 9.6 Split items
 
