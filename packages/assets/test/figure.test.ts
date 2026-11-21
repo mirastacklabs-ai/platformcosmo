@@ -671,20 +671,20 @@ describe("error codes", () => {
 
 // Golden hashes: update only when an intended change alters the outputs, and review the diff.
 const GOLDEN_MAIN = {
-  report: "e77f8d704fd2c77534aa9d53ea4861d2ffff212ac255c21306d0cdb4d61abc35",
+  report: "5384cedc50fca1d07a137535c7e7d879ae7b26791f4e97c0113c889141d2eca6",
   files: [
     "base.png:07ae16ca138387cb",
     "sprite-1.png:ed91d850d0dd47f7",
-    "report.json:e77f8d704fd2c775",
+    "report.json:5384cedc50fca1d0",
     "fragment.json:3c56bbeb00811bae",
   ],
 };
 const GOLDEN_TWINS = {
-  report: "da51ba6f8f372d102b61d791f0c77a97d8933802167b557bc55b0a23efb1eece",
+  report: "cc65cbf55553ce9cdb185a9a6a511f4da88a3d758ef3ef0146ffd409a5535253",
   files: [
     "base.png:6125ab9b234e6a93",
     "sprite-1.png:984b868295e185aa",
-    "report.json:da51ba6f8f372d10",
+    "report.json:cc65cbf55553ce9c",
     "fragment.json:c97f7f273f455d2a",
   ],
 };

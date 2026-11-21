@@ -8,6 +8,7 @@ import type { Raster } from "../raster.js";
 import type { Analysis, Unit } from "./analyze.js";
 import { inBox } from "./annotations.js";
 import type { FigureState } from "./manifest.js";
+import type { StateImage } from "./state.js";
 import { blank, dilate, erode1, filter, has, labelMask, minus, union, type Mask } from "./mask.js";
 
 export interface FigureOutputPart {
@@ -66,6 +67,63 @@ function endingInk(ink: Mask, hull: Mask, raw: Uint8Array, W: number, H: number)
   });
 }
 
+/**
+ * Straight strokes cut by `cut` (inside `erase`), rebuilt by continuity: for each raw-ink pixel
+ * of the drawing there, along the horizontal, vertical and both diagonals, the first pixels
+ * outside the erase on both sides must be raw ink that runs on for 2 more pixels the same way,
+ * of the same tone, not part ink, within a span of 64 px. The shortest such span wins.
+ */
+function continueLines(
+  st: StateImage,
+  erase: Mask,
+  cut: Mask,
+  part: Mask,
+): Map<number, [number, number, number]> {
+  const out = new Map<number, [number, number, number]>();
+  const { W, H } = st;
+  const ink = (x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < W && y < H && st.rawInk[y * W + x] !== 0 && !has(part, x, y);
+  const lum = (x: number, y: number): number => st.lum[y * W + x]!;
+  const dirs: [number, number][] = [
+    [1, 0],
+    [0, 1],
+    [1, 1],
+    [1, -1],
+  ];
+  for (let j = 0; j < cut.h; j++) {
+    for (let i = 0; i < cut.w; i++) {
+      if (!cut.data[j * cut.w + i]) continue;
+      const x = i + cut.x;
+      const y = j + cut.y;
+      if (!st.rawInk[y * W + x]) continue;
+      let best: { span: number; c: [number, number, number] } | undefined;
+      for (const [dx, dy] of dirs) {
+        const side = (sx: number, sy: number): [number, number, number] | undefined => {
+          let t = 1;
+          while (t <= 64 && has(erase, x + t * sx, y + t * sy)) t++;
+          if (t > 64) return undefined;
+          const ax = x + t * sx;
+          const ay = y + t * sy;
+          if (!ink(ax, ay) || !ink(ax + sx, ay + sy) || !ink(ax + 2 * sx, ay + 2 * sy))
+            return undefined;
+          return [t, ax, ay];
+        };
+        const a1 = side(dx, dy);
+        const b1 = side(-dx, -dy);
+        if (!a1 || !b1) continue;
+        if (Math.abs(lum(a1[1], a1[2]) - lum(b1[1], b1[2])) > 48) continue;
+        const span = a1[0] + b1[0];
+        if (best && best.span <= span) continue;
+        const [, nx, ny] = a1[0] <= b1[0] ? a1 : b1;
+        const q = (ny * W + nx) * 4;
+        best = { span, c: [st.image.data[q]!, st.image.data[q + 1]!, st.image.data[q + 2]!] };
+      }
+      if (best) out.set(y * W + x, best.c);
+    }
+  }
+  return out;
+}
+
 export function baseModel(a: Analysis): BaseModel {
   const b = a.base;
   const st = a.img[b]!;
@@ -100,11 +158,30 @@ export function baseModel(a: Analysis): BaseModel {
           if (has(partInk, x, y) && !allowB.some((q) => inBox(q, x, y))) data[j * m.w + i] = 0;
         }
       }
-      return { ...m, data };
+      // The annotation's own ink beyond its mask (a tip drawn past the declared end), with its
+      // anti-aliased fringe, never part ink.
+      const extra = filter(
+        dilate(g.extra, 1, st.W, st.H),
+        (x, y) => !has(partInk, x, y) && !a.units.some((u) => has(u.place[b]!.E, x, y)),
+      );
+      return union({ ...m, data }, extra);
     });
   const erase = union(...parts, ...annErase);
   const o = a.states.includes(other(b)) ? other(b) : undefined;
-  if (!o) return { erase, recover: () => undefined };
+  if (!o) {
+    // One drawing: nothing to recover from. A straight stroke of the drawing that an
+    // annotation's erase cut (a board line under an arrow) is rebuilt by continuity: where both
+    // sides line up along one direction and the stroke runs on past each side.
+    const partZ = union(...parts);
+    const annZ = filter(union(...annErase), (x, y) => !has(partZ, x, y));
+    const rebuilt = continueLines(
+      st,
+      erase,
+      annZ,
+      union(partInk, ...a.units.map((u) => u.place[b]!.E)),
+    );
+    return { erase, recover: (x, y) => rebuilt.get(y * st.W + x) };
+  }
   const so = a.img[o]!;
   const [dx, dy] = a.d[o]!;
   // Recovery never copies a part (its silhouette or part ink, with its fringe) or an annotation.

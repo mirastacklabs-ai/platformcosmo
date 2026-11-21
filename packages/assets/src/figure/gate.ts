@@ -747,6 +747,41 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
             invisible++;
     }
     entry("base-unrecovered", "asset/base-unrecovered", items, T.unrecovered, "error");
+    // One drawing: a stroke of the drawing cut where an annotation was erased and not rebuilt
+    // (it did not line up) is a gap in the base. Its cut ends are raw ink outside the erase, not
+    // part ink, next to an erased ink pixel left as background.
+    if (usable && states.length === 1) {
+      const outLum = luminanceOverWhite(out.base);
+      const Z = model.erase;
+      const isPart = (x: number, y: number): boolean =>
+        a.units.some((u) => has(u.place[b]!.E, x, y) || has(u.place[b]!.partInk, x, y));
+      const gapAt = (x: number, y: number): boolean =>
+        has(Z, x, y) &&
+        sb.rawInk[y * sb.W + x] !== 0 &&
+        !isPart(x, y) &&
+        Math.abs(outLum[y * sb.W + x]! - sb.backgroundLum) <= T.luminance;
+      for (const g of a.annotations) {
+        if (g.state !== b) continue;
+        const reach = dilate(union(g.mask, g.extra), 1, sb.W, sb.H);
+        const cutEnd = (x: number, y: number): boolean => {
+          if (has(Z, x, y) || !sb.rawInk[y * sb.W + x] || isPart(x, y)) return false;
+          for (let dy = -1; dy <= 1; dy++)
+            for (let dx = -1; dx <= 1; dx++) if (gapAt(x + dx, y + dy)) return true;
+          return false;
+        };
+        const ends = components(reach, cutEnd, 8);
+        if (ends.length === 0) continue;
+        let n = 0;
+        for (const c of ends) n += c.pixels;
+        diagnostics.push({
+          severity: "warning",
+          code: "asset/base-unrecovered",
+          path: `/annotations/${g.index}`,
+          message: `base-unrecovered: erasing annotation ${g.index} cut ${ends.length} stroke end(s) of the drawing that do not line up to be rebuilt (one drawing: nothing to recover them from)`,
+          params: { annotation: g.index, ends: ends.length, pixels: n },
+        });
+      }
+    }
     if (invisible > 0) {
       diagnostics.push({
         severity: "info",
@@ -834,6 +869,10 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
     if (usable) {
       const outLum = luminanceOverWhite(out.base);
       const t = sb.threshold;
+      // Any annotation ink left in the base, even 1 px, is a defect: a lifted part reveals it.
+      // Inside the mask: erased pixels still dark that recovery does not explain. Beyond it: the
+      // annotation's own ink (a tip drawn past its declared end), unless the base erased it and
+      // recovery explains it.
       for (const g of a.annotations) {
         if (g.state !== b) continue;
         const m = g.mask;
@@ -842,8 +881,14 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
           const rec = model.recover(x, y);
           return !(rec && lumOf(rec) < t);
         };
-        for (const c of components(m, f, 8)
-          .filter((c) => c.pixels >= T.annotationResidual)
+        const fx = (x: number, y: number): boolean => {
+          if (!has(g.extra, x, y) || outLum[y * sb.W + x]! >= t) return false;
+          if (!has(model.erase, x, y)) return true;
+          const rec = model.recover(x, y);
+          return !(rec && lumOf(rec) < t);
+        };
+        for (const c of [...components(m, f, 8), ...components(g.extra, fx, 8)]
+          .filter((c) => c.pixels >= 1)
           .sort(byPixels)) {
           items.push({ state: b, annotation: g.index, pixels: c.pixels, bbox: c.box });
         }
@@ -870,13 +915,13 @@ export function runGate(a: Analysis, out: FigureOutputs): FigureReport {
           return true;
         };
         for (const c of components(m, f, 8)
-          .filter((c) => c.pixels >= T.annotationResidual)
+          .filter((c) => c.pixels >= 1)
           .sort(byPixels)) {
           items.push({ state: b, annotation: g.index, pixels: c.pixels, bbox: c.box });
         }
       }
     }
-    entry("arrow-residual", "asset/arrow-residual", items, T.annotationResidual, "error");
+    entry("arrow-residual", "asset/arrow-residual", items, 0, "error");
   }
 
   // ---- hull confidence and annotation validity (from the analysis)

@@ -4,7 +4,7 @@
  * the gate's comparisons. Contact allowances are placed by the analysis (they need the parts).
  */
 import type { Annotation, FigureState } from "./manifest.js";
-import { blank, capsules, dilate, rectMask, union, type Box, type Mask } from "./mask.js";
+import { EMPTY, blank, capsules, dilate, rectMask, union, type Box, type Mask } from "./mask.js";
 
 /** Samples every 2 px along a polyline. */
 export const STEP = 2;
@@ -50,6 +50,12 @@ export interface AnnotationGeometry {
   mask: Mask;
   /** Contact allowances: w x w squares where an end or crossing meets a part (at most 2). */
   allowances: Box[];
+  /**
+   * The annotation's own ink beyond its mask (polylines): raw ink attached to the ink under the
+   * mask that ends within about 2w of it (a tip drawn past the declared end), never part ink.
+   * Erased with the annotation and checked by arrow-residual.
+   */
+  extra: Mask;
   /** Geometry-level problems (each becomes an `asset/annotation-invalid`). */
   readonly problems: string[];
 }
@@ -175,6 +181,7 @@ export function measureAnnotation(
       band,
       mask: dilate(band, 2, W, H),
       allowances: [],
+      extra: EMPTY,
       problems,
     };
   }
@@ -244,6 +251,7 @@ export function measureAnnotation(
     band,
     mask: union(capsules(pts, hw + 2, W, H), dilate(band, 2, W, H)),
     allowances: [],
+    extra: EMPTY,
     problems,
   };
 }
