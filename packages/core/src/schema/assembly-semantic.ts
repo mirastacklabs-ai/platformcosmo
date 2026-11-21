@@ -1381,9 +1381,11 @@ function checkCloseupChains(c: Check): void {
     if (tree !== undefined) hosts(tree, a.id, 1, [a.id], 1);
   });
   (spec.racks ?? []).forEach((r, ri) => {
+    const targeted = rackTargeted(spec, r.id);
+    if (!targeted && !(r.slots ?? []).some((sl) => sl.closeup !== undefined)) return;
     const tree = model.rackTree(ri);
     if (tree === undefined) return;
-    if (rackTargeted(spec, r.id)) hosts(tree, r.id, 1, [], 1);
+    if (targeted) hosts(tree, r.id, 1, [], 1);
     else
       for (const sl of tree.children)
         if (sl.closeup !== undefined) host(sl, `${r.id}/${sl.id}`, 3, [], 1);
