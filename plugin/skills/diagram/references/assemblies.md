@@ -6,6 +6,8 @@ spec (parts with a position and a size, optional images and an explode program, 
 all geometry, depth order and motion. For a **plan or board layout** as the source, read [from a plan](from-plan.md)
 too. For an installation figure that is already a drawing, use [from a figure](from-figure.md) instead.
 
+Assemblies use no icon packs, so the commands here omit `--packs-dir`; add `--packs-dir "${CLAUDE_PLUGIN_DATA}/icons"` only
+when `CLAUDE_PLUGIN_DATA` is set and the spec also uses icons.
 Run every command as `pcosmo ...`, or `node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs ...` if `pcosmo` is not found.
 Everything is offline.
 
@@ -118,6 +120,11 @@ need not add them for its sake.
 | `programs`                 | a nested explode program on a sub-assembly                                                                              |
 | `source`                   | document provenance: `document`, `page`, `figure`, `license`, `attribution`, `url`                                      |
 
+**Grids.** `pitch` is one vector, so a counted part is a line. A 2D grid is one counted part per row (`row-a`, `row-b`,
+...; simplest, each row selectable) or a counted **row sub-assembly** that holds a counted cell
+(`{"id":"row","count":3,"pitch":[0,30,0],"parts":[{"id":"cell","count":3,"pitch":[30,0,0],...}]}`; the grid is one unit and
+the rows are `row-1..3`). Do not write 9 separate parts.
+
 Primitives: `plate` thin box; `tray` open-top box (a housing); `card` a thin upright plate that carries an image;
 `sprite` no solid, the image covers the box's silhouette; `ring` hollow cylinder; `shaft` thin cylinder; `stud` small
 cylinder (a screw head); `prism` vertical hexagon; `wedge` a 45 degree slope (high side at `-x`, turn with `rotate`).
@@ -138,7 +145,13 @@ these): `hw:board` 305x330x12, `cpu` 76x56x5, `heatsink` 105x90x60, `dimm` 133.3
 `riser` 130x12x100, `pcie-card` 168x20x69, `chassis-2u` 482.6x740x88.9, `lid` 447.6x740x3. `auto:block-i4` 420x230x260
 (length along `x`), `head` 420x230x100, `valve-cover` 400x200x70, `crankshaft` 420x120x120, `camshaft` 420x40x40,
 `piston` 82x82x66, `rod` 24x50x150, `valve` 34x34x110, `oil-pan` 420x230x90, `intake` 380x110x90, `exhaust` 380x90x80,
-`timing-belt` 20x200x300. Fronts of `hw:` devices are at `+y`. `pcosmo` has no command that lists shapes: this is the list.
+`timing-belt` 20x200x300. Fronts of `hw:` devices are at `+y`. `hw:chassis-2u` (default 482.6x740x88.9): floor and walls are 1.5 mm; the floor's top is
+at `z = 1.5`, the interior runs `x` 19 to 463.6 (rack ears 17.5 mm each side) and `y` 1.5 to 738.5 from the chassis' `at`, and
+it is open at the top: put contents at `z >= 1.5`, `y >= 1.5` (a part at `y = 0` is inside the back wall). `pcosmo` has no command that lists shapes: this is the list.
+
+**Tone per kind.** Parts of one tone render as the same grey; set `tone` by kind: board, plate, housing `base`; CPUs, heat
+sinks, chips, shafts `metal`; slots, connectors, DIMMs `muted`; covers, doors `accent`; indicator parts `led`; windows
+`glass`. Pack shapes mostly carry their own tones for sub-parts; `tone` sets the main body.
 
 Shapes are generic: no brand names or marks in labels or ids unless the user's own material uses them.
 
@@ -159,6 +172,9 @@ Use an image when the user gave one for a part (a GPU card photo, a front panel)
 4. Fill `source` only with facts you were given (document, page, license, attribution). Never invent them. If the
    user's image belongs to a third party, say that the animation is for their personal use and that publishing is
    their licensing question.
+
+Pack shapes take `image` too. The `hw:gpu-card` fan side is its **+y** face, which is `face: "left"` (`right` is +x, the
+bracket end); `rotate` turns the card and its faces with it. Other `hw:` shapes put their front at +y as well.
 
 An unknown `ref` is `image/unknown`; a missing file (including one the renderer was not given) is always the error
 `image/not-found`, and an unsafe path `image/unsafe-path`: fix the path, never widen it. `assembly/image-unresolved`
@@ -233,14 +249,15 @@ say the same thing:
 1. Write the assembly **without** `programs`, with `role` set where you know it.
 2. Run `pcosmo validate <spec>` until it reports **no errors** (with errors, `--suggest` only prints
    `suggestions skipped: fix errors first`). Then
-   `pcosmo validate <spec> --suggest --packs-dir "${CLAUDE_PLUGIN_DATA}/icons"`. For every assembly (and every
+   `pcosmo validate <spec> --suggest`. For every assembly (and every
    nested sub-assembly up to depth 3) that has no program it prints why, the stages, and two fragments: a
    `programs` entry with the JSON pointer to add it at (`/assemblies/0/programs`, or
    `/assemblies/0/parts/3/programs` for a sub-assembly; create the array if missing), and the `steps` to append (keep
    existing steps before them). It prints `no suggestion for <owner>: <reason>` for an assembly that already has a
    program, is a template, or has fewer than two parts. It is advice only: it never changes the spec or the exit code.
    Add `--json` for the same data under `suggestions`.
-3. **Merge it, do not rewrite it:** paste each program where it says, append the steps. Nested programs keep the id
+3. **Merge it, do not rewrite it:** with the `Edit` tool (or `Write`) on the spec, paste each program where it says and
+   append the steps; no `jq` and no scripting is needed. Copy the printed JSON, do not retype values. Nested programs keep the id
    `suggested`; the steps already name the program and the `to` level. You may change only what the user asked
    for or what a diagnostic tells you (a `duration`, a `label`, a direction that collides).
 4. Explain the result to the user in a few lines: the body, the stages in order, what you changed.
@@ -328,14 +345,15 @@ Still look at the result: the suggestion is a good start, not a verified picture
 
 ## 4. Check it
 
-1. `pcosmo validate <spec> --packs-dir "${CLAUDE_PLUGIN_DATA}/icons"` until `valid`; `--strict` only if the user asked.
-2. `pcosmo build <spec> --packs-dir "${CLAUDE_PLUGIN_DATA}/icons"` writes the animated SVG (lines starting `wrote`).
+1. `pcosmo validate <spec>` until `valid`; `--strict` only if the user asked.
+2. `pcosmo build <spec>` writes the animated SVG (lines starting `wrote`).
 3. **View both poses.** `--png-step <n>` writes the PNG of the end pose of step `n` with that step's camera (and
    implies `--png`; `n` from 1 to the number of steps, never with `--time`, else `options/invalid-png-step`). Use
    distinct names so the second does not overwrite the first, and skip the animated file:
    `pcosmo build <spec> --png-step 1 --no-animated --name <name>-assembled -o <dir>` and
    `... --png-step <n> --no-animated --name <name>-exploded -o <dir>`, where step `n` is the one that finishes
-   the full explode. `--steps` writes one SVG per step, `--png --scale <k>` a larger PNG.
+   the full explode. Count steps from the spec's `steps` array: a caption-only step you added (for example the
+   not-to-scale caption) is step 1 and shifts every number by one. `--steps` writes one SVG per step, `--png --scale <k>` a larger PNG.
 4. `Read` both PNGs. Check: every part present and labelled as intended; no part buried in or floating off its neighbour
    at rest; exploded parts clear of the unit and of each other; labels legible and not on top of each other; the story
    matches the captions. Fix the spec and rebuild; do not call it done on "valid" alone.

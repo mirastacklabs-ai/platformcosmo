@@ -6,6 +6,7 @@ labelled reconstruction. Each rectangle becomes a part at the plan's position an
 plan gives the positions; you supply the scale and the heights. Spec fields and commands are in
 [assemblies](assemblies.md): read it first, this file only adds what is special about plans.
 
+Commands omit `--packs-dir` (no icons are used); add it only when `CLAUDE_PLUGIN_DATA` is set and the spec uses icons.
 Run every command as `pcosmo ...`, or `node ${CLAUDE_PLUGIN_ROOT}/bin/pcosmo.mjs ...` if `pcosmo` is not found.
 Claude reads the image as part of the conversation; no tool uploads it.
 
@@ -42,7 +43,9 @@ line between its end ticks` (1 in = 25.4 mm). Check which extent it measures (us
    use the pixel coordinates scaled by one convenient factor (for example 1 px = 0.5 mm) so the proportions are right,
    and **say so**: put "not drawn to scale" in `meta.description`, add a first step with the caption
    `Not drawn to scale: relative layout only`, and list it first in your assumptions. Type-default heights (section 3)
-   still apply; they are only typical values.
+   still apply; they are only typical values. The nominal size is real to the engine: an exploded view's distances
+   (`auto`, or a quarter of the board's larger side for components) follow it, so choose the factor so the board is
+   a plausible size (a few hundred mm), not 1 px = 1 mm if that makes it tiny.
 
 ## 3. Heights
 
@@ -85,7 +88,8 @@ first part with `role: "body"`, and one part per rectangle.
   and list it. A very small part (a jumper) keeps its label; if it cannot be read in the render, mention it.
 - **`fit`.** The assembly is scaled so its largest extent is `fit` tiles (default 6), which makes small parts' labels
   tiny. For a board layout set `"fit": 14`; it prints labels legibly.
-- **Tone.** Optional: `tone` (`base accent muted glass metal led`) to separate kinds (slots `muted`, CPUs `metal`).
+- **Tone.** Set `tone` by kind so parts do not all render the same dark grey: plate `base`; CPUs, chips `metal`; slots,
+  connectors, DIMMs `muted`; battery `accent`; jumpers `led`.
 - No `programs` and no step actions unless the user asks for an exploded view (section 6). A single plan view needs
   no steps (add one only for the "not drawn to scale" caption).
 
@@ -144,9 +148,9 @@ first part with `role: "body"`, and one part per rectangle.
 
 ## 5. Check it
 
-1. `pcosmo validate <spec> --packs-dir "${CLAUDE_PLUGIN_DATA}/icons"` until `valid` (fix by the codes in
+1. `pcosmo validate <spec>` until `valid` (fix by the codes in
    [assemblies](assemblies.md) section 5).
-2. `pcosmo build <spec> --png --no-animated --packs-dir "${CLAUDE_PLUGIN_DATA}/icons"` (a plan has one view; a plain
+2. `pcosmo build <spec> --png --no-animated` (a plan has one view, and `--png` draws it; if you also explode it, the caption step counts as step 1 for `--png-step`; a plain
    `pcosmo build` also writes the animated SVG). `Read` the PNG.
 3. Compare with the plan: every rectangle is there; the relative order and alignment are the same (what is left of
    what, which are in a row); the outline's aspect ratio matches the plan's; labels are legible and
