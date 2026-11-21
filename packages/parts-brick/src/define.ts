@@ -1,14 +1,16 @@
 import {
-  createProjection,
-  depthOrder,
-  didYouMean,
+  MAX_PARAM_DIAGNOSTICS,
+  MIN_DIM,
+  definePack,
+  finishGeometry,
   round2,
+  sanitizeSize as clampSize,
   type Axis,
   type Box3,
-  type Diagnostic,
+  type ParamSpec as CoreParamSpec,
+  type PartPrimitiveKind,
   type PartGeometry,
   type PartPrimitive,
-  type PartPrimitiveKind,
   type PartShapeContext,
   type PartShapeDef,
   type PartTone,
@@ -16,147 +18,19 @@ import {
   type Vec3,
 } from "@platformcosmo/core";
 
+export { MAX_PARAM_DIAGNOSTICS, MIN_DIM };
+/** Brick params are booleans and enums only. */
+export type ParamSpec = Exclude<CoreParamSpec, { kind: "int" }>;
+
 /** Validated shape params: booleans and enum strings only. */
 export type BrickParams = Record<string, boolean | string>;
-
-export type ParamSpec =
-  | { readonly kind: "bool"; readonly def: boolean }
-  | { readonly kind: "enum"; readonly values: readonly string[]; readonly def: string };
 
 /** Most studs one part draws; a larger footprint gets none (the checker reports it). */
 export const MAX_STUDS = 256;
 /** Largest extent per axis, in stud units (x, y) or plates (z). */
 export const MAX_EXTENT = 1000;
-/** Smallest extent, so every box stays non-degenerate after rounding to 0.01. */
-export const MIN_DIM = 0.01;
 /** Most steps an inverted slope is cut into. */
 export const MAX_STEPS = 16;
-/** Most diagnostics one `readParams` call returns; the rest are summarised in one more. */
-export const MAX_PARAM_DIAGNOSTICS = 20;
-
-function describe(spec: ParamSpec): string {
-  if (spec.kind === "bool") return "true or false";
-  return `one of ${spec.values.map((v) => JSON.stringify(v)).join(", ")}`;
-}
-
-function valid(spec: ParamSpec, v: unknown): boolean {
-  if (spec.kind === "bool") return typeof v === "boolean";
-  return typeof v === "string" && spec.values.includes(v);
-}
-
-/** Truncated, JSON-quoted text of an untrusted value; never throws. */
-function quote(value: unknown): string {
-  let text: string;
-  try {
-    if (typeof value === "string") text = value;
-    else if (value === null) text = "null";
-    else if (typeof value === "object" || typeof value === "function") {
-      text = Array.isArray(value) ? "an array" : "an object";
-    } else if (typeof value === "symbol") text = "a symbol";
-    else text = String(value);
-  } catch {
-    text = "(unprintable)";
-  }
-  return JSON.stringify(text.length > 40 ? `${text.slice(0, 40)}...` : text);
-}
-
-/** Merge `input` over the defaults; invalid or unknown entries become diagnostics. */
-export function readParamSpecs(
-  shapeId: string,
-  specs: ReadonlyMap<string, ParamSpec>,
-  input: unknown,
-): { params: BrickParams; diagnostics: Diagnostic[] } {
-  const ref = `brick:${shapeId}`;
-  const params: BrickParams = {};
-  for (const [k, s] of specs) params[k] = s.def;
-  const diagnostics: Diagnostic[] = [];
-  if (input === undefined || input === null) return { params, diagnostics };
-  if (typeof input !== "object" || Array.isArray(input)) {
-    diagnostics.push({
-      severity: "error",
-      code: "assembly/shape-params",
-      path: "/params",
-      message: `${ref} params must be an object (got ${Array.isArray(input) ? "an array" : typeof input}).`,
-      params: { shape: ref },
-    });
-    return { params, diagnostics };
-  }
-  const src = input as Record<string, unknown>;
-  const names = [...specs.keys()];
-  let omitted = 0;
-  const report = (d: Diagnostic): void => {
-    if (diagnostics.length < MAX_PARAM_DIAGNOSTICS) diagnostics.push(d);
-    else omitted++;
-  };
-  for (const key of Object.keys(src)) {
-    const spec = specs.get(key);
-    if (spec === undefined) {
-      if (diagnostics.length >= MAX_PARAM_DIAGNOSTICS) {
-        omitted++;
-        continue;
-      }
-      const hint = didYouMean(key, names);
-      const seg = key.slice(0, 64).replace(/~/g, "~0").replace(/\//g, "~1");
-      report({
-        severity: "error",
-        code: "assembly/shape-params",
-        path: `/params/${seg}`,
-        message: `${ref} has no param ${quote(key)}; known params: ${names.join(", ") || "(none)"}.`,
-        ...(hint !== undefined ? { suggestion: hint } : {}),
-        params: { shape: ref, param: key.slice(0, 64) },
-      });
-      continue;
-    }
-    const v = src[key];
-    if (!valid(spec, v)) {
-      if (diagnostics.length >= MAX_PARAM_DIAGNOSTICS) {
-        omitted++;
-        continue;
-      }
-      const hint =
-        spec.kind === "enum" && typeof v === "string" ? didYouMean(v, spec.values) : undefined;
-      report({
-        severity: "error",
-        code: "assembly/shape-params",
-        path: `/params/${key}`,
-        message: `${ref} param "${key}" must be ${describe(spec)} (got ${quote(v)}).`,
-        ...(hint !== undefined ? { suggestion: hint } : {}),
-        params: { shape: ref, param: key },
-      });
-      continue;
-    }
-    params[key] = v as boolean | string;
-  }
-  if (omitted > 0) {
-    diagnostics.push({
-      severity: "error",
-      code: "assembly/shape-params",
-      path: "/params",
-      message: `${ref}: ${omitted} more param problems omitted.`,
-      params: { shape: ref, omitted },
-    });
-  }
-  return { params, diagnostics };
-}
-
-/** Params for `build`: anything missing or invalid falls back to the default. */
-function normalize(specs: ReadonlyMap<string, ParamSpec>, input: unknown): BrickParams {
-  const src = (typeof input === "object" && input !== null ? input : {}) as Record<string, unknown>;
-  const out: BrickParams = {};
-  for (const [k, s] of specs) {
-    const v = Object.hasOwn(src, k) ? src[k] : undefined;
-    out[k] = valid(s, v) ? (v as boolean | string) : s.def;
-  }
-  return out;
-}
-
-export function sanitizeSize(size: Vec3 | undefined, def: Vec3): Vec3 {
-  const f = (v: unknown, d: number): number =>
-    typeof v === "number" && Number.isFinite(v) && v > 0
-      ? round2(Math.min(Math.max(v, MIN_DIM), MAX_EXTENT))
-      : d;
-  return { x: f(size?.x, def.x), y: f(size?.y, def.y), z: f(size?.z, def.z) };
-}
 
 export interface PrimOpts {
   readonly axis?: Axis;
@@ -248,21 +122,6 @@ export class Solid {
   }
 }
 
-function union(prims: readonly PartPrimitive[]): Box3 {
-  const lo = { x: Infinity, y: Infinity, z: Infinity };
-  const hi = { x: -Infinity, y: -Infinity, z: -Infinity };
-  for (const p of prims) {
-    for (const k of ["x", "y", "z"] as const) {
-      lo[k] = Math.min(lo[k], p.box.origin[k]);
-      hi[k] = Math.max(hi[k], p.box.origin[k] + p.box.size[k]);
-    }
-  }
-  return {
-    origin: lo,
-    size: { x: round2(hi.x - lo.x), y: round2(hi.y - lo.y), z: round2(hi.z - lo.z) },
-  };
-}
-
 /** Millimetres per unit on x, y and z. `stud`: 8 mm studs, 3.2 mm plates (assemblies section 4). */
 const UNIT_MM: Readonly<Record<string, readonly [number, number, number]>> = {
   stud: [8, 8, 3.2],
@@ -310,24 +169,12 @@ function rescale(
   });
 }
 
-const projection = createProjection();
-
 /** Back-to-front order; `bounds` is everything drawn, `depthBox` the body without studs. */
 export function finish(solid: Solid, scale?: readonly [number, number, number]): PartGeometry {
   const all = solid.all();
   const prims = scale === undefined ? all : rescale(all, scale);
-  const stud = new Set(all.filter((p) => p.kind === "stud").map((p) => p.id));
-  const byId = new Map(prims.map((p) => [p.id, p]));
-  const order = depthOrder(
-    prims.map((p) => ({ id: p.id, box: p.box })),
-    projection,
-  );
-  return {
-    primitives: order.map((id) => byId.get(id) as PartPrimitive),
-    bounds: union(prims),
-    depthBox: union(prims.filter((p) => !stud.has(p.id))),
-    solid: true,
-  };
+  const body = all.filter((p) => p.kind !== "stud").map((p) => p.id);
+  return finishGeometry(prims, undefined, body);
 }
 
 export interface ShapeInit {
@@ -341,18 +188,21 @@ export interface ShapeInit {
   readonly draw: (solid: Solid, p: BrickParams, axis: Axis) => void;
 }
 
-const specsById = new Map<string, ReadonlyMap<string, ParamSpec>>();
+const pack = definePack<BrickParams>({ prefix: "brick", enumHints: true });
 
 /** Declared params of a `brick:` shape id (`slope`), for docs and tests. */
-export function paramSpecsOf(shapeId: string): ReadonlyMap<string, ParamSpec> | undefined {
-  return specsById.get(shapeId);
+export const paramSpecsOf = pack.paramSpecsOf as (
+  shapeId: string,
+) => ReadonlyMap<string, ParamSpec> | undefined;
+
+/** Clamp a size in stud units to [MIN_DIM, MAX_EXTENT], rounded to 0.01. */
+export function sanitizeSize(size: Vec3 | undefined, def: Vec3): Vec3 {
+  return clampSize(size, def, MAX_EXTENT, true);
 }
 
 export function defineShape(init: ShapeInit, paint: (name: string) => string): PartShapeDef {
-  const specs = new Map(Object.entries(init.params));
-  specsById.set(init.id, specs);
+  const handle = pack.defineParams(init.id, init.params);
   const def: Vec3 = { x: init.size[0], y: init.size[1], z: init.size[2] };
-  const defaults = Object.freeze(normalize(specs, {}));
   return {
     id: init.id,
     label: init.label,
@@ -360,13 +210,10 @@ export function defineShape(init: ShapeInit, paint: (name: string) => string): P
     role: "body",
     defaultSize: def,
     defaultUnits: "stud",
-    defaults,
-    readParams: (input) => {
-      const r = readParamSpecs(init.id, specs, input);
-      return { params: r.params, diagnostics: r.diagnostics };
-    },
+    defaults: handle.defaults,
+    readParams: (input) => handle.readParams(input),
     build(params, ctx) {
-      const p = normalize(specs, params);
+      const p = handle.normalize(params);
       // `ctx.size` is in the assembly's units; the shape is authored in stud units and the
       // result is scaled back, so the body fills the spec size in the assembly's units.
       const toStud = toStudFactors(ctx?.units) ?? [1, 1, 1];
