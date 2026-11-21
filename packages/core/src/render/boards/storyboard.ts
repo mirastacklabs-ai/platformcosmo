@@ -304,7 +304,7 @@ export function buildStoryboards(
   if (staticOnly) {
     shared.diagnostics.push({
       severity: "warning",
-      code: "budget/board-tracks",
+      code: "budget/elements",
       path: "/storyboards",
       message: `The storyboards animate about ${total} elements (budget ${MAX_BOARD_ELEMENTS}); they are drawn as a static rest frame`,
       suggestion: "Split the booklet into several specs, or use fewer frames, parts and mini steps",

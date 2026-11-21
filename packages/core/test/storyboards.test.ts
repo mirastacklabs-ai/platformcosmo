@@ -1021,7 +1021,7 @@ describe("wipe: complementary reveal, no bleed-through", () => {
 });
 
 describe("budget, narrow panels, labels, order, opening ease", () => {
-  test("too many animated elements: budget/board-tracks and a static rest frame", async () => {
+  test("too many animated elements: budget/elements and a static rest frame", async () => {
     const many = Array.from({ length: 500 }, (_v, i) => ({
       number: i + 1,
       model: i % 2 === 0 ? "m1" : "m2",
@@ -1037,7 +1037,7 @@ describe("budget, narrow panels, labels, order, opening ease", () => {
       outputs: ["animated"],
       images: IMAGES(),
     });
-    const d = r.diagnostics.filter((x) => x.code === "budget/board-tracks");
+    const d = r.diagnostics.filter((x) => x.code === "budget/elements");
     expect(d).toHaveLength(1);
     expect(d[0]).toMatchObject({ severity: "warning", path: "/storyboards" });
     const svg = r.outputs[0]!.data as string;
@@ -1053,7 +1053,7 @@ describe("budget, narrow panels, labels, order, opening ease", () => {
       outputs: ["animated"],
       images: IMAGES(),
     });
-    expect(ok.diagnostics.filter((x) => x.code === "budget/board-tracks")).toEqual([]);
+    expect(ok.diagnostics.filter((x) => x.code === "budget/elements")).toEqual([]);
     expect(ok.outputs[0]!.data as string).toContain("@keyframes");
   }, 60_000);
 
