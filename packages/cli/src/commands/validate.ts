@@ -43,7 +43,7 @@ export async function validateCommand(ctx: Ctx, args: string[]): Promise<number>
       ...(ctx.deps.placement ? { placement: ctx.deps.placement } : {}),
     });
     all.push(...report.diagnostics);
-    addCloseupChecks(ctx, spec, all); // assemblies 8.5: needs the scene's geometry
+    addCloseupChecks(ctx, spec, all, { closeups: true }); // assemblies 8.5: needs the scene's geometry
   }
   let suggestions: SuggestReport | undefined;
   const SKIPPED = "suggestions skipped: fix errors first";

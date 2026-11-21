@@ -1250,6 +1250,25 @@ describe("review round", () => {
     expect(r.diagnostics.map((d) => d.code)).toEqual(["assembly/size-mismatch"]);
   });
 
+  it("warns only above 10% oversize (always shrinks): 5% silent, 15% warns", () => {
+    const at = (w: number) => {
+      const s = spec({
+        assemblies: [
+          { id: "t", template: true, parts: [{ id: "w", at: [0, 0, 0], size: [w, 100, 20] }] },
+        ],
+        racks: [{ id: "r", slots: [{ id: "s", at: 1, type: "server-2u", assembly: "t" }] }],
+        ...act("r"),
+      });
+      return build(s, "r", { t: template(s, "t") });
+    };
+    const near = at(450 * 1.05);
+    expect(near.diagnostics).toEqual([]);
+    expect(find(near.assembly!.root, "r/s/w")!.local.size.x).toBeCloseTo(450, 3);
+    const far = at(450 * 1.15);
+    expect(far.diagnostics.map((d) => d.code)).toEqual(["assembly/size-mismatch"]);
+    expect(find(far.assembly!.root, "r/s/w")!.local.size.x).toBeCloseTo(450, 3);
+  });
+
   it("an explicit gap of 0 is honoured by the template program", () => {
     const tpl = (gap: number): Json => ({
       id: "t",

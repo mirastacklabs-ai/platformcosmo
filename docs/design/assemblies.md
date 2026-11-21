@@ -401,7 +401,8 @@ rack, `DcPack.buildAssembly` returns a `SceneAssembly` (source `dc`):
 `racks[].slots[].assembly: "<template>"` makes the device a sub-assembly with internals: the DC
 pack builds the device as `tray` + `lid` (role `cover`) + faceplate, and the template's parts
 are placed inside at true scale (template units must be physical; a template larger than the
-interior is a warning `assembly/size-mismatch` and is scaled down uniformly). The interior is
+interior by more than 10% is a warning `assembly/size-mismatch`; it is always scaled down
+uniformly to fit, as in §8.5). The interior is
 the 19-inch one, 450 mm wide and centred in the chassis (§8.5); devices are front-mounted, so
 the template's front (its maximum `y`) meets the interior's front and its minimum `x` and `z`
 meet the interior's side and floor. A template with no parts keeps a lid-only `internals`
@@ -459,7 +460,7 @@ shorter in z never warns; a template under 50% of the interior in x or y gets an
 drawn at true scale, never enlarged. A footprint that would match better turned a quarter is
 reported (`assembly/closeup-turned`, info) and left alone. Close-ups the scene cannot build
 within the 8-segment path limit (host path plus template height) or the level caps are skipped
-with `assembly/too-deep` or `budget/levels`, at the host's pointer. Figures and
+with `assembly/too-deep` or `budget/levels`, at the host's pointer. `pcosmo validate` and `build` report these checks only when the spec has no errors (a gated or invalid spec never reaches the scene). Figures and
 storyboards (pixel units) are fitted to the part's zoomed screen rect. The skill takes real
 dimensions from documents (a 13-inch board is 330 mm) and states assumptions when a figure is
 "not drawn to scale" (keep relative layout, scale from the stated board size).

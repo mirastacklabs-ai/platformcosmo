@@ -266,7 +266,7 @@ export async function buildOnce(ctx: Ctx, s: BuildSettings): Promise<number> {
 
   const result = await ctx.deps.core.render(spec, options);
   diagnostics.push(...result.diagnostics);
-  addCloseupChecks(ctx, spec, diagnostics); // slot internals (assemblies 8.2); once with the scene's
+  addCloseupChecks(ctx, spec, diagnostics, { closeups: false }); // slot internals only (8.2); the scene reports close-ups
   stats.elements = result.stats.elements;
   if (hasErrors(diagnostics)) return finish(EXIT.failed);
 

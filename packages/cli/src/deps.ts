@@ -20,7 +20,7 @@ export interface CoreApi {
   parseSpec: ParseSpecFn;
   validate: ValidateFn;
   render: RenderFn;
-  /** Size and depth checks of close-ups and slot internals (validate only; render reports its own). */
+  /** Size and depth checks of close-ups and slot internals; `validate` and `build` both call it (internal). */
   closeupDiagnostics?: (typeof import("@platformcosmo/core"))["closeupDiagnostics"];
   createIconResolver: CreateIconResolverFn;
   sanitizeSvg: SvgSanitizer;

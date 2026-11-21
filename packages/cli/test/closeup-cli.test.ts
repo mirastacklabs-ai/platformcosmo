@@ -79,7 +79,11 @@ const lifted = (): ReturnType<typeof defaultDeps> => {
     const diagnostics = r.diagnostics.filter(
       (d) =>
         d.code !== "assembly/unsupported" &&
-        !(d.code === "assembly/unknown-target" && d.message.includes("it is a rack")),
+        !(
+          d.code === "assembly/unknown-target" &&
+          /^\/steps\/\d+\/assembly\/\d+\/explode$/.test(d.path) &&
+          d.params?.["id"] === "r1"
+        ),
     );
     const valid = !diagnostics.some((d) => d.severity === "error");
     return valid && r.valid === false
@@ -155,7 +159,7 @@ describe("validate", () => {
     expect(w).toHaveLength(1);
     expect(w[0]).toMatchObject({
       severity: "warning",
-      path: "/assemblies/1",
+      path: "/assemblies/1/parts/0/closeup",
       params: { host: "host/p", closeup: "tpl", axis: "x" },
     });
     expect(j.valid).toBe(true);
@@ -186,7 +190,7 @@ describe("validate", () => {
     const { code, diags } = await validateJson(deep());
     const d = only(diags, "assembly/too-deep");
     expect(d).toHaveLength(1);
-    expect(d[0]).toMatchObject({ severity: "error", path: "/assemblies/3" });
+    expect(d[0]).toMatchObject({ severity: "error", path: "/assemblies/3/parts/0/closeup" });
     expect(code).toBe(1);
   });
 
@@ -212,11 +216,19 @@ describe("build", () => {
     expect(only(j.diagnostics, "assembly/size-mismatch")).toHaveLength(1);
   });
 
-  test("too-deep stops no build on its own once; levels over the cap report once", async () => {
+  test("levels over the cap report once", async () => {
     const f = await file(levelsOver());
     const r = await run(["build", f, "--out", dir, "--no-optimize", "--json"], lifted());
     const j = JSON.parse(r.stdout) as { diagnostics: Diag[] };
     expect(only(j.diagnostics, "budget/levels")).toHaveLength(1);
+  });
+
+  test("too-deep fails the build and is reported once", async () => {
+    const f = await file(deep());
+    const r = await run(["build", f, "--out", dir, "--no-optimize", "--json"], lifted());
+    const j = JSON.parse(r.stdout) as { ok: boolean; diagnostics: Diag[] };
+    expect(r.code).toBe(1);
+    expect(only(j.diagnostics, "assembly/too-deep")).toHaveLength(1);
   });
 });
 
@@ -245,6 +257,18 @@ describe("slots[].assembly through the CLI (DC pack wired)", () => {
       (await run(["build", f, "--out", dir, "--no-optimize", "--json"], lifted())).stdout,
     ) as { diagnostics: Diag[] };
     expect(only(b.diagnostics, "assembly/size-mismatch")).toHaveLength(1);
+  });
+
+  test("a user assembly named like the internal twin does not interfere", async () => {
+    const body = rack([700, 700, 40]);
+    (body["assemblies"] as Obj[]).push({
+      id: "board-copy",
+      template: true,
+      units: "mm",
+      parts: [box("z", [1, 1, 1])],
+    });
+    const { diags } = await validateJson(body);
+    expect(only(diags, "assembly/size-mismatch")).toHaveLength(1);
   });
 
   test("a fitting template reports nothing; the gate rejects it by default", async () => {

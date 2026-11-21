@@ -101,7 +101,7 @@ export {
 } from "./render/index.js";
 export type { ModelInputs, RenderDeps } from "./render/index.js";
 
-// Close-up size and depth checks for `validate` (assemblies section 8.5; D-1b).
+// Close-up size and depth checks for the CLI (assemblies section 8.5; D-1b). @internal, not public API.
 export { closeupDiagnostics } from "./scene/assembly/closeup.js";
 export type { CloseupCheckContext } from "./scene/assembly/closeup.js";
 

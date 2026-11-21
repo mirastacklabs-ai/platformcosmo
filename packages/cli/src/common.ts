@@ -98,20 +98,27 @@ export async function resolveTheme(
     : { diagnostics: [...r.diagnostics] };
 }
 
-const dkey = (d: Diagnostic): string => `${d.code}\0${d.path}\0${d.message}`;
+const dkey = (d: Diagnostic): string => `${d.code}\0${d.path}\0${JSON.stringify(d.params ?? null)}`;
 
 /**
  * Close-up size and depth checks (assemblies 8.5, 8.2: `assembly/size-mismatch`,
- * `assembly/closeup-turned`, `assembly/too-deep`, `budget/levels`) appended to `all`, each once:
- * validation of the spec alone does not build the geometry, and `render` reports only what its
- * scene builds, so both commands add the checks and anything already in `all` is skipped.
- * Only for a spec without errors (a gated or invalid spec never reaches the scene).
+ * `assembly/closeup-turned`, `assembly/too-deep`, `budget/levels`) appended to `all`, each once.
+ * `validate` asks for everything (it never builds the scene); `build` asks for the slot internals
+ * only (`closeups: false`), because `render` already reports the close-ups through its scene and
+ * never builds the DC assemblies. Anything already in `all` (same code, path and params) is
+ * skipped as a safety net. Only for a spec without errors: a gated or invalid spec never gets here.
  */
-export function addCloseupChecks(ctx: Ctx, spec: unknown, all: Diagnostic[]): void {
+export function addCloseupChecks(
+  ctx: Ctx,
+  spec: unknown,
+  all: Diagnostic[],
+  opts: { closeups: boolean },
+): void {
   const check = ctx.deps.core.closeupDiagnostics;
   if (!check || all.some((d) => d.severity === "error")) return;
   const seen = new Set(all.map(dkey));
   const extra = check(spec as Parameters<typeof check>[0], {
+    closeups: opts.closeups,
     ...(ctx.deps.parts ? { parts: ctx.deps.parts } : {}),
     ...(ctx.deps.dcPack ? { dc: ctx.deps.dcPack } : {}),
   });
