@@ -25,6 +25,7 @@ import { Keyframes } from "../../src/anim/css.js";
 import { fixtureTheme } from "../fixtures/theme.js";
 import { realPng, resolverOf } from "../figure-fixtures.js";
 import { buildFixture } from "./fixtures/render-model.js";
+import { clippedCopySpec, copySwapSpec } from "../copies-fixtures.js";
 
 // B-1: the assembly animator (docs/design/assemblies.md §7.5, §9.4, §12; tracks doc B-1).
 
@@ -251,6 +252,33 @@ describe("keyframes per wrapper property (snapshots)", () => {
       sha: sha(css),
       samples: ids.map(([copy, kind, id]) => ({ copy, kind, kf: bodyOf(id as string) })),
     }).toMatchSnapshot();
+  });
+});
+
+describe("depth copies (A1-2b): the CSS swaps copies exactly where the frames do", () => {
+  test.each([
+    ["one-copy swap", copySwapSpec, "kit/arm/blk"],
+    ["clipped copy", clippedCopySpec, "kit/piston"],
+  ] as const)("%s: both copies' visibility, CSS vs frame, around every swap", (_n, make, item) => {
+    const model = build(make());
+    const am = A(model);
+    expect(am.items.find((i) => i.item === item)?.copies).toBe(2);
+    const loop = animate(model, { speed: 1, mode: "loop", motion: "css" });
+    const rules = parseRules(splitReduced(loop.css).live);
+    const ids = [0, 1].map((c) => am.ids.partVisible(item, c));
+    for (const id of ids) expect(rules.has(id), id).toBe(true);
+    let swaps = 0;
+    for (const e of am.epochs.slice(1)) {
+      const t0 = Math.round(e.t0 * 1e4) / 1e4;
+      for (const t of [t0 - 0.01, t0 - 1e-3, t0 + 1e-3, t0 + 0.01]) {
+        const attrs = animate(model, { speed: 1, mode: "frame", time: t }).attrs ?? {};
+        const css = ids.map((id) => cssPose(loop.css, rules, id, t).visibility);
+        expect(css, `t=${t}`).toEqual(ids.map((id) => attrs[id]?.visibility));
+        expect(css.filter((v) => v === "visible").length, `t=${t}`).toBeLessThanOrEqual(1);
+      }
+      if (e.order.includes(`${item}__c1`)) swaps++;
+    }
+    expect(swaps).toBeGreaterThan(0);
   });
 });
 

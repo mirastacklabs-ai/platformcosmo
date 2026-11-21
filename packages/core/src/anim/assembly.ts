@@ -25,6 +25,7 @@ import type {
   TrackKey,
   VisibilityKey,
 } from "../contracts/index.js";
+import { parseCopyKey } from "../depth/copies.js";
 import { keyProgress, round2 } from "../render/assembly/tracks.js";
 import { Keyframes, pct, t4 } from "./css.js";
 
@@ -265,22 +266,27 @@ export function assemblyAnim(am: AssemblyRenderModel, speed: number): AssemblyAn
     props.push({ kind: "opacity", id, keys: retime(t.keys, warp) });
   };
   for (const t of am.tracks) {
-    // the wrappers exist exactly for the tracks that have keys (A1-3 `Registered`)
-    move(am.ids.partHost(t.copy), t.host);
-    move(am.ids.partMotion(t.copy), t.motion);
+    // one track per copy (`item` or `item__c<k>`, §9.4); the wrappers exist exactly for the
+    // tracks that have keys (A1-3 `Registered`)
+    const { item, copy } = parseCopyKey(t.copy);
+    move(am.ids.partHost(item, copy), t.host);
+    move(am.ids.partMotion(item, copy), t.motion);
     if (t.visibility.length > 0) {
       props.push({
         kind: "visibility",
-        id: am.ids.partVisible(t.copy),
+        id: am.ids.partVisible(item, copy),
         keys: retime(t.visibility, warp),
       });
     }
-    fade(am.ids.partFade(t.copy), t.opacity);
+    fade(am.ids.partFade(item, copy), t.opacity);
   }
   for (const f of am.staticFades) fade(f.id, f.opacity);
   for (const l of am.labelTracks) {
-    move(l.id, l.motion);
-    fade(l.id, l.opacity);
+    // a top-face label rides inside its part: every copy has one (`copyIds`)
+    for (const id of am.ids.copyIds(l.id)) {
+      move(id, l.motion);
+      fade(id, l.opacity);
+    }
   }
   const anim: AssemblyAnim = {
     loop: am.loop,
