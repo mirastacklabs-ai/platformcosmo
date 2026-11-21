@@ -418,6 +418,8 @@ export interface AnimationLayer {
    * attributes rather than CSS transforms.
    */
   readonly attrs?: Readonly<Record<string, Readonly<Record<string, string | number>>>>;
+  /** Budget warnings found while animating (assemblies: tracks or wrappers above the bounds). */
+  readonly diagnostics?: readonly Diagnostic[];
 }
 
 export interface AnimateOptions {
