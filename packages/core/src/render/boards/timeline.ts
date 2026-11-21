@@ -42,6 +42,14 @@ export interface StepTime {
   readonly window: StepWindow;
 }
 
+/** Seconds the loop-start fades of the scene's assemblies last (0 without any, §7.4). */
+export function loopStartHold(scene: SceneGraph): number {
+  let hold = 0;
+  for (const a of scene.assemblies?.assemblies ?? [])
+    for (const f of a.loopStart?.fades ?? []) hold = Math.max(hold, f.t1);
+  return hold;
+}
+
 /** Step windows on the master loop; views are the scene's own (`SceneStep.focus`). */
 export function stepTimes(
   scene: SceneGraph,
@@ -53,6 +61,7 @@ export function stepTimes(
     tl.map((s) => s.duration),
     tl.map((s) => s.focus),
     closeLast,
+    loopStartHold(scene),
   );
   // The camera's transition is `min(0.8, 0.25 d / speed)` seconds on the OUTPUT clock; in loop
   // seconds that is `min(0.8 speed, 0.25 d)`, so a board's windows meet the camera's.
@@ -64,6 +73,7 @@ export function stepTimes(
     const window: StepWindow = {
       lead: loopSeconds(w.lead, s.duration),
       tr: loopSeconds(w.tr, s.duration),
+      hold: w.hold,
       window: w.window,
     };
     const start = r4(t);
@@ -71,7 +81,8 @@ export function stepTimes(
     return {
       start,
       duration: s.duration,
-      open: r4(start + window.lead),
+      // the motion opens after the camera's lead and after the loop-start fades (§7.4)
+      open: r4(start + Math.max(window.lead, window.hold)),
       end: r4(start + s.duration - window.tr),
       window,
     };

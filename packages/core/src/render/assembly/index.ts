@@ -744,7 +744,11 @@ export function buildAssemblyRender(
   const basePoses: Record<string, readonly { program: string; level: number }[]> = {};
   for (const a of assemblies) basePoses[a.id] = a.basePose;
   for (const l of levels) if (l.assembly !== undefined) basePoses[l.path] = l.assembly.basePose;
-  let closeLast = endsAwayFromBase(plan[plan.length - 1]?.poses, basePoses);
+  let closeLast = endsAwayFromBase(
+    plan[plan.length - 1]?.poses,
+    basePoses,
+    plan[plan.length - 1]?.view ?? 0,
+  );
   if (!closeLast && ctx.spec?.figures !== undefined) {
     closeLast = closesLoop(
       ctx.spec.figures.map((f, i) => resolveFigure(f, i).figure),

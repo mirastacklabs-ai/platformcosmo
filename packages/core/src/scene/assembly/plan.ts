@@ -1044,13 +1044,42 @@ export class AssemblyPrograms {
       basePose[id] = s.base;
       if (last !== undefined) lastPose[id] = s.poses[last] as readonly ProgramLevel[];
     }
-    const planned = planFigureSteps(this.spec, figures, views, {
-      ...opts,
-      foreign: (si, ai) => table.get(`${si}:${ai}`),
-      closeLoop:
-        opts.closeLoop === true ||
-        endsAwayFromBase(last === undefined ? undefined : lastPose, basePose),
-    });
+    // View in effect after the last step (§7.7): a loop that ends in a turned view closes (§7.3)
+    let endView: QuarterTurn = 0;
+    for (let si = 0; si < steps; si++) {
+      let at = -1;
+      for (const id of ids) {
+        const v = (sims.get(id) as Simulated).views.get(si);
+        if (v !== undefined && v.at > at) {
+          at = v.at;
+          endView = v.view;
+        }
+      }
+    }
+    const planOnce = (loopHold: number): ReturnType<typeof planFigureSteps> =>
+      planFigureSteps(this.spec, figures, views, {
+        ...opts,
+        foreign: (si, ai) => table.get(`${si}:${ai}`),
+        closeLoop:
+          opts.closeLoop === true ||
+          endsAwayFromBase(last === undefined ? undefined : lastPose, basePose, endView),
+        loopHold,
+      });
+    // loop start (§7.4): the opening transition of step 1 is the plan's own `lead_1`
+    const d1 = (this.spec.steps ?? [])[0]?.duration ?? 3;
+    const lead = views[0] === undefined ? 0 : transitionOf(d1);
+    const fadeEnd = (p: AssemblyStepPlan[]): number => {
+      let end = 0;
+      for (const a of assemblies)
+        for (const f of loopStartOf(a, p, lead)?.fades ?? []) end = Math.max(end, f.t1);
+      return end;
+    };
+    // Levels do not depend on the windows, so a first pass tells whether the loop-start fades
+    // exist; if so step 1 opens its motion window at max(lead_1, fade end) and the plan is made
+    // again with it (compression and suggestions agree).
+    let planned = planOnce(0);
+    const hold = fadeEnd(planned.plan);
+    if (hold > 0) planned = planOnce(hold);
     // View in effect at the end of each step (§7.7): the build/unbuild action that comes last
     // in the step (across assemblies) and whose program sets views decides; else it carries over
     let view: QuarterTurn = 0;
@@ -1087,9 +1116,6 @@ export class AssemblyPrograms {
     });
     // Compression is reported by validation (`assemblyPlanDiagnostics`), never twice.
     const compression = planned.diagnostics.filter((d) => d.code === "assembly/compressed");
-    // loop start (§7.4): the opening transition of step 1 is the plan's own `lead_1`
-    const d1 = (this.spec.steps ?? [])[0]?.duration ?? 3;
-    const lead = views[0] === undefined ? 0 : transitionOf(d1);
     const loopStart = new Map<string, LoopStart>();
     for (const a of assemblies) {
       const ls = loopStartOf(a, plan, lead);

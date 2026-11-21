@@ -615,7 +615,8 @@ describe("quarter-turn views", () => {
     // build 1, 2, 3, then the unbuild reverses steps 3 and 2, then step 2 is built again
     expect(switches.map((s) => s.view)).toEqual([90, 180, 270, 180, 90, 180]);
     expect(switches.map((s) => s.t)).toEqual([...switches.map((s) => s.t)].sort((a, b) => a - b));
-    expect(switches[0]!.t).toBe(0);
+    // step 1 opens after the loop-start fades (0.4 s), the others at their step start
+    expect(switches[0]!.t).toBeCloseTo(0.4, 4);
     expect(switches[1]!.t).toBe(4);
   });
 
@@ -631,7 +632,6 @@ describe("quarter-turn views", () => {
   test("views swap exactly at the planned times, over VIEW_FADE", () => {
     const op = (t: number, turn: number) => frameOf(m, t)[group(turn)]!.opacity as number;
     for (const [i, s] of switches.entries()) {
-      if (s.t === 0) continue;
       const prev = i === 0 ? 0 : switches[i - 1]!.view;
       expect(op(s.t - 0.01, s.view), `before ${s.t}`).toBe(0);
       expect(op(s.t - 0.01, prev), `before ${s.t}`).toBe(1);
@@ -643,6 +643,31 @@ describe("quarter-turn views", () => {
     // time 0 is the rest frame: view 0 shown
     expect(frameOf(m, 0)[group(0)]!.opacity).toBe(1);
     expect(frameOf(m, 0)[group(90)]!.opacity).toBe(0);
+  });
+
+  test("P2-2: the loop closes the view: the last view cross-fades back to 0, no jump at the wrap", () => {
+    // the rig ends in view 180 (put back, step 5): the closing window returns to view 0
+    expect(scene.plan[scene.plan.length - 1]!.view).toBe(180);
+    const end = am.clock[am.clock.length - 1]!.end;
+    expect(am.loop).toBeGreaterThan(end + 0.1);
+    for (const speed of [0.5, 1, 2]) {
+      const c = splitReduced(loopCss(m, speed)).live;
+      const dur = am.loop / speed;
+      for (const v of views) {
+        const css0 = cssGroup(c, v.group, 0).opacity!;
+        const cssEnd = cssGroup(c, v.group, dur - 1e-4).opacity!;
+        const f0 = frameOf(m, 0, speed)[v.group]!.opacity as number;
+        const fEnd = frameOf(m, dur - 1e-4, speed)[v.group]!.opacity as number;
+        expect(Math.abs(cssEnd - css0), `css view ${v.turn} x${speed}`).toBeLessThan(0.02);
+        expect(Math.abs(fEnd - f0), `frame view ${v.turn} x${speed}`).toBeLessThan(0.02);
+      }
+      // view 180 stays until the closing window opens, then view 0 returns
+      if (speed === 1) {
+        expect(frameOf(m, end - 0.02)[group(180)]!.opacity).toBe(1);
+        expect(frameOf(m, am.loop - 0.01)[group(180)]!.opacity).toBe(0);
+        expect(frameOf(m, am.loop - 0.01)[group(0)]!.opacity).toBe(1);
+      }
+    }
   });
 
   test("exactly one view is fully shown between swaps; fades sum to one", () => {
@@ -760,9 +785,28 @@ describe("builds: appearance along the planned path", () => {
     }
   });
 
-  test.todo(
-    "(c) loop-start overlap: l/tower is hidden at 0.0011 s although its fade runs 0-0.4 s (the plan should open step 1's motion at max(lead_1, fade end))",
-  );
+  test("(c) loop-start overlap: step 1 opens its motion after the loop-start fades", () => {
+    const fadeEnd = Math.max(...fades.map((x) => x.t1));
+    expect(fadeEnd).toBeCloseTo(0.4, 5);
+    // the plan opens step 1 at max(lead_1, fade end); no zoom here, so the fade end
+    expect(am.clock[0]!.open).toBeCloseTo(fadeEnd, 4);
+    for (const leaf of ["tower", "side"]) {
+      // a fading base part stays visible (and drawn in depth order) until its fade ends
+      for (const t of [0.0011, 0.1, 0.3, 0.39]) {
+        expect(hiddenOf(leaf, t), `${leaf} @${t}`).toBe(false);
+      }
+    }
+    // the build of step 1 starts only after the fades: the base is not drawn before
+    expect(opacityOf("base", fadeEnd + 0.01)).toBeLessThan(0.5);
+    expect(hiddenOf("tower", fadeEnd + 0.05)).toBe(true);
+  });
+
+  test("(c) the fades and the motion window agree at three speeds", () => {
+    for (const speed of [0.5, 1, 2]) {
+      const mid = frameOf(m, 0.0011 / speed, speed);
+      expect(mid[ids.partVisible("l/tower")]?.visibility, `x${speed}`).not.toBe("hidden");
+    }
+  });
 
   test("a built part appears when its move starts and moves to its seat", () => {
     // step 2 (4..8) builds the tower: hidden before, visible at its move start
