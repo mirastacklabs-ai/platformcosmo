@@ -474,8 +474,8 @@ node's zoomed screen rect and easing to its own overview; leaving reverses it. L
 Element and byte budgets count every level.
 
 **Render model (A1-4).** `AssemblyRenderModel.levels` has one entry per level, sorted by path.
-The level group (`ids.level(path)`) sits in the overlay layer, pinned against the camera like
-the captions, with `transform = overview` and `opacity 0` at rest. All rects are screen rects;
+The level group (`ids.level(path)`) sits in the overlay layer inside the camera group, with
+`transform = overview` and `opacity 0` at rest. All rects are screen rects;
 a level has its own coordinates (its world projected), `overview` places them in the main
 viewport (its reach contained in the main overview area), `hostRect` is the host box seen
 through the parent's overview and `hostFocus` the camera rect that frames it. The cross-fade
@@ -494,9 +494,12 @@ placement per level group. `frameAt` and `stepEnd` evaluate them and the animato
 every other track), so a frame equals the CSS pose at the same time; a group whose keys never change
 (a level that is never shown) gets no animation. Reduced motion snaps each group to its step-end
 state. The models of every view and level are animated under their own ids (`views[].model`,
-`levels[].model`), on the same loop clock. The level group starts at `fromHost(hostAt(k - 1))`
-at camera zoom 1 (the camera never zooms onto a close-up path: its focus rect lives in the level),
-and the main world is not cross-faded against the level (open, D-4a visual review). The
+`levels[].model`), on the same loop clock. The level group sits inside the camera group, so the parent camera composes the zoom: its
+placement keys are the zoom-1 ones (entry from `fromHost(hostAt(k - 1))` to `overview`, leaving
+reverses it, and the closing window of the last step leaves the level too, so the loop restarts
+without a pop; while invisible it waits at the next entry pose). The main world's layer groups
+(objects, labels, flows) cross-fade against the level over the same windows, emitted only when
+levels exist. The
 top-level `focusRect` answers world ids in the view in effect (`plan[step - 1].view`); ids
 inside a level are answered by `levelFocusRect(step, id)` in overlay coordinates and are not in
 `RenderModel.focusRects`. Close-ups and views do not combine (`assembly/view-needs-assembly-only`).

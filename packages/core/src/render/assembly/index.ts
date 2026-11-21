@@ -797,6 +797,10 @@ export function buildAssemblyRender(
     views: viewRenders,
     levels: lv?.levels ?? [],
     levelAtStep,
+    mainLayers:
+      lv === undefined
+        ? []
+        : ["objects", "labels", "flows", "dcflows"].map((l) => `${ctx.prefix}-ly_${l}`),
   });
   const groupState = (
     t: number,

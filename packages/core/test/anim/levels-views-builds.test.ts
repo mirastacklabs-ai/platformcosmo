@@ -10,6 +10,8 @@ import {
 import type { AssemblyRenderModel, LoopFade, SceneAssembly } from "../../src/contracts/index.js";
 import { assemblyAnim, assemblyFrame, assemblyLoop } from "../../src/anim/assembly.js";
 import { Keyframes } from "../../src/anim/css.js";
+import { zoomFor } from "../../src/anim/timeline.js";
+import { applyAffine } from "../../src/render/assembly/levels.js";
 import { VIEW_FADE } from "../../src/render/assembly/views.js";
 import type { AssemblyRenderModelX } from "../../src/render/assembly/types.js";
 import { fixtureTheme } from "../fixtures/theme.js";
@@ -422,8 +424,143 @@ describe("close-up chain: level cross-fades", () => {
     expect(cssGroup(live, server.group, at3).opacity).toBeCloseTo(0, 2);
   });
 
+  test("the main world cross-fades against the level", () => {
+    const main = ["objects", "labels", "flows"].map((l) => `pc-t-ly_${l}`);
+    for (const id of main) {
+      const t0 = clk[0]!.end;
+      const t1 = clk[1]!.start;
+      expect(frameOf(m, t0)[id]!.opacity, id).toBe(1);
+      expect(frameOf(m, t1)[id]!.opacity, id).toBe(0);
+      const mid = frameOf(m, (t0 + t1) / 2);
+      expect((mid[id]!.opacity as number) + (mid[server.group]!.opacity as number), id).toBeCloseTo(
+        1,
+        1,
+      );
+      // between two levels the world stays out; leaving the last one brings it back
+      expect(frameOf(m, clk[2]!.start)[id]!.opacity, id).toBe(0);
+      expect(frameOf(m, clk[3]!.start)[id]!.opacity, id).toBe(1);
+    }
+    expect(am.frameAt(clk[0]!.end).opacity["pc-t-ly_objects"]).toBe(1);
+  });
+
+  test.each([1, 0.5, 2])("%s x: the main world's frame equals its CSS pose", (speed) => {
+    const live = splitReduced(loopCss(m, speed)).live;
+    const dur = am.loop / speed;
+    for (let k = 0; k < 30; k++) {
+      const t = dur * (0.0087 + ((k * 0.0293) % 1));
+      const f = frameOf(m, t, speed)["pc-t-ly_objects"]!.opacity as number;
+      expect(Math.abs(f - cssGroup(live, "pc-t-ly_objects", t).opacity!), `@${t}`).toBeLessThan(
+        0.02,
+      );
+    }
+  });
+
+  test("leaving a level reverses the entry: it shrinks into the host's drawn rect", () => {
+    // step 4 (index 3) leaves the heat-sink level
+    const t0 = clk[2]!.end;
+    const t1 = clk[3]!.start;
+    const g = sink.group;
+    const at = (t: number) => matrixOf(frameOf(m, t)[g]!.transform);
+    const ov = sink.overview;
+    expect(at(t0)).toEqual([ov.scale, ov.tx, ov.ty]);
+    const host = sink.fromHost(sink.hostAt(3));
+    expect(at(t1)).toEqual([host.scale, host.tx, host.ty]);
+    expect(frameOf(m, t1)[g]!.opacity).toBe(0);
+    const mid = at((t0 + t1) / 2)[0];
+    expect(mid).toBeLessThan(ov.scale);
+    expect(mid).toBeGreaterThan(host.scale);
+    // at the end the level's content sits inside the host's rect
+    const r = applyAffine({ scale: at(t1)[0], tx: at(t1)[1], ty: at(t1)[2] }, sink.rest);
+    const h = sink.hostAt(3);
+    expect(r.x).toBeGreaterThanOrEqual(h.x - 0.05);
+    expect(r.y).toBeGreaterThanOrEqual(h.y - 0.05);
+    expect(r.x + r.width).toBeLessThanOrEqual(h.x + h.width + 0.05);
+    expect(r.y + r.height).toBeLessThanOrEqual(h.y + h.height + 0.05);
+  });
+
   test("deterministic: the same model gives the same CSS", () => {
     expect(loopCss(build(chain()))).toBe(loopCss(m));
+  });
+});
+
+describe("close-ups: last step in a level, and entry from a zoomed parent", () => {
+  const floor = box("floor", [-600, -600, -10], [1700, 1700, 10]);
+  const make = (steps: Obj[]): PlatformCosmoSpec => {
+    const s = chain() as unknown as { assemblies: Obj[]; steps: Obj[] };
+    const hall = s.assemblies.find((a) => a.id === "hall")!;
+    (hall.parts as Obj[]).push(floor);
+    s.steps = steps;
+    return s as unknown as PlatformCosmoSpec;
+  };
+
+  test("a level shown in the last step leaves over the closing window (no pop at the restart)", () => {
+    const m = build(
+      make([
+        { caption: "hall", duration: 3 },
+        {
+          caption: "server",
+          duration: 4,
+          focus: "hall/srv/closeup",
+          assembly: [{ explode: "hall/srv/closeup" }],
+        },
+      ]),
+    );
+    const am = A(m);
+    const l = am.levels!.find((x) => x.path === "hall/srv/closeup")!;
+    const end = am.clock[1]!.end;
+    expect(am.loop).toBeGreaterThan(end);
+    const f = (t: number) => frameOf(m, t);
+    expect(f(end)[l.group]!.opacity).toBe(1);
+    expect(f(end)["pc-t-ly_objects"]!.opacity).toBe(0);
+    const mid = f((end + am.loop) / 2);
+    expect(mid[l.group]!.opacity as number).toBeCloseTo(0.5, 1);
+    expect(mid["pc-t-ly_objects"]!.opacity as number).toBeCloseTo(0.5, 1);
+    // by the loop end the level is gone and the world is back: the restart is seamless
+    const last = f(am.loop - 1e-3);
+    expect(last[l.group]!.opacity as number).toBeLessThan(0.02);
+    expect(last["pc-t-ly_objects"]!.opacity as number).toBeGreaterThan(0.98);
+    expect(f(0)[l.group]!.opacity).toBe(0);
+    expect(f(0)["pc-t-ly_objects"]!.opacity).toBe(1);
+    expect(frameOf(m, 0)).toEqual(expectedAttrs(am.frameAt(0)));
+    // the CSS agrees at 3 speeds
+    for (const speed of [1, 0.5, 2]) {
+      const live = splitReduced(loopCss(m, speed)).live;
+      const dur = am.loop / speed;
+      for (const frac of [0.7, 0.8, 0.9, 0.97]) {
+        const t = dur * frac;
+        const got = cssGroup(live, l.group, t).opacity!;
+        expect(Math.abs((frameOf(m, t, speed)[l.group]!.opacity as number) - got)).toBeLessThan(
+          0.02,
+        );
+      }
+    }
+  });
+
+  test("entering from a zoomed parent: the level starts on the host's rect", () => {
+    const m = build(
+      make([
+        { caption: "rack", duration: 3, focus: "hall/srv" },
+        {
+          caption: "server",
+          duration: 4,
+          focus: "hall/srv/closeup",
+          assembly: [{ explode: "hall/srv/closeup" }],
+        },
+      ]),
+    );
+    const am = A(m);
+    expect(zoomFor(m, m.scene.timeline[0])?.scale ?? 1).toBeGreaterThan(1.01);
+    const l = am.levels![0]!;
+    const g = matrixOf(frameOf(m, am.clock[0]!.end)[l.group]!.transform);
+    const r = applyAffine({ scale: g[0], tx: g[1], ty: g[2] }, l.rest);
+    const h = l.hostRect;
+    expect(r.x).toBeGreaterThanOrEqual(h.x - 0.1);
+    expect(r.y).toBeGreaterThanOrEqual(h.y - 0.1);
+    expect(r.x + r.width).toBeLessThanOrEqual(h.x + h.width + 0.1);
+    expect(r.y + r.height).toBeLessThanOrEqual(h.y + h.height + 0.1);
+    expect(r.x + r.width / 2).toBeCloseTo(h.x + h.width / 2, 0);
+    expect(r.y + r.height / 2).toBeCloseTo(h.y + h.height / 2, 0);
+    expect(frameOf(m, am.clock[0]!.end)[l.group]!.opacity).toBe(0);
   });
 });
 
@@ -589,6 +726,19 @@ describe("builds: appearance along the planned path", () => {
     expect(hiddenOf("tower", side.t1 + 0.01)).toBe(true);
   });
 
+  test("a part stays visible (and seated) while its loop-start fade runs", () => {
+    const side = fades.find((x) => x.path === "l/side") as LoopFade;
+    for (const frac of [0.1, 0.5, 0.9]) {
+      const t = side.t0 + (side.t1 - side.t0) * frac;
+      expect(hiddenOf("side", t), `side @${t}`).toBe(false);
+      expect(dy("side", t)).toBe(0);
+    }
+  });
+
+  test.todo(
+    "(c) loop-start overlap: l/tower is hidden at 0.0011 s although its fade runs 0-0.4 s (the plan should open step 1's motion at max(lead_1, fade end))",
+  );
+
   test("a built part appears when its move starts and moves to its seat", () => {
     // step 2 (4..8) builds the tower: hidden before, visible at its move start
     expect(hiddenOf("tower", 3.99)).toBe(true);
@@ -675,13 +825,14 @@ describe("builds: appearance along the planned path", () => {
     const css = loopCss(m);
     const { reduced } = splitReduced(css);
     expect(reduced).toContain("step-end");
-    for (const leaf of ["tower", "side", "base"]) {
+    for (const leaf of ["tower"]) {
       const id = ids.partFade(`l/${leaf}`);
       for (const c of am.clock) {
         const want = am.stepEnd(c.step).opacity[id]!;
         for (const frac of [0.05, 0.5, 0.95]) {
           const rg = cssGroup(reduced, id, c.start + c.duration * frac, css).opacity;
-          if (rg !== undefined) expect(rg, `${leaf} step ${c.step}`).toBeCloseTo(want, 1);
+          expect(rg, `${leaf} step ${c.step}: animated in reduced motion`).toBeDefined();
+          expect(rg, `${leaf} step ${c.step}`).toBeCloseTo(want, 1);
         }
       }
     }

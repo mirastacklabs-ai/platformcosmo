@@ -135,6 +135,8 @@ export interface GroupInput {
   readonly levels: readonly AssemblyLevelRender[];
   /** Path of the level a step (0-based) focuses, if any. */
   readonly levelAtStep: (k: number) => string | undefined;
+  /** Ids of the main world's layer groups, faded against the levels (only with levels). */
+  readonly mainLayers: readonly string[];
 }
 
 /** Tracks of every view and level group, sorted by id. */
@@ -160,51 +162,92 @@ export function groupTracks(input: GroupInput): GroupTrack[] {
   }
 
   if (input.levels.length > 0) {
+    // Segment k (0-based) is the transition INTO step k: [end of step k-1, start of step k]
+    // (step 0: up to its motion window). Segment n is the closing window of the last step,
+    // [its end, loop end], a transition into "no level" (the loop restarts on the overview).
+    const n = clock.length;
+    const closing = n > 0 && total > (clock[n - 1]?.end ?? 0) + EPS;
+    const segs = closing ? n + 1 : n;
+    const lvl = (k: number): string | undefined =>
+      k < 0 || k >= n ? undefined : input.levelAtStep(k);
     const tStart = (k: number): number => (k <= 0 ? 0 : (clock[k - 1]?.end ?? 0));
-    const tEnd = (k: number): number => (k <= 0 ? (clock[0]?.open ?? 0) : (clock[k]?.start ?? 0));
-    const bps = clock.flatMap((_, k) => [tStart(k), tEnd(k)]);
+    const tEnd = (k: number): number =>
+      k >= n ? total : k <= 0 ? (clock[0]?.open ?? 0) : (clock[k]?.start ?? 0);
+    const bps = Array.from({ length: segs }, (_, k) => [tStart(k), tEnd(k)]).flat();
     const stepAt = (t: number): number => {
       let k = 0;
-      for (let i = 0; i < clock.length; i++) if (tStart(i) <= t + EPS) k = i;
+      for (let i = 0; i < segs; i++) if (tStart(i) <= t + EPS) k = i;
       return k;
     };
-    for (const l of input.levels) {
-      const state = (t: number): { f: number; k: number; cur: boolean; prev: boolean } => {
+    const fAt = (k: number, t: number): number => {
+      const span = tEnd(k) - tStart(k);
+      return span > EPS ? clamp01((t - tStart(k)) / span) : 1;
+    };
+
+    // the main world cross-fades against the levels (occluders, §8.4)
+    if (input.mainLayers.length > 0) {
+      const mainAt = (t: number): number => {
         const k = stepAt(t);
-        const span = tEnd(k) - tStart(k);
-        const f = span > EPS ? clamp01((t - tStart(k)) / span) : 1;
-        return {
-          f,
-          k,
-          cur: input.levelAtStep(k) === l.path,
-          prev: input.levelAtStep(k - 1) === l.path,
-        };
+        const f = fAt(k, t);
+        const cur = lvl(k) !== undefined;
+        const prev = lvl(k - 1) !== undefined;
+        return r2(cur ? (prev ? 0 : 1 - f) : prev ? f : 1);
+      };
+      for (const id of input.mainLayers) {
+        out.push({ id, opacity: sampled(bps, total, mainAt, opacityDiffers, opacityKey) });
+      }
+    }
+
+    for (const l of input.levels) {
+      /** Step whose host rect starts the NEXT entry after segment `k`, if any. */
+      const nextEntry = (k: number): number | undefined => {
+        for (let j = k + 1; j < n; j++) if (lvl(j) === l.path && lvl(j - 1) !== l.path) return j;
+        return undefined;
+      };
+      /** Step whose host rect ended the LAST exit at or before segment `k`, if any. */
+      const lastExit = (k: number): number | undefined => {
+        for (let j = k; j >= 1; j--) if (lvl(j - 1) === l.path && lvl(j) !== l.path) return j;
+        return undefined;
       };
       const opacityAt = (t: number): number => {
-        const s = state(t);
-        return r2(s.cur ? (s.prev ? 1 : s.f) : s.prev ? 1 - s.f : 0);
+        const k = stepAt(t);
+        const f = fAt(k, t);
+        const cur = lvl(k) === l.path;
+        const prev = lvl(k - 1) === l.path;
+        return r2(cur ? (prev ? 1 : f) : prev ? 1 - f : 0);
       };
       const placementAt = (t: number): AssemblyAffine => {
-        const s = state(t);
+        const k = stepAt(t);
+        const f = fAt(k, t);
+        const cur = lvl(k) === l.path;
+        const prev = lvl(k - 1) === l.path;
+        const mix = (e: AssemblyAffine, g: number): AssemblyAffine => ({
+          scale: e.scale + (l.overview.scale - e.scale) * g,
+          tx: e.tx + (l.overview.tx - e.tx) * g,
+          ty: e.ty + (l.overview.ty - e.ty) * g,
+        });
         let a = l.overview;
-        if (s.cur && !s.prev) {
-          const e = l.fromHost(l.hostAt(s.k));
-          a = {
-            scale: e.scale + (a.scale - e.scale) * s.f,
-            tx: e.tx + (a.tx - e.tx) * s.f,
-            ty: e.ty + (a.ty - e.ty) * s.f,
-          };
+        if (cur && !prev) {
+          // entry: from the host's drawn rect to the overview
+          a = mix(l.fromHost(l.hostAt(k)), f);
+        } else if (prev && !cur) {
+          // exit: the reverse, from the overview back into the host's rect
+          a = mix(l.fromHost(l.hostAt(k)), 1 - f);
+        } else if (!cur && !prev) {
+          // invisible: wait at the next entry pose (else the last exit pose): no jump keys
+          const j = nextEntry(k) ?? lastExit(k);
+          if (j !== undefined) a = l.fromHost(l.hostAt(j));
         }
         return { scale: r4(a.scale), tx: r2(a.tx), ty: r2(a.ty) };
       };
-      const near = (a: AssemblyAffine, b: AssemblyAffine): boolean =>
+      const differs = (a: AssemblyAffine, b: AssemblyAffine): boolean =>
         Math.abs(a.scale - b.scale) > 1e-3 ||
         Math.abs(a.tx - b.tx) > 0.02 ||
         Math.abs(a.ty - b.ty) > 0.02;
       out.push({
         id: l.group,
         opacity: sampled(bps, total, opacityAt, opacityDiffers, opacityKey),
-        placement: sampled(bps, total, placementAt, near, (t, a): PlacementKey => ({ t, ...a })),
+        placement: sampled(bps, total, placementAt, differs, (t, a): PlacementKey => ({ t, ...a })),
       });
     }
   }

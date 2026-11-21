@@ -66,19 +66,11 @@ exports[`close-up chain: level cross-fades > keyframes of the level groups (snap
       [
         {
           "matrix": [
-            21.7255,
-            22.5,
-            65.21,
+            8.6118,
+            -78.08,
+            28.5,
           ],
           "p": 0,
-        },
-        {
-          "matrix": [
-            21.7255,
-            22.5,
-            65.21,
-          ],
-          "p": 0.44284999999999997,
         },
         {
           "matrix": [
@@ -109,6 +101,30 @@ exports[`close-up chain: level cross-fades > keyframes of the level groups (snap
             21.7255,
             22.5,
             65.21,
+          ],
+          "p": 0.7285710000000001,
+        },
+        {
+          "matrix": [
+            8.6134,
+            -78.07,
+            28.5,
+          ],
+          "p": 0.785707,
+        },
+        {
+          "matrix": [
+            8.6118,
+            -78.08,
+            28.5,
+          ],
+          "p": 0.785714,
+        },
+        {
+          "matrix": [
+            8.6118,
+            -78.08,
+            28.5,
           ],
           "p": 1,
         },
