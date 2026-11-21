@@ -641,6 +641,7 @@ describe("error codes", () => {
           "hull-uncertain",
           "annotation-invalid",
           "annotation-erased",
+          "rim-stroke",
           "seat-unverified",
         ],
         ...[

@@ -169,6 +169,40 @@ function pinned(L: number, short: number) {
   return { f, manifest, sources: { "exploded.png": X, "assembled.png": A }, pins };
 }
 
+/**
+ * A board trace (the figure's stroke wide) ending exactly on a part's outline, from the left,
+ * right or top, `pct` percent along that side of its bbox: drawn into the drawing and its board.
+ */
+function traced(
+  f: GenFigure,
+  unit: string,
+  dir: "L" | "R" | "U",
+  pct: number,
+): [GenFigure, Raster] {
+  const st = f.states.assembled!;
+  const full = st.truth.units[unit]!.full;
+  const T = f.stroke;
+  const image = clone(st.image);
+  const hit = (x: number, y: number): boolean => maskHas(full, x, y);
+  for (let t = 0; t < T; t++) {
+    if (dir === "U") {
+      const x = full.x + Math.round(((full.w - T) * pct) / 100) + t;
+      for (let y = full.y - 30; !hit(x, y); y++) {
+        setPx(image, x, y, BLACK);
+        setPx(st.board, x, y, BLACK);
+      }
+    } else {
+      const y = full.y + Math.round(((full.h - T) * pct) / 100) + t;
+      const step = dir === "L" ? 1 : -1;
+      for (let x = dir === "L" ? full.x - 30 : full.x + full.w + 30; !hit(x, y); x += step) {
+        setPx(image, x, y, BLACK);
+        setPx(st.board, x, y, BLACK);
+      }
+    }
+  }
+  return [f, image];
+}
+
 describe("no 1 px leftovers in the clean base", () => {
   it("an arrow whose drawn tip runs past its declared end is erased whole, and any leftover fails", () => {
     const f = figure("main");
@@ -492,23 +526,66 @@ describe("no 1 px leftovers in the clean base", () => {
     }
   });
 
-  it("one drawing, s5: each sprite equals its truth sprite (no trace remnant on the edge)", () => {
+  it("one drawing, s5: each sprite equals its truth sprite, or the gate names what differs", () => {
+    // The 5 px trace remnant on the heat sinks' diagonal edge (sides of the edge disagree there:
+    // undecided, kept and named), a trace from the right onto the fan's 32-gon, one from the top
+    // onto the heat sink's diagonal/top-edge vertex (no dent), and the comb on its board line.
+    const cases: [string, GenFigure, Raster][] = [];
+    const s5 = { scale: 2, stroke: 5 };
+    for (const name of ["assembled-only", "dense-assembled"]) {
+      const f = figure(name, s5);
+      cases.push([name, f, f.states.assembled!.image]);
+    }
+    cases.push(["fan R20", ...traced(figure("cage-assembled", s5), "fan-1", "R", 20)]);
+    cases.push(["heat sink U62", ...traced(figure("assembled-only", s5), "hs-1", "U", 62)]);
+    for (const [name, f, image] of cases) {
+      const r = runFigure(f.manifest, { "assembled.png": image }).value!;
+      expect(errorsOf(r.report), name).toEqual([]);
+      const named = r.report.diagnostics
+        .filter((d) => d.code === "asset/rim-stroke")
+        .flatMap((d) => (d.params?.pixels ?? []) as [number, number][]);
+      const st = f.states.assembled!;
+      for (const p of r.outputs.parts) {
+        const tpl = r.outputs.parts.find(
+          (q, k) => q.sprite === p.sprite && r.report.parts[k]!.template,
+        )!;
+        const t = st.truth.units[p.id]!.full;
+        const sp = r.outputs.sprites[p.sprite]!;
+        const truth = f.sprites[p.id]!.raster;
+        // Every pixel where the sprite and the truth sprite differ, placed at the template's
+        // seat (where the analysis decided it), is named within 1 px.
+        const unexplained: [number, number][] = [];
+        const x0 = Math.min(p.seat[0], t.x);
+        const y0 = Math.min(p.seat[1], t.y);
+        const x1 = Math.max(p.seat[0] + sp.width, t.x + truth.width);
+        const y1 = Math.max(p.seat[1] + sp.height, t.y + truth.height);
+        const lumIn = (r2: Raster, x: number, y: number): number =>
+          x < 0 || y < 0 || x >= r2.width || y >= r2.height || !r2.data[(y * r2.width + x) * 4 + 3]
+            ? 255
+            : lumAt(r2, x, y);
+        for (let y = y0; y < y1; y++)
+          for (let x = x0; x < x1; x++) {
+            const a = lumIn(sp, x - p.seat[0], y - p.seat[1]);
+            const b = lumIn(truth, x - t.x, y - t.y);
+            if (Math.abs(a - b) <= 48) continue;
+            const qx = x - p.seat[0] + tpl.seat[0];
+            const qy = y - p.seat[1] + tpl.seat[1];
+            if (!named.some(([nx, ny]) => Math.abs(nx - qx) <= 1 && Math.abs(ny - qy) <= 1))
+              unexplained.push([x, y]);
+          }
+        expect(unexplained, `${name} ${p.id}`).toEqual([]);
+      }
+    }
+  });
+
+  it("one drawing: a stroke left on an undecidable rim pixel is named in a warning", () => {
     const f = figure("assembled-only", { scale: 2, stroke: 5 });
     const r = runFigure(f.manifest, sourcesOf(f)).value!;
-    expect(errorsOf(r.report)).toEqual([]);
-    const st = f.states.assembled!;
-    const blankOf = (): Raster => ({
-      width: st.image.width,
-      height: st.image.height,
-      data: new Uint8Array(st.image.width * st.image.height * 4).fill(255),
-    });
-    for (const p of r.outputs.parts) {
-      const ours = blankOf();
-      const truth = blankOf();
-      paste(ours, r.outputs.sprites[p.sprite]!, p.seat[0], p.seat[1]);
-      const t = st.truth.units[p.id]!.full;
-      paste(truth, f.sprites[p.id]!.raster, t.x, t.y);
-      expect(differences(ours, truth), p.id).toBe(0);
-    }
+    const warned = r.report.diagnostics.filter(
+      (d) => d.code === "asset/rim-stroke" && d.severity === "warning",
+    );
+    expect(warned.flatMap((d) => d.params?.pixels as [number, number][])).toContainEqual([
+      155, 176,
+    ]);
   });
 });

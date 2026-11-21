@@ -1731,6 +1731,8 @@ export function analyzeFigure(
       // edge) is not the part's where another instance shows paper there, uncovered: its pixels
       // on the template's rim leave the template (one drawing; instances only).
       const mates = c.units.filter((i) => i !== c.unit).map((i) => units[i]!);
+      const peeled: [number, number][] = [];
+      const undecided: [number, number][] = [];
       // Peeled a rim at a time (a stroke a few pixels thick), at most the stroke's width + 2.
       for (let pass = 0; mates.length > 0 && pass < st.stroke + 2; pass++) {
         const rim = filter(c.mask, (x, y) => {
@@ -1754,27 +1756,59 @@ export function analyzeFigure(
           });
         });
         if (isEmpty(rim)) break;
+        for (let j = 0; j < rim.h; j++)
+          for (let i = 0; i < rim.w; i++)
+            if (rim.data[j * rim.w + i]) peeled.push([i + rim.x, j + rim.y]);
         regrow(c, minus(c.mask, rim));
       }
-      // What is left of such a stroke on the rim is decided by the part's own outline next to it:
-      // the mask-boundary pixels within 2 strokes + 2 px with no raw ink outside next to them (a
-      // clean edge), at least 3 on each side of the pixel along the edge, fitted by a line
-      // (total least squares, RMS residual at most 0.75 px). A pixel at least 0.5 px beyond that
-      // line on the outside, and 0.15 px beyond the farthest of those clean edge pixels (the
-      // staircase of the edge itself), is the stroke's, not the edge's, and leaves the template.
+      // What is left of such a stroke on the rim is decided by the part's own outline next to it,
+      // only where that outline is straight through the pixel: the mask-boundary pixels within
+      // 2 strokes + 2 px with no raw ink outside next to them (a clean edge), at least 3 on each
+      // side of the pixel along the edge, fitted by a line on each side separately (total least
+      // squares, RMS at most 0.5 px) and together (RMS at most 1.15 x the worse side + 0.05: one
+      // edge, not a vertex or corner). A pixel at least 0.5 px beyond the common line on the
+      // outside, 0.15 px beyond the farthest clean edge pixel (the edge's own staircase) and
+      // 0.5 px beyond each side's own line (a convex curve bulges past the common line, not past
+      // the sides') is the stroke's and leaves the template. Anything else beyond the common line,
+      // and every such pixel where the outline is not straight (a stroke ending on a vertex or
+      // corner), stays and is reported (`asset/rim-stroke` warning); a peel is reported as info.
       {
         const m = c.mask;
-        const outside = (x: number, y: number): boolean => !has(m, x, y);
         const rimOf = (x: number, y: number): { edge: boolean; runs: boolean } => {
           let edge = false;
           let runs = false;
           for (let dy = -1; dy <= 1; dy++)
             for (let dx = -1; dx <= 1; dx++) {
-              if (!outside(x + dx, y + dy)) continue;
+              if (has(m, x + dx, y + dy)) continue;
               if (dx === 0 || dy === 0) edge = true;
               if (raw(x + dx, y + dy)) runs = true;
             }
           return { edge, runs };
+        };
+        /** Total least squares line: centroid, unit direction and RMS residual. */
+        const fit = (pts: readonly (readonly [number, number])[]) => {
+          let mx = 0;
+          let my = 0;
+          for (const [a, b] of pts) {
+            mx += a;
+            my += b;
+          }
+          mx /= pts.length;
+          my /= pts.length;
+          let sxx = 0;
+          let syy = 0;
+          let sxy = 0;
+          for (const [a, b] of pts) {
+            sxx += (a - mx) ** 2;
+            syy += (b - my) ** 2;
+            sxy += (a - mx) * (b - my);
+          }
+          const th = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+          const ux = Math.cos(th);
+          const uy = Math.sin(th);
+          let res = 0;
+          for (const [a, b] of pts) res += ((a - mx) * -uy + (b - my) * ux) ** 2;
+          return { mx, my, ux, uy, rms: Math.sqrt(res / pts.length) };
         };
         const R = 2 * st.stroke + 2;
         const peel: [number, number][] = [];
@@ -1794,56 +1828,83 @@ export function analyzeFigure(
                 const q = rimOf(x + dx, y + dy);
                 if (q.edge && !q.runs) clean.push([dx, dy]);
               }
-            if (clean.length < 6) continue;
-            // Total least squares line through the clean edge pixels (relative to the pixel).
-            let mx = 0;
-            let my = 0;
-            for (const [a, b] of clean) {
-              mx += a;
-              my += b;
-            }
-            mx /= clean.length;
-            my /= clean.length;
-            let sxx = 0;
-            let syy = 0;
-            let sxy = 0;
-            for (const [a, b] of clean) {
-              sxx += (a - mx) ** 2;
-              syy += (b - my) ** 2;
-              sxy += (a - mx) * (b - my);
-            }
-            const th = 0.5 * Math.atan2(2 * sxy, sxx - syy);
-            const ux = Math.cos(th);
-            const uy = Math.sin(th);
-            const nx = -uy;
-            const ny = ux;
-            let res = 0;
-            let before = 0;
-            let after = 0;
-            for (const [a, b] of clean) {
-              res += ((a - mx) * nx + (b - my) * ny) ** 2;
-              const t = a * ux + b * uy;
-              if (t < 0) before++;
-              else if (t > 0) after++;
-            }
-            if (before < 3 || after < 3 || Math.sqrt(res / clean.length) > 0.75) continue;
-            // The inside of the part: the side the mask's pixels around lie on. Distances are
-            // measured outward; the clean edge's own staircase sets how far an edge pixel may sit.
+            const all = clean.length >= 6 ? fit(clean) : undefined;
+            const before = all ? clean.filter(([a, b]) => a * all.ux + b * all.uy < 0) : [];
+            const after = all ? clean.filter(([a, b]) => a * all.ux + b * all.uy > 0) : [];
+            const f1 = before.length >= 3 ? fit(before) : undefined;
+            const f2 = after.length >= 3 ? fit(after) : undefined;
+            const straight =
+              all &&
+              f1 &&
+              f2 &&
+              f1.rms <= 0.5 &&
+              f2.rms <= 0.5 &&
+              all.rms <= 1.15 * Math.max(f1.rms, f2.rms) + 0.05;
             let side = 0;
-            for (const [a, b] of inner) side += (a - mx) * nx + (b - my) * ny;
-            if (side === 0) continue;
-            const out = (a: number, b: number): number =>
-              -((a - mx) * nx + (b - my) * ny) * Math.sign(side);
+            if (straight)
+              for (const [a, b] of inner) side += (a - all.mx) * -all.uy + (b - all.my) * all.ux;
+            if (!straight || side === 0) {
+              undecided.push([x, y]);
+              continue;
+            }
+            // Distances outward from a line (its inside: where the mask around lies); the clean
+            // edge's own staircase sets how far an edge pixel may sit.
+            const outFrom = (l: NonNullable<typeof all>) => {
+              let sg = 0;
+              for (const [a, b] of inner) sg += (a - l.mx) * -l.uy + (b - l.my) * l.ux;
+              return (a: number, b: number): number =>
+                -((a - l.mx) * -l.uy + (b - l.my) * l.ux) * Math.sign(sg);
+            };
+            const out = outFrom(all);
             let spread = 0;
             for (const [a, b] of clean) spread = Math.max(spread, out(a, b));
-            if (out(0, 0) >= Math.max(0.5, spread + 0.15)) peel.push([x, y]);
+            if (out(0, 0) < Math.max(0.5, spread + 0.15)) continue;
+            if (Math.min(outFrom(f1)(0, 0), outFrom(f2)(0, 0)) >= 0.5) peel.push([x, y]);
+            else undecided.push([x, y]);
           }
-        if (peel.length > 0)
+        if (peel.length > 0) {
+          peeled.push(...peel);
           regrow(
             c,
             filter(c.mask, (x, y) => !peel.some(([a, b]) => a === x && b === y)),
           );
+        }
       }
+      // Never silent: what left the template, and what could not be decided (the template is
+      // cut from one instance, so either goes with every copy).
+      const list = (q: [number, number][]) => {
+        let x0 = Infinity;
+        let y0 = Infinity;
+        let x1 = -Infinity;
+        let y1 = -Infinity;
+        for (const [x, y] of q) {
+          x0 = Math.min(x0, x);
+          y0 = Math.min(y0, y);
+          x1 = Math.max(x1, x);
+          y1 = Math.max(y1, y);
+        }
+        return {
+          pixels: q.slice(0, 256).map(([x, y]) => [x + st.origin[0], y + st.origin[1]]),
+          count: q.length,
+          bbox: { x: x0 + st.origin[0], y: y0 + st.origin[1], w: x1 - x0 + 1, h: y1 - y0 + 1 },
+        };
+      };
+      if (peeled.length > 0)
+        diagnostics.push({
+          severity: "info",
+          code: "asset/rim-stroke",
+          path: "",
+          message: `${peeled.length} px where a board stroke touches ${tu.id}'s outline left its template (the stroke's, not the part's)`,
+          params: { part: tu.id, state: s, ...list(peeled) },
+        });
+      if (undecided.length > 0)
+        diagnostics.push({
+          severity: "warning",
+          code: "asset/rim-stroke",
+          path: "",
+          message: `a board stroke touches ${tu.id}'s outline where it is not straight (a vertex or corner): ${undecided.length} px there may be the stroke's or the part's; check the sprite there`,
+          params: { part: tu.id, state: s, ...list(undecided) },
+        });
       const add = endingInk(minus(tp.partInk, tp.E), tp.hull, st.rawInk, st.W, st.H);
       if (isEmpty(add)) continue;
       const joined = union(c.mask, add);

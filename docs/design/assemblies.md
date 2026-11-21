@@ -942,6 +942,7 @@ suggestions):
 | `image/icc-ignored`, `image/cmyk`                                                                               | info / warning                                    | colour handling                                                                            |
 | `image/unknown`                                                                                                 | error                                             | part references an image id not in `images`                                                |
 | `asset/annotation-erased`                                                                                       | info                                              | figure end moved onto its drawn stroke, or ink inside a mask erased (ingestion §6.4)       |
+| `asset/rim-stroke`                                                                                              | info / warning (undecided)                        | figure template rim pixels a board stroke touches: peeled, or undecided (ingestion §6.4)   |
 | `budget/assembly-parts`, `budget/depth-copies`, `budget/views`, `budget/levels`, `budget/images`, `budget/time` | warning / error                                   | §13                                                                                        |
 
 ## 19. Examples
