@@ -60,6 +60,22 @@ export type { Half, PartFace, PartPrimitiveFaces, StudGridOptions } from "./geom
  * text and matching are not stable across releases; do not parse or snapshot them.
  */
 export { didYouMean } from "./schema/suggest.js";
+export {
+  Draft,
+  MAX_PARAM_DIAGNOSTICS,
+  MIN_DIM,
+  definePack,
+  finishGeometry,
+  sanitizeSize,
+} from "./parts/define.js";
+export type {
+  PackOptions,
+  Pack,
+  ParamHandle,
+  ParamSpec,
+  ParamValue,
+  ShapeInit,
+} from "./parts/define.js";
 export type { ProjectionOptions, Silhouette } from "./geometry/index.js";
 
 /**
@@ -103,6 +119,10 @@ export {
   defaultIdPrefix,
 } from "./render/index.js";
 export type { ModelInputs, RenderDeps } from "./render/index.js";
+
+// Close-up size and depth checks for the CLI (assemblies section 8.5; D-1b). @internal, not public API.
+export { closeupDiagnostics } from "./scene/assembly/closeup.js";
+export type { CloseupCheckContext } from "./scene/assembly/closeup.js";
 
 // Image assets (Track C-1): validate and clean image bytes, no I/O.
 export { prepareImage, decodeImageDataUri, DEFAULT_IMAGE_LIMITS } from "./assets/prepare.js";

@@ -28,6 +28,16 @@ image, box) and the heat-sink figure through `render()` as `asm-*.svg` / `fig-he
 step. Under reduced motion these diagrams show each step's end pose (assemblies.md section 12),
 so the check is not "static" but "frames inside a step are equal, different steps differ".
 
+### Depth copy fixtures (A1-2b)
+
+`asm-copies.svg` (one copy swapped twice, with a top-face label inside the copy) and
+`asm-copies-clip.svg` (a clipped piston with a copy) come from `packages/core/test/copies-fixtures.ts`.
+`fixture.json` lists their copy swaps (`copies[file].swaps`: time and the `partVisible` ids of the
+swapping item's copies). At each swap, in inline and `<object>`, exactly one copy must be visible
+at `t - 1/60`, `t` and `t + 1/60` s, the frames across the swap must differ by less than 0.5% of the
+pixels, and, as a control, the frame at `t` with the visible copy removed must differ by more
+(so a gap would be caught). Safari runs the same swap check without the control.
+
 ### Checking real `render()` output
 
 Write the animated SVGs to a directory (and optionally `name.expected.png` plus a `fixture.json`

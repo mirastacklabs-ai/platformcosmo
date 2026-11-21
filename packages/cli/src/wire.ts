@@ -34,6 +34,7 @@ export function defaultDeps(): Deps {
       parseSpec: core.parseSpec,
       validate: core.validate,
       render: core.render,
+      closeupDiagnostics: core.closeupDiagnostics,
       createIconResolver: core.createIconResolver,
       sanitizeSvg: core.sanitizeSvg,
       fetchIconPack: core.fetchIconPack,

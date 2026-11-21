@@ -63,8 +63,10 @@ function itemSeg(item: string): string {
 
 export interface CreateIdsOptions {
   /**
-   * Number of DOM copies by copy-0 element id (default 1 each). Phase 1b has no copies;
-   * `copyIds` lists `id`, `id__c1` ... for ids with more than one.
+   * Number of DOM copies by copy-0 element id (default 1 each); `copyIds` lists `id`, `id__c1`
+   * ... for ids with more than one. The assembly render model (A1-2b) returns a scheme whose
+   * `copyIds` knows every element of every copied item; this option is for callers that know
+   * their counts up front.
    */
   readonly copies?: ReadonlyMap<string, number>;
 }
