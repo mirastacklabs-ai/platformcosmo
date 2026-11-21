@@ -1,0 +1,273 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`close-up chain: level cross-fades > keyframes of the level groups (snapshot) 1`] = `
+[
+  {
+    "dur": 14,
+    "keyframes": [
+      [
+        {
+          "opacity": 0,
+          "p": 0,
+        },
+        {
+          "opacity": 0,
+          "p": 0.160714,
+        },
+        {
+          "opacity": 1,
+          "p": 0.214286,
+        },
+        {
+          "opacity": 1,
+          "p": 0.442857,
+        },
+        {
+          "opacity": 0,
+          "p": 0.5,
+        },
+        {
+          "opacity": 0,
+          "p": 1,
+        },
+      ],
+    ],
+    "path": "hall/srv/closeup",
+  },
+  {
+    "dur": 14,
+    "keyframes": [
+      [
+        {
+          "opacity": 0,
+          "p": 0,
+        },
+        {
+          "opacity": 0,
+          "p": 0.442857,
+        },
+        {
+          "opacity": 1,
+          "p": 0.5,
+        },
+        {
+          "opacity": 1,
+          "p": 0.7285710000000001,
+        },
+        {
+          "opacity": 0,
+          "p": 0.785714,
+        },
+        {
+          "opacity": 0,
+          "p": 1,
+        },
+      ],
+      [
+        {
+          "matrix": [
+            21.7255,
+            22.5,
+            65.21,
+          ],
+          "p": 0,
+        },
+        {
+          "matrix": [
+            21.7255,
+            22.5,
+            65.21,
+          ],
+          "p": 0.44284999999999997,
+        },
+        {
+          "matrix": [
+            8.6118,
+            -78.08,
+            28.5,
+          ],
+          "p": 0.442857,
+        },
+        {
+          "matrix": [
+            21.7239,
+            22.49,
+            65.21,
+          ],
+          "p": 0.49999299999999997,
+        },
+        {
+          "matrix": [
+            21.7255,
+            22.5,
+            65.21,
+          ],
+          "p": 0.5,
+        },
+        {
+          "matrix": [
+            21.7255,
+            22.5,
+            65.21,
+          ],
+          "p": 1,
+        },
+      ],
+    ],
+    "path": "hall/srv/closeup/cpu-1/closeup",
+  },
+]
+`;
+
+exports[`quarter-turn views > keyframes of the view groups (snapshot) 1`] = `
+[
+  {
+    "keyframes": [
+      [
+        {
+          "opacity": 1,
+          "p": 0,
+        },
+        {
+          "opacity": 0,
+          "p": 0.015,
+        },
+        {
+          "opacity": 0,
+          "p": 1,
+        },
+      ],
+    ],
+    "turn": 0,
+  },
+  {
+    "keyframes": [
+      [
+        {
+          "opacity": 0,
+          "p": 0,
+        },
+        {
+          "opacity": 1,
+          "p": 0.015,
+        },
+        {
+          "opacity": 1,
+          "p": 0.2,
+        },
+        {
+          "opacity": 0,
+          "p": 0.215,
+        },
+        {
+          "opacity": 0,
+          "p": 0.63,
+        },
+        {
+          "opacity": 1,
+          "p": 0.645,
+        },
+        {
+          "opacity": 1,
+          "p": 0.8,
+        },
+        {
+          "opacity": 0,
+          "p": 0.815,
+        },
+        {
+          "opacity": 0,
+          "p": 1,
+        },
+      ],
+    ],
+    "turn": 90,
+  },
+  {
+    "keyframes": [
+      [
+        {
+          "opacity": 0,
+          "p": 0,
+        },
+        {
+          "opacity": 0,
+          "p": 0.2,
+        },
+        {
+          "opacity": 1,
+          "p": 0.215,
+        },
+        {
+          "opacity": 1,
+          "p": 0.4,
+        },
+        {
+          "opacity": 0,
+          "p": 0.415,
+        },
+        {
+          "opacity": 0,
+          "p": 0.6,
+        },
+        {
+          "opacity": 1,
+          "p": 0.615,
+        },
+        {
+          "opacity": 1,
+          "p": 0.63,
+        },
+        {
+          "opacity": 0,
+          "p": 0.645,
+        },
+        {
+          "opacity": 0,
+          "p": 0.8,
+        },
+        {
+          "opacity": 1,
+          "p": 0.815,
+        },
+        {
+          "opacity": 1,
+          "p": 1,
+        },
+      ],
+    ],
+    "turn": 180,
+  },
+  {
+    "keyframes": [
+      [
+        {
+          "opacity": 0,
+          "p": 0,
+        },
+        {
+          "opacity": 0,
+          "p": 0.4,
+        },
+        {
+          "opacity": 1,
+          "p": 0.415,
+        },
+        {
+          "opacity": 1,
+          "p": 0.6,
+        },
+        {
+          "opacity": 0,
+          "p": 0.615,
+        },
+        {
+          "opacity": 0,
+          "p": 1,
+        },
+      ],
+    ],
+    "turn": 270,
+  },
+]
+`;

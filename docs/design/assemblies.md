@@ -268,6 +268,15 @@ as `count × thumbnail` (thumbnail = the leaf drawn at a fixed callout scale, or
 `view` rotates the view a quarter turn from that step on (§7.7). `unbuild` plays steps in
 reverse (time-reversed, §7.2).
 
+Animation (B-3, `render/assembly/builds.ts`): a built leaf is hidden until its move starts, then
+fades in over 0.2 s while it travels from its origin to its seat; an unbuilt leaf fades out over
+the last 0.2 s of its reversed move and vanishes when it ends (the exact mirror, easing mirrored
+like an implode's). The depth order sees the same windows (`DepthItemInput.present`), so an absent
+part takes no part. The loop-start fades are the contract's (`SceneAssembly.loopStart`); a part
+whose own build starts before its fade-out ends is cut at its build start (never shorter than
+1e-4 s, so time 0 still shows the base pose). The loop closure fades parts present at rest but
+not at the end in, and the others out, over the last step's closing window.
+
 Within a step the added nodes move **bottom-up**: ordered by their lowest face, ties by spec
 order, then path; each starts `stagger` after the previous. Distances stack as in §6.3 against
 the parts placed so far (the base and earlier steps), so a part never starts inside one that is
@@ -478,10 +487,16 @@ storyboard levels carry the geometry and an empty group; their fit is a placehol
 `frameAt`/`stepEnd` merge the states of the main scene, every view and every level, including
 the opacity of each view group (linear over 0.3 s at the build step's start) and of each level
 group (linear over the camera transition into its step), and the level groups' placement
-(zoom 1); B-3 still animates them in CSS. Entry rule: a focus transition into step k starts the
-level at `fromHost(camera(hostAt(k - 1)))`; `enter` is that start for a host that never moved.
-Occluders: B-3 cross-fades the main world against the level (at least the host's depth
-neighbours), so nothing of the main scene slides under the level while it zooms in. The
+(zoom 1). **Animation (B-3).** The cross-fades are keys on the loop clock
+(`AssemblyRenderModelX.groups`, `render/assembly/groups.ts`): opacity per view and level group,
+placement per level group. `frameAt` and `stepEnd` evaluate them and the animator writes them as CSS
+(`opacity` and `matrix(s,0,0,s,tx,ty)` keyframes on the group, retimed by the camera windows like
+every other track), so a frame equals the CSS pose at the same time; a group whose keys never change
+(a level that is never shown) gets no animation. Reduced motion snaps each group to its step-end
+state. The models of every view and level are animated under their own ids (`views[].model`,
+`levels[].model`), on the same loop clock. The level group starts at `fromHost(hostAt(k - 1))`
+at camera zoom 1 (the camera never zooms onto a close-up path: its focus rect lives in the level),
+and the main world is not cross-faded against the level (open, D-4a visual review). The
 top-level `focusRect` answers world ids in the view in effect (`plan[step - 1].view`); ids
 inside a level are answered by `levelFocusRect(step, id)` in overlay coordinates and are not in
 `RenderModel.focusRects`. Close-ups and views do not combine (`assembly/view-needs-assembly-only`).

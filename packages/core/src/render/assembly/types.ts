@@ -25,4 +25,6 @@ export type { AssemblyStaticFade as StaticFadeTrack, AssemblyStepClock as StepCl
 /** The contract model plus the loop's moves (kept internal: not part of the contract). */
 export interface AssemblyRenderModelX extends AssemblyRenderModel {
   readonly moves: readonly import("./tracks.js").BezierMove[];
+  /** Opacity (views, levels) and placement (levels) tracks of the view and level groups (B-3). */
+  readonly groups?: readonly import("./groups.js").GroupTrack[];
 }
