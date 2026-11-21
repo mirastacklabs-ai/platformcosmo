@@ -240,6 +240,7 @@ export async function buildOnce(ctx: Ctx, s: BuildSettings): Promise<number> {
     const steps = (spec as { steps?: unknown }).steps;
     const count = Array.isArray(steps) ? steps.length : 0;
     if (s.pngStep > count) {
+      // Core checks the range too, but only the CLI maps it to exit 2 (usage), so it is repeated here.
       // Schema and semantic errors come first: they are the likelier cause of a wrong step count.
       const report = ctx.deps.core.validate(spec, {
         icons: resolver,

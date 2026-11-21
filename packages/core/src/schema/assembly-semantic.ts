@@ -648,7 +648,8 @@ const wellFormed = (d: unknown): d is Diagnostic => {
     (x.severity === "error" || x.severity === "warning" || x.severity === "info") &&
     typeof x.code === "string" &&
     typeof x.path === "string" &&
-    typeof x.message === "string"
+    typeof x.message === "string" &&
+    (x.suggestion === undefined || typeof x.suggestion === "string")
   );
 };
 
@@ -698,7 +699,19 @@ function checkPlacement(
     let kept = 0;
     for (const d of ds) {
       if (!wellFormed(d)) continue;
-      if (kept++ >= PLACEMENT_DIAG_CAP) break;
+      if (kept++ >= PLACEMENT_DIAG_CAP) {
+        c.out.push(
+          mk(
+            "info",
+            "assembly/diagnostics-capped",
+            ptr,
+            `This part's placement check reported more than ${PLACEMENT_DIAG_CAP} diagnostics; the rest are omitted`,
+            undefined,
+            { limit: PLACEMENT_DIAG_CAP },
+          ),
+        );
+        break;
+      }
       c.out.push(d);
     }
   } catch {

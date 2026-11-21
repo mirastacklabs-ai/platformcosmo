@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- test helpers walk untyped spec JSON */
 /**
  * D-1: shape packs, --png-step and validate --suggest through the real wiring and the built
  * bin (assemblies.md sections 5, 12, 17, 18).
@@ -301,9 +300,9 @@ const car = spec({
 function applySuggestions(base: Spec, report: SuggestReport): Spec {
   const out = structuredClone(base) as Record<string, unknown>;
   for (const sg of report.suggestions) {
-    let node: any = out;
-    for (const seg of sg.pointer.split("/").slice(1)) node = node[seg];
-    node.programs = [...(node.programs ?? []), sg.program];
+    let node = out as Record<string, unknown>;
+    for (const seg of sg.pointer.split("/").slice(1)) node = node[seg] as Record<string, unknown>;
+    node.programs = [...((node.programs as unknown[]) ?? []), sg.program];
     if (sg.steps) out.steps = [...((out.steps as unknown[]) ?? []), ...sg.steps];
   }
   return out as Spec;
@@ -531,9 +530,14 @@ const docSpec = (title: string): Spec => {
 };
 /** The example with its programs and steps removed: the "user gave no program" case. */
 const bare = (title: string): Spec => {
-  const o = structuredClone(docSpec(title)) as Record<string, any>;
+  type BarePart = { programs?: unknown; parts?: BarePart[] };
+  type BareSpec = {
+    steps?: unknown;
+    assemblies: (BarePart & { program?: unknown; pose?: unknown; parts: BarePart[] })[];
+  };
+  const o = structuredClone(docSpec(title)) as unknown as BareSpec;
   delete o.steps;
-  const strip = (parts: any[]): void => {
+  const strip = (parts: BarePart[]): void => {
     for (const p of parts) {
       delete p.programs;
       if (p.parts) strip(p.parts);
@@ -545,7 +549,7 @@ const bare = (title: string): Spec => {
     delete a.pose;
     strip(a.parts);
   }
-  return o as Spec;
+  return o as unknown as Spec;
 };
 const selects = (stages: { parts: string[] }[], id: string): boolean =>
   stages.some((st) => st.parts.includes(id) || st.parts.includes(`${id}-*`));
@@ -652,6 +656,32 @@ describe("suggestions are valid specs (merge, validate, no compression)", () => 
     },
     60_000,
   );
+
+  test("the story's last frame is the rest pose, nested owners included", async () => {
+    const base = cases.find(([n]) => n === "nested sub-assembly")![1]();
+    const rep = suggest(base, defaultDeps().parts);
+    const steps = rep.suggestions[0]!.steps!;
+    expect(steps.at(-1)!.assembly).toEqual([{ implode: "a/unit" }, { implode: "a" }]);
+    const merged = applySuggestions(base, rep);
+    // Same caption on both, so only the scene can differ between the two frames.
+    const all = merged.steps as { caption: string }[];
+    all[0]!.caption = all.at(-1)!.caption = "frame";
+    const f = await file("rest-pose.cosmo.json", merged);
+    const last = String(steps.length);
+    for (const [step, name] of [
+      ["1", "rp1"],
+      [last, "rpn"],
+    ] as const) {
+      const r = await run(
+        ["build", f, "--png-step", step, "--no-animated", "--out", dir, "--name", name],
+        deps(),
+      );
+      expect(r.code).toBe(0);
+    }
+    const first = await readFile(join(dir, "rp1.png"));
+    const end = await readFile(join(dir, "rpn.png"));
+    expect(Buffer.compare(first, end)).toBe(0);
+  }, 120_000);
 
   test("the text says where each part of the fragment goes", () => {
     const text = formatSuggestions("f", suggest(car));

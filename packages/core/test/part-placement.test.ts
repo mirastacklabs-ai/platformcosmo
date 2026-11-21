@@ -106,6 +106,23 @@ describe("PartPlacement callback", () => {
     expect(calls.filter((c) => c.kind === undefined).map((c) => c.shape)).toEqual(["brick:brick"]);
   });
 
+  test("a non-string suggestion is malformed; more than 8 diagnostics from one part report one info", () => {
+    const bad = validate(spec(), {
+      parts: registry,
+      placement: () => [{ ...warn(1), code: "x/bad", suggestion: { a: 1 } }] as never,
+    });
+    expect(bad.diagnostics.filter((d) => d.code === "x/bad")).toHaveLength(0);
+
+    const flood = validate(spec(), {
+      parts: registry,
+      placement: (req) => Array.from({ length: 12 }, (_, i) => ({ ...warn(i), path: req.path })),
+    });
+    const capped = flood.diagnostics.filter((d) => d.code === "assembly/diagnostics-capped");
+    expect(capped.length).toBeGreaterThan(0);
+    expect(flood.diagnostics.filter((d) => d.code === "x/y").length).toBe(capped.length * 8);
+    expect(capped[0]).toMatchObject({ severity: "info", params: { limit: 8 } });
+  });
+
   test("malformed pack diagnostics are dropped; hitting the call cap reports one info", () => {
     const r = validate(spec(), {
       parts: registry,

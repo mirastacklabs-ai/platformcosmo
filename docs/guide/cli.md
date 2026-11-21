@@ -52,7 +52,7 @@ exit code or the spec.
 | `--json`                                       | machine-readable result                                  |
 
 `--png-step <n>` writes the PNG of the end pose of step `n` (with that step's camera) and implies `--png`; `n` must be an integer from 1
-to the number of steps and cannot be combined with `--time`. Otherwise it fails with `options/invalid-png-step` and exit code 2.
+to the number of steps and cannot be combined with `--time`. Otherwise it fails with `options/invalid-png-step` and exit code 2 (after schema and semantic errors, which exit 1).
 
 `--motion css` replaces the SMIL particle animation (`<animateMotion>`) with CSS `offset-path` keyframes, so the SVG has no
 SMIL elements. Use it when the host strips SMIL but keeps `<style>`; timing, particle counts and reduced-motion

@@ -244,10 +244,13 @@ function suggestOwner(
   if (body) why.push(`body: ${body.id} (role body)`);
   if (!body) {
     const mated = new Map<string, number>();
+    const counted = new Set(items.filter((it) => it.count > 1).map((it) => it.id));
     for (const it of items) {
       const m = it.p.mates;
       if (typeof m === "string") {
-        const head = m.split("/")[0] as string;
+        // `cpu-1` names one instance of the counted part `cpu`.
+        const inst = /^(.+)-\d+$/.exec(m);
+        const head = inst && counted.has(inst[1]!) ? inst[1]! : m;
         mated.set(head, (mated.get(head) ?? 0) + 1);
       }
     }
@@ -275,7 +278,13 @@ function suggestOwner(
   if (!body) why.push("body: none found (no role, mates or sizes); every part may move");
 
   // 2. Classify the rest.
-  const ctx: Ctx = { shells: items.filter((it) => it.p.role === "shell" || it.p.shape === "tray") };
+  const roleOf = (p: P): string | undefined => {
+    const def = p.shape !== undefined && p.shape.includes(":") ? reg?.get(p.shape) : undefined;
+    return p.role ?? def?.role;
+  };
+  const ctx: Ctx = {
+    shells: items.filter((it) => roleOf(it.p) === "shell" || it.p.shape === "tray"),
+  };
   if (body) ctx.body = body;
   for (const it of items) it.cls = it === body ? "body" : classify(it, reg, ctx);
   const of = (c: PartClass): Item[] => items.filter((it) => it.cls === c);
@@ -291,7 +300,7 @@ function suggestOwner(
   // covers on a hidden side go last, with the others faded.
   const stages: SuggestedStage[] = [];
   const counts: number[] = [];
-  const push = (name: string, group: Item[], cls: PartClass, dir: string): void => {
+  const push = (name: string, group: Item[], dir: string): void => {
     if (group.length === 0) return;
     const chunks: Item[][] = [];
     let cur: Item[] = [];
@@ -322,7 +331,6 @@ function suggestOwner(
       });
       counts.push(leaves);
     });
-    void cls;
   };
   const byDirection = (group: Item[], cls: PartClass): Map<string, Item[]> => {
     const m = new Map<string, Item[]>();
@@ -335,25 +343,24 @@ function suggestOwner(
     return m;
   };
   for (const [d, g] of byDirection(classes.fastener, "fastener"))
-    push(d === "+z" ? "Fasteners" : `Fasteners (${d})`, g, "fastener", d);
+    push(d === "+z" ? "Fasteners" : `Fasteners (${d})`, g, d);
   const covers = byDirection(classes.cover, "cover");
   const late: [string, Item[]][] = [];
   for (const [d, g] of covers) {
     if (hidden(d)) late.push([d, g]);
-    else push(covers.size === 1 ? "Covers" : `Covers (${d})`, g, "cover", d);
+    else push(covers.size === 1 ? "Covers" : `Covers (${d})`, g, d);
   }
   for (const [d, g] of byDirection(classes.unit, "unit"))
-    push(d === "drawer" ? "Devices" : "Sub-assemblies", g, "unit", d);
+    push(d === "drawer" ? "Devices" : "Sub-assemblies", g, d);
   if (classes.internal.length > 0) {
     push(
       "Internals",
       classes.internal,
-      "internal",
       direction(classes.internal[0]!, "internal", body, classes.internal),
     );
   }
-  push("Other parts", classes.loose, "loose", "out");
-  for (const [d, g] of late) push(`Covers (${d}, hidden side)`, g, "cover", d);
+  push("Other parts", classes.loose, "out");
+  for (const [d, g] of late) push(`Covers (${d}, hidden side)`, g, d);
 
   if (stages.length === 0) {
     return "no stages: no part other than the body is movable";
@@ -390,7 +397,7 @@ function story(root: Suggestion, label: string, nested: Suggestion[]): Suggested
   const steps: SuggestedStep[] = [{ caption: `${label} assembled`, duration: 2 }];
   const run = (s: Suggestion, caption: (st: SuggestedStage) => string): void => {
     s.program.stages.forEach((st, k) => {
-      const first = st.parts[0]!.replace(/-\*$/, (m) => (st.parts[0]!.endsWith("-*") ? "-1" : m));
+      const first = st.parts[0]!.replace(/-\*$/, "-1");
       steps.push({
         caption: caption(st),
         duration: fitStep(stageTime(st, s.stageLeaves[k] ?? 1)),
@@ -403,8 +410,15 @@ function story(root: Suggestion, label: string, nested: Suggestion[]): Suggested
   for (const n of nested) run(n, (st) => `${n.owner.split("/").pop()}: ${st.label}`);
   steps.push({
     caption: `${label} reassembled`,
-    duration: root.stepDuration,
-    assembly: [{ implode: root.owner }],
+    duration: fitStep(
+      [root, ...nested].reduce(
+        (a, x) =>
+          a + x.program.stages.reduce((b, st, k) => b + stageTime(st, x.stageLeaves[k] ?? 1), 0),
+        0,
+      ),
+    ),
+    // Levels are per target, so an implode of the root does not reset nested owners.
+    assembly: [...nested.map((n) => ({ implode: n.owner })), { implode: root.owner }],
   });
   return steps;
 }

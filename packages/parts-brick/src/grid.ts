@@ -5,7 +5,7 @@ import { brickShapes } from "./shapes.js";
 /**
  * Placement checks for `brick:` parts (assemblies section 5.1, section 18). Pure and
  * non-throwing: bad input yields no diagnostics for that field. The semantic validator calls
- * `checkBrickPlacement` once per leaf part, with the part's own spec fields and the assembly's
+ * `checkBrickPlacement` once per leaf part and once per group, with the part's own spec fields and the assembly's
  * resolved units.
  *
  * Values are converted from the assembly's units to stud units first (section 4: x and y in
