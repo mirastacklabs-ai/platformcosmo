@@ -6,7 +6,7 @@ import type { SvgElement, SvgNode } from "../src/index.js";
 import { zoomFor } from "../src/anim/timeline.js";
 import { assemblyStepEnd } from "../src/anim/assembly.js";
 import type { AssemblyRenderModelX } from "../src/render/assembly/types.js";
-import { evalOffset, evalOpacity } from "../src/render/assembly/tracks.js";
+import { evalOffset, evalOpacity, stepEndTime } from "../src/render/assembly/tracks.js";
 import { fixtureTheme } from "./fixtures/theme.js";
 
 // Labels must lie inside the frame in every pose and under every step camera (assemblies §10),
@@ -114,22 +114,27 @@ describe("labels stay inside the frame", () => {
     expect(checked).toBeGreaterThan(100);
   });
 
-  test("under every step camera, the labels shown at the end of the step are inside it", () => {
-    let steps = 0;
-    for (let s = 1; s <= m.scene.timeline.length; s++) {
-      const cam = zoomFor(m, m.scene.timeline[s - 1])?.viewBox ?? m.viewBox;
-      const f = a.stepEnd(s);
-      for (const lt of leader) {
-        if ((f.opacity[lt.id] ?? 0) <= 0) continue;
-        const tf = /translate\((-?[\d.]+) (-?[\d.]+)\)/.exec(f.transforms[lt.id] ?? "");
-        const o = tf ? { x: Number(tf[1]), y: Number(tf[2]) } : { x: 0, y: 0 };
-        for (const r of restRects(groups.get(lt.id)!)) {
-          expect(inside({ ...r, x: r.x + o.x, y: r.y + o.y }, cam)).toBe(true);
+  test("under every step camera, the labels shown during the step are inside it", () => {
+    let seen = 0;
+    for (let n = 1; n <= m.scene.timeline.length; n++) {
+      const cam = zoomFor(m, m.scene.timeline[n - 1])?.viewBox ?? m.viewBox;
+      const c = a.clock[n - 1]!;
+      // from the camera's arrival (the step's start) to the end of its hold, at several fractions
+      for (const frac of [0, 0.25, 0.5, 0.75, 1]) {
+        const t = c.start + (stepEndTime(c.end) - c.start) * frac;
+        for (const lt of leader) {
+          if (evalOpacity(lt.opacity, t) <= 0) continue;
+          const o = evalOffset(lt.motion, t);
+          for (const r of restRects(groups.get(lt.id)!)) {
+            expect(inside({ ...r, x: r.x + o.x, y: r.y + o.y }, cam), `step ${n} @${frac}`).toBe(
+              true,
+            );
+          }
+          seen++;
         }
-        steps++;
       }
     }
-    expect(steps).toBeGreaterThan(5);
+    expect(seen).toBeGreaterThan(20);
   });
 });
 
@@ -184,20 +189,31 @@ describe("labels: always never drops a label silently", () => {
 });
 
 describe("a part image that cannot be placed is reported", () => {
-  test("assembly/image-unresolved when the image has no crop and its asset was not provided", () => {
+  test("an image whose asset was not provided is image/not-found (error), with or without a crop", () => {
     const spec = {
       meta: { version: "1" },
       images: [{ id: "photo", src: "img/card.png" }],
       assemblies: [
         {
           id: "a",
-          parts: [{ id: "card", shape: "box", at: [0, 0, 0], size: [4, 4, 4], image: "photo" }],
+          parts: [
+            { id: "card", shape: "box", at: [0, 0, 0], size: [4, 4, 4], image: "photo" },
+            {
+              id: "cropped",
+              shape: "box",
+              at: [9, 0, 0],
+              size: [4, 4, 4],
+              image: { ref: "photo", crop: [0, 0, 8, 4] },
+            },
+          ],
         },
       ],
     } as unknown as PlatformCosmoSpec;
     const scene = buildScene(spec, {});
-    const d = scene.diagnostics.find((x) => x.code === "assembly/image-unresolved");
-    expect(d).toMatchObject({ severity: "warning", path: "/assemblies/0/parts/0/image" });
-    expect(d!.params).toEqual({ part: "a/card", image: "photo" });
+    const d = scene.diagnostics.filter((x) => x.code === "image/not-found");
+    expect(d.map((x) => [x.severity, x.path])).toEqual([
+      ["error", "/assemblies/0/parts/0/image"],
+      ["error", "/assemblies/0/parts/1/image"],
+    ]);
   });
 });

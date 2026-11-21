@@ -20,6 +20,7 @@ import { partGeometry, studGrid } from "../src/geometry/index.js";
 import { depthItems, worldLeaves, type WorldLeaf } from "../src/render/assembly/world.js";
 import type { AssemblyRenderModelX } from "../src/render/assembly/types.js";
 import { evalOffset, round2 } from "../src/render/assembly/tracks.js";
+import { stepEndTime } from "../src/render/assembly/tracks.js";
 import { fixtureTheme } from "./fixtures/theme.js";
 import { realPng, resolverOf } from "./figure-fixtures.js";
 import { colorOf, indexOf, silhouette, viewOf, type Scene } from "./depth-zbuffer.js";
@@ -184,7 +185,8 @@ describe("model and wrapper chain (§9.4)", () => {
     expect(c.t0).toBeLessThan(c.t1);
     expect(Object.values(a.stepEnd(4).transforms).some((v) => v !== "translate(0 0)")).toBe(true);
     expect(a.frameAt(a.loop)).toEqual(a.frameAt(0));
-    expect(a.frameAt(c.t0)).toEqual(a.stepEnd(4));
+    // the end pose is the left limit at the end of the step, where the closing return begins
+    expect(a.frameAt(stepEndTime(c.t0))).toEqual(a.stepEnd(4));
     // the closing window is the last step's own transition
     expect(c.t1 - c.t0).toBeCloseTo(Math.min(0.8, 0.25 * a.clock[3]!.duration), 4);
   });

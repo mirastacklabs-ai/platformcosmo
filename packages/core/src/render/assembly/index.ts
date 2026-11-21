@@ -54,6 +54,7 @@ import {
   MoveIndex,
   evalOffset,
   evalOpacity,
+  stepEndTime,
   evalVisible,
   offsetTrack,
   plain,
@@ -105,8 +106,6 @@ export interface AssemblyBuild {
   readonly defs: SvgNode[];
   /** Screen rects that must stay inside the view box (swept boxes, labels, leaders). */
   readonly extents: Rect[];
-  /** Leader label and leader boxes under a node over their visible windows (camera focus). */
-  readonly labelRects: (path: string) => Rect[];
   readonly diagnostics: Diagnostic[];
 }
 
@@ -436,7 +435,7 @@ export function buildAssemblyRender(
   // the END of a step is read where its closing hold ends, which may be the loop's end: no wrap
   const stepEnd = (step: number): AssemblyFrameState => {
     const c = clock[step - 1];
-    return stateAt(c === undefined ? 0 : Math.min(c.end, total));
+    return stateAt(c === undefined ? 0 : stepEndTime(Math.min(c.end, total)));
   };
 
   // ---- focus rects at the END pose (§7.4) -------------------------------------------------
@@ -457,15 +456,18 @@ export function buildAssemblyRender(
     const c = clock[step - 1];
     const list = nodeLeaves.get(id);
     if (c === undefined || list === undefined) return undefined;
+    const at = stepEndTime(Math.min(c.end, total));
     const rects = list.map((l) => {
-      const d = index.displacement(l.path, c.end);
+      const d = index.displacement(l.path, at);
       const b = l.geometry.bounds;
       return projectBoxBounds(projection, {
         origin: { x: b.origin.x + d.x, y: b.origin.y + d.y, z: b.origin.z + d.z },
         size: b.size,
       });
     });
-    const r = unionRects(rects);
+    // what the camera frames also holds the labels and leaders shown from its lead to the end
+    const lead = Math.min(0.8, 0.25 * c.duration);
+    const r = unionRects([...rects, ...labels.rectsUnder(id, Math.max(0, c.start - lead), at)]);
     return {
       x: round2(r.x - m.side),
       y: round2(r.y - m.side),
@@ -503,7 +505,6 @@ export function buildAssemblyRender(
     labels: labels.nodes,
     defs: domCtx.defs,
     extents,
-    labelRects: labels.rectsUnder,
     diagnostics,
   };
 }

@@ -101,10 +101,11 @@ export interface LabelOutput {
   /** `assembly/label-omitted`: a requested top-face label that did not fit and was not drawn. */
   readonly diagnostics: Diagnostic[];
   /**
-   * Every box (label and leader) of the leader labels of `path` and everything below it, at every
-   * instant they are visible, in screen coordinates: what a camera that frames `path` must contain.
+   * Boxes (label and leader) of the leader labels of `path` and everything below it over the
+   * window `[a, b]` of loop time, wherever they are visible: what a camera that frames `path`
+   * during that window must contain.
    */
-  readonly rectsUnder: (path: string) => Rect[];
+  readonly rectsUnder: (path: string, a: number, b: number) => Rect[];
 }
 
 interface NodeInfo {
@@ -164,7 +165,12 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
   const topLabels = new Map<string, SvgElement>();
   const extents: Rect[] = [];
   const diagnostics: Diagnostic[] = [];
-  const shown: { path: string; rects: Rect[] }[] = [];
+  const shown: {
+    path: string;
+    rest: Rect[];
+    motion: readonly TrackKey[];
+    keys: readonly OpacityKey[];
+  }[] = [];
   let elements = 0;
 
   // Nodes (leaf or sub) with a label, from the assemblies' trees.
@@ -356,8 +362,7 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       x: q.x - sx,
       y: q.y - sy,
     }));
-    const mine: Rect[] = [];
-    shown.push({ path, rects: mine });
+    shown.push({ path, rest, motion, keys });
     const stamps = [...new Set([...motion.map((k) => k.t), ...keys.map((k) => k.t)])];
     for (const t of stamps) {
       const seen =
@@ -366,11 +371,7 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
         evalOpacity(keys, t - 1e-3) > 0;
       if (!seen) continue;
       const o = evalOffset(motion, t);
-      for (const q of rest) {
-        const r2 = { ...q, x: q.x + o.x, y: q.y + o.y };
-        extents.push(r2);
-        mine.push(r2);
-      }
+      for (const q of rest) extents.push({ ...q, x: q.x + o.x, y: q.y + o.y });
     }
     const tf = translateOf(evalOffset(motion, 0));
     nodes.push(
@@ -446,8 +447,23 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     elements += 2;
     extents.push({ x: top.x - faceW / 2, y: top.y - fs2, width: faceW, height: fs2 * 2 });
   }
-  const rectsUnder = (under: string): Rect[] =>
-    shown.filter((e) => e.path === under || e.path.startsWith(`${under}/`)).flatMap((e) => e.rects);
+  const rectsUnder = (under: string, a: number, b: number): Rect[] => {
+    const out: Rect[] = [];
+    for (const e of shown) {
+      if (e.path !== under && !e.path.startsWith(`${under}/`)) continue;
+      const times = [
+        a,
+        b,
+        ...[...e.motion.map((k) => k.t), ...e.keys.map((k) => k.t)].filter((t) => t > a && t < b),
+      ];
+      for (const t of times) {
+        if (evalOpacity(e.keys, t) <= 0 && evalOpacity(e.keys, t + 1e-3) <= 0) continue;
+        const o = evalOffset(e.motion, t);
+        for (const q of e.rest) out.push({ ...q, x: q.x + o.x, y: q.y + o.y });
+      }
+    }
+    return out;
+  };
   return { nodes, tracks, extents, elements, top: topLabels, diagnostics, rectsUnder };
 }
 
@@ -462,13 +478,6 @@ function restOpacity(
     .filter((t) => t >= 0 && t <= loop)
     .sort((a, b) => a - b);
   const d0 = disp(0);
-  if (chain.length > 0 && process.env.DBG)
-    console.error(
-      "DBG",
-      JSON.stringify(times),
-      JSON.stringify(times.map(disp)),
-      JSON.stringify(chain),
-    );
   const atRest = (t: number): boolean => {
     const d = disp(t);
     return Math.abs(d.x - d0.x) < 0.005 && Math.abs(d.y - d0.y) < 0.005;

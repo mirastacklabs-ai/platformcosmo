@@ -1009,11 +1009,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   // ---- Focus rects, glyph coverage -----------------------------------------------------
   const focusRects: Record<string, Rect> = {};
   for (const id of Object.keys(scene.focusTargets).sort()) {
-    // a node's camera also frames the labels and leaders its stages show (§7.4, §10)
-    const r = unionRects([
-      projectBoxBounds(projection, scene.focusTargets[id] as Box3),
-      ...(asmBuild?.labelRects(id) ?? []),
-    ]);
+    const r = projectBoxBounds(projection, scene.focusTargets[id] as Box3);
     focusRects[id] = {
       x: round2(r.x - MARGIN_FOCUS),
       y: round2(r.y - MARGIN_FOCUS),
