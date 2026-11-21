@@ -49,6 +49,7 @@ import {
 import { h } from "../../emit/xml.js";
 import { projectBoxBounds, unionRects } from "../../geometry/index.js";
 import { endsAwayFromBase } from "../../scene/assembly/timing.js";
+import { resolveStoryboard } from "../../scene/storyboards.js";
 import { closesLoop, resolveFigure } from "../../scene/boards.js";
 import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
 import { stepTimes } from "../boards/timeline.js";
@@ -806,10 +807,11 @@ export function buildAssemblyRender(
   for (const a of assemblies) basePoses[a.id] = a.basePose;
   for (const l of levels) if (l.assembly !== undefined) basePoses[l.path] = l.assembly.basePose;
   let closeLast = endsAwayFromBase(plan[plan.length - 1]?.poses, basePoses);
-  if (!closeLast && ctx.spec?.figures !== undefined) {
+  if (!closeLast && (ctx.spec?.figures !== undefined || ctx.spec?.storyboards !== undefined)) {
     closeLast = closesLoop(
-      ctx.spec.figures.map((f, i) => resolveFigure(f, i).figure),
+      (ctx.spec.figures ?? []).map((f, i) => resolveFigure(f, i).figure),
       plan,
+      (ctx.spec.storyboards ?? []).map((b) => resolveStoryboard(b)),
     );
   }
   const { times, total } = stepTimes(scene, 1, closeLast);

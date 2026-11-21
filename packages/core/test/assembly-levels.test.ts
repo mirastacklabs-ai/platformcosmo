@@ -1058,11 +1058,12 @@ describe("existing output is unchanged", () => {
     // The two specs with build programs changed in A2-6 (build programs, plan views and the
     // build poses now exist); re-recorded there. Every other hash is the A2-3 record.
     // A2-7: the rover's cab sub-build and cargo flights are now in its scene
-    "assemblies.md Brick rover": "106c53ca0b834a0d",
+    "assemblies.md Brick rover": "72f287612e44146d",
     "document-ingestion.md Generic 2OU server from a spec document": "ccca9f57caea9bd6",
     "document-ingestion.md Heat-sink installation figure": "0210858f1ee3bae2",
     "document-ingestion.md From the hall to the heat sink": "51d21be6488c12ce",
-    "document-ingestion.md Booklet storyboard": "c1fbfa2da67efd3d",
+    // R-2: the scene now carries the storyboard (boards, plan, images) the guard used to refuse
+    "document-ingestion.md Booklet storyboard": "37b6db4a9865fdaf",
   };
 
   test("1.1 gallery specs build byte-identical scenes", () => {

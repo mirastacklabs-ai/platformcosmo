@@ -69,6 +69,7 @@ import {
   type PlanOptions,
   type ResolvedFigure,
 } from "../boards.js";
+import { resolveStoryboard, type ResolvedStoryboard } from "../storyboards.js";
 import {
   resolveDirection,
   toLBox,
@@ -1183,13 +1184,14 @@ export function assemblyPlanDiagnostics(
     const { figure } = resolveFigure(f, i);
     if (!figures.has(figure.id)) figures.set(figure.id, figure);
   });
+  const storyboards = new Map<string, ResolvedStoryboard>();
+  for (const sb of spec.storyboards ?? [])
+    if (!storyboards.has(sb.id)) storyboards.set(sb.id, resolveStoryboard(sb));
   const views = stepViews(spec, ctx.isFocusTarget);
-  const planned = programs.plan(
-    built.assemblies,
-    figures,
-    views,
-    ctx.gated ? { gated: ctx.gated } : {},
-  );
+  const planned = programs.plan(built.assemblies, figures, views, {
+    ...(ctx.gated ? { gated: ctx.gated } : {}),
+    ...(storyboards.size > 0 ? { storyboards } : {}),
+  });
   // the build-program warnings a scene reports too (resolution happens in `plan`), so `validate`
   // shows them: a blocked drop, a `subBuild` the step does not add whole
   const build = programs.diagnostics.filter(

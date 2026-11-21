@@ -891,17 +891,17 @@ keyframe names are derived from sorted inputs only.
 
 ## 13. Budgets
 
-| Limit                                        | Value                                            | Diagnostic                      |
-| -------------------------------------------- | ------------------------------------------------ | ------------------------------- |
-| leaf parts per spec (after `count`, `use`)   | ≤ 2000 (warn > 500)                              | `budget/assembly-parts`         |
-| nesting                                      | ≤ 8 path segments                                | `assembly/too-deep`             |
-| stages per program / build steps per program | ≤ 32 / ≤ 500                                     | schema                          |
-| depth copies                                 | ≤ 0.5 × items                                    | `budget/depth-copies`           |
-| epochs per transition                        | ≤ 64                                             | `assembly/depth-approx`         |
-| views / levels                               | ≤ 4 / ≤ 4 deep, ≤ 8 total                        | `budget/views`, `budget/levels` |
-| elements                                     | existing warn > 5000 (all levels, views, copies) | `budget/elements`               |
-| images                                       | §11.4                                            | `budget/images`                 |
-| build time                                   | 2 s at 300 leaves, 10 s at 2000                  | `budget/time`                   |
+| Limit                                        | Value                                                                                                                                                    | Diagnostic                      |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| leaf parts per spec (after `count`, `use`)   | ≤ 2000 (warn > 500)                                                                                                                                      | `budget/assembly-parts`         |
+| nesting                                      | ≤ 8 path segments                                                                                                                                        | `assembly/too-deep`             |
+| stages per program / build steps per program | ≤ 32 / ≤ 500                                                                                                                                             | schema                          |
+| depth copies                                 | ≤ 0.5 × items                                                                                                                                            | `budget/depth-copies`           |
+| epochs per transition                        | ≤ 64                                                                                                                                                     | `assembly/depth-approx`         |
+| views / levels                               | ≤ 4 / ≤ 4 deep, ≤ 8 total                                                                                                                                | `budget/views`, `budget/levels` |
+| elements                                     | existing warn > 5000 (all levels, views, copies); storyboards: ≤ 12000 animated (28 per frame at most: 2 + 2 + 1 + 2 + 20 + 1), else a static rest frame | `budget/elements`               |
+| images                                       | §11.4                                                                                                                                                    | `budget/images`                 |
+| build time                                   | 2 s at 300 leaves, 10 s at 2000                                                                                                                          | `budget/time`                   |
 
 **Size classes.** `typical` (PLAN §6, under 150 KB); `assembly` (no images, ≤ 300 leaves:
 about 2–4 KB per leaf incl. keyframes, target under 600 KB); `document` (embedded images:
@@ -923,6 +923,52 @@ model image changes (`transition`: fade, wipe via an animated clip rect, or cut)
 plays backward. Explode is not available (`assembly/storyboard-no-explode`). All motion is
 2D inside the panel, so no depth questions arise. Details and the skill flow:
 [document ingestion](./document-ingestion.md).
+
+**Levels.** A storyboard has one program, its frames (`ProgramLevel.program` = `frames`), and one
+level per frame: level `k` shows the model after document step `k`, level 0 an empty panel.
+`build` moves `from → to` (default: one frame; `advance` steps by frames), `unbuild` moves back
+(default: to 0). The timeline starts where the first action starts (`build`: level 0, `unbuild`:
+the last frame). The rest frame (static output, PNG default, reduced-motion start) shows the
+finished model, level `n`; the loop opens by easing from it to the start level (at most 0.4 s,
+none of it when the first action starts at once), and a story that ends before level `n`
+reserves the closing window and returns to the rest frame (§7.4). Invalid actions (explode,
+a path below the board, `program`, range, direction) are `validate`'s; the planner leaves them out.
+
+**Frame timing** (seconds at speed 1, before the step's compression; one `ResolvedAction.length`
+is the sum over its frames): callout fade-in 0.3 (frames with `parts` or `sub`), one beat of 0.35
+per mini step (0.1 cross-fade), flight 0.6 (ease-in-out; the copies fade over the last 0.12), model
+change 0.5. A frame without a callout is the change alone (0.5). `cut` swaps in 0.02 s (so every
+value stays a function of time and reverses exactly).
+
+**Panel.** From the top: callout strip (22% of the panel width; thumbnails with `<count>x`
+beneath them on the left, the sub-build box on the right), the model area (the aspect of the first
+frame's model image, clamped to 1:4 .. 2:1; every model is fitted into it, centred), the caption
+bar (step number, then the caption). The callout of frame `k` shows from its fade-in until frame
+`k + 1` starts (it fades out then, also when frame `k + 1` has none); the last frame's callout stays
+on the finished panel. Thumbnails fly as copies of the callout's, one group per frame; the last
+mini step flies on its own and docks at `attach` (percent of the fitted model image) before the
+model changes; copies and the docked image are gone when the model image has changed. Captions
+change in two halves (old out, new in) so two never overlap.
+
+**Draw order.** Figures and storyboards are ordered together by one key, the depth of their anchor
+(`pos`: nearer = larger x + y, then id), after the 3D content.
+
+**Transitions.** `fade` cross-fades the two model images; `cut` swaps them; `wipe` reveals the new
+image from the left: each image sits still in a group clipped by its own `clipPath`, whose rect
+slides in over the panel (a plain translate track on the rect). The old image's rect slides out to
+the right in the same time (the complementary reveal), so a transparent new image never shows the
+old one under the sweep. Only the rect's transform animates, never a clip-path on an animated
+element (Chromium does not re-resolve that after a seek), and the CSS loop, the attribute frames
+of PNG, GIF and MP4 and reduced motion read the same keys (resvg has
+no animated clip). `unbuild` plays every frame's keys backward with mirrored easing: an exact
+time reverse, not a second animation (a test compares them).
+
+**Images.** Every frame image goes through the image pipeline of §11 (`imageUses` lists model,
+parts and sub-build images; `image/not-found`, `image/too-large`, `image/too-many`, `budget/images`
+apply unchanged; a `label` is the thumbnail's `<title>`), `source` of the storyboard and of its images feed the credits line, and a
+storyboard whose first model image is missing draws no panel. Focus on a storyboard frames the
+panel; a manual `pos` that lands on other content warns (`layout/overlap` at `/storyboards/<i>/pos`).
+The merge-guard group is `storyboards` (`from: "callout"` and `subBuild` stay in `phase3`).
 
 ## 15. Figures (figure mode)
 
@@ -1103,6 +1149,7 @@ suggestions):
 | `asset/annotation-erased`                                                                                       | info                                              | figure end moved onto its drawn stroke, or ink inside a mask erased (ingestion §6.4)                                                                                  |
 | `asset/rim-stroke`                                                                                              | info / warning (undecided)                        | figure template rim pixels a board stroke touches: peeled, or undecided (ingestion §6.4)                                                                              |
 | `budget/assembly-parts`, `budget/depth-copies`, `budget/views`, `budget/levels`, `budget/images`, `budget/time` | warning / error                                   | §13                                                                                                                                                                   |
+| `layout/callout-count-hidden`                                                                                   | info                                              | a storyboard callout too narrow or low for a part's `<count>x`: the thumbnail is drawn, the count is not                                                              |
 | `options/invalid-png-step`                                                                                      | error                                             | `png.step` is not a positive integer, is given with `png.time`, or is beyond the timeline                                                                             |
 
 ## 19. Examples

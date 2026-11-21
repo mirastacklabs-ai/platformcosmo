@@ -46,7 +46,8 @@ function overCap(a: ImageAsset, limits: ImageLimits): string | undefined {
 }
 
 /**
- * Image ids a spec uses, in first-use order: figures (base, then parts), then assembly parts
+ * Image ids a spec uses, in first-use order: figures (base, then parts), storyboards (per frame:
+ * model, parts, sub-build), then assembly parts
  * (billboards and decals, recursively through `parts`; a `use` template is an assembly of its
  * own, so its parts are walked there). `index` is the declaration in `images` and `at` the
  * pointer diagnostics should name: the declaration for a figure use, the first part that uses it
@@ -67,6 +68,17 @@ export function imageUses(spec: PlatformCosmoSpec): { id: string; index: number;
   };
   for (const f of spec.figures ?? []) {
     for (const id of [f.base, ...f.parts.map((p) => p.image)]) add(id, (i) => `/images/${i}/src`);
+  }
+  for (const sb of spec.storyboards ?? []) {
+    for (const f of sb.frames) {
+      for (const id of [
+        f.model,
+        ...(f.parts ?? []).map((p) => p.image),
+        ...(f.sub ?? []).map((p) => p.image),
+      ]) {
+        add(id, (i) => `/images/${i}/src`);
+      }
+    }
   }
   const walk = (parts: readonly SpecPart[] | undefined, base: string): void => {
     (parts ?? []).forEach((part, j) => {
