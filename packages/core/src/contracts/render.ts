@@ -116,7 +116,7 @@ export type MotionMode = "smil" | "css";
 /**
  * Options. Invalid values produce `error` diagnostics (`options/*`) and no outputs:
  * `idPrefix` must match `^[a-z][a-z0-9-]{0,31}$`; `name` must match `^[A-Za-z0-9._-]{1,64}$`;
- * `speed` must be in (0, 10]; `png.scale` in (0, 8]; `video.fps` in [1, 60];
+ * `speed` must be in (0, 10]; `png.scale` in (0, 8]; `png.step` a positive integer, not together with `png.time`; `video.fps` in [1, 60];
  * `video.durationSec` in (0, 120]; `motion` must be `smil` or `css`.
  */
 export interface RenderOptions {
@@ -158,6 +158,11 @@ export interface RenderOptions {
     readonly scale?: number;
     /** Animation time in seconds to capture, default 0. */
     readonly time?: number;
+    /**
+     * 1-based step whose end pose to capture (the pose a `steps` output shows, with that step's
+     * camera). Exclusive with `time`; must be an integer within the timeline (`options/invalid-png-step`).
+     */
+    readonly step?: number;
   };
   readonly video?: {
     /** Default 24. */

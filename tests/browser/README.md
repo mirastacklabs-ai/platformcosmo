@@ -20,6 +20,14 @@ localhost" check is Playwright only.
 Output: `tests/browser/out/results.json` and `RESULTS.md` (commit, image digest, versions, date,
 counts). The exit code is non-zero on any FAIL.
 
+### Assembly and figure fixtures (B-2)
+
+`generate.test.ts` also renders the Phase 1b design examples (engine, GPU server with a synthetic
+image, box) and the heat-sink figure through `render()` as `asm-*.svg` / `fig-heatsink.svg`.
+`fixture.json` carries per file two times whose frames differ (motion plays) and one mid-time per
+step. Under reduced motion these diagrams show each step's end pose (assemblies.md section 12),
+so the check is not "static" but "frames inside a step are equal, different steps differ".
+
 ### Checking real `render()` output
 
 Write the animated SVGs to a directory (and optionally `name.expected.png` plus a `fixture.json`
