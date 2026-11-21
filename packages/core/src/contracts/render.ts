@@ -60,6 +60,7 @@ import type {
   ImageAsset,
   ImageAssetResolver,
   PartShapeRegistry,
+  PartPlacementCheck,
 } from "./assembly.js";
 import type { DcPack } from "./dc.js";
 import type { Diagnostic, ValidationReport } from "./diagnostics.js";
@@ -176,6 +177,8 @@ export interface RenderOptions {
   readonly images?: ImageAssetResolver;
   /** Part shape packs (`dc:`, `hw:`, `auto:`, `brick:`), wired by the CLI like icons (D4). */
   readonly parts?: PartShapeRegistry;
+  /** Pack placement check (`brick/off-grid`) run during validation; wired by the CLI. */
+  readonly placement?: PartPlacementCheck;
 }
 
 export interface RenderOutput {
@@ -236,6 +239,7 @@ export type ValidateFn = (
     /** Schema 1.2.0: unknown image ids / shape refs become errors with did-you-mean. */
     readonly images?: ImageAssetResolver;
     readonly parts?: PartShapeRegistry;
+    readonly placement?: PartPlacementCheck;
   },
 ) => ValidationReport<PlatformCosmoSpec>;
 

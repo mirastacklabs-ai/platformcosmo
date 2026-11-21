@@ -23,7 +23,7 @@ Usage: pcosmo <command> [options]
 
 Commands:
   init [file]            Write a starter spec (--template, --list)
-  validate <spec>        Schema and semantic checks, with fix suggestions
+  validate <spec>        Schema and semantic checks, with fix suggestions (--suggest: explode program)
   build <spec>           Render outputs (--static --steps --interactive --png --gif --mp4 ...)
   watch <spec>           Rebuild on change
   assets <sub>           doctor | crop | cutout | locate | align | figure | check | shrink

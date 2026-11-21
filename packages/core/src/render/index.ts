@@ -205,6 +205,7 @@ export function createRender(deps: RenderDeps): RenderFn {
         ...(options.icons ? { icons: options.icons } : {}),
         ...(options.dc ? { dc: options.dc } : {}),
         ...(options.parts ? { parts: options.parts } : {}),
+        ...(options.placement ? { placement: options.placement } : {}),
       });
       diagnostics.push(...report.diagnostics);
       if (!options.dc && hasDcContent(spec)) {
