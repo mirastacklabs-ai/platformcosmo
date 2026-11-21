@@ -26,6 +26,19 @@ function err(code: string, path: string, message: string, suggestion?: string): 
   };
 }
 
+/** `options/invalid-png-step` when `step` is beyond the `count` steps of the spec, else undefined. */
+export function pngStepDiagnostic(step: number, count: number): Diagnostic | undefined {
+  if (step <= count) return undefined;
+  return err(
+    "options/invalid-png-step",
+    "/png/step",
+    count === 0
+      ? "png.step needs a spec with steps; this one has none."
+      : `png.step ${step} is beyond the ${count} step(s) of the spec.`,
+    count === 0 ? "Use png.time or omit it." : `Use a step from 1 to ${count}.`,
+  );
+}
+
 /** Code-point order (locale independent, deterministic). */
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
