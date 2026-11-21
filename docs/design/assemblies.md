@@ -938,19 +938,36 @@ and explains it:
    consecutive stages in spec order. Each sub-assembly's own parts get their own nested
    program, so a class never has to be split across sub-assemblies. Nested owners are
    imploded before the root.
-   - **Nested programs need two stages.** A sub-assembly whose own program would have one stage
-     (or none: a piston with its rod, parts that move as one) gets no nested program and no
-     focused story steps; the root program already moves it as a unit. A sub-assembly with two
-     or more stages keeps its program and its steps.
-   - **Covers move aside.** A thin cover lying on the body's top face, carrying nothing, with
-     parts under it (sub-assemblies, internals, components, loose parts) that leave in later
-     stages, does not lift `+z`: stacked above the exploded parts it would hide them in the
-     isometric view. It slides off along the visible horizontal axis (`+x` or `+y`, the one it
-     is shorter on, `+x` on a tie) at its own height, `distance` `auto` (its extent plus the
-     gap, §6.3), so it ends beside the stack. The side must be free: no other part rises above
-     the cover's underside across its path, else the cover keeps `+z`. A cover with nothing
-     below it that leaves later, a thick cover (a cylinder head), one that carries other parts
-     (they leave first, `+z`) and a cover that does not lie on the body's top face keep `+z`.
+   - **Nested programs must move something.** A sub-assembly whose own program would move fewer
+     than two leaves in total, or whose only stage is the "moving as one" stage (a piston with its
+     rod), gets no nested program and no focused story steps, and is listed as skipped ("one
+     stage: the root moves it as a unit"); the root program already moves it as a unit. A
+     sub-assembly that moves two or more leaves keeps its program and steps, also with a single
+     stage (a sub-board whose one "Components" stage lifts 8 chips).
+   - **Covers move aside.** A cover that lies on the body's top face, is one part (counted rows
+     and groups are excluded), has z as its thin axis (z extent at most 20% of its largest) and
+     carries no other cover, with parts under it (sub-assemblies, internals, components, loose
+     parts) that leave in later stages, does not lift `+z`: stacked above the exploded parts it
+     would hide them in the isometric view. It slides off along a visible horizontal axis at its
+     own height, `distance` `auto`, which is its extent on that axis plus the gap (10% of the
+     owner's largest extent, §6.3; the suggestion sets no `gap`). The axes are tried shorter
+     side first (`+x` on a tie), then the longer side, else the cover keeps `+z`. An axis is
+     taken only when (a) the path is free: no other part (a fastener or a group on top of the
+     cover included) rises above the cover's underside between its rest and end positions, and
+     (b) the end position lies beyond the body (`cover.min + D >= body.max` on that axis) and
+     over none of the parts that leave later, so the parts lifting afterwards do not pass
+     through it (core stacking compares only movers that share a direction). A cover with
+     nothing below it that leaves later, a thick cover (a cylinder head), one that carries
+     another cover (that one leaves first, `+z`) and a cover not on the body's top face keep
+     `+z`. `+x` and `+y` are the owner's local axes; a `rotate` of the owner is not considered
+     yet.
+   - **Exits.** A sub-assembly or internal enclosed by the body (inside its box) leaves through
+     the first face of the body it is flush with (`+z`, `+x`, `+y`, then `-z`, `-x`, `-y`):
+     pistons flush with a block's open top go `+z`, a crank as long as the block goes `+x`,
+     never `out` or `away` through the block. With several internals a stage still uses `lift`
+     (or `+z`, see Mounting depth). A part that exits through a hidden face passes through the
+     cover on that side, so that cover leaves first (a stage before the sub-assemblies) instead
+     of last.
    - **Mounting depth.** A part carried by another (its bottom touches the carrier's top,
      over its footprint, the carrier having height: a heat sink on a CPU on a board; a card on
      a board in a case; a sensor on a lid) leaves before its carrier, top-most first, so the

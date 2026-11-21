@@ -141,7 +141,7 @@ function placedBox(
   placed: PlacedBoxes | undefined,
 ): { box?: Box; inst?: Box } {
   const stated = boxOf(p);
-  if (!placed || isGroup(p)) return stated ? { box: stated, inst: stated } : {};
+  if (!placed) return stated ? { box: stated, inst: stated } : {};
   const n = countOf(p);
   const names =
     n > 1 ? Array.from({ length: Math.min(n, 1024) }, (_, k) => `${id}-${k + 1}`) : [id];
@@ -337,6 +337,23 @@ const carries = (q: Item, it: Item): boolean =>
 
 const sel = (it: Item): string => (it.count > 1 ? `${it.id}-*` : it.id);
 
+/**
+ * The open face an enclosed part leaves through: the first face of the body (`+z`, `+x`, `+y`,
+ * then the hidden ones) its box is flush with. Undefined when it is not inside the body or touches
+ * no face, where `away` finds the shortest exit.
+ */
+function exitFace(it: Item, body: Item | undefined): string | undefined {
+  const bb = body?.box;
+  if (!bb || !it.box || !inside(it.box, bb)) return undefined;
+  for (const sign of ["+", "-"] as const)
+    for (const a of AXES) {
+      const k = AXIS_INDEX[a];
+      if (sign === "+" ? it.box.max[k]! >= bb.max[k]! - TOL : it.box.min[k]! <= bb.min[k]! + TOL)
+        return `${sign}${a}`;
+    }
+  return undefined;
+}
+
 function direction(it: Item, cls: PartClass, body: Item | undefined, internals: Item[]): string {
   const p = it.p;
   switch (cls) {
@@ -351,9 +368,11 @@ function direction(it: Item, cls: PartClass, body: Item | undefined, internals: 
         (it.isGroup && RACK_DEVICE.test(it.id))
       )
         return "drawer";
-      return p.mates !== undefined || p.inserts !== undefined ? "away" : "out";
+      return (
+        exitFace(it, body) ?? (p.mates !== undefined || p.inserts !== undefined ? "away" : "out")
+      );
     case "internal":
-      return internals.length >= 2 ? "lift" : "away";
+      return internals.length >= 2 ? "lift" : (exitFace(it, body) ?? "away");
     case "mounted":
       return "+z";
     default:
@@ -363,42 +382,67 @@ function direction(it: Item, cls: PartClass, body: Item | undefined, internals: 
 
 const hidden = (d: string): boolean => d.startsWith("-");
 
+/** The program's default gap: 10% of the owner's largest extent (assemblies.md 6.3). */
+function ownerGap(items: Item[]): number {
+  const boxes = items.flatMap((it) => (it.box ? [it.box] : []));
+  if (boxes.length === 0) return 0;
+  const ext = Math.max(
+    ...[0, 1, 2].map(
+      (k) => Math.max(...boxes.map((b) => b.max[k]!)) - Math.min(...boxes.map((b) => b.min[k]!)),
+    ),
+  );
+  return 0.1 * ext;
+}
+
 /**
- * Top covers that move aside. A thin cover lying on the body's top face that carries nothing, with
- * parts under it that leave in later stages, would end above the exploded stack and hide it in
- * the isometric view: it slides off along the visible horizontal axis instead (`+x` or `+y`, the
- * one it is shorter on, `+x` on a tie), at its own height, so it clears the stack in the final
- * pose. The side must be free: no other part rises above the cover's underside across its path.
+ * Top covers that move aside. A cover lying on the body's top face whose thin axis is z, one cover
+ * (not a row, not a group) that carries no other cover, with parts under it that leave in later
+ * stages, would end above the exploded stack and hide it in the isometric view: it slides off
+ * along a visible horizontal axis of the owner (`+x` or `+y`, the shorter side first, `+x` on a
+ * tie), at its own height, by `auto` = its extent plus the gap (assemblies.md 6.3). An axis is
+ * taken only when the path is free (no other part rises above the cover's underside between its
+ * rest and end positions) and the end position lies beyond the body and over none of the parts
+ * that leave later, so nothing then passes through it; else the longer side, else it keeps `+z`.
  * Maps the cover to its direction.
  */
 function asideCovers(covers: Item[], later: Item[], items: Item[], body: Item | undefined) {
   const out = new Map<Item, string>();
-  const top = body?.box?.max[2];
-  if (top === undefined) return out;
+  const bb = body?.box;
+  if (!bb) return out;
+  const gap = ownerGap(items);
   for (const c of covers) {
     const b = c.inst;
-    if (!b || c.isGroup || c.count > 1 || !c.box || !thin(b)) continue;
-    if (Math.abs(b.min[2] - top) > TOL) continue; // lies on the body's top face
+    const cb = c.box;
+    if (!b || !cb || c.isGroup || c.count > 1) continue;
+    const e3 = [0, 1, 2].map((k) => b.max[k]! - b.min[k]!);
+    if (e3[2]! > 0.2 * Math.max(...e3)) continue; // z is the thin axis
+    if (Math.abs(b.min[2] - bb.max[2]) > TOL) continue; // lies on the body's top face
     if (covers.some((q) => q !== c && carries(c, q))) continue;
     const under = later.some(
-      (q) => q.box && q.box.max[2] <= c.box!.min[2] + TOL && overlapXY(q.box, c.box!) > 0,
+      (q) => q.box && q.box.max[2] <= cb.min[2] + TOL && overlapXY(q.box, cb) > 0,
     );
     if (!under) continue;
-    const ext = [0, 1].map((k) => c.box!.max[k]! - c.box!.min[k]!);
+    const ext = [0, 1].map((k) => cb.max[k]! - cb.min[k]!);
     const axes = (ext[1]! < ext[0]! - TOL ? [1, 0] : [0, 1]) as number[];
     for (const k of axes) {
       const o = 1 - k;
+      const d = ext[k]! + gap;
+      const apart = (q: Box, lo: number, hi: number): boolean =>
+        q.max[o]! <= cb.min[o]! + TOL ||
+        q.min[o]! >= cb.max[o]! - TOL ||
+        q.max[k]! <= lo + TOL ||
+        q.min[k]! >= hi - TOL;
       const free = items.every(
         (q) =>
           q === c ||
           !q.box ||
-          q.box.max[2] <= c.box!.min[2] + TOL ||
-          q.box.max[o]! <= c.box!.min[o]! + TOL ||
-          q.box.min[o]! >= c.box!.max[o]! - TOL ||
-          q.box.max[k]! <= c.box!.min[k]! + TOL ||
-          q.box.min[k]! >= c.box!.max[k]! + ext[k]! - TOL,
+          q.box.max[2] <= cb.min[2] + TOL ||
+          apart(q.box, cb.min[k]!, cb.max[k]! + d),
       );
-      if (free) {
+      const clear =
+        cb.min[k]! + d >= bb.max[k]! - TOL &&
+        later.every((q) => !q.box || apart(q.box, cb.min[k]! + d, cb.max[k]! + d));
+      if (free && clear) {
         out.set(c, k === 0 ? "+x" : "+y");
         break;
       }
@@ -636,6 +680,15 @@ function suggestOwner(
     if (hidden(d)) late.push([d, g]);
     else pushLevels("Covers", covers.size === 1 ? [] : [d], g, (name, grp) => push(name(), grp, d));
   }
+  // a part that exits through a hidden face passes through the cover there: that cover leaves first
+  const exits = new Set(
+    [...classes.unit, ...classes.internal].map((it) =>
+      direction(it, it.cls, body, classes.internal),
+    ),
+  );
+  for (const [d, g] of late.filter(([d]) => exits.has(d)))
+    pushLevels("Covers", [d, "hidden side"], g, (name, grp) => push(name(), grp, d));
+  const rest = late.filter(([d]) => !exits.has(d));
   for (const [d, g] of byDirection(classes.unit, "unit"))
     push(d === "drawer" ? "Devices" : "Sub-assemblies", g, d);
   if (classes.internal.length > 0) {
@@ -669,7 +722,7 @@ function suggestOwner(
     );
   }
   push("Other parts", classes.loose, "out");
-  for (const [d, g] of late)
+  for (const [d, g] of rest)
     pushLevels("Covers", [d, "hidden side"], g, (name, grp) => push(name(), grp, d));
 
   if (stages.length === 0) {
@@ -780,11 +833,19 @@ export function suggest(
         const path = `${base}/${p.id}${countOf(p) > 1 ? "-1" : ""}`;
         const ptr = `${pointer}/parts/${k}`;
         const sug = suggestOwner(path, p.label ?? p.id, p.parts, reg, placed);
-        // one stage (or none) is the root program moving it as a unit: no nested program, no story
-        if (typeof sug !== "string" && sug.program.stages.length >= 2) {
-          sug.pointer = ptr;
-          owners++;
-          nested.push(sug);
+        if (typeof sug !== "string") {
+          // fewer than two parts move, or the one stage moves as one: the root program already
+          // moves the sub-assembly as a unit, a nested program would add nothing
+          const leaves = sug.stageLeaves.reduce((x, y) => x + y, 0);
+          const rigidOnly =
+            sug.program.stages.length === 1 && /moving as one/.test(sug.program.stages[0]!.label);
+          if (leaves < 2 || rigidOnly) {
+            out.skipped.push({ owner: path, reason: "one stage: the root moves it as a unit" });
+          } else {
+            sug.pointer = ptr;
+            owners++;
+            nested.push(sug);
+          }
         }
         walk(p.parts, path, ptr, depth + 1);
       });

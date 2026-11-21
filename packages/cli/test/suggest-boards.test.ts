@@ -590,10 +590,11 @@ describe("covers move aside; counted sub-assemblies", () => {
     const rep = await suggestOf(spec, "engine-r2");
     expect(rep.suggestions.map((x) => x.owner)).toEqual(["engine"]);
     expect(rep.suggestions[0]!.steps!.some((s) => (s.focus ?? "").includes("pr-"))).toBe(false);
-    // the root program's transit collisions (pistons out through the block) are not this change's
-    const m = await mergedDiagnostics(spec, rep, "engine-r2");
-    expect(m).toMatchObject({ vCode: 0, bCode: 0 });
-    expect(m.codes.filter((c) => !c.startsWith("assembly/transit-collision"))).toEqual([]);
+    expect(await mergedDiagnostics(spec, rep, "engine-r2")).toEqual({
+      codes: [],
+      vCode: 0,
+      bCode: 0,
+    });
   }, 120_000);
 
   const unit = (parts: unknown[]) =>
@@ -665,5 +666,131 @@ describe("covers move aside; counted sub-assemblies", () => {
       { id: "rail2", at: [0, 100, 20], size: [100, 10, 40] },
     ]);
     expect(st[0]![1]).toBe("+z");
+  });
+
+  test("engine r2: the pistons leave through the block's open top, the crank along x", async () => {
+    const rep = await suggestOf(await fixture("engine-r2"), "engine-r2-dirs");
+    const st = brief(rep.suggestions[0]!.program.stages);
+    expect(st).toContainEqual(["Sub-assemblies", "+z", "auto", "show", "pr-1,pr-2,pr-3,pr-4"]);
+    expect(st).toContainEqual(["Internals", "+x", "auto", "show", "crankshaft"]);
+  }, 120_000);
+
+  test("a part that exits through a hidden face leaves after the cover there has gone", async () => {
+    const spec = wrap([
+      {
+        id: "a",
+        units: "mm",
+        parts: [
+          { id: "base", role: "body", at: [0, 0, 0], size: [100, 100, 40] },
+          { id: "pan", role: "cover", at: [0, 0, -10], size: [100, 100, 10] },
+          { id: "rod", role: "internal", at: [10, 10, 0], size: [20, 20, 10] },
+        ],
+      },
+    ]);
+    const rep = await suggestOf(spec, "hidden-exit");
+    expect(brief(rep.suggestions[0]!.program.stages)).toEqual([
+      ["Covers (-z, hidden side)", "-z", "auto", "show", "pan"],
+      ["Internals", "-z", "auto", "show", "rod"],
+    ]);
+    expect(await mergedDiagnostics(spec, rep, "hidden-exit")).toEqual({
+      codes: [],
+      vCode: 0,
+      bCode: 0,
+    });
+  }, 120_000);
+
+  test("a half lid does not land over the rest of the body: it takes the longer side", async () => {
+    const spec = wrap([
+      {
+        id: "a",
+        units: "mm",
+        parts: [
+          { id: "base", role: "body", at: [0, 0, 0], size: [100, 100, 40] },
+          { id: "top", role: "cover", at: [0, 0, 40], size: [50, 100, 3] },
+          { id: "p", role: "internal", at: [10, 10, 10], size: [30, 30, 5] },
+          { id: "q", role: "internal", at: [65, 10, 10], size: [30, 30, 5] },
+        ],
+      },
+    ]);
+    const rep = await suggestOf(spec, "half-lid");
+    expect(brief(rep.suggestions[0]!.program.stages)[0]).toEqual([
+      "Covers",
+      "+y",
+      "auto",
+      "show",
+      "top",
+    ]);
+    expect(await mergedDiagnostics(spec, rep, "half-lid")).toEqual({
+      codes: [],
+      vCode: 0,
+      bCode: 0,
+    });
+  }, 120_000);
+
+  const slab = (at: number[], size: number[], extra: unknown[] = []) =>
+    lidded2([{ id: "top", role: "cover", at, size }, ...extra]);
+  function lidded2(parts: unknown[]) {
+    return suggest({
+      assemblies: [
+        {
+          id: "a",
+          parts: [
+            { id: "base", role: "body", at: [0, 0, 0], size: [100, 100, 40] },
+            { id: "board", role: "internal", at: [10, 10, 10], size: [50, 50, 5] },
+            ...parts,
+          ],
+        },
+      ],
+    }).suggestions[0]!.program.stages.map((x) => x.direction);
+  }
+
+  test("a lid shorter on y slides +y", () => {
+    expect(slab([0, 20, 40], [100, 80, 3])[0]).toBe("+y");
+  });
+
+  test("a rail across the shorter side sends the lid the longer way, else it keeps +z", () => {
+    const rail = { id: "rail", at: [100, 0, 20], size: [10, 100, 40] };
+    expect(slab([0, 0, 40], [90, 100, 3], [rail])[0]).toBe("+y");
+    const rail2 = { id: "rail2", at: [0, 100, 20], size: [100, 10, 40] };
+    expect(slab([0, 0, 40], [90, 100, 3], [rail, rail2])[0]).toBe("+z");
+  });
+
+  test("a thick top cover, and a thin one not at the top face, keep +z", () => {
+    expect(slab([0, 0, 40], [100, 100, 30])[0]).toBe("+z");
+    expect(slab([0, 0, 45], [100, 100, 3])[0]).toBe("+z");
+  });
+
+  test("a sub-board whose one stage lifts several chips keeps its nested program", () => {
+    const chips = Array.from({ length: 8 }, (_, i) => ({
+      id: `c${i}`,
+      at: [i * 10, 0, 2],
+      size: [8, 8, 4],
+    }));
+    const rep = suggest({
+      assemblies: [
+        {
+          id: "a",
+          parts: [
+            { id: "frame", role: "body", at: [0, 0, 0], size: [200, 200, 10] },
+            {
+              id: "board",
+              parts: [{ id: "pcb", role: "body", at: [0, 0, 0], size: [100, 20, 2] }, ...chips],
+            },
+          ],
+        },
+      ],
+    });
+    expect(rep.suggestions.map((x) => x.owner)).toEqual(["a", "a/board"]);
+    expect(rep.suggestions[1]!.program.stages).toHaveLength(1);
+  });
+
+  test("a dropped nested owner is listed as skipped", () => {
+    const rep = unit([
+      { id: "shell", role: "body", at: [0, 0, 20], size: [100, 100, 40] },
+      { id: "chip", role: "internal", at: [10, 10, 30], size: [20, 20, 10] },
+    ]);
+    expect(rep.skipped).toEqual([
+      { owner: "a/unit", reason: "one stage: the root moves it as a unit" },
+    ]);
   });
 });
