@@ -123,7 +123,6 @@ describe("schema 1.2.0 guard", () => {
       "/racks/0/slots/0/assembly",
       "/racks/0/slots/0/closeup",
       "/steps/1/assembly/1",
-      "/storyboards",
     ]);
   });
 
@@ -209,7 +208,7 @@ describe("schema 1.2.0 guard", () => {
       "/assemblies/0/programs/1/steps/0/from",
       "/assemblies/0/programs/1/steps/0/subBuild",
     ]);
-    expect(paths({ storyboards: true })).toEqual(["/storyboards", "/steps/1/assembly/1"]);
+    expect(paths({ storyboards: true })).toEqual(["/storyboards"]);
     expect(paths({})).toEqual([]);
   });
 
@@ -239,10 +238,11 @@ describe("schema 1.2.0 guard", () => {
     expect(at(spec)).toEqual([]);
   });
 
-  // tracks §0: an example renders when all its 1.2 fields are phase 1a or 1b (images, figures,
-  // assemblies with explode programs, explode/implode on figures and assemblies); everything
-  // else (racks programs, slot assemblies, build programs, close-ups, storyboards, rack/slot
-  // actions) still hits the guard. The predicate does not use the guard.
+  // tracks §0: an example renders when all its 1.2 fields are phase 1a, 1b or storyboards (images,
+  // figures, assemblies with explode programs, explode/implode on figures and assemblies,
+  // storyboards and their build/unbuild); everything else (racks programs, slot assemblies,
+  // build programs, close-ups, rack/slot actions) still hits the guard. The predicate does not
+  // use the guard.
   const phase1Only = (spec: Record<string, unknown>): boolean => {
     const racks = (spec.racks ?? []) as { programs?: unknown; slots?: Record<string, unknown>[] }[];
     const ok = new Set(
@@ -251,20 +251,19 @@ describe("schema 1.2.0 guard", () => {
         ...((spec.assemblies ?? []) as { id: string }[]),
       ].map((f) => f.id),
     );
+    const boards = new Set(((spec.storyboards ?? []) as { id: string }[]).map((b) => b.id));
     const actions = ((spec.steps ?? []) as { assembly?: Record<string, string>[] }[]).flatMap(
       (s) => s.assembly ?? [],
     );
     const text = JSON.stringify(spec);
     return (
-      spec.storyboards === undefined &&
       !racks.some(
         (r) => r.programs !== undefined || r.slots?.some((s) => s.assembly || s.closeup),
       ) &&
-      actions.every(
-        (a) =>
-          !("build" in a) &&
-          !("unbuild" in a) &&
-          ok.has(String(Object.values(a)[0]).split("/")[0] as string),
+      actions.every((a) =>
+        "build" in a || "unbuild" in a
+          ? boards.has(String(Object.values(a)[0]))
+          : ok.has(String(Object.values(a)[0]).split("/")[0] as string),
       ) &&
       !text.includes('"closeup"') &&
       !text.includes('"kind":"build"')
@@ -333,10 +332,11 @@ describe("schema 1.2.0 guard", () => {
     });
   });
 
-  test("the examples that render are the heat-sink figure and the three Phase 1b plans", () => {
+  test("the examples that render: the heat-sink figure, the booklet storyboard and the Phase 1b plans", () => {
     const title = (s: Record<string, unknown>) => (s.meta as { title: string }).title;
     expect(designExamples("document-ingestion.md").filter(phase1Only).map(title)).toEqual([
       "Heat-sink installation figure",
+      "Booklet storyboard",
     ]);
     expect(designExamples("assemblies.md").filter(phase1Only).map(title)).toEqual([
       "Two-part box",
@@ -383,10 +383,12 @@ describe("schema 1.2.0 guard", () => {
       "/steps/0/assembly/2",
       "/steps/0/assembly/3",
       "/steps/0/assembly/4",
-      "/steps/0/assembly/5",
       "/steps/1/focus",
-      "/storyboards",
     ]);
+    // the storyboard is lifted (R-2): an explode on it is validate's, not the guard's
+    expect(r.diagnostics.find((d) => d.path === "/steps/0/assembly/5/explode")?.code).toBe(
+      "assembly/storyboard-no-explode",
+    );
     // the phase 1b explode on the assembly is not flagged and not unknown
     expect(r.diagnostics.filter((d) => d.path === "/steps/0/assembly/0/explode")).toEqual([]);
     // post-lift unknown-target: rack/slot/storyboard explode is not an assembly or figure

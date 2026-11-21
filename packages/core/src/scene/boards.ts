@@ -706,7 +706,10 @@ function planPass(
       const target = (a as unknown as Record<string, string>)[kind] as string;
       const root = target.split("/")[0] as string;
       const fig = figures.get(root);
-      const board = fig === undefined ? boards.get(root) : undefined;
+      // A storyboard is planned here once its guard group is lifted; while it is gated it is an
+      // unknown target below, like every other gated root.
+      const board =
+        fig === undefined && opts.gated?.storyboards !== true ? boards.get(root) : undefined;
       if (board !== undefined) {
         const planned1 = planBoardAction(board, a, kind, target, level, cursor);
         if (planned1 !== undefined) {
