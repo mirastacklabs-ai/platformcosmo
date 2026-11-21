@@ -654,7 +654,7 @@ it is ordered by separation or bisection only (approximate where those cannot de
   epochs (`assembly/clip-fallback`, info); Phase 3 is to use two copies instead, a clipped copy
   visible only during the crossing epochs and an unclipped copy for the rest of the loop,
   swapped by visibility like any other copy (§9.4). A1-2b does not do this yet: such leaves keep
-  the hidden-until-clear fallback (a follow-up track).
+  the hidden-until-clear fallback (follow-up track A1-2c).
 - Regression fixture: the engine example (§19.3) exercises all three: valves inserted in the
   casting and enclosed by casting ∪ cover at rest, camshafts flush in the cover, pistons
   crossing the block deck.

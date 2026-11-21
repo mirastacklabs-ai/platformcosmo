@@ -19,6 +19,7 @@ import {
   assemblyDiagnostics,
   assemblyFrame,
   assemblyLoop,
+  cutProps,
 } from "../../src/anim/assembly.js";
 import { evalOffset as evalOffsetOrig, translateFull } from "../../src/render/assembly/tracks.js";
 import { Keyframes } from "../../src/anim/css.js";
@@ -279,6 +280,35 @@ describe("depth copies (A1-2b): the CSS swaps copies exactly where the frames do
       if (e.order.includes(`${item}__c1`)) swaps++;
     }
     expect(swaps).toBeGreaterThan(0);
+  });
+});
+
+describe("the MAX_PROPS cut keeps an item's copies together (§9.4)", () => {
+  test("cutProps: whole groups in first-appearance order, stopping at the first that does not fit", () => {
+    const groups = ["a", "b", "a", "c", "b"];
+    const props = groups.map((g, i) => `${g}${i}`);
+    expect(cutProps(props, groups, 9)).toEqual(props);
+    expect(cutProps(props, groups, 4)).toEqual(["a0", "b1", "a2", "b4"]);
+    expect(cutProps(props, groups, 3)).toEqual(["a0", "a2"]);
+    expect(cutProps(props, groups, 1)).toEqual([]);
+  });
+
+  test("a cut never animates one copy of an item and leaves the other at rest", () => {
+    const model = build(copySwapSpec());
+    const am = A(model);
+    const full = assemblyAnim(am, 1);
+    const v0 = am.ids.partVisible("kit/arm/blk", 0);
+    const v1 = am.ids.partVisible("kit/arm/blk", 1);
+    const ids = full.props.map((p) => p.id);
+    expect(ids).toContain(v0);
+    expect(ids).toContain(v1);
+    for (let max = 1; max < full.props.length; max++) {
+      const cut = assemblyAnim(am, 1, max);
+      const kept = new Set(cut.props.map((p) => p.id));
+      expect(kept.has(v0), `max ${max}`).toBe(kept.has(v1));
+      expect(cut.props.length + cut.overProps).toBe(full.props.length);
+    }
+    expect(assemblyAnim(am, 1)).toBe(full); // the default stays cached
   });
 });
 

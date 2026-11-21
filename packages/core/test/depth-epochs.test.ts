@@ -617,6 +617,32 @@ describe("cycles and copies", () => {
       "assembly/depth-approx",
       "assembly/depth-cycle",
     ]);
+    expect(one.diagnostics[1]!.message).toContain("copy budget");
+    // no cycle budget at all: the copy path cannot order its groups and says so (budget/time)
+    const tight = depthEpochs(items, moves, 3, { budgets: { maxCycleDrops: 0 } });
+    expect(tight.stats.copies).toBe(0);
+    const w = tight.diagnostics.filter((d) => d.code === "budget/time");
+    expect(w.map((d) => d.message.slice(0, 40))).toContain(
+      "Ordering the depth copies ran over the c",
+    );
+    expect(tight.diagnostics.find((d) => d.params?.["copy"] === true)!.message).toContain(
+      "cycle budget",
+    );
+  });
+
+  it("orders with copies over the work budget: merged, budget/time names the copy path", () => {
+    const r = run(swap, { budgets: { maxPhaseWork: 10 } });
+    invariants(r, 3);
+    expect(r.stats.copies).toBe(0);
+    const w = r.diagnostics.find(
+      (x) => x.code === "budget/time" && x.message.startsWith("Depth copies need"),
+    )!;
+    expect(w.severity).toBe("warning");
+    expect(w.params).toEqual({ work: 20, limit: 10 });
+    expect(codes(r)).not.toContain("budget/depth-copies");
+    // the one-order fallback says why no copy was made
+    const d = r.diagnostics.find((x) => x.params?.["copy"] === true)!;
+    expect(d.message).toContain("work budget");
   });
 
   it("between certified and forced, a copy; beyond the budget the longer-held wins (E-Q04)", () => {
@@ -954,6 +980,53 @@ describe("performance (§9.8): 300 leaves × 20 transitions", () => {
     expect(r.approximate).toEqual([]);
     return { r, ms };
   }
+
+  it("copy path: 150 movers that each swap with a static base (one copy each)", () => {
+    // 10 rows × 15 pairs: a mover behind its static base on x lifts clear and slides over it
+    // (base before mover), then back; row r moves in transition r. Every mover needs exactly one
+    // copy: 150 = 0.5 × 300 items, the copy budget's limit.
+    const items: DepthItemInput[] = [];
+    const moves: LoopMove[] = [];
+    for (let row = 0; row < 10; row++) {
+      for (let col = 0; col < 15; col++) {
+        const x = col * 4;
+        const y = row * 3;
+        items.push({
+          key: `b/r${row}-c${col}`,
+          box: box(x, y, 0, 1, 1, 1),
+          solid: true,
+          fills: true,
+        });
+        const key = `m/r${row}/p${col}`;
+        items.push({ key, path: key, box: box(x - 1, y, 0, 1, 1, 1), solid: true, fills: true });
+      }
+      const path = `m/r${row}`;
+      const t = 4 * row;
+      const mv = (t0: number, d: ReturnType<typeof v>): LoopMove => ({
+        path,
+        t0,
+        t1: t0 + 1,
+        from: v(0, 0, 0),
+        to: d,
+        easing: "ease-in-out",
+      });
+      moves.push(mv(t, v(0, 0, 1.5)), mv(t + 1, v(1, 0, 0)), mv(t + 2, v(-1, 0, 0)));
+      moves.push(mv(t + 3, v(0, 0, -1.5)));
+    }
+    expect(items).toHaveLength(300);
+    depthEpochs(items, moves, 40); // warm-up (JIT)
+    const t0 = performance.now();
+    const r = depthEpochs(items, moves, 40);
+    const ms = performance.now() - t0;
+    console.info(
+      `depth copies 300 items: ${ms.toFixed(0)} ms, ${r.stats.copies} copies, ${r.epochs.length} epochs`,
+    );
+    invariants(r, 40);
+    expect(r.stats.copies).toBe(150);
+    expect(r.approximate).toEqual([]);
+    expect(codes(r)).toEqual([]);
+    expect(ms).toBeLessThan(10_000);
+  });
 
   it("rows as sub-assemblies (one move per row and direction)", () => {
     const moves: LoopMove[] = [drift];

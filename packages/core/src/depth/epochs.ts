@@ -762,6 +762,11 @@ class EpochSolver {
   private cycleDrops = 0;
   private copyConflicts = 0;
   private extraCopies = 0;
+  /**
+   * Why the copy path did not apply although a pair needed a copy (named in the one-order path's
+   * `assembly/depth-approx` `copy: true` messages); set by `withCopies`.
+   */
+  private noCopy = "";
   private readonly inputNotArray: boolean;
   private degraded = false;
   private collided = new Set<number>();
@@ -2595,7 +2600,7 @@ class EpochSolver {
               severity: "info",
               code: "assembly/depth-approx",
               path: this.pointer(this.it[x]!.key),
-              message: `"${this.it[x]!.key}" must be drawn before "${this.it[y]!.key}" in some epochs and after it in others; no depth copy is made for it (copy or work budget), so those epochs are approximate.`,
+              message: `"${this.it[x]!.key}" must be drawn before "${this.it[y]!.key}" in some epochs and after it in others; no depth copy is made for it (${this.noCopy}), so those epochs are approximate.`,
               params: { items: [this.it[x]!.key, this.it[y]!.key], copy: true },
             },
             `c${pe.i}/${pe.j}`,
@@ -2847,9 +2852,13 @@ class EpochSolver {
    * caller then takes the one-order path.
    */
   private withCopies(spans: readonly Span[]): Ordered | undefined {
-    if (this.degraded) return undefined;
     const pairs = this.sortedPairs();
     if (!pairs.some(EpochSolver.strongConflict)) return undefined;
+    if (this.degraded) {
+      // already reported as budget/time by the certification
+      this.noCopy = "depth certification ran over its work budget";
+      return undefined;
+    }
     const n = this.it.length;
     const F_ = this.finals;
     const K = F_.length;
@@ -2889,6 +2898,8 @@ class EpochSolver {
     // (greedy, so as few orders as possible). Both directions inside one interval (only at
     // tolerance-wide overlaps): the loop-wide winner, approximate.
     const localApprox: number[] = [];
+    /** Diagnostics reported only when the copy path is taken. */
+    const pending: [Diagnostic, string][] = [];
     const dirOf = new Int8Array(conflicts.length).fill(-1);
     let touched: number[] = [];
     const groupOf = new Int32Array(K);
@@ -2900,8 +2911,22 @@ class EpochSolver {
         const c = raw[q]! >> 1;
         if (codes.length > 0 && codes[codes.length - 1]! >> 1 === c) {
           if (codes[codes.length - 1] !== raw[q]) {
-            codes[codes.length - 1] = 2 * c + (this.winner(conflicts[c]!)!.fwd ? 0 : 1);
+            const pe = conflicts[c]!;
+            const fwd = this.winner(pe)!.fwd;
+            codes[codes.length - 1] = 2 * c + (fwd ? 0 : 1);
             localApprox.push(F_[k]!.ta, F_[k]!.tb);
+            const [x, y] = fwd ? [pe.i, pe.j] : [pe.j, pe.i];
+            const [a, b] = [this.it[x]!.key, this.it[y]!.key];
+            pending.push([
+              {
+                severity: "info",
+                code: "assembly/depth-approx",
+                path: this.pointer(a),
+                message: `"${a}" and "${b}" need both orders inside [${fmtT(F_[k]!.ta)}, ${fmtT(F_[k]!.tb)}] s (a tolerance-wide overlap); "${a}" is drawn first there, approximate.`,
+                params: { items: [a, b], t0: F_[k]!.ta, t1: F_[k]!.tb },
+              },
+              `b${pe.i}/${pe.j}`,
+            ]);
           }
           continue;
         }
@@ -2940,7 +2965,7 @@ class EpochSolver {
     }
     const abort = { drop: () => undefined, release: () => false, released: () => undefined };
     const ref = this.kahn(base, abort);
-    if (ref === null) return undefined;
+    if (ref === null) return this.copiesOverCycles();
     const chain = ref.order.filter((i) => isStatic[i]);
     let drops = 0;
     const cycles: [Diagnostic, string][] = [];
@@ -2952,10 +2977,10 @@ class EpochSolver {
       // close a cycle that costs a certified or forced edge, the group's own edges (those that
       // occur in it, §9.3 step 4) are tried too and the one with fewer such drops is kept.
       let best = this.orderGroup(base, chain, conflicts, g.dirs, ga, gb, false);
-      if (best === null) return undefined;
+      if (best === null) return this.copiesOverCycles();
       if (best.strong > 0) {
         const own = this.orderGroup(base, chain, conflicts, g.dirs, ga, gb, true);
-        if (own === null) return undefined;
+        if (own === null) return this.copiesOverCycles();
         if (own.strong < best.strong) best = own;
       }
       drops += best.drops;
@@ -2983,6 +3008,7 @@ class EpochSolver {
       });
       this.approxRanges.length = mark;
       if (plan.reason === "budget") {
+        this.noCopy = "beyond the copy budget, budget/depth-copies";
         this.diags.add({
           severity: "warning",
           code: "budget/depth-copies",
@@ -2990,10 +3016,22 @@ class EpochSolver {
           message: `The depth order needs more than ${limit} depth copies (${budgets.maxCopyRatio} × ${n} items); the epochs are merged into one order and approximate.`,
           params: { limit, items: n },
         });
+      } else {
+        // The static chain keeps every static item in one order, so this needs a fallback
+        // release inside a group; reported rather than silent.
+        const key = this.it[plan.item]!.key;
+        this.noCopy = `the static item "${key}" would need one`;
+        this.diags.add({
+          severity: "info",
+          code: "assembly/depth-approx",
+          path: this.pointer(key),
+          message: `The static item "${key}" would need a depth copy (static items are never copied); the epochs are merged into one order and approximate.`,
+          params: { item: key, copy: true },
+        });
       }
       return undefined;
     }
-    for (const [d, k] of cycles) this.diags.add(d, k);
+    for (const [d, k] of [...pending, ...cycles]) this.diags.add(d, k);
     for (const d of sink) this.diags.add(d);
     this.cycleDrops += drops;
     this.copyConflicts += both;
@@ -3050,13 +3088,23 @@ class EpochSolver {
     const r = this.kahn(ed, {
       drop: (e) => {
         if (ed.str[e]! < C || ed.str[e]! === CHAIN) return;
+        // `strong` counts EVERY certified or forced drop: it only decides whether the group's
+        // own edges are tried (any drop means the loop-wide set is cyclic here, and the own-edge
+        // order is then the principled one; counting only in-group drops picked orders that
+        // need more copies). Only a drop whose edge holds inside the group makes it approximate
+        // and is reported; its own group reports it otherwise.
         strong++;
         const occ = ed.occ[e]!;
+        let inside = false;
         for (let q = 0; q < occ.length; q += 2) {
           const a = Math.max(ga, occ[q]!);
           const b = Math.min(gb, occ[q + 1]!);
-          if (b > a + TIME_EPS) approx.push(a, b);
+          if (b > a + TIME_EPS) {
+            approx.push(a, b);
+            inside = true;
+          }
         }
+        if (!inside) return;
         this.cycleDiag(ed, e, `g${ed.from[e]}/${ed.to[e]}`, cycles);
       },
       release: () => false,
@@ -3065,7 +3113,21 @@ class EpochSolver {
     return r === null ? null : { order: r.order, drops: r.drops, strong, cycles, approx };
   }
 
+  /** The cycle budget ran out while ordering a copy group (fallback release needed). */
+  private copiesOverCycles(): undefined {
+    this.noCopy = "ordering with copies ran over the cycle budget, budget/time";
+    this.diags.add({
+      severity: "warning",
+      code: "budget/time",
+      path: "",
+      message: `Ordering the depth copies ran over the cycle budget (${this.budgets.maxCycleDrops} drops); the epochs are merged into one order and approximate.`,
+      params: { limit: this.budgets.maxCycleDrops },
+    });
+    return undefined;
+  }
+
   private copiesOverWork(work: number): undefined {
+    this.noCopy = "ordering with copies would exceed the work budget, budget/time";
     this.diags.add({
       severity: "warning",
       code: "budget/time",
