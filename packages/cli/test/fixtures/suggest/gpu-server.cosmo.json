@@ -1,0 +1,103 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "Inside a 2U GPU server",
+    "description": "Exploded view: lid, GPU, then the rest."
+  },
+  "assemblies": [
+    {
+      "id": "srv",
+      "units": "mm",
+      "fit": 8,
+      "parts": [
+        {
+          "id": "chassis",
+          "shape": "hw:chassis-2u",
+          "at": [0, 0, 0],
+          "size": [440, 650, 88],
+          "role": "body",
+          "label": "Chassis tray"
+        },
+        {
+          "id": "lid",
+          "shape": "hw:lid",
+          "at": [0, 0, 88],
+          "size": [440, 650, 4],
+          "role": "cover",
+          "label": "Lid"
+        },
+        {
+          "id": "board",
+          "shape": "hw:board",
+          "at": [30, 150, 6],
+          "size": [380, 420, 4],
+          "label": "Motherboard"
+        },
+        {
+          "id": "cpu",
+          "shape": "hw:cpu",
+          "at": [110, 360, 10],
+          "size": [60, 60, 4],
+          "count": 2,
+          "pitch": [160, 0, 0],
+          "label": "CPU"
+        },
+        {
+          "id": "heatsink",
+          "shape": "hw:heatsink",
+          "at": [100, 350, 14],
+          "size": [80, 80, 30],
+          "count": 2,
+          "pitch": [160, 0, 0],
+          "label": "Heat sink"
+        },
+        {
+          "id": "dimm-left",
+          "shape": "hw:dimm",
+          "at": [45, 300, 10],
+          "size": [8, 120, 30],
+          "count": 4,
+          "pitch": [10, 0, 0],
+          "type": "dimm",
+          "label": "DIMM"
+        },
+        {
+          "id": "dimm-right",
+          "shape": "hw:dimm",
+          "at": [350, 300, 10],
+          "size": [8, 120, 30],
+          "count": 4,
+          "pitch": [10, 0, 0],
+          "type": "dimm",
+          "label": "DIMM"
+        },
+        {
+          "id": "gpu",
+          "shape": "card",
+          "at": [210, 150, 10],
+          "size": [8, 196, 70],
+          "label": "GPU card"
+        },
+        {
+          "id": "fan",
+          "shape": "hw:fan",
+          "at": [30, 60, 6],
+          "size": [70, 50, 60],
+          "count": 5,
+          "pitch": [80, 0, 0],
+          "label": "Fan"
+        },
+        {
+          "id": "psu",
+          "shape": "hw:psu",
+          "at": [40, 580, 6],
+          "size": [150, 70, 40],
+          "count": 2,
+          "pitch": [210, 0, 0],
+          "label": "PSU"
+        }
+      ]
+    }
+  ]
+}
