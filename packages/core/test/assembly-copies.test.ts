@@ -15,7 +15,7 @@ import {
   type SvgElement,
   type SvgNode,
 } from "../src/index.js";
-import type { AssemblyRenderModel } from "../src/contracts/index.js";
+import type { AssemblyIdScheme, AssemblyRenderModel, IdScheme } from "../src/contracts/index.js";
 import { assemblyAnim, assemblyFrame, assemblyStepEnd } from "../src/anim/assembly.js";
 import { parseCopyKey } from "../src/depth/copies.js";
 import { fixtureTheme } from "./fixtures/theme.js";
@@ -32,7 +32,9 @@ function build(spec: PlatformCosmoSpec): { model: RenderModel; codes: string[] }
   });
   return { model, codes: diagnostics.map((d) => d.code) };
 }
-const A = (m: RenderModel): AssemblyRenderModel => m.assembly as AssemblyRenderModel;
+/** The assembly model; its `ids` is the full scheme (`IdScheme & AssemblyIdScheme`). */
+const A = (m: RenderModel): AssemblyRenderModel & { ids: IdScheme & AssemblyIdScheme } =>
+  m.assembly as AssemblyRenderModel & { ids: IdScheme & AssemblyIdScheme };
 const animator = createAnimator();
 const BLK = "kit/arm/blk";
 
@@ -134,8 +136,13 @@ describe("crafted one-copy spec (§9.4)", () => {
       expect(ids.copyIds(id)).toEqual([id, `${id}__c1`]);
     }
     expect(ids.copyIds(ids.object("kit/base"))).toEqual([ids.object("kit/base")]);
-    for (const mode of ["loop", "static", "interactive"] as const) {
-      const svg = emit(model, animator.animate(model, { speed: 1, mode }), { font: "system" });
+    for (const opts of [
+      { speed: 1, mode: "loop" },
+      { speed: 1, mode: "interactive" },
+      { speed: 1, mode: "frame", time: 0 },
+    ] as const) {
+      const mode = opts.mode;
+      const svg = emit(model, animator.animate(model, opts), { font: "system" });
       const all = idsIn(svg);
       expect(new Set(all).size, mode).toBe(all.length);
     }
