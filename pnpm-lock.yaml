@@ -137,6 +137,10 @@ importers:
       '@platformcosmo/core':
         specifier: workspace:*
         version: link:../core
+    devDependencies:
+      '@platformcosmo/parts-base':
+        specifier: workspace:*
+        version: link:../parts-base
 
   packages/icons-base:
     dependencies:
