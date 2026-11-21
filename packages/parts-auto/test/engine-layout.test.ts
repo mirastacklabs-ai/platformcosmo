@@ -86,10 +86,6 @@ const INTERNAL = /^(crankshaft|rod-\d+|piston-\d+|cam-intake|cam-exhaust)$/;
 function declared(a: Placed, b: Placed): boolean {
   const pair = (x: Placed, y: Placed): boolean => {
     if (x.part === "block" && x.prim === "body") return INTERNAL.test(y.part);
-    // The bore plug is the deck's top millimetre; the piston in that bore reaches it.
-    if (x.part === "block" && /^bore-\d+$/.test(x.prim)) {
-      return y.part === `piston-${x.prim.slice(5)}`;
-    }
     if (x.part === "head" && x.prim === "casting") return /^cam-/.test(y.part);
     const rod = /^rod-(\d+)$/.exec(x.part);
     if (rod === null) return false;
@@ -115,6 +111,10 @@ describe("default engine at its documented anchors (assemblies 5.2)", () => {
       expect(bad).toEqual([]);
     },
   );
+
+  test("engineLayout rejects cylinder counts outside 2..8", () => {
+    for (const n of [1, 9, 2.5, Number.NaN]) expect(() => engineLayout(n)).toThrow(RangeError);
+  });
 
   test("the contacts really exist: the checker can fail", () => {
     const ps = placed(4);
@@ -147,9 +147,9 @@ describe("default engine at its documented anchors (assemblies 5.2)", () => {
       expect(centre(pin(i), "y")).toBeCloseTo(115, 2);
       expect(centre(pin(i), "z")).toBeCloseTo(L.pinZ[i]!, 2);
     }
-    // Throws: down, up, up, down around the axis at z 74; the up pistons' crowns sit on the deck.
-    expect(L.pinZ).toEqual([44, 104, 104, 44]);
-    expect(crown(1).origin.z + crown(1).size.z).toBeCloseTo(260, 2);
+    // Throws: down, up, up, down around the axis at z 73; the up pistons' crowns sit just under the bore plugs (z 259).
+    expect(L.pinZ).toEqual([43, 103, 103, 43]);
+    expect(crown(1).origin.z + crown(1).size.z).toBeCloseTo(259, 2);
   });
 
   test("head, gasket and valve cover cover the block deck", () => {
@@ -181,7 +181,7 @@ describe("default engine at its documented anchors (assemblies 5.2)", () => {
 });
 
 describe("default engine, three-stage explode (rendered)", () => {
-  test.each([4, 6])(
+  test.each([4, 5, 6])(
     "%i cylinders: no errors, no warnings, no transit-collision",
     async (n) => {
       const r = await render(engineSpec(n), {
@@ -200,7 +200,7 @@ describe("default engine, three-stage explode (rendered)", () => {
 });
 
 describe("assemblies.md section 19.3 engine (rendered)", () => {
-  test("the example renders with no warnings or errors, and no transit-collision", async () => {
+  test("the example (built from primitives, no auto: shapes) renders with no warnings or errors", async () => {
     const md = readFileSync(
       fileURLToPath(new URL("../../../docs/design/assemblies.md", import.meta.url)),
       "utf8",

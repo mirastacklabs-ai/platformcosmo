@@ -15,7 +15,7 @@ import { defineShape, type Draft, type ParamSpec } from "./define.js";
  *
  * Placement: the shapes compose at their default sizes when placed per `engineLayout`
  * (`anchors.ts`, assemblies §5.2): bore pitch 105 mm (block length / cylinders), deck at z 260,
- * crank axis 60 mm above the crank's min corner (z 14), rod centres 117 mm apart.
+ * crank axis 60 mm above the crank's min corner (z 13), rod centres 117 mm apart.
  *
  * Occlusion: the housings (`block-i4`, `head`, `valve-cover`) occlude through their BODY box.
  * Each has exactly one core `box` primitive equal to its `depthBox` (`detail: true` and
@@ -386,7 +386,7 @@ const rod = defineShape({
   params: { section: enumOf(["i-beam", "plain"], "i-beam") },
   draw(g, p, tone) {
     // The big end and the lower beam (z < 80) hook the crank pin: drawn, but outside the core, so
-    // the rod's depth item stays above the crank's journal envelope (z 49..99 at the documented
+    // the rod's depth item stays above the crank's journal envelope (z 48..98 at the documented
     // anchors) and the crank and the rods do not "interpenetrate" when the rods lift out.
     const lo = { core: false, paint: true };
     round(g, "big-end", "cylinder", "x", [0, 0, 0], [24, 50, 50], tone, lo);

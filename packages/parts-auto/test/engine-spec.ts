@@ -16,8 +16,8 @@ export function engineSpec(n: number): unknown {
     id: `pr-${i + 1}`,
     label: `Piston and rod ${i + 1}`,
     parts: [
-      part("rod", "auto:rod", L.at.rod[i]!, n > 5 ? L.size.rod : undefined),
-      part("piston", "auto:piston", L.at.piston[i]!, n > 5 ? L.size.piston : undefined),
+      part("rod", "auto:rod", L.at.rod[i]!, L.size.rod),
+      part("piston", "auto:piston", L.at.piston[i]!, L.size.piston),
     ],
   }));
   return {

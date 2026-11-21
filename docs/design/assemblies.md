@@ -175,9 +175,9 @@ bore pitch `105 = 420 / n`, bore `i` (0-based) centred at `x = (i + 0.5) * pitch
 | Part (`auto:`)        | `at` (n = 4)                         | Notes                                                                                                          |
 | --------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
 | `block-i4`            | `[0, 0, 0]`                          | 420 x 230 x 260; deck (top face) at z 260; bores 82 mm at pitch 105, y 115                                     |
-| `crankshaft`          | `[-40, 55, 14]`                      | 500 x 120 x 120 (40 mm nose and stub outside the block); axis y 115, z 74; throw i centred on bore i           |
+| `crankshaft`          | `[-40, 55, 13]`                      | 500 x 120 x 120 (40 mm nose and stub outside the block); axis y 115, z 73; throw i centred on bore i           |
 | `rod` (cylinder i)    | `[boreX - 12, 90, pinZ - 25]`        | 24 x 50 x 156; big-end centre = pin centre; small-end centre 117 above it; big end and lower beam are not core |
-| `piston` (cylinder i) | `[boreX - 41, 74, pinZ + 90]`        | 82 x 82 x 66; gudgeon 27 above its base, so up-throw pistons end flush with the deck (z 260)                   |
+| `piston` (cylinder i) | `[boreX - 41, 74, pinZ + 90]`        | 82 x 82 x 66; gudgeon 27 above its base, so up-throw pistons end just under the bore plugs (z 259)             |
 | `oil-pan`             | `[0, 0, -90]`                        | open-top tray, top edge at the block's bottom face                                                             |
 | head gasket (`plate`) | `[0, 12, 260]`, size `[420, 206, 4]` | the block core's footprint (y 12..218)                                                                         |
 | `head`                | `[0, 0, 264]`                        | 420 x 230 x 100; ports centred on the bores                                                                    |
@@ -185,9 +185,12 @@ bore pitch `105 = 420 / n`, bore `i` (0-based) centred at `x = (i + 0.5) * pitch
 | `intake` / `exhaust`  | `[0, 230, 269]` / `[0, -90, 274]`    | 420 long, runners / primaries centred on the bores and on the head ports                                       |
 | `camshaft` (x 2)      | `[0, 60, 314]` / `[0, 130, 314]`     | 420 x 40 x 40, inside the head                                                                                 |
 
-Crank pin heights: axis z 74 +/- 30, in flat-plane order down, up, up, down: `pinZ` = 44, 104, 104, 44
-(`+ 30` for up throws). For more than five cylinders (pitch under 84 mm) size each piston
-`[bore, bore, 66]` with `bore = floor(0.8 * pitch)` and each rod `[floor(0.3 * pitch), 50, 156]`.
+Crank pin heights: axis z 73 +/- 30, in flat-plane order down, up, up, down: `pinZ` = 43, 103, 103, 43
+(`+ 30` for up throws). Pass `params.cylinders = n` to the block, crankshaft, head, valve cover, intake, exhaust and camshafts.
+Pistons and rods cannot use `count`/`pitch` (their pin heights alternate); place each one. From five
+cylinders, size each piston `[bore, bore, 66]` with `bore = floor(0.8 * pitch)`; from six, each rod
+`[floor(0.3 * pitch), 50, 156]` (or always pass the `size` that `engineLayout` returns).
+The crankshaft, including its nose and stub, is hidden while enclosed in the block and shows once it drops.
 The `timing-belt` is not anchored (decorative). The `oil-pan` is an open tray (never solid, like
 `hw:chassis-2u`): a crank lowered into it stays visible. Pistons, rods, crank and camshafts are
 `internal` and sit inside the block or head core (enclosed, so hidden at rest).
@@ -294,6 +297,15 @@ staging to seat. The parts **callout** groups the step's leaves by (shape, size,
 as `count × thumbnail` (thumbnail = the leaf drawn at a fixed callout scale, or its image).
 `view` rotates the view a quarter turn from that step on (§7.7). `unbuild` plays steps in
 reverse (time-reversed, §7.2).
+
+Animation (B-3, `render/assembly/builds.ts`): a built leaf is hidden until its move starts, then
+fades in over 0.2 s while it travels from its origin to its seat; an unbuilt leaf fades out over
+the last 0.2 s of its reversed move and vanishes when it ends (the exact mirror, easing mirrored
+like an implode's). The depth order sees the same windows (`DepthItemInput.present`), so an absent
+part takes no part. The loop-start fades are the contract's (`SceneAssembly.loopStart`); a part
+whose own build starts before its fade-out ends is cut at its build start (never shorter than
+1e-4 s, so time 0 still shows the base pose). The loop closure fades parts present at rest but
+not at the end in, and the others out, over the last step's closing window.
 
 Within a step the added nodes move **bottom-up**: ordered by their lowest face, ties by spec
 order, then path; each starts `stagger` after the previous. Distances stack as in §6.3 against
@@ -492,8 +504,8 @@ node's zoomed screen rect and easing to its own overview; leaving reverses it. L
 Element and byte budgets count every level.
 
 **Render model (A1-4).** `AssemblyRenderModel.levels` has one entry per level, sorted by path.
-The level group (`ids.level(path)`) sits in the overlay layer, pinned against the camera like
-the captions, with `transform = overview` and `opacity 0` at rest. All rects are screen rects;
+The level group (`ids.level(path)`) sits in the overlay layer inside the camera group, with
+`transform = overview` and `opacity 0` at rest. All rects are screen rects;
 a level has its own coordinates (its world projected), `overview` places them in the main
 viewport (its reach contained in the main overview area), `hostRect` is the host box seen
 through the parent's overview and `hostFocus` the camera rect that frames it. The cross-fade
@@ -505,10 +517,19 @@ storyboard levels carry the geometry and an empty group; their fit is a placehol
 `frameAt`/`stepEnd` merge the states of the main scene, every view and every level, including
 the opacity of each view group (linear over 0.3 s at the build step's start) and of each level
 group (linear over the camera transition into its step), and the level groups' placement
-(zoom 1); B-3 still animates them in CSS. Entry rule: a focus transition into step k starts the
-level at `fromHost(camera(hostAt(k - 1)))`; `enter` is that start for a host that never moved.
-Occluders: B-3 cross-fades the main world against the level (at least the host's depth
-neighbours), so nothing of the main scene slides under the level while it zooms in. The
+(zoom 1). **Animation (B-3).** The cross-fades are keys on the loop clock
+(`AssemblyRenderModelX.groups`, `render/assembly/groups.ts`): opacity per view and level group,
+placement per level group. `frameAt` and `stepEnd` evaluate them and the animator writes them as CSS
+(`opacity` and `matrix(s,0,0,s,tx,ty)` keyframes on the group, retimed by the camera windows like
+every other track), so a frame equals the CSS pose at the same time; a group whose keys never change
+(a level that is never shown) gets no animation. Reduced motion snaps each group to its step-end
+state. The models of every view and level are animated under their own ids (`views[].model`,
+`levels[].model`), on the same loop clock. The level group sits inside the camera group, so the parent camera composes the zoom: its
+placement keys are the zoom-1 ones (entry from `fromHost(hostAt(k - 1))` to `overview`, leaving
+reverses it, and the closing window of the last step leaves the level too, so the loop restarts
+without a pop; while invisible it waits at the next entry pose). The main world's layer groups
+(objects, labels, flows) cross-fade against the level over the same windows, emitted only when
+levels exist. The
 top-level `focusRect` answers world ids in the view in effect (`plan[step - 1].view`); ids
 inside a level are answered by `levelFocusRect(step, id)` in overlay coordinates and are not in
 `RenderModel.focusRects`. Close-ups and views do not combine (`assembly/view-needs-assembly-only`).

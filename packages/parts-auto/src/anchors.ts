@@ -15,9 +15,9 @@ export const BLOCK = { length: 420, depth: 230, height: 260, coreY0: 12, coreY1:
 export const BORE_Y = BLOCK.depth / 2;
 export const DECK_Z = BLOCK.height;
 
+/** Crank min-corner height: its 120 mm flange tops out at 133, under the lowest piston (down throws, z 133). */
+export const CRANK_Z = 13;
 /** Crankshaft (`auto:crankshaft`, default size 500 x 120 x 120): axis at (y, z) = (60, 60) in its own frame. */
-/** Crank min-corner height: its 120 mm flange tops out at 134, under the lowest piston (down throws). */
-export const CRANK_Z = 14;
 export const CRANK = { length: 500, nose: 40, axis: 60, throw: 30, journal: 50 } as const;
 /** Rod (`auto:rod`, default 24 x 50 x 156): big-end and small-end centres, on the rod's z axis. */
 export const ROD = { width: 24, depth: 50, length: 156, bigEnd: 25, smallEnd: 142 } as const;
@@ -59,12 +59,15 @@ export interface EngineLayout {
     rod: V3[];
     piston: V3[];
   };
-  /** Sizes that differ from the shape default: the gasket; pistons and rods once the pitch is under 105 mm. */
+  /** Sizes to pass: the gasket always; pistons from 5 cylinders, rods from 6 (always passing all is safe). */
   size: { "head-gasket": V3; piston: V3; rod: V3 };
 }
 
-/** Placements of the engine parts for `cylinders` (2..8) cylinders, relative to the block. */
+/** Placements of the engine parts for `cylinders` (an integer 2..8; else RangeError), relative to the block. */
 export function engineLayout(cylinders = 4): EngineLayout {
+  if (!Number.isInteger(cylinders) || cylinders < 2 || cylinders > 8) {
+    throw new RangeError(`engineLayout: cylinders must be an integer 2..8, got ${cylinders}`);
+  }
   const n = cylinders;
   const pitch = round2(BLOCK.length / n);
   const bore = Math.min(PISTON.bore, Math.floor((0.8 * BLOCK.length) / n));
