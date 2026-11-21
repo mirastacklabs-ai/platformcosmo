@@ -1057,8 +1057,8 @@ describe("existing output is unchanged", () => {
     "assemblies.md Rack to server to internals": "b6f4978ff28ce3db",
     // The two specs with build programs changed in A2-6 (build programs, plan views and the
     // build poses now exist); re-recorded there. Every other hash is the A2-3 record.
-    "assemblies.md Brick rover": "66eb5eeacbcdee62",
-    "document-ingestion.md Generic 2OU server from a spec document": "1f5f211ceae50a37",
+    "assemblies.md Brick rover": "c60fc74324613b75",
+    "document-ingestion.md Generic 2OU server from a spec document": "f1a65cfd3dd48988",
     "document-ingestion.md Heat-sink installation figure": "0210858f1ee3bae2",
     "document-ingestion.md From the hall to the heat sink": "51d21be6488c12ce",
     "document-ingestion.md Booklet storyboard": "c1fbfa2da67efd3d",

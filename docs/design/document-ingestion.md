@@ -471,6 +471,19 @@ declared away (§6.5 rules 2–4), and anything not declared is drawing and must
    regions (the part's enclosed whites: opaque, unless `holes`), plus the ink bounding them;
    regions containing another part's seeds are excluded; the rough polygon and the shape prior
    (the isometric box or cylinder hull fitted to the seeded regions) bound the result.
+   **Shape prior.** `box` is the isometric box hull of the seeded mask: the smallest hexagon with
+   vertical sides and ±30° edges that contains it. `cylinder` is the convex hull of the seeded
+   mask and its mirror image about its vertical axis. `none` adds nothing. The prior bounds the
+   mask where the part stands alone in no state, and it is part of every hull (step 6), so a
+   stroke that segmentation missed inside the part's box still counts as the part's for the
+   annotation rules (§6.5 rule 2) even for a part that never stands alone. It also estimates
+   what a hidden part should cover when no depiction shows it (§6.3, `asset/occluded-unrecovered`).
+   **Filling and the peel.** The mask is filled from the **closed** ink, so a 1 px break in an
+   outline (a scan, a light print) does not open the face behind it. Then only closing-only
+   pixels (ink after the closing, paper before it) that the exterior reaches through closing-only
+   pixels are peeled: comb fin gaps of up to 2 px open to the outside and show what lies behind
+   them, while raw ink, the seeded faces and paper stay. The accepted trade-off: a cavity behind a
+   mouth of 2 px or less stays opaque; declare it with `holes`.
 4. Ink shared by two parts (a common outline) goes to the part in front in that state (lower
    on screen, or the manifest order when equal).
 5. `--mask rect` exists only for diagnostics; the gate rejects rectangle masks that include
@@ -484,6 +497,12 @@ declared away (§6.5 rules 2–4), and anything not declared is drawing and must
    offset, and each state's hull is the convex hull of that mapped hull, the state's mask and
    the shape prior, dilated by 2 px. A part that stands alone in no state keeps the hull of
    mask ∪ prior and gets `asset/hull-uncertain` (warning; `confidence: "reduced"`).
+   With two drawings, whole ink that the other drawing also shows at the aligned place (a cage,
+   a bracket, the board) is static: more than a quarter of it beyond the mask means the part
+   touches static ink and does not stand alone there. **With one drawing** there is no such
+   evidence: a part stands alone only where its rough polygon, or its declared prior dilated by
+   the stroke + 1 px, contains its whole ink. Otherwise it keeps its seeded mask (a frame about
+   its own size around it is never swallowed), and every face of it must be seeded.
 
 Result: opaque inside the true outline, transparent everywhere else; never a rectangle.
 
@@ -494,11 +513,17 @@ compared with the visible mask; pixels covered by another part are **recovered**
 depiction: the other state, a duplicate instance (`instanceOf`, which also share one clean
 template sprite: the instance with the fewest occluded pixels), or a detail view. Pixels that
 cannot be recovered are flagged (`asset/occluded-unrecovered`, with area and bbox). A sprite
-never contains pixels of a different part.
+never contains pixels of a different part. A pixel the template's drawing shows (not hidden
+there) comes back from another depiction only where both agree: the other depiction's
+segmentation claims it, and in the template's drawing it is raw ink 8-connected to the
+template's mask, or paper enclosed by that ink. A face only another drawing closes is not
+added.
 
 ### 6.4 Clean base
 
-The base (default the assembled drawing) has every moved part's mask (dilated by 1 px) and
+The base (default the assembled drawing) has every moved part's mask and part ink (dilated by
+1 px; with one drawing, the mask, its anti-aliased fringe, and the part ink in the hull that
+ends there, since a stroke running on out of the hull is the board's) and
 every declared annotation erased: the measured band of each arrow and leader polyline and each
 text rectangle, dilated by 2 px (the **annotation mask** of each state), **minus part ink** (§6.5
 rule 2): annotation erasure only ever removes ink that is not part ink, except inside each
@@ -513,9 +538,11 @@ the background colour and flagged. Arrows are redrawn by the renderer as fading 
 The gate checks what a viewer actually sees: it re-renders **both** states from our outputs
 (base + every sprite at its seat; base + every sprite at its exploded position, through the
 same resvg path as `pcosmo build`) and compares each with its source drawing, after alignment.
-All metrics are **local**: the unit is the largest connected component (8-connectivity) of
-residual pixels, in pixels, never a fraction of the image, so a 40-pixel ghost fin cannot hide
-in a large figure. A residual pixel is one whose luminance differs by more than 48 (0–255)
+All metrics are **local**: the unit is the largest connected component (pixels at Chebyshev
+distance up to 2 connect, i.e. across exactly 1-pixel gaps, so a comb of thin fins is one
+defect, while single pixels 2 px apart stay separate) of residual
+pixels, in pixels, never a fraction of the image, so a 40-pixel ghost fin cannot hide in a
+large figure. A residual pixel is one whose luminance differs by more than 48 (0–255)
 after a 1-pixel tolerance for anti-aliasing (a pixel matches if any pixel in its 3 × 3
 neighbourhood of the other image matches).
 
@@ -553,6 +580,13 @@ until the gate passes:
      because the hull comes from the part's whole ink where it stands alone); an arrow from
      the background to a part's edge and a leader from a callout number to a seated part pass.
    - Annotation erasure in the base (§6.4) uses the same rule, so it never removes part ink.
+   - The polyline's own stroke (the ink runs through its samples) is exempt from "ink inside a
+     hull" only in the hull's 2 px margin, never inside the undilated convex hull: a leader drawn
+     along a stroke segmentation missed there (a lever just off the body) fails.
+   - An arrow whose tip touches the other state's mask mapped into its drawing (in the exploded
+     drawing, the seat outline the part goes to) gets a `w × w` allowance there for rule 4,
+     like a contact square; an arrow reaching into that mask beyond its tip square still
+     counts.
 3. **Measured band width.** A polyline's band is not its declared `width`: at every 2 px sample
    along it, the gate measures the ink run perpendicular to the polyline through the sample;
    the band half-width is (median run + 2 px) / 2. The polyline must lie on ink of its declared
@@ -563,15 +597,22 @@ until the gate passes:
    part's hull over its length and fails rule 2.
    **Shape of annotations.** Every **leader** must end (at its free end, the end without a part
    contact) within 4 px of a declared `text` rectangle of the same state (a callout number,
-   label or bubble). Every **arrow** must have a detected **arrowhead** at its free end: within
-   the last `3w` px the ink run perpendicular to the polyline widens to at least 2× the median
-   run and narrows again toward the tip (filled or open wedge), deterministically measured on
-   the same samples. A stroke that is neither (a fin, an edge, a crease) cannot be declared at
-   all.
-4. **Cumulative caps per part.** For each part and state, the pixels of its seated and exploded
-   masks and of its part ink (rule 2) that lie inside the part's hull and inside
-   any annotation, counted once over the union of all annotations and excluding the contact
-   allowances, must be ≤ 16 px. Many small annotations cannot add up to a hidden part. Text
+   label or bubble). Every **arrow** must have a detected **arrowhead** at **either** end (the
+   tip may touch a part: an arrow from the background to a part's edge has its head at the part,
+   so the "free end" of arrows is not required): within the last `3w` px the arrow's own ink,
+   8-connected to the shaft's run and excluding part outlines and the static drawing, widens
+   across the polyline to at least 2× the stroke run and narrows again toward the tip without
+   widening (filled or open wedge), deterministically measured on the same samples; ink that
+   runs out of that window sideways is a crossing stroke, not a head. The band around a head is
+   the wedge's own ink. A stroke that is neither (a fin, an edge, a crease) cannot be declared at
+   all. Because static ink is excluded, an arrowhead drawn on a feature that both drawings show at
+   the aligned place (the board, a bracket) cannot be detected: draw the head clear of it.
+4. **Cumulative caps per part.** For each part and state, the pixels of **both** its masks in
+   that state's frame (the mask placed there, and the other state's mask mapped into this frame by
+   the alignment: in the exploded drawing that is the seat location) and of its part ink (rule 2,
+   inside the part's hull), inside any annotation mask of that state, counted once over the
+   union of all annotations and excluding each annotation's own contact allowances (dilated like
+   the mask), must be ≤ 16 px. Many small annotations cannot add up to a hidden part. Text
    rectangles must also contain ink and be ≤ 2% of the figure each.
    Residual risk, stated in the report: only for a part that stands alone in no state (its hull
    then comes from mask and prior only, `asset/hull-uncertain`) could a missed stroke outside
@@ -597,11 +638,11 @@ still reported.
 | assembled residual    | largest residual component of (assembled re-render vs assembled source) > 24 px                                                                                                                                                                                                                                                                                                                                                                                                                        | `asset/assembled-residual` (error, with bbox)                   |
 | exploded residual     | largest residual component of (exploded re-render vs exploded source) > 24 px; this is where ghost fragments in the base, rectangles carrying slivers and blanked interiors show up, and where an ungrouped sub-part (a clip lever left seated) fails                                                                                                                                                                                                                                                  | `asset/exploded-residual` (error, with bbox)                    |
 | leftover fragments    | after erasing, an ink component ≥ 12 px inside the moved parts' dilated seated masks whose pixels correlate (NCC ≥ 0.6) with the moved sprite at that place                                                                                                                                                                                                                                                                                                                                            | `asset/leftover-fragment` (error)                               |
-| foreign pixels        | any ink pixel of a sprite outside the part's own regions (its seeded regions, the regions they enclose, and their bounding ink); ≥ 1 component of ≥ 4 px fails                                                                                                                                                                                                                                                                                                                                         | `asset/foreign-pixels` (error)                                  |
+| foreign pixels        | any ink pixel of a sprite outside the part's own regions in that drawing (its seeded regions, the regions they enclose, and their bounding ink; the whole silhouette where it stands alone; for the template in its own drawing, also what was recovered from other depictions), except ink the drawing shows there that continues those regions inside the part's hull (never for the template in its own drawing); ≥ 1 component of ≥ 4 px fails                                                     | `asset/foreign-pixels` (error)                                  |
 | transparency holes    | a transparent region of a sprite fully enclosed by its opaque mask, unless `holes`                                                                                                                                                                                                                                                                                                                                                                                                                     | `asset/mask-hole` (error)                                       |
 | rectangle masks       | a mask equal to its bbox while the bbox contains ink of another part's regions                                                                                                                                                                                                                                                                                                                                                                                                                         | `asset/rect-mask` (error)                                       |
 | group connectivity    | a group's mask is not one connected component (unless `allowDisjoint`)                                                                                                                                                                                                                                                                                                                                                                                                                                 | `asset/group-disconnected` (error)                              |
-| instance assignment   | two instances assigned to the same `locate` peak, or a swap that lowers the residual                                                                                                                                                                                                                                                                                                                                                                                                                   | `asset/instance-swap` (error)                                   |
+| instance assignment   | two instances assigned to the same `locate` peak, or a swap that fits the seeds and `nearest` hints better (identical sprites render the same, so the residual cannot decide); `asset/ambiguous` (warning) where neither instance has seeds or a hint in a drawn state                                                                                                                                                                                                                                 | `asset/instance-swap` (error)                                   |
 | unrecovered base      | erased pixels filled with background (no other depiction) that are **visible in either re-render**, i.e. not covered by a sprite in that state, with a component > 24 px                                                                                                                                                                                                                                                                                                                               | `asset/base-unrecovered` (error); invisible fills are info      |
 | unrecovered occlusion | pixels of a part hidden in its source depiction and not recovered (§6.3), visible in the exploded re-render                                                                                                                                                                                                                                                                                                                                                                                            | `asset/occluded-unrecovered` (error when > 24 px, else warning) |
 | annotation residual   | ink left in the base inside a declared annotation mask (arrow or leader polyline, callout text rectangle)                                                                                                                                                                                                                                                                                                                                                                                              | `asset/arrow-residual` (error)                                  |
@@ -1266,12 +1307,19 @@ image index and bbox in `params`.
 
 Raster operations (`@platformcosmo/assets`, §5) use these `asset/*` codes, with a bbox in
 `params` wherever a region applies: errors `bad-option` (`params.option` names the option:
-tolerance, maxPx, rect, region, top, minScore, scales, svgSize, maxShift, exclude, input),
+tolerance, maxPx, rect, region, top, minScore, scales, svgSize, maxShift, exclude, input; the
+figure pipeline adds manifest, with a JSON pointer `path` into the manifest, outputs for
+`assets check`, figureId, dir and label),
 `bad-raster`, `too-large`, `too-expensive`, `empty`, `flat` (no texture under the mask),
 `not-found` (nothing fits or matches), `renderer-failed` (resvg wasm could not start); warnings
 `rect-clamped`, `no-background`, `background-covers-image`, `ambiguous` (align: no majority or a
 small best-vs-second margin), `flat` (one scale skipped), and info/warning `shrink-passthrough`.
-Image validation errors keep C-1's `image/*` codes.
+Image validation errors keep C-1's `image/*` codes. The figure pipeline (§6) uses the §6.5 gate
+codes (`asset/seat-unverified` is a warning) plus these; `not-found` also covers a seed on the
+background or a part that `locate` cannot find in a drawing, `too-large` a manifest with more
+than 64 parts, `too-expensive` annotation masks or part overlaps beyond the work budget, `empty` a
+part whose mask is empty (a polygon away from its seeds), and the warning `ambiguous` instances
+with neither seeds nor a `nearest` hint in a drawn state (their assignment is unverified).
 
 ## 14. Limits
 

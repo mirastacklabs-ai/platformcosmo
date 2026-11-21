@@ -31,6 +31,8 @@ import type {
   AssemblyStepPlan,
   CalloutEntry,
   Diagnostic,
+  LoopFade,
+  LoopStart,
   PartMove,
   ProgramLevel,
   QuarterTurn,
@@ -51,7 +53,7 @@ import {
 import { parseDistance, programDistances, type LeafBox, type Mover } from "./distances.js";
 import { EPS, type LBox } from "./roles.js";
 import { spend, type Item, type OwnerIndex, type OwnerSelectors, type Work } from "./selectors.js";
-import { programSegment, r4, rankMovers, type OrderKeys, type ProgramSegment } from "./timing.js";
+import { programSegment, r4, type ProgramSegment } from "./timing.js";
 
 /** Build steps per program (the schema's `maxItems`); more are ignored. */
 export const MAX_BUILD_STEPS = 500;
@@ -250,9 +252,19 @@ export function resolveBuild(input: BuildInput): BuildResolved | undefined {
     ? specIndex(input.tnode, index.items.length)
     : new Map<string, TNode>();
   const added = new Set<SceneAssemblyNode>();
+  /**
+   * A node some step adds. When earlier steps already added some of its leaves (a sub-assembly
+   * after one of its parts, or the reverse), `rest` is only the leaves still to add and they
+   * move together as one rigid unit (`partial`); nothing is dropped.
+   */
+  interface PMover {
+    readonly item: Item;
+    readonly rest: readonly SceneAssemblyNode[];
+    readonly partial: boolean;
+  }
   interface Planned {
     readonly spec: SpecBuildStep;
-    readonly movers: readonly Item[];
+    readonly movers: readonly PMover[];
     readonly leaves: readonly SceneAssemblyNode[];
   }
   const planned: Planned[] = [];
@@ -260,7 +272,7 @@ export function resolveBuild(input: BuildInput): BuildResolved | undefined {
     const add: readonly unknown[] = Array.isArray(st.add) ? st.add : [];
     const r = sel.stage(add as string[], undefined);
     if (r === undefined) return undefined;
-    const movers: Item[] = [];
+    const movers: PMover[] = [];
     const leaves: SceneAssemblyNode[] = [];
     for (const it of r.movers) {
       const stop = ends[it.index] as number;
@@ -270,9 +282,10 @@ export function resolveBuild(input: BuildInput): BuildResolved | undefined {
         const n = (index.items[k] as Item).node;
         if (n.kind === "leaf") lv.push(n);
       }
-      if (lv.some((l) => added.has(l))) continue;
-      movers.push(it);
-      for (const l of lv) {
+      const rest = lv.filter((l) => !added.has(l));
+      if (rest.length === 0) continue;
+      movers.push({ item: it, rest, partial: rest.length < lv.length });
+      for (const l of rest) {
         added.add(l);
         leaves.push(l);
       }
@@ -312,8 +325,11 @@ export function resolveBuild(input: BuildInput): BuildResolved | undefined {
       return;
     }
     const bounds = origin === "outside" ? (unionL(placed.map((p) => p.box)) ?? ownerBox) : ownerBox;
-    const movers: Mover[] = pl.movers.map((it) => {
-      const box = toLBox(it.node.local);
+    const movers: Mover[] = pl.movers.map((pm) => {
+      const it = pm.item;
+      const box = pm.partial
+        ? (unionL(pm.rest.map((l) => toLBox(l.local))) as LBox)
+        : toLBox(it.node.local);
       const u: Dir =
         origin === "outside"
           ? outsideDir(box, bounds)
@@ -376,28 +392,26 @@ export function resolveBuild(input: BuildInput): BuildResolved | undefined {
         ? st.duration
         : 0.6;
     const easing = st.easing ?? "ease-out";
-    const keys = (m: Mover): OrderKeys => {
-      const w = m.item.node.world;
-      return {
-        spec: m.item.index,
-        radius: 0,
-        minZ: w.origin.z,
-        maxZ: w.origin.z + w.size.z,
-        depth: 0,
-        path: m.rel,
-      };
-    };
-    const ranked = rankMovers(movers, keys, "bottom-up", () => undefined);
-    const moves: PartMove[] = ranked.map((m, r) => {
+    const keys = (m: Mover): { minZ: number } => ({ minZ: m.box.z0 });
+    // bottom-up by the part's lowest face, then spec order, then path (§6.5)
+    const ranked = [...movers].sort(
+      (a, b) => keys(a).minZ - keys(b).minZ || a.item.index - b.item.index || cmp(a.rel, b.rel),
+    );
+    const restOf = new Map(pl.movers.map((pm) => [pm.item.rel, pm]));
+    const moves: PartMove[] = ranked.flatMap((m, r) => {
       const d = dist.distance.get(m.rel) ?? 0;
-      return {
-        path: m.item.node.path,
+      const one = {
         // seat - origin: the part starts at -offset and ends on its seat
         offset: toWorld(asm.frame, [-m.u[0] * d, -m.u[1] * d, -m.u[2] * d]),
         start: r4(start + r * stagger),
         duration: r4(duration),
         easing,
       };
+      const pm = restOf.get(m.rel) as PMover;
+      // a partly added sub-assembly: its remaining leaves move together, one move each
+      return pm.partial
+        ? pm.rest.map((l) => ({ path: l.path, ...one }))
+        : [{ path: m.item.node.path, ...one }];
     });
     moves.sort((a, b) => a.start - b.start || cmp(a.path, b.path));
     let end = start;
@@ -455,9 +469,22 @@ export function resolveBuild(input: BuildInput): BuildResolved | undefined {
 // Levels, segments, appearance
 // ---------------------------------------------------------------------------------------------
 
-/** What an action plays: `build` steps `from+1 .. to`, `unbuild` the exact reverse (§7.2). */
+/**
+ * What an action plays. `build`: steps `from+1 .. to`. `unbuild-played`: the exact reverse
+ * (§7.2) with `moves` ALREADY reversed (offsets negated, starts mirrored, easing mirrored),
+ * so it is the "as played" view of the action.
+ *
+ * Two inputs, never mixed (the same hazard exists for `programSegment`'s `implode`):
+ *  - `moves` are the moves AS PLAYED: use them to sample positions or draw the action;
+ *  - `forward` are the moves of the forward (build) segment, unreversed: this is the input of
+ *    `toLoopMoves` (`depth/epochs.ts`), which mirrors `unbuild` and `implode` itself. Feeding
+ *    `moves` of an `unbuild-played` segment to `toLoopMoves` reverses it twice.
+ * For a `build` segment the two are equal.
+ */
 export interface BuildSegment extends Omit<ProgramSegment, "kind"> {
-  readonly kind: "build" | "unbuild";
+  readonly kind: "build" | "unbuild-played";
+  /** Unreversed moves, in segment time: the input of `toLoopMoves` (see above). */
+  readonly forward: readonly PartMove[];
 }
 
 /**
@@ -471,7 +498,9 @@ export function buildSegment(
   to: number,
 ): BuildSegment {
   const seg = programSegment({ stages: program.steps }, from, to);
-  return { ...seg, kind: seg.kind === "explode" ? "build" : "unbuild" };
+  if (seg.kind === "explode") return { ...seg, kind: "build", forward: seg.moves };
+  const fwd = programSegment({ stages: program.steps }, to, from);
+  return { ...seg, kind: "unbuild-played", forward: fwd.moves };
 }
 
 /** Leaves present at `level` (steps done): the base plus everything steps `1 .. level` add. */
@@ -515,7 +544,7 @@ export function appearance(program: ResolvedBuildProgram, from: number, to: numb
   const lo = Math.max(0, Math.min(from, to));
   const hi = Math.min(program.steps.length, Math.max(from, to));
   const out: Appearance[] = [];
-  const reverse = seg.kind === "unbuild";
+  const reverse = seg.kind === "unbuild-played";
   const startOf = new Map(seg.moves.map((m) => [m.path, m]));
   for (let i = lo; i < hi; i++) {
     const step = program.steps[i] as ResolvedBuildStep;
@@ -537,18 +566,42 @@ export function appearance(program: ResolvedBuildProgram, from: number, to: numb
 }
 
 /**
- * View in effect at `level` (§7.7): the `view` of the latest step `<= level` that sets one, 0
- * before any; undefined when the program sets none (it does not touch the view).
+ * View in effect at `level` (§7.7): the `view` of the latest step `<= level` that sets one;
+ * undefined while none has (the program has not touched the view yet, or sets none).
  */
 export function viewAt(program: ResolvedBuildProgram, level: number): QuarterTurn | undefined {
-  let any = false;
-  let cur: QuarterTurn = 0;
-  program.steps.forEach((s, i) => {
-    if (s.view === undefined) return;
-    any = true;
-    if (i < level) cur = s.view;
-  });
-  return any ? cur : undefined;
+  let cur: QuarterTurn | undefined;
+  const n = Math.min(level, program.steps.length);
+  for (let i = 0; i < n; i++) {
+    const v = (program.steps[i] as ResolvedBuildStep).view;
+    if (v !== undefined) cur = v;
+  }
+  return cur;
+}
+
+/**
+ * View switches of the action `from -> to` (`ResolvedAction.views`): a build switches at the
+ * start of each step that sets a view; an unbuild, the exact reverse, switches back to the view
+ * before the step at the start of the reversed step. Times are segment times before compression.
+ */
+export function viewSwitches(
+  program: ResolvedBuildProgram,
+  from: number,
+  to: number,
+): { at: number; view: QuarterTurn }[] {
+  const lo = Math.max(0, Math.min(from, to));
+  const hi = Math.min(program.steps.length, Math.max(from, to));
+  if (lo >= hi) return [];
+  const off = (program.steps[lo] as ResolvedBuildStep).start;
+  const len = buildSegment(program, lo, hi).length;
+  const out: { at: number; view: QuarterTurn }[] = [];
+  for (let i = lo; i < hi; i++) {
+    const st = program.steps[i] as ResolvedBuildStep;
+    if (st.view === undefined) continue;
+    if (from <= to) out.push({ at: r4(st.start - off), view: st.view });
+    else out.push({ at: r4(len - (st.end - off)), view: viewAt(program, i) ?? 0 });
+  }
+  return out.sort((a, b) => a.at - b.at);
 }
 
 /** Build leaves fading out at the start of the loop (§7.4). */
@@ -559,15 +612,17 @@ export interface LoopStartFade {
   /** Level the timeline starts at (`k - advance` of the first action) and the base pose level. */
   readonly startLevel: number;
   readonly baseLevel: number;
-  /** Leaves present at the base pose but not at the start level, sorted. */
+  /** Leaves present at the base pose but not at the start level (fade out), sorted. */
   readonly leaves: readonly string[];
+  /** Leaves present at the start level but not at the base pose (fade in), sorted. */
+  readonly appear: readonly string[];
   /** Seconds of output the fade lasts: `max(lead_1, 0.4)`. */
   readonly window: number;
 }
 
 /** Rest level of a build program of `steps` steps: finished, or 0 for `pose: "empty"`. */
 export const baseBuildLevel = (steps: number, pose: string | undefined): number =>
-  pose === "empty" ? 0 : steps;
+  pose === "empty" ? 0 : Math.min(steps, MAX_BUILD_STEPS);
 
 /**
  * Loop-start fades of an assembly (§7.4): for each build program whose first action starts at a
@@ -602,6 +657,7 @@ export function loopStartFades(
       startLevel: f.from,
       baseLevel: base,
       leaves: presenceDiff(p, base, f.from).vanish,
+      appear: presenceDiff(p, base, f.from).appear,
       window: Math.max(lead, LOOP_START_MIN),
     });
   }
@@ -616,4 +672,25 @@ function baseOf(
   const rel = p.owner === asm.id ? "" : p.owner.slice(asm.id.length + 1);
   const q = rel === "" ? p.id : `${rel}/${p.id}`;
   return pose.find((x) => x.program === q)?.level ?? p.steps.length;
+}
+
+/**
+ * The contract form of the loop-start fades of an assembly (`SceneAssembly.loopStart`, §7.4):
+ * one `LoopFade` per leaf over `[0, max(lead, 0.4)]` (loop seconds at speed 1; `lead` is the
+ * plan's own opening transition `lead_1`). Parts of the base pose that the start level lacks
+ * fade out (1 -> 0); parts the start level has but the base pose lacks (`pose: empty` with a
+ * build starting at 3) fade in (0 -> 1). Undefined when there are none.
+ */
+export function loopStartOf(
+  asm: SceneAssembly,
+  plan: readonly AssemblyStepPlan[],
+  lead = 0,
+): LoopStart | undefined {
+  const fades = new Map<string, LoopFade>();
+  for (const f of loopStartFades(asm, plan, lead)) {
+    for (const path of f.leaves) fades.set(path, { path, t0: 0, t1: f.window, from: 1, to: 0 });
+    for (const path of f.appear) fades.set(path, { path, t0: 0, t1: f.window, from: 0, to: 1 });
+  }
+  if (fades.size === 0) return undefined;
+  return { fades: [...fades.values()].sort((a, b) => cmp(a.path, b.path)) };
 }

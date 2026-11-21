@@ -40,6 +40,7 @@ import type {
   SceneAssembly,
   PartShapePack,
   PartShapeRegistry,
+  LoopStart,
   QuarterTurn,
   ResolvedBuildProgram,
   SceneAssemblyNode,
@@ -77,7 +78,14 @@ import {
 } from "./directions.js";
 import { parseDistance, programDistances, type LeafBox, type Mover } from "./distances.js";
 import { frameMap, rnd, unionBoxes } from "./frame.js";
-import { baseBuildLevel, buildSegment, resolveBuild, viewAt } from "./build.js";
+import {
+  baseBuildLevel,
+  buildSegment,
+  loopStartOf,
+  resolveBuild,
+  viewAt,
+  viewSwitches,
+} from "./build.js";
 import { buildAssemblies } from "./tree.js";
 import {
   OwnerSelectors,
@@ -94,6 +102,7 @@ import {
   r4,
   rankMovers,
   stageStart,
+  transitionOf,
   type OrderKeys,
 } from "./timing.js";
 
@@ -711,9 +720,29 @@ export class AssemblyPrograms {
         const isBuild = kind === "build" || kind === "unbuild";
         if (isBuild && !startLevel.has(r.key)) startLevel.set(r.key, r.from);
         const built = res.builds.get(`${rel}\u0000${r.prog.id}`);
-        if (isBuild && built !== undefined) {
-          const v = viewAt(built, r.to);
-          if (v !== undefined) views.set(si, { at: ai, view: v });
+        let switches: { at: number; view: QuarterTurn }[] = [];
+        if (isBuild && built !== undefined && !r.noop) {
+          // the view this action leaves: that of the new level, or the rest view (0) when it
+          // leaves a level that had set one (§7.7); a no-op action changes nothing
+          const nv = viewAt(built, r.to);
+          const eff = nv ?? (viewAt(built, r.from) === undefined ? undefined : 0);
+          if (eff !== undefined) {
+            const prev = views.get(si);
+            if (prev !== undefined && prev.view !== eff) {
+              diagnostics.push(
+                mk(
+                  "info",
+                  "assembly/view-conflict",
+                  at,
+                  `Actions ${prev.at + 1} and ${ai + 1} of this step set different views (${prev.view} and ${eff}); the last one wins`,
+                  "Put the view changes in separate steps",
+                  { views: [prev.view, eff] },
+                ),
+              );
+            }
+            views.set(si, { at: ai, view: eff });
+          }
+          switches = viewSwitches(built, r.from, r.to);
         }
         if (!(isBuild ? built !== undefined : res.programs.has(`${rel}\u0000${r.prog.id}`))) {
           // not resolved (budget or malformed): reported, never planned with a zero length
@@ -771,6 +800,7 @@ export class AssemblyPrograms {
             start: 0,
             length: natural,
             scale: 1,
+            ...(switches.length === 0 ? {} : { views: switches }),
             ...(implied.length === 0 ? {} : { accessLength: r4(access) }),
             ...(skip === undefined || skip.size === 0 || r.noop
               ? {}
@@ -964,7 +994,13 @@ export class AssemblyPrograms {
     figures: ReadonlyMap<string, ResolvedFigure>,
     views: readonly (string | undefined)[],
     opts: PlanOptions = {},
-  ): { plan: AssemblyStepPlan[]; diagnostics: Diagnostic[]; compression: Diagnostic[] } {
+  ): {
+    plan: AssemblyStepPlan[];
+    diagnostics: Diagnostic[];
+    compression: Diagnostic[];
+    /** Loop-start fades by assembly id (§7.4), only for assemblies that have any. */
+    loopStart: Map<string, LoopStart>;
+  } {
     const sims = new Map<string, Simulated>();
     const diagnostics: Diagnostic[] = [];
     for (const a of assemblies) {
@@ -998,9 +1034,24 @@ export class AssemblyPrograms {
     let view: QuarterTurn = 0;
     const plan = planned.plan.map((p, si) => {
       let at = -1;
+      let first: { id: string; view: QuarterTurn } | undefined;
       for (const id of ids) {
         const v = (sims.get(id) as Simulated).views.get(si);
-        if (v !== undefined && v.at > at) {
+        if (v === undefined) continue;
+        if (first !== undefined && first.id !== id && first.view !== v.view) {
+          diagnostics.push(
+            mk(
+              "info",
+              "assembly/view-conflict",
+              `/steps/${si}/assembly`,
+              `Assemblies ${JSON.stringify(first.id)} and ${JSON.stringify(id)} set different views (${first.view} and ${v.view}) in one step; the later action wins`,
+              "Put the view changes in separate steps",
+              { views: [first.view, v.view] },
+            ),
+          );
+        }
+        first ??= { id, view: v.view };
+        if (v.at > at) {
           at = v.at;
           view = v.view;
         }
@@ -1014,7 +1065,15 @@ export class AssemblyPrograms {
     });
     // Compression is reported by validation (`assemblyPlanDiagnostics`), never twice.
     const compression = planned.diagnostics.filter((d) => d.code === "assembly/compressed");
-    return { plan, diagnostics, compression };
+    // loop start (§7.4): the opening transition of step 1 is the plan's own `lead_1`
+    const d1 = (this.spec.steps ?? [])[0]?.duration ?? 3;
+    const lead = views[0] === undefined ? 0 : transitionOf(d1);
+    const loopStart = new Map<string, LoopStart>();
+    for (const a of assemblies) {
+      const ls = loopStartOf(a, plan, lead);
+      if (ls !== undefined) loopStart.set(a.id, ls);
+    }
+    return { plan, diagnostics, compression, loopStart };
   }
 }
 

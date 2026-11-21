@@ -2,11 +2,14 @@ import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import type { Diagnostic, ResolvedBuildProgram, SceneAssembly, SceneGraph } from "../src/index.js";
 import { buildScene } from "../src/index.js";
+import { toLoopMoves } from "../src/depth/epochs.js";
 import { assemblyDiagnostics } from "../src/schema/assembly-semantic.js";
 import type { PlatformCosmoSpec } from "../src/schema/types.gen.js";
 import {
   MAX_BUILD_STEPS,
   appearance,
+  baseBuildLevel,
+  loopStartOf,
   buildSegment,
   loopStartFades,
   presenceDiff,
@@ -19,6 +22,7 @@ import { OwnerSelectors, indexOwner, makeWork } from "../src/scene/assembly/sele
 import { AssemblyModel } from "../src/schema/assembly-tree.js";
 import type { TNode } from "../src/schema/assembly-tree.js";
 import { BEZIER, fitDuration, stepWindows } from "../src/scene/boards.js";
+import { transitionOf } from "../src/scene/assembly/timing.js";
 
 // A2-6: build programs (docs/design/assemblies.md §6.5, §7.2, §7.4, §7.7, §18).
 
@@ -202,7 +206,7 @@ describe("the brick rover (§19.5), without sub-builds", () => {
       undefined,
       undefined,
     ]);
-    expect(viewAt(main, 4)).toBe(0);
+    expect(viewAt(main, 4)).toBeUndefined(); // no view step done yet
     expect(viewAt(main, 5)).toBe(90);
     expect(viewAt(main, 6)).toBe(0);
     expect(viewAt(bprog(a, "cab-build", "rover/cab"), 3)).toBeUndefined();
@@ -486,7 +490,7 @@ describe("unbuild reverses the build", () => {
       const a = b + 1 + Math.floor(r() * (n - b));
       const fwd = buildSegment(p, b, a);
       const rev = buildSegment(p, a, b);
-      expect(rev.kind).toBe("unbuild");
+      expect(rev.kind).toBe("unbuild-played");
       expect(rev.length).toBe(fwd.length);
       expect(rev.moves.length).toBe(fwd.moves.length);
       for (let k = 0; k <= 24; k++) {
@@ -979,5 +983,260 @@ describe("specs without build programs are untouched", () => {
     expect(g.assemblies!.plan[0]!.poses.a).toEqual([{ program: "p", level: 1 }]);
     expect(asmOf(g).programs.every((p) => p.kind === "explode")).toBe(true);
     expect(g.assemblies!.views).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Review round: overlap by ancestor/descendant, contract fades and view switches, segments
+// ---------------------------------------------------------------------------------------------
+
+describe("a step that overlaps an earlier selection (Q01)", () => {
+  const cab = (steps: Obj[], actions: Obj[] = []): PlatformCosmoSpec =>
+    spec({
+      assemblies: [
+        tile(
+          [
+            box("floor", [0, 0, 0], [6, 6, 1]),
+            {
+              id: "cab",
+              at: [0, 0, 1],
+              parts: [
+                box("base", [0, 0, 0], [2, 2, 1]),
+                box("wall", [0, 0, 1], [2, 2, 1]),
+                box("roof", [0, 0, 2], [2, 2, 1]),
+              ],
+            },
+          ],
+          [build([{ add: ["floor"] }, ...steps])],
+        ),
+      ],
+      steps: actions.length === 0 ? undefined : [{ duration: 20, assembly: actions }],
+    });
+  const errs = (s: PlatformCosmoSpec): Diagnostic[] =>
+    codes(assemblyDiagnostics(s, OPEN), "assembly/moved-twice");
+
+  test("cab/base, then cab: the remaining leaves move together, nothing is dropped", () => {
+    const s = cab([{ add: ["cab/base"] }, { add: ["cab"] }]);
+    const p = bprog(asmOf(scene(s)));
+    expect(p.steps[1]!.adds).toEqual(["a/cab/base"]);
+    expect(p.steps[2]!.adds).toEqual(["a/cab/roof", "a/cab/wall"]);
+    expect(p.base).toEqual([]);
+    // the rest is one rigid unit: one move per leaf, same offset, same start
+    const m = p.steps[2]!.moves;
+    expect(m.map((x) => x.path).sort()).toEqual(["a/cab/roof", "a/cab/wall"]);
+    expect(vec(m[0]!)).toEqual(vec(m[1]!));
+    expect(m[0]!.start).toBe(m[1]!.start);
+    expect(m[0]!.offset.z).toBeLessThan(0);
+    // the leaves of all steps and the base are exactly the leaves, each once
+    const all = [...p.base, ...p.steps.flatMap((x) => x.adds)].sort();
+    expect(all).toEqual([...asmOf(scene(s)).leaves].sort());
+    const d = errs(s);
+    expect(d).toHaveLength(1);
+    expect(d[0]!.path).toContain("/steps/2/add");
+  });
+
+  test("cab, then cab/roof: the later add has nothing left; validation reports it", () => {
+    const s = cab([{ add: ["cab"] }, { add: ["cab/roof"] }]);
+    const p = bprog(asmOf(scene(s)));
+    expect(p.steps[1]!.adds).toHaveLength(3);
+    expect(p.steps[2]!.adds).toEqual([]);
+    expect(p.steps[2]!.moves).toEqual([]);
+    expect(errs(s)).toHaveLength(1);
+  });
+
+  test("no overlap, no report; a node and its child in the SAME step is not a conflict", () => {
+    expect(errs(cab([{ add: ["cab/base"] }, { add: ["cab/wall", "cab/roof"] }]))).toEqual([]);
+    expect(errs(cab([{ add: ["cab", "cab/roof"] }]))).toEqual([]);
+  });
+});
+
+describe("loop start on the contract (Q02, Q05)", () => {
+  const four = (pose: string | undefined, steps: Obj[]): SceneGraph =>
+    scene(
+      spec({
+        assemblies: [
+          tile(
+            Array.from({ length: 4 }, (_, i) => box(`p${i}`, [i, 0, 0], [1, 1, 1])),
+            [build(Array.from({ length: 4 }, (_, i) => ({ add: [`p${i}`] })))],
+            pose === undefined ? {} : { pose },
+          ),
+        ],
+        steps,
+      }),
+    );
+
+  test("parts the start level lacks fade out over max(lead_1, 0.4)", () => {
+    const g = four(undefined, [{ duration: 6, assembly: [{ build: "a", to: 3, advance: 2 }] }]);
+    const ls = asmOf(g).loopStart!;
+    expect(ls.fades).toEqual([
+      { path: "a/p1", t0: 0, t1: 0.4, from: 1, to: 0 },
+      { path: "a/p2", t0: 0, t1: 0.4, from: 1, to: 0 },
+      { path: "a/p3", t0: 0, t1: 0.4, from: 1, to: 0 },
+    ]);
+  });
+
+  test("pose empty with a build starting at 3: parts present at 3 fade IN", () => {
+    const g = four("empty", [{ duration: 6, assembly: [{ build: "a", to: 4, advance: 1 }] }]);
+    expect(asmOf(g).loopStart!.fades).toEqual([
+      { path: "a/p0", t0: 0, t1: 0.4, from: 0, to: 1 },
+      { path: "a/p1", t0: 0, t1: 0.4, from: 0, to: 1 },
+      { path: "a/p2", t0: 0, t1: 0.4, from: 0, to: 1 },
+    ]);
+  });
+
+  test("the window is the plan's own opening transition; absent when nothing fades", () => {
+    // step 1 focuses an object, so the camera eases in: lead = min(0.8, 0.25 * 4) = 0.8
+    const s = spec({
+      assemblies: [
+        tile(
+          Array.from({ length: 4 }, (_, i) => box(`p${i}`, [i, 0, 0], [1, 1, 1])),
+          [build(Array.from({ length: 4 }, (_, i) => ({ add: [`p${i}`] })))],
+        ),
+      ],
+      steps: [{ duration: 4, focus: "a", assembly: [{ build: "a", advance: 2 }] }],
+    });
+    const g = scene(s);
+    expect(asmOf(g).loopStart!.fades[0]!.t1).toBe(transitionOf(4));
+    expect(asmOf(g).loopStart!.fades).toHaveLength(4);
+    // the same data in every view and the rest view is the main list
+    const none = four(undefined, [{ duration: 6, assembly: [{ unbuild: "a", to: 1 }] }]);
+    expect(asmOf(none).loopStart).toBeUndefined();
+    expect(loopStartOf(asmOf(none), none.assemblies!.plan)).toBeUndefined();
+  });
+
+  test("views carry the fades, and the rest view stays the main list", () => {
+    const g = scene(
+      rover([
+        { duration: 4, assembly: [{ build: "rover", program: "build", advance: 2 }] },
+        { duration: 4, assembly: [{ build: "rover", advance: 4 }] },
+      ]),
+    );
+    const v = g.assemblies!.views!;
+    expect(v[0]!.assemblies).toBe(g.assemblies!.assemblies);
+    expect(asmOf(g, "rover").loopStart!.fades).toHaveLength(33);
+    expect(v.find((x) => x.turn === 90)!.assemblies[0]!.loopStart).toEqual(
+      asmOf(g, "rover").loopStart,
+    );
+  });
+});
+
+describe("view switches of an action (Q03, Q08)", () => {
+  test("rover steps 5 (90) and 6 (0): one switch each, in action time; unbuild is the reverse", () => {
+    const g = scene(
+      rover([
+        { duration: 9, assembly: [{ build: "rover", program: "build", to: 4 }] },
+        { duration: 9, assembly: [{ build: "rover", to: 6 }] },
+        { duration: 9, assembly: [{ unbuild: "rover", to: 4 }] },
+      ]),
+    );
+    const [, b, u] = g.assemblies!.plan;
+    // steps 5 and 6 start at 3.3 and 3.9 in the program; the segment starts at step 5
+    expect(b!.actions[0]!.views).toEqual([
+      { at: 0, view: 90 },
+      { at: 0.6, view: 0 },
+    ]);
+    // reversed: the segment is 1.2 s long; step 6 un-happens first (back to 90), then step 5 (0)
+    const L = b!.actions[0]!.length / b!.actions[0]!.scale;
+    expect(u!.actions[0]!.views).toEqual([
+      { at: 0, view: 90 },
+      { at: 0.6, view: 0 },
+    ]);
+    expect(L).toBeCloseTo(1.2, 4);
+    expect(g.assemblies!.plan.map((p) => p.view)).toEqual([0, 0, 0]);
+  });
+
+  test("no views key without view steps; a no-op action changes nothing", () => {
+    const g = scene(
+      rover([
+        { duration: 9, assembly: [{ build: "rover", program: "build", to: 5 }] },
+        { duration: 9, assembly: [{ build: "rover", to: 5 }] },
+      ]),
+    );
+    const [p1, p2] = g.assemblies!.plan;
+    expect(p1!.view).toBe(90);
+    expect(p2!.actions[0]!.views).toBeUndefined();
+    expect(p2!.view).toBe(90);
+    const plain = scene(rover([{ duration: 9, assembly: [{ build: "rover", to: 2 }] }]));
+    expect(plain.assemblies!.plan[0]!.actions[0]!.views).toBeUndefined();
+  });
+
+  test("two actions of a step setting different views: info assembly/view-conflict, last wins", () => {
+    const two = (view: number): Obj =>
+      tile([box("p", [0, 0, 0], [1, 1, 1])], [build([{ add: ["p"], view }])], {});
+    const s = spec({
+      assemblies: [
+        { ...two(90), id: "a" },
+        { ...two(180), id: "c" },
+      ],
+      steps: [{ duration: 6, assembly: [{ build: "a" }, { build: "c" }] }],
+    });
+    const g = scene(s);
+    expect(g.assemblies!.plan[0]!.view).toBe(180);
+    expect(codes(g.diagnostics, "assembly/view-conflict")).toHaveLength(1);
+    expect(codes(g.diagnostics, "assembly/view-conflict")[0]!.severity).toBe("info");
+    // the same view twice is no conflict
+    const same = scene(
+      spec({
+        assemblies: [
+          { ...two(90), id: "a" },
+          { ...two(90), id: "c" },
+        ],
+        steps: [{ duration: 6, assembly: [{ build: "a" }, { build: "c" }] }],
+      }),
+    );
+    expect(codes(same.diagnostics, "assembly/view-conflict")).toEqual([]);
+  });
+});
+
+describe("segments for toLoopMoves (Q04) and ties (Q06)", () => {
+  test("toLoopMoves on `forward` plays the unbuild exactly as the segment's moves do", () => {
+    const g = scene(rover());
+    const prog = bprog(asmOf(g, "rover"), "build", "rover");
+    const fwd = buildSegment(prog, 2, 6);
+    const rev = buildSegment(prog, 6, 2);
+    // build: the parts end at their seat (displacement 0)
+    const built = toLoopMoves(fwd.moves, { at: 0, kind: "build", length: fwd.length });
+    expect(built.every((m) => m.to.x === 0 && m.to.y === 0 && m.to.z === 0)).toBe(true);
+    expect(built.every((m) => m.t1 <= fwd.length + 1e-9)).toBe(true);
+    // unbuild: the right input is `forward`; its loop times equal the played segment's times
+    const good = toLoopMoves(rev.forward, { at: 0, kind: "unbuild", length: rev.length });
+    for (const m of good) {
+      const played = rev.moves.find((x) => x.path === m.path)!;
+      expect(m.t0).toBeCloseTo(played.start, 3);
+      expect(m.t1).toBeCloseTo(played.start + played.duration, 3);
+      // ends at -offset of the forward move: back at the origin
+      const f = fwd.moves.find((x) => x.path === m.path)!;
+      near([m.to.x, m.to.y, m.to.z], [-f.offset.x, -f.offset.y, -f.offset.z]);
+    }
+    // the wrong input (the played moves) is mirrored a second time: times differ somewhere
+    const bad = toLoopMoves(rev.moves, { at: 0, kind: "unbuild", length: rev.length });
+    expect(bad.some((m) => Math.abs(m.t0 - good.find((g2) => g2.path === m.path)!.t0) > 1e-6)).toBe(
+      true,
+    );
+    expect(rev.kind).toBe("unbuild-played");
+  });
+
+  test("bottom-up ties break by spec order, not path", () => {
+    const g = scene(
+      spec({
+        assemblies: [
+          tile(
+            [box("z-first", [0, 0, 0], [1, 1, 1]), box("a-second", [2, 0, 0], [1, 1, 1])],
+            [build([{ add: ["z-first", "a-second"] }])],
+          ),
+        ],
+      }),
+    );
+    const m = bprog(asmOf(g)).steps[0]!.moves;
+    expect(m.map((x) => [x.path, x.start])).toEqual([
+      ["a/z-first", 0],
+      ["a/a-second", 0.1],
+    ]);
+  });
+
+  test("baseBuildLevel never exceeds the step cap", () => {
+    expect(baseBuildLevel(7, undefined)).toBe(7);
+    expect(baseBuildLevel(900, undefined)).toBe(MAX_BUILD_STEPS);
+    expect(baseBuildLevel(900, "empty")).toBe(0);
   });
 });
