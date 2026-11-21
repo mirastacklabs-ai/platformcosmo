@@ -326,6 +326,14 @@ const SCREW = {
       [18, 28],
     ],
   },
+  /** Every face (head and the four shaft faces between the threads), for one-drawing figures. */
+  allFaces: [
+    [6, 9],
+    [18, 18],
+    [18, 28],
+    [18, 38],
+    [18, 48],
+  ],
   draw(layer, ox, oy) {
     const hex = at(SCREW.hex, ox, oy);
     fillPoly(layer, hex, PAPER);
@@ -680,6 +688,8 @@ const PRESETS = {
     layout: "hs",
     states: ["exploded"],
     ann: ["arrows", "label", "labelLeader"],
+    // One drawing: a part stands alone only where a polygon (or a declared prior) bounds it.
+    polygon: true,
   },
   "assembled-only": {
     units: HS_UNITS,
@@ -715,6 +725,23 @@ const PRESETS = {
     states: ["exploded", "assembled"],
     ann: [],
   },
+  /** The cage figure with the assembled drawing only: nothing tells the cage is static. */
+  "cage-assembled": {
+    units: [{ id: "fan-1", kind: "fan", seat: [60, 40], exploded: [60, -120], prior: "cylinder" }],
+    board: QUIET_BOARD,
+    layout: "small",
+    states: ["assembled"],
+    ann: [],
+  },
+  /** The screw figure with the assembled drawing only (every face seeded: nothing else tells). */
+  "screw-assembled": {
+    units: [{ id: "screw-1", kind: "screw", seat: [70, 40], exploded: [70, -100], prior: "none" }],
+    board: QUIET_BOARD,
+    layout: "small",
+    states: ["assembled"],
+    ann: [],
+    allFaces: true,
+  },
   /** A screw seated in a static bracket about 3x its size. */
   screw: {
     units: [{ id: "screw-1", kind: "screw", seat: [70, 40], exploded: [70, -100], prior: "none" }],
@@ -739,6 +766,7 @@ const PRESETS = {
     states: ["exploded"],
     ann: [],
     stroke2: true,
+    polygon: true,
   },
   "dense-assembled": {
     units: [{ id: "sink-1", kind: "dense", seat: [40, 40], exploded: [40, -120], polygon: true }],
@@ -925,7 +953,7 @@ function build(name, options) {
       }
       return out;
     };
-    const body = preset.allFaces && u.kind === "hs" ? HS.allFaces : kind.seeds.body;
+    const body = preset.allFaces && kind.allFaces ? kind.allFaces : kind.seeds.body;
     const part = {
       id: u.id,
       group: u.id,
@@ -933,7 +961,7 @@ function build(name, options) {
       seeds: seedsFor(body),
       prior: u.prior ?? "box",
     };
-    if (u.polygon) {
+    if (u.polygon || preset.polygon) {
       const poly = {};
       for (const state of preset.states) {
         const t = states[state].truth.units[u.id].full;
@@ -948,7 +976,13 @@ function build(name, options) {
     }
     parts.push(part);
     if (u.clip)
-      parts.push({ id: u.clip, group: u.id, seeds: seedsFor(HS.seeds.clip), prior: "none" });
+      parts.push({
+        id: u.clip,
+        group: u.id,
+        seeds: seedsFor(HS.seeds.clip),
+        prior: "none",
+        ...(part.polygon ? { polygon: part.polygon } : {}),
+      });
   }
   const sources = {};
   for (const state of preset.states) sources[state] = `${state}.png`;
