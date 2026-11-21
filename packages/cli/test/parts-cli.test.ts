@@ -19,11 +19,13 @@ beforeAll(async () => {
 });
 afterAll(() => rm(dir, { recursive: true, force: true }));
 
-const spec = (over: Record<string, unknown>) => ({
-  $schema: "https://platformcosmo.io/schema/v1.json",
-  meta: { version: "1", title: "t" },
-  ...over,
-});
+type Spec = { assemblies: Record<string, unknown>[] } & Record<string, unknown>;
+const spec = (over: Record<string, unknown>): Spec =>
+  ({
+    $schema: "https://platformcosmo.io/schema/v1.json",
+    meta: { version: "1", title: "t" },
+    ...over,
+  }) as unknown as Spec;
 
 const engine = spec({
   assemblies: [
