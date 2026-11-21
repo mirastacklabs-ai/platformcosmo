@@ -94,9 +94,9 @@ the parent's frame (children of a sub-assembly are relative to the sub-assembly'
 about `z` only (`rotate`: 0, 90, 180, 270, about the part's own centre), so everything stays axis-aligned. Cylinder,
 ring and shaft take `axis` `x`, `y` or `z`. `y = 0` is the **back** end of the unit (far from the viewer) and larger `y` comes toward the viewer's lower left: the
 default `front` is `+y`, so put a device's front, a drive bay or a PSU's face at the largest `y`. Length runs along `x`.
-**Give every part an explicit `at` and `size`:** the heuristics and the
-suggestion only use what the spec states, so a part without both takes no part in the geometric rules (a missing
-size also means it can never be picked as the largest part, so a big shell without a size loses to a small lid).
+Give a part an explicit `at` and `size` wherever the drawing needs a position or dimension (always for plans and
+anything built from primitives); `--suggest` reads the effective placement, including a pack shape's default size, so you
+need not add them for its sake.
 
 ### 2.3 Parts
 
@@ -228,8 +228,7 @@ at rest, for plans and board layouts (short labels; it truncates to fit and swit
 When the user gives no order of removal, the program and the story come from the CLI so that the skill and the tool
 say the same thing:
 
-1. Write the assembly **without** `programs`, with `role` set where you know it, and with explicit `at` and `size`
-   on every part.
+1. Write the assembly **without** `programs`, with `role` set where you know it.
 2. Run `pcosmo validate <spec>` until it reports **no errors** (with errors, `--suggest` only prints
    `suggestions skipped: fix errors first`). Then
    `pcosmo validate <spec> --suggest --packs-dir "${CLAUDE_PLUGIN_DATA}/icons"`. For every assembly (and every
@@ -248,29 +247,56 @@ say the same thing:
 ### The heuristics it follows (assemblies design section 17)
 
 1. **Body.** The part with an explicit `role: "body"`, else the part most others `mates` with (`cpu-1` counts for
-   the counted part `cpu`), else the part with the largest volume (needs `at` and `size`; sub-assemblies and `use` instances always move as units and their size never counts). A pack's default role
-   `body` (every brick, many `auto:` parts) does **not** count; only an explicit spec role does. The body never
-   moves. With no role, no mates and no sizes there is no body, and every part may move.
-2. **Classify** the rest, from `role`, `type`, the shape name and, where `at` and `size` are given, geometry:
-   _covers_ (role `cover`; a type or shape ending in `lid`, `panel`, `cover`, `pan`, `door`, `cap`; or a thin part
-   (smallest side at most 20% of the largest) on the body's outer side), _fasteners_ (role `fastener`, or type or
-   shape `screw bolt clip pin nut washer rivet fastener`), _sub-assemblies_ (parts with `parts`, role `shell`),
-   _internals_ (role `internal`, or inside a `shell` or `tray` part's box), and _loose_ parts (the rest, `cable`).
-3. **Stage order.** Fasteners first (along their `axis`, else `+z`), then covers (away from the body's mating
-   surface), then sub-assemblies as units (`drawer` for rack devices, `away` when they `mate` or `insert`, else
-   `out`), then internals (`lift` when two or more stack, else `away`), then the loose parts (`out`). One stage per
-   class and direction; a class of more than 24 leaf parts is split into consecutive stages in spec order. Each
-   sub-assembly's own parts get their own nested program, so a class is never split across sub-assemblies.
-4. **Directions.** Away from the mating surface, visible directions (`+z`, `+x`, `+y`) preferred. A cover that
-   can only go a hidden way (`-z` for an oil pan, `-y` for a PSU) goes **last**, with the other parts faded
+   the counted part `cpu`), else the part with the largest volume (of one instance, `id-1`, for a counted part). A
+   pack's default role `body` (every brick, many `auto:` parts) does **not** count; only an explicit spec role does. The
+   body never moves. Boxes are the **effective** placement the resolved tree gives, including a pack shape's default
+   size and `dc:` shapes, not only the `at` and `size` the spec states. With no role, no mates and no sizes there is no
+   body, and every part may move.
+2. **Classify** the rest (per part; a counted part is judged by one instance but placed, enclosed and carried by the union
+   of its instances):
+   - _covers_: a type or role of `lid`, `panel`, `cover`, `pan`, `door`, or a compound `...-cap` (a bare `cap` is a
+     capacitor); or a thin part (smallest extent at most 20% of the largest) lying flat against the body: its thin axis is
+     the side's axis, it touches that face and spans at least half of it. **Flat parts on a board are not covers**, and a
+     thin sheet floating above the body is not a cover;
+   - _fasteners_: role `fastener`, or type or shape `screw bolt clip pin nut washer rivet fastener`;
+   - _shells_ (role `shell`, open containers) and _sub-assemblies_ (parts with `parts`, and `use` instances);
+   - _internals_: enclosed or seated inside a shell, or inside the body on another part (role `internal`);
+   - _components_: parts sitting on the body's top face (a board's chips, DIMMs, connectors), and anything stacked
+     above them;
+   - _loose_: the rest (`cable`).
+3. **Stage order.** Fasteners first (along their `axis`, else `+z`), then covers (away from the body's mating surface),
+   then sub-assemblies as units (`drawer` for rack devices, `away` when they `mate` or `insert`, else `out`), then each
+   sub-assembly's internals (nested program, `lift` when they stack), then components, then the remaining loose parts
+   (`out`), then covers on a hidden side. One stage per class and direction; a class of more than 24 leaf parts is
+   split into consecutive stages in spec order. Each sub-assembly's own parts get their own nested program. Nested owners
+   are imploded before the root.
+   - **Mounting depth.** A part carried by another (its bottom touches the carrier's top over its footprint: a heat sink
+     on a CPU on a board, a card on a board in a case) leaves **before** its carrier, top-most first, so the carrier never
+     passes through it (`assembly/transit-collision`). A part carried by a cover, internal or component joins the
+     carrier's class (a component on a lid is a cover). Contact means the carried part's bottom is within 1% of the
+     carrier's height of the carrier's top, either way. Within a class the stages are split by level and named
+     `X (level n)` (level 0 sits on the body); with several levels the internals use `+z`, not `lift`.
+   - **Moving as one.** Parts of an internals level that interpenetrate at rest (a crank through its rods) get their own
+     stage, `Internals (moving as one)` or `Internals (level n, moving as one)`. It moves `+z` by one distance that
+     clears the body and the shells, with `stagger: 0`, and is never split into chunks. The rest of the level moves
+     normally.
+   - **Components** are one `+z` lift named "Components" (not "Covers"), nothing sideways. Its distance is a number:
+     the larger of a quarter of the body's larger footprint extent and 1.5 times the tallest component, times
+     (level + 1), so a part ends clear above its carrier.
+4. **Directions.** Away from the mating surface, visible directions (`+z`, `+x`, `+y`) preferred. A cover that can only
+   go a hidden way (`-z` for an oil pan, `-y` for a PSU) goes **last**, with the other parts faded
    (`fade: "unselected"`).
-5. **Timing.** `stagger` 0.08 s `outside-in`, `duration` 0.8 s per part, `distance: "auto"`; each step's `duration`
-   is the smallest value that fits its stage time (stage `duration + stagger * (leaf parts - 1)`), so it does not
-   compress.
-6. **Labels.** `show` for stages with 12 leaf parts or fewer, `hide` above.
-7. **Story.** `"<label> assembled"` (2 s) then one step per stage with `focus` on its first part and
-   `explode` `to: k`, then each nested sub-assembly's stages (caption `"<sub-assembly>: <stage>"`), then **one**
-   final step that implodes the nested sub-assemblies first and the root last.
+5. **Timing.** `stagger` 0.08 s `outside-in` (0 for parts that move as one), `duration` 0.8 s per part,
+   `distance: "auto"` (a number for components); each step's `duration` is the smallest value that fits its stage time
+   (stage `duration + stagger * (leaf parts - 1)`), so `assembly/compressed` does not fire.
+6. **Labels.** `show` when the stage moves 12 parts or fewer, or when every part in it has a `label`; otherwise `hide`.
+7. **Story.** `"<label> assembled"` (2 s), then one step per stage (`explode` `to: k`), then each nested
+   sub-assembly's stages with `focus` on the nested owner (caption `"<sub-assembly>: <stage>"`), then **one** final step
+   that implodes the nested sub-assemblies first and the root last. Steps for the root assembly carry **no `focus`**:
+   focusing one part zooms onto it and crops the assembly.
+8. Builds are not drawn in this release (section 1).
+
+Still look at the result: the suggestion is a good start, not a verified picture (section 4).
 
 ### 3.1 When the user dictates the order, and making the story read well
 
@@ -282,24 +308,21 @@ say the same thing:
 - **Keep pairs together.** Parts that always travel together (a piston and its connecting rod, a bearing and its
   cap) are one sub-assembly (`parts`), which moves as a unit. Parts inside a housing (the crankshaft in a block, boards in
   a chassis) are hidden in the assembled pose: that is expected, not a defect.
-- **Carrier before cargo.** A part mounted on another (valves on a head, a bearing on a shaft) moves before it, or in
-  the same stage as it, so it is not dragged through its neighbours (`assembly/transit-collision`). Put cargo in the
-  carrier's sub-assembly when it should travel with it.
+- **Carrier before cargo.** `--suggest` already stages a carried part before its carrier. When you write the order
+  yourself, move a mounted part (valves on a head, a bearing on a shaft) before its carrier, or in the same stage, so
+  the carrier is not dragged through it (`assembly/transit-collision`); put cargo in the carrier's sub-assembly when it
+  should travel with it.
 - **Leave gaps between end positions.** `distance: "auto"` keeps stages clear of what they stack with; a number or `"1x"`
   you set yourself can put one stage's end pose inside another's (a dropped crankshaft inside the oil pan). Prefer
   `auto` or a larger multiple, and check the exploded PNG.
-- **`focus` keeps everything in frame.** `focus` zooms the camera to one part; if the exploded subject and its labels do
-  not fit in the zoomed picture, drop `focus` from that step (it then shows the whole scene) or focus the sub-assembly
-  path or the root instead of one small part. Check the exploded PNG for cut-off parts and labels.
+- **`focus` keeps everything in frame.** The suggestion gives root steps no `focus` and focuses a nested owner as a
+  whole. If you add a `focus`, it must keep the exploded subject and its labels in the zoomed picture: use the root or a
+  sub-assembly path, never one small part, and drop it when the PNG shows cut-off parts or labels.
 - **Labels.** A counted part has one `label` for all copies, so four pistons read `Piston` four times: label one copy
   (a separate part for the first copy, the rest as a counted part without a label), or label the group instead. A stage
-  with more than 12 parts hides its labels (`labels: "hide"` in the suggestion): set `"show"` on the stage you want to read, or
-  split the stage, so the exploded pose keeps its labels. If neighbours still overlap with `fit: 14`, raise `fit` (up to
+  of more than 12 parts hides its labels unless every part in it has a `label`: give the parts labels, or set `"show"`
+  on the stage, so the exploded pose keeps them. If neighbours still overlap with `fit: 14`, raise `fit` (up to
   40), shorten the labels, or leave the least important parts unlabelled; do not move parts.
-
-Known reading of the rules: on a board, flat parts sitting on the plate come out as "Covers" (thin, on the body's
-outer side). The motion (up, stacked clear of each other) is what you want; you may rename the stage `label`.
-Builds (assemblies design rule 8) are not drawn in this release (section 1).
 
 ## 4. Check it
 
