@@ -146,4 +146,32 @@ describe("plugin contents", () => {
   test("plugin ships no package.json (a self-contained bundle)", () => {
     expect(existsSync(join(root, "plugin/package.json"))).toBe(false);
   });
+
+  test("the bundle includes the shape packs and validates pack shapes", async () => {
+    const bundle = join(root, "plugin/bin/pcosmo.mjs");
+    const text = readFileSync(bundle, "utf8");
+    for (const id of ["hw:dimm", "brick:brick", "auto:piston", "brick/off-grid"]) {
+      expect(text.includes(id) || text.includes(id.replace(":", '"'))).toBe(true);
+    }
+    const dir = await tmp();
+    const spec = join(dir, "x.cosmo.json");
+    writeFileSync(
+      spec,
+      JSON.stringify({
+        meta: { version: "1" },
+        assemblies: [
+          {
+            id: "a",
+            parts: [
+              { id: "x", shape: "hw:dimn" },
+              { id: "y", shape: "box" },
+            ],
+          },
+        ],
+      }),
+    );
+    const r = spawnSync(process.execPath, [bundle, "validate", spec], { encoding: "utf8" });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("hw:dimm");
+  });
 });
