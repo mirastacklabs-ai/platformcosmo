@@ -543,18 +543,19 @@ export const emit: EmitFn = (
     (model.scene.meta.description ??
       `Isometric architecture diagram with ${model.scene.objects.length} objects.`) +
     (credits === "" ? "" : ` ${credits}`);
+  // The layer groups take attribute overrides too (the main world's fade against close-ups).
+  const layerGroup = (id: string, children: readonly SvgNode[]): SvgNode => {
+    const g = h("g", { id, class: `${prefix}-layer` }, ...children);
+    return overrides === undefined ? g : (override(g as SvgElement) ?? g);
+  };
   const camera = h(
     "g",
     { id: ids.camera() },
     ...LAYERS.flatMap((l) => {
-      const group = h(
-        "g",
-        { id: `${prefix}-ly_${l}`, class: `${prefix}-layer` },
-        ...(layers.get(l) ?? []),
-      );
+      const group = layerGroup(`${prefix}-ly_${l}`, layers.get(l) ?? []);
       // DC particles sit right after the objects layer, before labels.
       return l === "objects" && dcParticles.length > 0
-        ? [group, h("g", { id: `${prefix}-ly_dcflows`, class: `${prefix}-layer` }, ...dcParticles)]
+        ? [group, layerGroup(`${prefix}-ly_dcflows`, dcParticles)]
         : [group];
     }),
   );

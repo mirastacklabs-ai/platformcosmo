@@ -3,6 +3,7 @@ import {
   buildModel,
   buildScene,
   createAnimator,
+  emit,
   type AssemblyFrameState,
   type PlatformCosmoSpec,
   type RenderModel,
@@ -476,6 +477,30 @@ describe("close-up chain: level cross-fades", () => {
     expect(r.y).toBeGreaterThanOrEqual(h.y - 0.05);
     expect(r.x + r.width).toBeLessThanOrEqual(h.x + h.width + 0.05);
     expect(r.y + r.height).toBeLessThanOrEqual(h.y + h.height + 0.05);
+  });
+
+  test("frame and step SVGs carry the main-world fade on the layer groups", () => {
+    const tag = (svg: string, id: string): string => {
+      const i = svg.indexOf(`id="${id}"`);
+      return svg.slice(svg.lastIndexOf("<", i), svg.indexOf(">", i));
+    };
+    const layers = ["background", "groups", "edges", "flows", "objects", "labels"].map(
+      (l) => `pc-t-ly_${l}`,
+    );
+    const t = (clk[1]!.start + clk[1]!.end) / 2;
+    const frame = emit(m, animate(m, { speed: 1, mode: "frame", time: t }), { font: "system" });
+    const step = emit(m, animate(m, { speed: 1, mode: "step", step: 2 }), { font: "system" });
+    for (const [name, svg] of [
+      ["frame", frame],
+      ["step", step],
+    ] as const) {
+      for (const id of layers) expect(tag(svg, id), `${name} ${id}`).toContain('opacity="0"');
+      expect(tag(svg, "pc-t-ly_overlay"), name).not.toContain("opacity=");
+      expect(tag(svg, server.group), name).toContain('opacity="1"');
+    }
+    // the first step shows the world
+    const first = emit(m, animate(m, { speed: 1, mode: "step", step: 1 }), { font: "system" });
+    expect(tag(first, "pc-t-ly_objects")).toContain('opacity="1"');
   });
 
   test("deterministic: the same model gives the same CSS", () => {

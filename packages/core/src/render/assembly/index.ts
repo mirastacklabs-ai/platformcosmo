@@ -800,7 +800,9 @@ export function buildAssemblyRender(
     mainLayers:
       lv === undefined
         ? []
-        : ["objects", "labels", "flows", "dcflows"].map((l) => `${ctx.prefix}-ly_${l}`),
+        : ["background", "groups", "edges", "flows", "objects", "labels", "dcflows"].map(
+            (l) => `${ctx.prefix}-ly_${l}`,
+          ),
   });
   const groupState = (
     t: number,
