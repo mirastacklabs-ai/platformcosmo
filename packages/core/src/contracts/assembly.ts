@@ -206,8 +206,12 @@ export interface PartShapeRegistry {
 export interface PartPlacement {
   /** JSON pointer of the part in the spec, e.g. `/assemblies/0/parts/2`. */
   readonly path: string;
-  /** Full shape ref, e.g. `brick:brick`. */
-  readonly shape: string;
+  /** `group`: a sub-assembly (`parts` or `use`) with `at` or `pitch`; default a leaf part. */
+  readonly kind?: "part" | "group";
+  /** Full shape ref, e.g. `brick:brick`; absent for a group. */
+  readonly shape?: string;
+  /** Group only: the pack shape refs of the leaves below it (sorted, bounded). */
+  readonly shapes?: readonly string[];
   /** The declaring assembly's resolved units (`mm` when the spec gives none). */
   readonly units: string;
   readonly at?: readonly unknown[];

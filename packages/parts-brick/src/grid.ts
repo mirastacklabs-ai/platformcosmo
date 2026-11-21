@@ -21,8 +21,12 @@ import { brickShapes } from "./shapes.js";
 export interface BrickPlacement {
   /** JSON pointer of the part in the spec, e.g. `/assemblies/0/parts/2`. */
   readonly path: string;
+  /** `group`: a sub-assembly; its `at`/`pitch` are checked only when it holds `brick:` leaves. */
+  readonly kind?: "part" | "group";
   /** Full shape ref, e.g. `brick:brick`; anything outside `brick:` yields no diagnostics. */
-  readonly shape: string;
+  readonly shape?: string;
+  /** Group only: pack shape refs of the leaves below it. */
+  readonly shapes?: readonly string[];
   /** The assembly's resolved units: `stud`, `mm`, `cm`, `in` or `tile`. */
   readonly units?: string;
   /** Spec `at`, `pitch` and `size`, in `units`. */
@@ -109,8 +113,23 @@ function studsFor(p: BrickPlacement, shapeId: string, w: number, d: number): num
   return cols * rows;
 }
 
+/** A group's offset (`at`, and `pitch` when repeated) must be on the grid if it holds bricks. */
+function checkGroup(p: BrickPlacement): Diagnostic[] {
+  if (!Array.isArray(p.shapes) || !p.shapes.some((s) => typeof s === "string" && s.startsWith(PREFIX))) {
+    return [];
+  }
+  const f = toStudFactors(p.units);
+  if (f === undefined) return [];
+  const g: BrickPlacement = { ...p, shape: "group" };
+  return [
+    ...offGrid(g, "at", p.at, f),
+    ...(num(p.count) && p.count > 1 ? offGrid(g, "pitch", p.pitch, f) : []),
+  ];
+}
+
 /** `brick/off-grid` and stud-count diagnostics for one leaf part. Never throws. */
 export function checkBrickPlacement(p: BrickPlacement): Diagnostic[] {
+  if (p.kind === "group") return checkGroup(p);
   if (typeof p.shape !== "string" || !p.shape.startsWith(PREFIX)) return [];
   const f = toStudFactors(p.units);
   if (f === undefined) return [];
