@@ -277,3 +277,43 @@ describe("clipped copies (§9.4, §9.5)", () => {
     }
   });
 });
+
+describe("copies in quarter-turn views (A1-4): copyIds lists the ids as emitted", () => {
+  test("every id copyIds names exists once in the SVG, in every view", () => {
+    const spec = copySwapSpec() as unknown as {
+      assemblies: { programs: unknown[] }[];
+    };
+    spec.assemblies[0]!.programs.push({
+      id: "b",
+      kind: "build",
+      steps: [{ add: ["base"], view: 270 }, { add: ["arm"] }],
+    });
+    const { model } = build(spec as unknown as PlatformCosmoSpec);
+    const views = (A(model) as { views?: readonly { turn: number; model: AssemblyRenderModel }[] })
+      .views;
+    expect(views?.length).toBeGreaterThan(1);
+    const svg = emit(model, animator.animate(model, { speed: 1, mode: "loop" }), {
+      font: "system",
+    });
+    const all = idsIn(svg);
+    expect(new Set(all).size).toBe(all.length);
+    const present = new Set(all);
+    let copied = 0;
+    for (const v of views!) {
+      const am = v.model as AssemblyRenderModel & { ids: IdScheme & AssemblyIdScheme };
+      for (const it of am.items.filter((i) => i.copies > 1)) {
+        copied++;
+        for (const id of [
+          am.ids.partMotion(it.item, 0),
+          am.ids.partVisible(it.item, 0),
+          am.ids.object(it.item),
+        ]) {
+          const list = am.ids.copyIds(id);
+          expect(list, `view ${v.turn} ${id}`).toHaveLength(it.copies);
+          for (const x of list) expect(present.has(x), `view ${v.turn} ${x}`).toBe(true);
+        }
+      }
+    }
+    expect(copied).toBeGreaterThan(1); // the swap needs a copy in the turned view too
+  });
+});
