@@ -60,6 +60,27 @@ export type { Half, PartFace, PartPrimitiveFaces, StudGridOptions } from "./geom
  * text and matching are not stable across releases; do not parse or snapshot them.
  */
 export { didYouMean } from "./schema/suggest.js";
+export {
+  Draft,
+  MAX_PARAM_DIAGNOSTICS,
+  MIN_DIM,
+  definePack,
+  finishGeometry,
+  isValidParam,
+  normalizeParams,
+  quote,
+  readParamSpecs,
+  sanitizeSize,
+  unionBoxes,
+} from "./parts/define.js";
+export type {
+  PackOptions,
+  Pack,
+  ParamHandle,
+  ParamSpec,
+  ParamValue,
+  ShapeInit,
+} from "./parts/define.js";
 export type { ProjectionOptions, Silhouette } from "./geometry/index.js";
 
 // Depth ordering and text (Track A1).
