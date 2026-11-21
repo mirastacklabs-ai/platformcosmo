@@ -8,6 +8,15 @@
  * `resolveFigure` is exported for R-1: it is cheap and gives the same answer as the scene.
  */
 import { toSource } from "./assembly/source.js";
+import {
+  STORYBOARD_PROGRAM,
+  resolveStoryboard,
+  storyboardGeometry,
+  storyboardImages,
+  storyboardLength,
+  type ResolvedStoryboard,
+} from "./storyboards.js";
+import { checkLevel } from "../schema/assembly-levels.js";
 import { globMatch } from "../schema/glob.js";
 import type {
   AssemblyStepPlan,
@@ -508,7 +517,7 @@ export function stepWindows(
 // ---------------------------------------------------------------------------------------------
 
 /** Which guard phase gates actions on a root id of a given kind (tracks §0). */
-export type RootPhase = "phase1a" | "phase1b" | "phase2" | "phase3";
+export type RootPhase = "phase1a" | "phase1b" | "phase2" | "storyboards";
 
 export interface PlanOptions {
   /** Phases still gated by the merge guard. Non-figure targets of a gated phase are reported
@@ -524,6 +533,12 @@ export interface PlanOptions {
   readonly foreign?: (step: number, action: number) => ForeignAction | undefined;
   /** The last step ends away from the base pose for a reason other than a figure (§7.4). */
   readonly closeLoop?: boolean;
+  /**
+   * Storyboards (R-2): `build` and `unbuild` on them are planned here, in the same step loop,
+   * one level per frame (`STORYBOARD_PROGRAM`). Invalid actions on them (explode, a path, a
+   * program, a range) are `validate`'s (assembly checks) and are left out of the plan.
+   */
+  readonly storyboards?: ReadonlyMap<string, ResolvedStoryboard>;
 }
 
 /** One action planned by another track: `start` and `length` are filled in by the step. */
@@ -556,7 +571,7 @@ export function planFigureSteps(
   // `opts.closeLoop` (A2-3: an assembly ends away from its base pose) forces the closing window.
   if (opts.closeLoop === true) return planPass(spec, figures, views, opts, true);
   const first = planPass(spec, figures, views, opts, false);
-  return closesLoop(figures.values(), first.plan)
+  return closesLoop(figures.values(), first.plan, opts.storyboards?.values())
     ? planPass(spec, figures, views, opts, true)
     : first;
 }
@@ -569,6 +584,8 @@ export function planFigureSteps(
 export function closesLoop(
   figures: Iterable<ResolvedFigure>,
   plan: readonly AssemblyStepPlan[],
+  /** A storyboard's base level is its last frame: the rest frame shows the finished model. */
+  storyboards: Iterable<ResolvedStoryboard> = [],
 ): boolean {
   const last = plan[plan.length - 1];
   if (last === undefined) return false;
@@ -576,7 +593,51 @@ export function closesLoop(
     const end = last.poses[f.id]?.[0]?.level;
     if (end !== undefined && end !== f.baseLevel) return true;
   }
+  for (const b of storyboards) {
+    const end = last.poses[b.id]?.[0]?.level;
+    if (end !== undefined && end !== b.frames.length) return true;
+  }
   return false;
+}
+
+/**
+ * One `build` / `unbuild` on a storyboard: moves its level and returns the action, or undefined
+ * when it is invalid (explode, a path below the board, a program, a level out of range or in
+ * the wrong direction: reported by the assembly checks of `validate`) or does not change the
+ * level (reported there as `assembly/no-op-action`).
+ */
+function planBoardAction(
+  board: ResolvedStoryboard,
+  a: SpecAssemblyAction,
+  kind: (typeof KEYS)[number],
+  target: string,
+  level: Map<string, number>,
+  cursor: number,
+): { natural: number; action: ResolvedAction } | undefined {
+  if (kind !== "build" && kind !== "unbuild") return undefined;
+  if (target !== board.id || (a as { program?: string }).program !== undefined) return undefined;
+  const n = board.frames.length;
+  const cur = level.get(board.id) ?? (kind === "build" ? 0 : n);
+  const r = checkLevel(kind, a as { to?: number; advance?: number }, n, cur);
+  if (r.fail !== undefined) return undefined;
+  level.set(board.id, r.to);
+  if (r.to === cur) return undefined;
+  const natural = storyboardLength(board, cur, r.to);
+  const start = (a as { start?: number }).start ?? cursor;
+  return {
+    natural,
+    action: {
+      target: board.id,
+      kind,
+      program: STORYBOARD_PROGRAM,
+      from: cur,
+      to: r.to,
+      start,
+      length: natural,
+      scale: 1,
+      implied: [],
+    },
+  };
 }
 
 function planPass(
@@ -617,8 +678,23 @@ function planPass(
   declare(spec.cables, "none", "a cable");
   declare(spec.racks, "phase2", "a rack");
   declare(spec.assemblies, "phase1b", "an assembly");
-  declare(spec.storyboards, "phase3", "a storyboard");
+  declare(spec.storyboards, "storyboards", "a storyboard");
   const sortedFigs = [...figures.keys()].sort();
+  const boards = opts.storyboards ?? new Map<string, ResolvedStoryboard>();
+  const sortedBoards = [...boards.keys()].sort();
+  // A storyboard's timeline starts where its first action starts: `build` at frame 0 (nothing
+  // built), `unbuild` at the last frame (the same rule as validation's level machine).
+  for (const [id, b] of boards) {
+    for (const step of steps) {
+      const first = (step.assembly ?? []).find(
+        (a) => (a as unknown as Record<string, string>)[actionKey(a)]?.split("/")[0] === id,
+      );
+      if (first === undefined) continue;
+      level.set(id, "unbuild" in first ? b.frames.length : 0);
+      break;
+    }
+    if (!level.has(id)) level.set(id, b.frames.length);
+  }
   const plan: AssemblyStepPlan[] = [];
 
   steps.forEach((step, si) => {
@@ -630,6 +706,18 @@ function planPass(
       const target = (a as unknown as Record<string, string>)[kind] as string;
       const root = target.split("/")[0] as string;
       const fig = figures.get(root);
+      // A storyboard is planned here once its guard group is lifted; while it is gated it is an
+      // unknown target below, like every other gated root.
+      const board =
+        fig === undefined && opts.gated?.storyboards !== true ? boards.get(root) : undefined;
+      if (board !== undefined) {
+        const planned1 = planBoardAction(board, a, kind, target, level, cursor);
+        if (planned1 !== undefined) {
+          cursor = r4(planned1.action.start + planned1.natural);
+          planned.push(planned1);
+        }
+        return;
+      }
       const foreign = fig === undefined ? opts.foreign?.(si, ai) : undefined;
       if (foreign !== undefined) {
         const start = (a as { start?: number }).start ?? cursor;
@@ -807,6 +895,8 @@ function planPass(
     const poses: Record<string, readonly ProgramLevel[]> = {};
     for (const id of sortedFigs)
       poses[id] = [{ program: FIGURE_PROGRAM, level: level.get(id) as number }];
+    for (const id of sortedBoards)
+      poses[id] = [{ program: STORYBOARD_PROGRAM, level: level.get(id) as number }];
     plan.push({ step: si + 1, actions, poses, view: 0 });
   });
   return { plan, diagnostics };
@@ -837,8 +927,12 @@ export interface FigureScene {
   readonly boxes: ReadonlyMap<string, Box3>;
   /** Screen rect of every such panel (the panel only, without moved sprites or labels). */
   readonly panels: ReadonlyMap<string, Rect>;
-  /** Spec index of every board placed with an explicit `pos`. */
+  /** Spec index (in `figures` or `storyboards`) of every board placed with an explicit `pos`. */
   readonly explicit: ReadonlyMap<string, number>;
+  /** Storyboards by id (R-2); empty without `storyboards`. */
+  readonly storyboards: ReadonlyMap<string, ResolvedStoryboard>;
+  /** Ids of the boards that are storyboards (the others are figures). */
+  readonly storyboardIds: ReadonlySet<string>;
 }
 
 /**
@@ -880,7 +974,10 @@ export function panelPlacement(
   };
 }
 
-/** Ids of the figures whose base image is known: the ones that can take a camera `focus`. */
+/**
+ * Ids of the figures (base image) and storyboards (first frame's model image) whose image is
+ * known: the boards that can take a camera `focus`.
+ */
 export function figureFocusIds(
   spec: PlatformCosmoSpec,
   images: ImageAssetResolver | undefined,
@@ -890,6 +987,11 @@ export function figureFocusIds(
     const a = images?.get(f.base);
     if (a !== undefined && panelSize(f.width ?? DEFAULT_WIDTH, a.width, a.height) !== undefined)
       out.add(f.id);
+  }
+  for (const sb of spec.storyboards ?? []) {
+    const board = resolveStoryboard(sb);
+    const first = images?.get((board.frames[0] as { model: string }).model);
+    if (storyboardGeometry(board, first) !== undefined) out.add(board.id);
   }
   return out;
 }
@@ -911,7 +1013,7 @@ const rectsCross = (a: Rect, b: Rect): boolean =>
  * One warning per board, naming the first thing it covers (sorted by id).
  */
 export function boardOverlapDiagnostics(
-  scene: Pick<FigureScene, "panels" | "explicit">,
+  scene: Pick<FigureScene, "panels" | "explicit"> & Partial<Pick<FigureScene, "storyboardIds">>,
   others: ReadonlyMap<string, Box3>,
 ): Diagnostic[] {
   const proj = createProjection();
@@ -931,8 +1033,8 @@ export function boardOverlapDiagnostics(
       mk(
         "warning",
         "layout/overlap",
-        `/figures/${index}/pos`,
-        `Figure ${q(id)} overlaps ${q(hit)} at its manual position`,
+        `/${scene.storyboardIds?.has(id) ? "storyboards" : "figures"}/${index}/pos`,
+        `${scene.storyboardIds?.has(id) ? "Storyboard" : "Figure"} ${q(id)} overlaps ${q(hit)} at its manual position`,
         'Move it, or drop "pos" to place it beside the other content',
         { a: hit, b: id },
       ),
@@ -949,10 +1051,12 @@ export function buildFigureScene(
   spec: PlatformCosmoSpec,
   opts: BoardOptions = {},
 ): FigureScene | undefined {
-  const specFigures = spec.figures;
-  if (specFigures === undefined) return undefined;
+  const specFigures = spec.figures ?? [];
+  if (spec.figures === undefined && spec.storyboards === undefined) return undefined;
   const diagnostics: Diagnostic[] = [];
   const figures = new Map<string, ResolvedFigure>();
+  const storyboards = new Map<string, ResolvedStoryboard>();
+  const storyboardIds = new Set<string>();
   const boards: SceneFlatBoard[] = [];
   const boxes = new Map<string, Box3>();
   const panels = new Map<string, Rect>();
@@ -1012,12 +1116,53 @@ export function buildFigureScene(
     });
   });
 
+  // Storyboards (R-2) stand in the same row after the figures.
+  (spec.storyboards ?? []).forEach((ss, i) => {
+    if (figures.has(ss.id) || storyboards.has(ss.id)) return; // duplicate id: reported by semantic validation
+    const board = resolveStoryboard(ss);
+    storyboards.set(board.id, board);
+    storyboardIds.add(board.id);
+    const images = storyboardImages(board);
+    for (const k of images) if (!used.includes(k)) used.push(k);
+    const width = board.width;
+    const anchor: Vec3 =
+      ss.pos === undefined
+        ? { x: r2(nextX), y: origin.y, z: 0 }
+        : { x: ss.pos.x, y: ss.pos.y, z: 0 };
+    if (ss.pos === undefined) nextX += width + 1;
+    else explicit.set(board.id, i);
+    const first = opts.images?.get((board.frames[0] as { model: string }).model);
+    const size = storyboardGeometry(board, first);
+    if (size !== undefined) {
+      const placed = panelPlacement(anchor, width, size);
+      boxes.set(board.id, placed.box);
+      panels.set(board.id, placed.rect);
+    }
+    const source = toSource(ss.source);
+    boards.push({
+      id: board.id,
+      kind: "storyboard",
+      ...(board.label === undefined ? {} : { label: board.label }),
+      anchor,
+      width,
+      images,
+      ...(source === undefined ? {} : { source }),
+    });
+    credit(source);
+    for (const k of images) credit(imageSource.get(k));
+  });
+
   const views = stepViews(spec, opts.isFocusTarget ?? (() => true));
-  const planned = planFigureSteps(spec, figures, views, opts.gated ? { gated: opts.gated } : {});
+  const planned = planFigureSteps(spec, figures, views, {
+    ...(opts.gated ? { gated: opts.gated } : {}),
+    ...(storyboards.size > 0 ? { storyboards } : {}),
+  });
   diagnostics.push(...planned.diagnostics);
 
   return {
     figures,
+    storyboards,
+    storyboardIds,
     diagnostics,
     boxes,
     panels,

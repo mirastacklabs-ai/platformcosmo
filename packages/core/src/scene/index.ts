@@ -786,6 +786,9 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
       ],
       figureScene?.figures ?? new Map(),
       stepViews(spec, (id) => Object.hasOwn(focusTargets, id)),
+      figureScene !== undefined && figureScene.storyboards.size > 0
+        ? { storyboards: figureScene.storyboards }
+        : {},
     );
     diagnostics.push(...programs.diagnostics, ...assemblyPlan.diagnostics);
     // loop-start fades (§7.4) ride on the assemblies, in every view

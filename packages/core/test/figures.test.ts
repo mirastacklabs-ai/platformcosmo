@@ -57,6 +57,7 @@ const diags = (spec: PlatformCosmoSpec, groups?: Partial<Record<GuardGroup, bool
     phase1a: true,
     phase1b: true,
     phase2: true,
+    storyboards: true,
     phase3: true,
     ...groups,
   });
