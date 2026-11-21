@@ -96,12 +96,15 @@ describe("assets doctor", () => {
     // sorted keys at every level
     expect(Object.keys(j)).toEqual([...Object.keys(j)].sort());
   });
-  test("finds an optional tool on PATH, and says when it is missing", async () => {
+  test("finds the PDF tools in the tool directories, and says when it is missing", async () => {
     const dir = await tmp();
     const bin = join(dir, "bin");
     await mkdir(bin);
     await writeFile(join(bin, "mutool"), "#!/bin/sh\n", { mode: 0o755 });
-    const r = await run(["assets", "doctor", "--json"], makeDeps(dir, { env: { PATH: bin } }));
+    const r = await run(
+      ["assets", "doctor", "--json"],
+      makeDeps(dir, { env: { PATH: bin }, pdfRender: { toolDirs: [bin] } }),
+    );
     const j = json(r.stdout);
     expect(j.optionalTools.mutool).toEqual({ found: true, path: join(bin, "mutool") });
     expect(j.optionalTools.ffmpeg).toEqual({ found: false });
@@ -110,7 +113,7 @@ describe("assets doctor", () => {
   test("text output", async () => {
     const dir = await tmp();
     const r = await cli(dir, ["doctor"]);
-    expect(r.stdout).toContain("renderer (resvg-wasm): ok");
+    expect(r.stdout).toContain("renderer (resvg): ok");
     expect(r.stdout).toContain("O_NOFOLLOW");
   });
 });

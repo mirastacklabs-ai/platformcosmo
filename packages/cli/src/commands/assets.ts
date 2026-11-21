@@ -7,7 +7,7 @@
  * from a file's content. Every problem is a diagnostic plus an exit code.
  */
 import { access, constants as fsc, stat } from "node:fs/promises";
-import { delimiter, dirname, basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { DEFAULT_IMAGE_LIMITS, type Diagnostic, type ImageLimits } from "@platformcosmo/core";
 import {
   MANIFEST_LIMITS,
@@ -25,7 +25,6 @@ import {
   removeBackground,
   runFigure,
   shrinkImage,
-  stableStringify,
   trim,
   type FigureSourceInfo,
   type Raster,
@@ -33,15 +32,36 @@ import {
 } from "@platformcosmo/assets";
 import { type Parsed, flag, num, parse, str } from "../args.js";
 import { type Ctx, EXIT, UsageError } from "../deps.js";
-import { formatDiagnostics, hasErrors, plural } from "../format.js";
+import { hasErrors, plural } from "../format.js";
+import { HAS_NOFOLLOW, insideAssetsRoot, readFileSafe } from "../images.js";
+import { relFromCwd, staleOutputs } from "../outputs.js";
+import { MAX_PAGES_PER_COMMAND, pdfCommand } from "./assets-pdf.js";
+import { DEFAULT_LIMITS as DEFAULT_PDF_LIMITS } from "@platformcosmo/pdf";
 import {
-  HAS_NOFOLLOW,
-  insideAssetsRoot,
-  readExplicitFile,
-  readFileSafe,
-  type SafeRead,
-} from "../images.js";
-import { relFromCwd, staleOutputs, writeSet } from "../outputs.js";
+  DPI_RANGE,
+  RENDER_LIMITS,
+  TOOL_NAMES,
+  findTool,
+  toolDirs,
+  unshareAvailable,
+} from "../pdftool.js";
+import {
+  assetsRoot,
+  bad,
+  finish,
+  outsideRoot,
+  ROOT_HINT,
+  isObj,
+  needed,
+  oneInput,
+  pngExt,
+  readDiag,
+  readIn,
+  shown,
+  strs,
+  writeFiles,
+  writeOne,
+} from "./assets-io.js";
 import schema from "../../schema/figure-manifest.v1.json" with { type: "json" };
 
 export const HELP = `Usage: pcosmo assets <command> [options]
@@ -71,6 +91,8 @@ Commands:
   check <manifest.json> -d <dir>           Re-run the quality gate on the outputs in <dir>
                                            (reads <dir>/fragment.json and its PNGs; --strict)
   shrink <img> --max-px 1024 -o out.png    Downscale (PNG) or pass a JPEG through (--to-png)
+  pdf <command> ...                        PDF inputs: info, list, extract, compose, render, text
+                                           (pcosmo assets pdf --help; render needs pdftoppm or mutool)
 
 Options:
   --json         Print a machine-readable result (sorted keys, same input gives the same bytes)
@@ -104,17 +126,6 @@ export const ASSET_LIMITS: ImageLimits = {
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const FIXED_OUTPUT = /^(base|sprite-[1-9][0-9]{0,2})\.png$/;
 
-type Obj = Record<string, unknown>;
-const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
-
-const bad = (option: string, message: string): Diagnostic => ({
-  severity: "error",
-  code: "asset/bad-option",
-  path: "",
-  message,
-  params: { option },
-});
-
 // ---------------------------------------------------------------------------------------------
 // argument parsing (every problem is a UsageError: exit 2 with the help)
 // ---------------------------------------------------------------------------------------------
@@ -146,60 +157,6 @@ function pointsArg(texts: readonly string[], max: number, name: string): [number
     }
   }
   return out;
-}
-
-function strs(p: Parsed, name: string): string[] {
-  const v = p.values[name];
-  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string");
-  return typeof v === "string" ? [v] : [];
-}
-
-function oneInput(p: Parsed, cmd: string, n: number, what: string): string[] {
-  if (p.positionals.length !== n) throw new UsageError(`${cmd} needs ${what}`);
-  return p.positionals;
-}
-
-function needed(p: Parsed, name: string, cmd: string): string {
-  const v = str(p, name);
-  if (v === undefined || v === "") throw new UsageError(`${cmd} needs --${name}`);
-  return v;
-}
-
-// ---------------------------------------------------------------------------------------------
-// reading
-// ---------------------------------------------------------------------------------------------
-
-function readDiag(r: Extract<SafeRead, { ok: false }>, what: string): Diagnostic {
-  return {
-    severity: "error",
-    code: r.code,
-    path: "",
-    message: `${what}: ${r.message}`,
-    ...(r.suggestion === undefined ? {} : { suggestion: r.suggestion }),
-  };
-}
-
-/** The path as the user should see it: relative to the working directory when inside it. */
-const shown = (ctx: Ctx, path: string): string =>
-  relFromCwd(resolve(ctx.deps.cwd), resolve(ctx.deps.cwd, path)).slice(0, 160);
-
-const assetsRoot = (ctx: Ctx): string => ctx.assetsRoot ?? resolve(ctx.deps.cwd);
-const outsideRoot = (ctx: Ctx): string =>
-  `it is outside the allowed directory ${relFromCwd(resolve(ctx.deps.cwd), assetsRoot(ctx))}`;
-const ROOT_HINT = "pass --root <dir> to allow another directory";
-
-/** An explicit input: confined by PCOSMO_ASSETS_ROOT when set, then read through the path guard. */
-async function readIn(ctx: Ctx, path: string, maxBytes: number): Promise<SafeRead> {
-  const abs = resolve(ctx.deps.cwd, path);
-  if (!(await insideAssetsRoot(assetsRoot(ctx), dirname(abs)))) {
-    return {
-      ok: false,
-      code: "image/unsafe-path",
-      message: outsideRoot(ctx),
-      suggestion: ROOT_HINT,
-    };
-  }
-  return readExplicitFile(ctx.deps.cwd, path, maxBytes);
 }
 
 /** An image named on the command line, decoded to RGBA. Diagnostics are appended to `diags`. */
@@ -271,92 +228,6 @@ async function loadSources(
 }
 
 // ---------------------------------------------------------------------------------------------
-// writing and reporting
-// ---------------------------------------------------------------------------------------------
-
-interface Written {
-  readonly name: string;
-  readonly bytes: number;
-}
-
-/**
- * Writes `files` into the directory `dirTarget` (relative to the working directory, or absolute
- * but inside it) as one set: temp directory first, then rename into place (outputs.ts). Refusals
- * are `asset/unsafe-path` diagnostics and leave every final name untouched.
- */
-async function writeFiles(
-  ctx: Ctx,
-  dirTarget: string,
-  files: readonly { name: string; data: Uint8Array }[],
-  diags: Diagnostic[],
-): Promise<Written[]> {
-  const cwd = resolve(ctx.deps.cwd);
-  const root = assetsRoot(ctx);
-  const abs = resolve(cwd, dirTarget);
-  const rel = relative(root, abs);
-  const label = relFromCwd(cwd, abs);
-  const refuse = (why: string): Written[] => {
-    diags.push({
-      severity: "error",
-      code: "asset/unsafe-path",
-      path: "",
-      message: `refusing to write to ${label.slice(0, 160)}: ${why}`,
-      suggestion: `write below ${relFromCwd(cwd, root)} without symbolic links, or ${ROOT_HINT}`,
-    });
-    return [];
-  };
-  if (dirTarget.includes("\0")) return refuse("the path is not valid");
-  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    return refuse(outsideRoot(ctx));
-  }
-  if (!(await insideAssetsRoot(root, abs))) {
-    return refuse(outsideRoot(ctx));
-  }
-  const r = await writeSet(root, rel.split(sep).join("/"), files, {}, label);
-  if (!r.ok) return refuse(r.message);
-  return r.written.map((w) => ({
-    name: relFromCwd(cwd, join(abs, w.name)),
-    bytes: w.bytes,
-  }));
-}
-
-/** One file at a typed `-o` path. */
-function writeOne(
-  ctx: Ctx,
-  target: string,
-  data: Uint8Array,
-  diags: Diagnostic[],
-): Promise<Written[]> {
-  const abs = resolve(ctx.deps.cwd, target);
-  return writeFiles(ctx, dirname(abs), [{ name: basename(abs), data }], diags);
-}
-
-const pngExt = (p: string): boolean => /\.png$/i.test(p);
-
-function finish(
-  ctx: Ctx,
-  json: boolean,
-  command: string,
-  diags: readonly Diagnostic[],
-  payload: Obj,
-  written: readonly Written[],
-  summary: string[],
-  okOverride?: boolean,
-): number {
-  const failed = hasErrors(diags) || okOverride === false;
-  if (json) {
-    ctx.out(
-      stableStringify({ command, ok: !failed, diagnostics: diags, files: written, ...payload }),
-    );
-  } else {
-    if (diags.length > 0) ctx.err(formatDiagnostics(diags));
-    for (const w of written) ctx.out(`wrote ${w.name} (${w.bytes} bytes)\n`);
-    for (const l of summary) ctx.out(`${l}\n`);
-  }
-  return failed ? EXIT.failed : EXIT.ok;
-}
-
-// ---------------------------------------------------------------------------------------------
 // commands
 // ---------------------------------------------------------------------------------------------
 
@@ -383,27 +254,40 @@ async function doctor(ctx: Ctx, args: string[]): Promise<number> {
   const p = parse(args, { json: { type: "boolean" } });
   oneInput(p, "assets doctor", 0, "no arguments");
   const diags: Diagnostic[] = [];
-  // The renderer decodes every image: a 1x1 PNG round trip proves resvg-wasm starts.
+  // The renderer decodes every image: a 1x1 PNG round trip proves resvg starts.
   const probe = await decodeImage(encodePng({ width: 1, height: 1, data: new Uint8Array(4) }));
   const renderer = probe.value !== undefined;
   if (!renderer) diags.push(...probe.diagnostics);
-  const tools: Record<string, { found: boolean; path?: string }> = {};
-  for (const t of ["ffmpeg", "mutool", "pdftoppm"]) {
-    const path = await toolPath(ctx.deps.env, t);
-    tools[t] = path === undefined ? { found: false } : { found: true, path };
+  // The PDF tools are looked up once, in the fixed directories `assets pdf render` uses; ffmpeg is
+  // informational only and is still found through PATH.
+  const pdfTools: Record<string, { found: boolean; path?: string }> = {};
+  for (const t of TOOL_NAMES) {
+    const path = await findTool(toolDirs(ctx.deps.pdfRender), t);
+    pdfTools[t] = path === undefined ? { found: false } : { found: true, path };
   }
+  const ff = await toolPath(ctx.deps.env, "ffmpeg");
+  const tools: Record<string, { found: boolean; path?: string }> = {
+    ffmpeg: ff === undefined ? { found: false } : { found: true, path: ff },
+    mutool: pdfTools.mutool!,
+    pdftoppm: pdfTools.pdftoppm!,
+  };
   for (const [name, t] of Object.entries(tools)) {
     if (!t.found) {
       diags.push({
         severity: "warning",
         code: "asset/tool-missing",
         path: "",
-        message: `optional tool ${name} was not found on PATH`,
+        message: `optional tool ${name} was not found ${name === "ffmpeg" ? "on PATH" : `in ${toolDirs(ctx.deps.pdfRender).join(":")}`}`,
         suggestion: "only needed for PDF and video work; image and figure commands run without it",
         params: { tool: name },
       });
     }
   }
+  const sandbox: "unshare" | "none" =
+    ctx.deps.pdfRender?.useUnshare !== false && (await unshareAvailable()) !== undefined
+      ? "unshare"
+      : "none";
+  const pdfChosen = TOOL_NAMES.find((t) => pdfTools[t]!.found);
   const payload = {
     assetsRoot: assetsRoot(ctx),
     assetsRootEnv: ctx.deps.env.PCOSMO_ASSETS_ROOT ?? null,
@@ -413,6 +297,24 @@ async function doctor(ctx: Ctx, args: string[]): Promise<number> {
     readGuard: process.platform === "linux" ? "proc-fd" : "writable-directory-refusal",
     renderer: renderer ? "ok" : "failed",
     optionalTools: tools,
+    pdf: {
+      limits: { ...DEFAULT_PDF_LIMITS },
+      commands: {
+        maxPagesPerCommand: MAX_PAGES_PER_COMMAND,
+        maxPdfBytes: DEFAULT_PDF_LIMITS.maxFileBytes,
+        maxOutputPixels: RENDER_LIMITS.maxPixels,
+      },
+      render: {
+        available: pdfChosen !== undefined,
+        tool: pdfChosen ?? null,
+        tools: pdfTools,
+        sandbox,
+        searchedDirs: [...toolDirs(ctx.deps.pdfRender)],
+        timeoutMs: RENDER_LIMITS.timeoutMs,
+        maxOutputBytes: RENDER_LIMITS.maxOutputBytes,
+        dpi: { ...DPI_RANGE },
+      },
+    },
     limits: {
       figure: {
         maxMultiplyAdds: MAX_MULTIPLY_ADDS,
@@ -427,11 +329,14 @@ async function doctor(ctx: Ctx, args: string[]): Promise<number> {
   };
   const summary = [
     `node ${payload.node} on ${payload.platform}`,
-    `renderer (resvg-wasm): ${payload.renderer}`,
+    `renderer (resvg): ${payload.renderer}`,
     `symlink refusal at open (O_NOFOLLOW): ${HAS_NOFOLLOW ? "yes" : "no (checked after open instead)"}`,
     `swap detection after open: ${payload.readGuard === "proc-fd" ? "/proc/self/fd path comparison (Linux)" : "directories writable by other users are refused (no /proc here); a rename race by the directory's owner stays possible"}`,
     `allowed directory for inputs and outputs: ${payload.assetsRoot}${payload.assetsRootEnv === null ? "" : ` (bounded by PCOSMO_ASSETS_ROOT=${payload.assetsRootEnv})`}`,
     ...Object.entries(tools).map(([n, t]) => `${n}: ${t.found ? t.path : "not found (optional)"}`),
+    `pdf renderer (pdftoppm or mutool, for assets pdf render): ${pdfChosen === undefined ? "not found in " + toolDirs(ctx.deps.pdfRender).join(":") + " (optional; compose and extract work without it)" : (pdfTools[pdfChosen]!.path ?? pdfChosen)}`,
+    `pdf render sandbox: ${sandbox === "unshare" ? "unshare (no network, own PID namespace)" : "none (process-group kill and limits only)"}`,
+    `pdf limits: ${DEFAULT_PDF_LIMITS.maxFileBytes} bytes per file, ${MAX_PAGES_PER_COMMAND} pages per command, ${DEFAULT_PDF_LIMITS.maxImagePixels} px per extracted image, ${RENDER_LIMITS.timeoutMs} ms per render`,
     `limits: ${MAX_PIXELS} px per source, ${MANIFEST_LIMITS.parts} parts, ${MAX_MULTIPLY_ADDS} multiply-adds, ${ASSET_LIMITS.maxBytes} bytes per file`,
   ];
   const code = finish(ctx, flag(p, "json"), "doctor", diags, payload, [], summary);
@@ -959,6 +864,7 @@ const SUBCOMMANDS: Readonly<Record<string, (ctx: Ctx, args: string[]) => Promise
   figure: figureCmd,
   check: checkCmd,
   shrink: shrinkCmd,
+  pdf: pdfCommand,
 };
 
 export async function assetsCommand(ctx: Ctx, args: string[]): Promise<number> {
