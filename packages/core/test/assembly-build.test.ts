@@ -111,7 +111,7 @@ const rover = (steps?: Obj[]): PlatformCosmoSpec => {
   return s as unknown as PlatformCosmoSpec;
 };
 
-describe("the brick rover (§19.5), without sub-builds", () => {
+describe("the brick rover (§19.5)", () => {
   const g = scene(rover());
   const a = asmOf(g, "rover");
   const main = bprog(a, "build", "rover");
@@ -157,16 +157,18 @@ describe("the brick rover (§19.5), without sub-builds", () => {
     const all = main.steps.flatMap((s) => s.adds);
     expect(new Set(all).size).toBe(all.length);
     expect([...all].sort()).toEqual([...a.leaves].sort());
-    // step windows follow each other; stagger 0.1, duration 0.6 (schema defaults)
+    // step windows follow each other; stagger 0.1, duration 0.6 (schema defaults). Step 6 plays
+    // the cab's own 2.5 s program at its staging spot, then docks (slide, drop: 1.2 s); step 7's cargo and
+    // rails fly in from the callout first (1.2 s each: 0.6 flight + 0.6 drop, staggered by 0.1)
     expect(main.steps.map((s) => [s.start, s.end])).toEqual([
       [0, 0.6],
       [0.6, 1.4],
       [1.4, 2.3],
       [2.3, 3.3],
       [3.3, 3.9],
-      [3.9, 4.5],
-      [4.5, 5.4],
-      [5.4, 6.4],
+      [3.9, 7.6],
+      [7.6, 9.1],
+      [9.1, 10.1],
     ]);
   });
 
@@ -236,10 +238,12 @@ describe("the brick rover (§19.5), without sub-builds", () => {
     const cab = main.steps[5]!.callout;
     expect(cab.reduce((n, c) => n + c.count, 0)).toBe(10);
     expect(cab.find((c) => c.sample === "rover/cab/wall-1")!.count).toBe(2);
-    // sub-build and callout flights are Phase 3 (A2-7): hooks only, nothing is staged
-    expect(main.steps[5]!.subBuild).toBeUndefined();
-    expect(main.steps[6]!.moves.every((m) => m.overlayDuration === undefined)).toBe(true);
-    expect(main.steps[5]!.moves.map((m) => m.path)).toEqual(["rover/cab"]);
+    // the cab is staged beside the model, built by its own program, then docked (A2-7)
+    expect(main.steps[5]!.subBuild).toMatchObject({ path: "rover/cab", program: "cab-build" });
+    expect(main.steps[5]!.moves.map((m) => m.path)).toContain("rover/cab");
+    expect(main.steps[6]!.moves.every((m) => m.overlayDuration === 0.6 && m.duration === 1.2)).toBe(
+      true,
+    );
   });
 
   test("the sub-assembly's own program resolves in its owner", () => {
@@ -332,8 +336,14 @@ describe("origins and distances", () => {
     expect(m1!.start).toBeLessThan(m2!.start); // bottom-up
   });
 
-  test("callout origin drops like above (the flight is A2-7)", () => {
+  test("callout origin drops like above, after a flight as long as the drop (A2-7)", () => {
     near(move(one({ from: "callout" })), [0, 0, -1.4]);
+    const first = (p: ResolvedBuildProgram) => p.steps[1]!.moves[0]!;
+    const m = first(one({ from: "callout" }));
+    expect([m.overlayDuration, m.duration]).toEqual([0.6, 1.2]);
+    const slow = first(one({ from: "callout", duration: 2 }));
+    expect([slow.overlayDuration, slow.duration]).toEqual([2, 4]);
+    expect(first(one({ from: "above" })).overlayDuration).toBeUndefined();
   });
 });
 
@@ -1137,11 +1147,12 @@ describe("view switches of an action (Q03, Q08)", () => {
     ]);
     // reversed: the segment is 1.2 s long; step 6 un-happens first (back to 90), then step 5 (0)
     const L = b!.actions[0]!.length / b!.actions[0]!.scale;
+    // the cab step is 3.7 s long now (sub-build, slide, drop): step 5 un-happens after it
     expect(u!.actions[0]!.views).toEqual([
       { at: 0, view: 90 },
-      { at: 0.6, view: 0 },
+      { at: 3.7, view: 0 },
     ]);
-    expect(L).toBeCloseTo(1.2, 4);
+    expect(L).toBeCloseTo(4.3, 4);
     expect(g.assemblies!.plan.map((p) => p.view)).toEqual([0, 0, 0]);
   });
 
@@ -1200,13 +1211,21 @@ describe("segments for toLoopMoves (Q04) and ties (Q06)", () => {
     expect(built.every((m) => m.t1 <= fwd.length + 1e-9)).toBe(true);
     // unbuild: the right input is `forward`; its loop times equal the played segment's times
     const good = toLoopMoves(rev.forward, { at: 0, kind: "unbuild", length: rev.length });
+    // (a node can have two moves, a sub-assembly's slide and drop: match by time too)
     for (const m of good) {
-      const played = rev.moves.find((x) => x.path === m.path)!;
-      expect(m.t0).toBeCloseTo(played.start, 3);
+      const played = rev.moves.find((x) => x.path === m.path && Math.abs(x.start - m.t0) < 1e-3)!;
+      expect(played, m.path).toBeDefined();
       expect(m.t1).toBeCloseTo(played.start + played.duration, 3);
       // ends at -offset of the forward move: back at the origin
-      const f = fwd.moves.find((x) => x.path === m.path)!;
-      near([m.to.x, m.to.y, m.to.z], [-f.offset.x, -f.offset.y, -f.offset.z]);
+      const f = fwd.moves.filter((x) => x.path === m.path);
+      expect(
+        f.some((x) =>
+          [x.offset.x, x.offset.y, x.offset.z].every(
+            (v, i) => Math.abs(-v - [m.to.x, m.to.y, m.to.z][i]!) < 1e-6,
+          ),
+        ),
+        m.path,
+      ).toBe(true);
     }
     // the wrong input (the played moves) is mirrored a second time: times differ somewhere
     const bad = toLoopMoves(rev.moves, { at: 0, kind: "unbuild", length: rev.length });

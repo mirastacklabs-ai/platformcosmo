@@ -26,7 +26,7 @@ export const UNRENDERED: Readonly<Record<GuardGroup, boolean>> = {
   /** Phase 3, tier A documents: `storyboards` and build/unbuild actions on them. Lifted by R-2. */
   storyboards: false,
   /** Phase 3, callouts and sub-builds of build programs: `from: "callout"` and `subBuild` (A2-7). */
-  phase3: true,
+  phase3: false,
 };
 
 const MESSAGE =
