@@ -1,7 +1,7 @@
 import { dirname, resolve } from "node:path";
 import type { Diagnostic } from "@platformcosmo/core";
 import { flag, parse } from "../args.js";
-import { loadSpec, makeResolver } from "../common.js";
+import { addCloseupChecks, loadSpec, makeResolver } from "../common.js";
 import { loadSpecImages } from "../images.js";
 import { type Ctx, EXIT, UsageError } from "../deps.js";
 import { formatDiagnostics, hasErrors, plural } from "../format.js";
@@ -43,6 +43,7 @@ export async function validateCommand(ctx: Ctx, args: string[]): Promise<number>
       ...(ctx.deps.placement ? { placement: ctx.deps.placement } : {}),
     });
     all.push(...report.diagnostics);
+    addCloseupChecks(ctx, spec, all); // assemblies 8.5: needs the scene's geometry
   }
   let suggestions: SuggestReport | undefined;
   const SKIPPED = "suggestions skipped: fix errors first";

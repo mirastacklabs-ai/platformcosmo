@@ -9,7 +9,7 @@ import type {
   ResolvedExplodeProgram,
   SceneAssembly,
 } from "../src/index.js";
-import { buildScene } from "../src/index.js";
+import { buildScene, closeupDiagnostics } from "../src/index.js";
 import type { PlatformCosmoSpec } from "../src/schema/types.gen.js";
 import { frameMap } from "../src/scene/assembly/frame.js";
 import { AssemblyPrograms } from "../src/scene/assembly/plan.js";
@@ -1108,5 +1108,31 @@ describe("existing output is unchanged", () => {
     expect(base[0]!.id).toBe("a");
     expect(base[0]!.root.id).toBe("a");
     expect(base[0]!.root.path).toBe("a");
+  });
+});
+
+describe("closeupDiagnostics (validate)", () => {
+  const tpl = (x: number): PlatformCosmoSpec =>
+    spec({
+      assemblies: [
+        { id: "tpl", template: true, units: "mm", parts: [box("b", [0, 0, 0], [x, 100, 50])] },
+        {
+          id: "host",
+          units: "mm",
+          parts: [box("p", [0, 0, 0], [100, 100, 50], { closeup: "tpl" })],
+        },
+      ],
+    });
+  test("reports the scene's size checks, sorted, and nothing for a spec without close-ups", () => {
+    const d = closeupDiagnostics(tpl(111));
+    expect(d.map((x) => x.code)).toEqual(["assembly/size-mismatch"]);
+    expect(d).toEqual(closeupDiagnostics(tpl(111)));
+    expect(closeupDiagnostics(tpl(100))).toEqual([]);
+    expect(closeupDiagnostics(spec({}))).toEqual([]);
+    expect(closeupDiagnostics(spec({ assemblies: [{ id: "a", parts: [] }] }))).toEqual([]);
+  });
+  test("the scene reports the same diagnostic (render shows it once, validate adds it)", () => {
+    const s = buildScene(tpl(111), {});
+    expect(codes(s.diagnostics, "assembly/size-mismatch")).toHaveLength(1);
   });
 });

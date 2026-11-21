@@ -30,6 +30,7 @@
  */
 import type {
   AssemblyUnits,
+  DcPack,
   AssetSource,
   Box3,
   Diagnostic,
@@ -37,14 +38,21 @@ import type {
   QuarterTurn,
   SceneAssemblies,
   SceneAssembly,
+  SceneAssemblyNode,
   Vec3,
 } from "../../contracts/index.js";
 import { AssemblyModel, LEAF_ERROR, MAX_DEPTH } from "../../schema/assembly-tree.js";
+import { sortDiagnostics } from "../../schema/diagnose.js";
 import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
 import { unitMm } from "./frame.js";
 import { levelLimit, levelOverflow, type Level, type LevelKind } from "./levels.js";
-import type { AssemblyPrograms } from "./plan.js";
-import { assemblyNodes, buildTemplateInstance, type AssemblyBuildOptions } from "./tree.js";
+import { AssemblyPrograms } from "./plan.js";
+import {
+  assemblyNodes,
+  buildAssemblies,
+  buildTemplateInstance,
+  type AssemblyBuildOptions,
+} from "./tree.js";
 
 /** Oversize above which a close-up is shrunk and reported (§8.5). */
 export const SIZE_TOLERANCE = 0.1;
@@ -385,4 +393,85 @@ export function buildCloseups(
   }
   levels.sort((p, q) => cmp(p.path, q.path));
   return { levels, images: [...images].sort(), credits, diagnostics };
+}
+
+/** The codes `closeupDiagnostics` reports (the size and depth checks of §8.5). */
+const CHECK_CODES: ReadonlySet<string> = new Set([
+  "assembly/size-mismatch",
+  "assembly/closeup-turned",
+  "assembly/too-deep",
+  "budget/levels",
+]);
+
+export interface CloseupCheckContext extends Pick<AssemblyBuildOptions, "parts"> {
+  /** DC pack: reports `assembly/size-mismatch` of `racks[].slots[].assembly` (§8.2). */
+  readonly dc?: DcPack;
+}
+
+/**
+ * The size and depth diagnostics of close-ups (`assembly/size-mismatch`, `assembly/closeup-turned`,
+ * `assembly/too-deep`, `budget/levels`) and of slot internals, for `pcosmo validate`: the scene
+ * computes the same with the same code, but validation of the spec alone does not build it. Call
+ * it only for a spec that validated; it never throws. Sorted by (path, code), empty when the spec
+ * has no close-ups and no slot internals. `render` reports them through the scene, so a caller
+ * that renders must not add these again.
+ */
+export function closeupDiagnostics(
+  spec: PlatformCosmoSpec,
+  ctx: CloseupCheckContext = {},
+): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  try {
+    if ((spec.assemblies?.length ?? 0) > 0) {
+      const programs = new AssemblyPrograms(spec);
+      const built = programs.attach(
+        buildAssemblies(spec, {
+          reach: programs.reach,
+          ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
+          ...(ctx.dc?.shapes === undefined ? {} : { dcShapes: ctx.dc.shapes }),
+        }),
+      );
+      if (built.assemblies.some((a) => assemblyNodes(a).some((n) => n.closeup !== undefined))) {
+        const c = buildCloseups(spec, built.assemblies, {
+          programs,
+          ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
+          ...(ctx.dc?.shapes === undefined ? {} : { dcShapes: ctx.dc.shapes }),
+        });
+        out.push(...c.diagnostics);
+      }
+    }
+    // Slot internals (§8.2): the DC pack builds the rack in assembly mode (only racks a step
+    // action targets) and reports `assembly/size-mismatch` of each slot template.
+    const dc = ctx.dc;
+    const withSlots = (spec.racks ?? []).filter((r) =>
+      (r.slots ?? []).some((sl) => sl.assembly !== undefined),
+    );
+    if (dc?.buildAssembly !== undefined && withSlots.length > 0) {
+      const frag = dc.buildScene(spec);
+      const templates: Record<string, SceneAssemblyNode> = {};
+      const tids = new Set(
+        withSlots.flatMap((r) => (r.slots ?? []).flatMap((sl) => sl.assembly ?? [])),
+      );
+      for (const id of [...tids].sort(cmp)) {
+        const base = (spec.assemblies ?? []).find((a) => a.id === id);
+        if (base === undefined) continue; // unknown-target: validation reports it
+        const twin = { ...base, id: `${id}-copy`, template: undefined };
+        const twinned = buildAssemblies(
+          { ...spec, assemblies: [...(spec.assemblies ?? []), twin] } as PlatformCosmoSpec,
+          {
+            ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
+            ...(dc.shapes === undefined ? {} : { dcShapes: dc.shapes }),
+          },
+        );
+        const root = twinned.assemblies.find((a) => a.id === `${id}-copy`)?.root;
+        if (root !== undefined) templates[id] = root;
+      }
+      for (const r of withSlots)
+        out.push(...dc.buildAssembly(spec, r.id, frag, templates).diagnostics);
+    }
+  } catch {
+    // an internal failure is the renderer's to report (`render/internal-error`), not validation's
+    return [];
+  }
+  return sortDiagnostics(out.filter((d) => CHECK_CODES.has(d.code)));
 }
