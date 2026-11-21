@@ -26,6 +26,8 @@ import type {
   VisibilityKey,
 } from "../contracts/index.js";
 import { parseCopyKey } from "../depth/copies.js";
+import { placementAttr, placementAt, type PlacementKey } from "../render/assembly/groups.js";
+import type { AssemblyRenderModelX } from "../render/assembly/types.js";
 import { keyProgress, round2, stepEndTime } from "../render/assembly/tracks.js";
 import { Keyframes, pct, t4 } from "./css.js";
 
@@ -53,7 +55,14 @@ interface FadeProp {
   readonly id: string;
   readonly keys: readonly OpacityKey[];
 }
-export type AssemblyProp = MoveProp | VisProp | FadeProp;
+/** Placement of a level group: `matrix(s 0 0 s tx ty)`, linear between keys (B-3). */
+type MatrixKey = PlacementKey & { readonly easing: "linear" };
+interface MatrixProp {
+  readonly kind: "matrix";
+  readonly id: string;
+  readonly keys: readonly MatrixKey[];
+}
+export type AssemblyProp = MoveProp | VisProp | FadeProp | MatrixProp;
 
 export interface AssemblyAnim {
   /** Loop length at speed 1 (the keys' own clock). */
@@ -126,35 +135,64 @@ function warpFor(am: AssemblyRenderModel, speed: number): (t: number) => number 
   };
 }
 
+/**
+ * The model and the models of its other views and close-up levels (B-3): each has its own
+ * tracks, ids scoped to it, on the SAME loop clock. Deterministic order: main, views by turn,
+ * levels by path; a model shared by two entries (view 0 is the main model) counts once.
+ */
+function modelsOf(am: AssemblyRenderModel): AssemblyRenderModel[] {
+  const out: AssemblyRenderModel[] = [am];
+  const seen = new Set<unknown>([am.tracks]);
+  const take = (m: AssemblyRenderModel | undefined): void => {
+    if (m === undefined || seen.has(m.tracks)) return;
+    seen.add(m.tracks);
+    out.push(m);
+    for (const l of m.levels ?? []) take(l.model);
+  };
+  for (const v of am.views ?? []) take(v.model);
+  for (const l of am.levels ?? []) take(l.model);
+  return out;
+}
+
 /** Times at which a pose must stay exact: every key there is kept by `thin`. */
 function protectedTimes(am: AssemblyRenderModel): Set<number> {
   const set = new Set<number>();
   const add = (t: number | undefined): void => {
     if (t !== undefined && Number.isFinite(t)) set.add(r4(t));
   };
-  for (const e of am.epochs) {
-    add(e.t0);
-    add(e.t1);
+  for (const m of modelsOf(am)) {
+    for (const e of m.epochs) {
+      add(e.t0);
+      add(e.t1);
+    }
+    for (const x of m.approximate) {
+      add(x.t0);
+      add(x.t1);
+    }
+    for (const c of m.clock) {
+      add(c.start);
+      add(c.open);
+      add(c.end);
+      add(c.start + c.duration);
+    }
+    for (const s of m.settled) add(s);
+    add(m.closure?.t0);
+    add(m.closure?.t1);
+    for (const t of m.tracks) for (const k of t.visibility) add(k.t);
+    // move boundaries (the render-side model keeps its moves)
+    const moves = (m as unknown as { moves?: readonly { t0: number; t1: number }[] }).moves;
+    for (const mv of moves ?? []) {
+      add(mv.t0);
+      add(mv.t1);
+    }
   }
-  for (const x of am.approximate) {
-    add(x.t0);
-    add(x.t1);
+  // group and presence keys: the cross-fades and appearances keep their ends
+  for (const g of (am as AssemblyRenderModelX).groups ?? []) {
+    for (const k of g.opacity) add(k.t);
+    for (const k of g.placement ?? []) add(k.t);
   }
-  for (const c of am.clock) {
-    add(c.start);
-    add(c.open);
-    add(c.end);
-    add(c.start + c.duration);
-  }
-  for (const s of am.settled) add(s);
-  add(am.closure?.t0);
-  add(am.closure?.t1);
-  for (const t of am.tracks) for (const k of t.visibility) add(k.t);
-  // move boundaries (the render-side model keeps its moves)
-  const moves = (am as unknown as { moves?: readonly { t0: number; t1: number }[] }).moves;
-  for (const m of moves ?? []) {
-    add(m.t0);
-    add(m.t1);
+  for (const m of modelsOf(am)) {
+    for (const t of m.tracks) for (const k of t.opacity) add(k.t);
   }
   return set;
 }
@@ -239,6 +277,16 @@ function prune<K>(keys: readonly K[], same: (a: K, b: K) => boolean): K[] {
 const sameOffset = (a: TrackKey, b: TrackKey): boolean =>
   a.offset.x === b.offset.x && a.offset.y === b.offset.y;
 const sameOpacity = (a: OpacityKey, b: OpacityKey): boolean => a.opacity === b.opacity;
+const sameMatrix = (a: MatrixKey, b: MatrixKey): boolean =>
+  a.scale === b.scale && a.tx === b.tx && a.ty === b.ty;
+const matrixError = (a: MatrixKey, k: MatrixKey, b: MatrixKey): number => {
+  const f = (k.t - a.t) / (b.t - a.t);
+  return Math.hypot(
+    k.tx - lerpAt(a.tx, b.tx, f),
+    k.ty - lerpAt(a.ty, b.ty, f),
+    (k.scale - lerpAt(a.scale, b.scale, f)) * 100,
+  );
+};
 
 const cache = new WeakMap<AssemblyRenderModel, Map<number, AssemblyAnim>>();
 
@@ -296,33 +344,49 @@ export function assemblyAnim(
     props.push({ kind: "opacity", id, keys: retime(t.keys, warp) });
     groups.push(group);
   };
-  for (const t of am.tracks) {
-    // one track per copy (`item` or `item__c<k>`, §9.4); the wrappers exist exactly for the
-    // tracks that have keys (A1-3 `Registered`)
-    const { item, copy } = parseCopyKey(t.copy);
-    group = `i:${item}`;
-    move(am.ids.partHost(item, copy), t.host);
-    move(am.ids.partMotion(item, copy), t.motion);
-    if (t.visibility.length > 0) {
-      props.push({
-        kind: "visibility",
-        id: am.ids.partVisible(item, copy),
-        keys: retime(t.visibility, warp),
-      });
-      groups.push(group);
+  // every model the layer draws: the main scene, each quarter-turn view and each close-up level
+  // (B-3), each under its own ids; a model's copies are grouped per model and item for the cut
+  modelsOf(am).forEach((m, mi) => {
+    for (const t of m.tracks) {
+      // one track per copy (`item` or `item__c<k>`, §9.4); the wrappers exist exactly for the
+      // tracks that have keys (A1-3 `Registered`)
+      const { item, copy } = parseCopyKey(t.copy);
+      group = `i:${mi}:${item}`;
+      move(m.ids.partHost(item, copy), t.host);
+      move(m.ids.partMotion(item, copy), t.motion);
+      if (t.visibility.length > 0) {
+        props.push({
+          kind: "visibility",
+          id: m.ids.partVisible(item, copy),
+          keys: retime(t.visibility, warp),
+        });
+        groups.push(group);
+      }
+      fade(m.ids.partFade(item, copy), t.opacity);
     }
-    fade(am.ids.partFade(item, copy), t.opacity);
-  }
-  for (const f of am.staticFades) {
-    group = `s:${f.id}`;
-    fade(f.id, f.opacity);
-  }
-  for (const l of am.labelTracks) {
-    // a top-face label rides inside its part: every copy has one (`copyIds`)
-    group = `l:${l.id}`;
-    for (const id of am.ids.copyIds(l.id)) {
-      move(id, l.motion);
-      fade(id, l.opacity);
+    for (const f of m.staticFades) {
+      group = `s:${f.id}`;
+      fade(f.id, f.opacity);
+    }
+    for (const l of m.labelTracks) {
+      // a top-face label rides inside its part: every copy has one (`copyIds`)
+      group = `l:${l.id}`;
+      for (const id of m.ids.copyIds(l.id)) {
+        move(id, l.motion);
+        fade(id, l.opacity);
+      }
+    }
+  });
+  // view and level groups: cross-fades and the level placements (B-3)
+  for (const g of (am as AssemblyRenderModelX).groups ?? []) {
+    group = `g:${g.id}`;
+    fade(g.id, g.opacity);
+    if (g.placement !== undefined && g.placement.length > 0) {
+      const keys = g.placement.map((k): MatrixKey => ({ ...k, easing: "linear" }));
+      const t = thin(prune(keys, sameMatrix), protect, matrixError);
+      if (!t.ok) overKeys++;
+      props.push({ kind: "matrix", id: g.id, keys: retime(t.keys, warp) });
+      groups.push(group);
     }
   }
   const kept = cutProps(props, groups, maxProps);
@@ -347,6 +411,7 @@ export function isConstant(p: AssemblyProp): boolean {
   const first = p.keys[0];
   if (first === undefined) return true;
   if (p.kind === "transform") return p.keys.every((k) => sameOffset(k, first as TrackKey));
+  if (p.kind === "matrix") return p.keys.every((k) => sameMatrix(k, first as MatrixKey));
   if (p.kind === "opacity") return p.keys.every((k) => k.opacity === (first as OpacityKey).opacity);
   return p.keys.every((k) => k.visible === (first as VisibilityKey).visible);
 }
@@ -414,6 +479,10 @@ function evalVisible(keys: readonly VisibilityKey[], t: number): boolean {
   return (keys[Math.max(0, lo - 1)] as VisibilityKey).visible;
 }
 
+/** CSS `matrix()` of a placement (unitless numbers: user units, like the translate keyframes). */
+const matrixCss = (a: { scale: number; tx: number; ty: number }): string =>
+  `matrix(${t4(a.scale)},0,0,${t4(a.scale)},${t4(a.tx)},${t4(a.ty)})`;
+
 const translateAttr = (x: number, y: number): string => `translate(${round2(x)} ${round2(y)})`;
 
 /** The FULL state of every animated wrapper at loop time `t` (this speed's loop seconds). */
@@ -424,6 +493,8 @@ function attrsAtLoop(a: AssemblyAnim, t: number): Attrs {
     if (p.kind === "transform") {
       const v = evalOffset(p.keys, t);
       at(p.id).transform = translateAttr(v.x, v.y);
+    } else if (p.kind === "matrix") {
+      at(p.id).transform = placementAttr(p.keys, t);
     } else if (p.kind === "visibility") {
       at(p.id).visibility = evalVisible(p.keys, t) ? "visible" : "hidden";
     } else {
@@ -578,6 +649,15 @@ export function assemblyLoop(
         tf: "linear",
       };
     }
+    if (p.kind === "matrix") {
+      return {
+        stops: stopsOf(a, p, (i) => {
+          const k = p.keys[i] as MatrixKey;
+          return `transform:${matrixCss(k)}${i < p.keys.length - 1 ? ";animation-timing-function:linear" : ""}`;
+        }),
+        tf: "linear",
+      };
+    }
     if (p.kind === "opacity") {
       const last = p.keys.length - 1;
       return {
@@ -628,11 +708,13 @@ export function assemblyLoop(
             const v = evalOffset(p.keys, t);
             return `transform:translate(${t4(round2(v.x))}px,${t4(round2(v.y))}px)`;
           })
-        : p.kind === "opacity"
-          ? discrete(
-              (t) => `opacity:${t4(Math.min(1, Math.max(0, round2(evalOpacity(p.keys, t)))))}`,
-            )
-          : discrete((t) => `visibility:${evalVisible(p.keys, t) ? "visible" : "hidden"}`);
+        : p.kind === "matrix"
+          ? discrete((t) => `transform:${matrixCss(placementAt(p.keys, t))}`)
+          : p.kind === "opacity"
+            ? discrete(
+                (t) => `opacity:${t4(Math.min(1, Math.max(0, round2(evalOpacity(p.keys, t)))))}`,
+              )
+            : discrete((t) => `visibility:${evalVisible(p.keys, t) ? "visible" : "hidden"}`);
     put(reducedPerId, p.id, kf.add(rs), "step-end");
   }
   // Elements with the same animations share one rule (selectors grouped, in first-use order).
