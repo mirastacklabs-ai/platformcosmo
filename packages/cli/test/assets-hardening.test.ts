@@ -149,7 +149,10 @@ describe("assets schema and doctor warnings", () => {
 
   test("a missing optional tool is a warning with exit 0", async () => {
     const dir = await tmp();
-    const r = await run(["assets", "doctor", "--json"], makeDeps(dir, { env: { PATH: dir } }));
+    const r = await run(
+      ["assets", "doctor", "--json"],
+      makeDeps(dir, { env: { PATH: dir }, pdfRender: { toolDirs: [dir] } }),
+    );
     expect(r.code).toBe(0);
     const w = json(r.stdout).diagnostics.filter((d: Diag) => d.code === "asset/tool-missing");
     expect(w).toHaveLength(3);
