@@ -1,15 +1,22 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test, vi } from "vitest";
 import {
+  buildScene,
+  createAnimator,
+  emit,
+  optimize,
   render,
   validate,
+  type RenderModel,
   type RenderOptions,
   type RenderResult,
   type VideoEncoder,
 } from "../../src/index.js";
 import { decodePng } from "../../src/export/png.js";
+import { exportOutputs, rasterize } from "../../src/export/index.js";
+import { createRender } from "../../src/render/index.js";
 import { DEFAULT_IMAGE_LIMITS } from "../../src/assets/prepare.js";
-import { checkFigureImages } from "../../src/render/boards/images.js";
+import { checkSpecImages } from "../../src/render/boards/images.js";
 import type { ImageAsset, PartShapeDef, PartShapeRegistry } from "../../src/contracts/index.js";
 import { fixtureTheme } from "../fixtures/theme.js";
 import { realPng, resolverOf } from "../figure-fixtures.js";
@@ -80,6 +87,29 @@ const HW = new Map(
 const hwRegistry: PartShapeRegistry = { get: (r) => HW.get(r), list: () => [...HW.keys()] };
 const run = (spec: Obj, o: RenderOptions = {}): Promise<RenderResult> =>
   render(spec, { theme: THEME, font: "system", images: images(), parts: hwRegistry, ...o });
+/** The RenderModel render() builds for a spec, captured on its way to the exporter. */
+async function modelOf(spec: Obj): Promise<RenderModel> {
+  let captured: RenderModel | undefined;
+  await createRender({
+    validate,
+    buildScene,
+    createAnimator,
+    exportOutputs: (m, k, d, o) => {
+      captured = m;
+      return exportOutputs(m, k, d, o);
+    },
+    rasterize,
+    emit,
+    optimize,
+  })(spec, {
+    theme: THEME,
+    font: "system",
+    images: images(),
+    parts: hwRegistry,
+    outputs: ["static"],
+  });
+  return captured!;
+}
 const text = (r: RenderResult, kind: string): string =>
   r.outputs.find((o) => o.kind === kind)!.data as string;
 
@@ -182,6 +212,17 @@ describe("Phase 1b design examples through render()", () => {
     // frame 0 is the rest frame (png at t=0), and the clip then leaves it
     const rest = await run(spec, { outputs: ["png"], png: { scale: 1 } });
     expect(same(frames[0]!, pixels(rest))).toBe(true);
+    // independent of renderFrame: the animator's wrapper attrs at t=0 are zero offsets, and
+    // some mid-move time has a non-zero one
+    const model = await modelOf(spec);
+    const offsets = (time: number): number[] =>
+      Object.values(
+        createAnimator().animate(model, { speed: 1, mode: "frame", time }).attrs ?? {},
+      ).flatMap((set) =>
+        [...String(set.transform ?? "").matchAll(/-?\d+(?:\.\d+)?/g)].map((m) => Number(m[0])),
+      );
+    expect(offsets(0).every((v) => v === 0)).toBe(true);
+    expect([2, 4, 6, 8, 10].some((t) => offsets(t).some((v) => v !== 0))).toBe(true);
     expect(frames.some((f) => !same(f, frames[0]!))).toBe(true);
     // the engine moves: more than a few distinct frames
     expect(
@@ -207,6 +248,25 @@ describe("Phase 1b design examples through render()", () => {
         `${step}`,
       ).toBe(true);
     }
+  });
+
+  test("png.step at speed 0.5 shows the same end pose as at speed 1 (one clock)", async () => {
+    const spec = example("Two-part box");
+    for (const step of [1, 2, 3]) {
+      const slow = await run(spec, { outputs: ["png"], speed: 0.5, png: { scale: 1, step } });
+      const normal = await run(spec, { outputs: ["png"], png: { scale: 1, step } });
+      expect(slow.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+      expect(same(pixels(slow), pixels(normal)), `step ${step}`).toBe(true);
+    }
+  });
+
+  test("png.step on a spec without steps is an error, not a throw", async () => {
+    const spec: Obj = { meta: { version: "1" }, nodes: [{ id: "a", type: "server" }] };
+    const r = await run(spec, { outputs: ["png"], png: { step: 1 } });
+    expect(r.outputs).toEqual([]);
+    const d = r.diagnostics.find((x) => x.code === "options/invalid-png-step");
+    expect(d?.path).toBe("/png/step");
+    expect(d?.message).toContain("has none");
   });
 
   test("rendering is deterministic (animated and steps, twice)", async () => {
@@ -318,15 +378,43 @@ describe("assembly images and pack shapes are checked before anything is rendere
     );
   });
 
-  test("the distinct-image cap applies to assembly images (checkFigureImages)", () => {
+  test("the distinct-image cap applies to assembly images (checkSpecImages)", () => {
     const spec = validate(withImages()).spec!;
     const limits = { ...DEFAULT_IMAGE_LIMITS, maxImages: 2 };
-    const d = checkFigureImages(
+    const d = checkSpecImages(
       spec,
       resolver([asset("a", 10), asset("b", 10), asset("c", 10)]),
       limits,
     );
     expect(d.map((x) => x.code)).toEqual(["image/too-many"]);
+  });
+
+  test("an assembly image that is an unsafe SVG is an image/format error", async () => {
+    const bad: ImageAsset = {
+      ...asset("a", 10),
+      format: "svg",
+      mime: "image/svg+xml",
+      svg: { body: '<script>alert(1)</script><rect width="1" height="1"/>' } as ImageAsset["svg"],
+    };
+    const r = await render(withImages(), {
+      theme: THEME,
+      font: "system",
+      images: resolver([bad, asset("b", 10), asset("c", 10)]),
+    });
+    expect(r.outputs).toEqual([]);
+    expect(r.diagnostics.map((d) => d.code)).toContain("image/format");
+  });
+
+  test("a dc: assembly part without a DC pack is refused, never drawn as a box", async () => {
+    const spec: Obj = {
+      meta: { version: "1" },
+      assemblies: [{ id: "m", parts: [{ id: "s", shape: "dc:server-2u" }] }],
+    };
+    const r = await render(spec, { theme: THEME, font: "system" });
+    expect(r.outputs).toEqual([]);
+    expect(
+      r.diagnostics.filter((d) => d.code === "assembly/unknown-shape").map((d) => d.path),
+    ).toEqual(["/assemblies/0/parts/0/shape"]);
   });
 
   const dimmSpec = (): Obj => ({

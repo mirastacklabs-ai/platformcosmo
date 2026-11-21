@@ -96,25 +96,34 @@ const shot = async (page, box) =>
   ).toString("base64");
 
 /**
- * Waits until every SVG <image> of the diagram has loaded and decoded (assembly diagrams embed
- * raster images as data URIs; a lazily decoded one would repaint between two seeks to one time).
+ * Waits (bounded, 5 s) until every SVG <image> of the diagram is decoded, in the document that
+ * renders it (assembly diagrams embed rasters as data URIs; a lazily decoded one would repaint
+ * between two seeks to one time). An SVGImageElement has no decode() in most engines, so the
+ * href is decoded by an Image of that same document's realm; elements that do have decode() are
+ * awaited directly. A timeout is logged, not fatal.
  */
 async function decodeImages(page, mode) {
-  await page.evaluate(async (m) => {
+  const timedOut = await page.evaluate(async (m) => {
     const doc = m === "object" ? document.getElementById("el").contentDocument : document;
-    const hrefs = [...doc.querySelectorAll("image")].map(
-      (i) => i.getAttribute("href") ?? i.getAttribute("xlink:href"),
-    );
-    await Promise.all(
-      hrefs
-        .filter((h) => h && h.startsWith("data:"))
-        .map((h) => {
-          const img = new Image();
-          img.src = h;
-          return img.decode().catch(() => undefined);
-        }),
-    );
+    const win = doc.defaultView;
+    const waits = [...doc.querySelectorAll("image")].map((el) => {
+      if (typeof el.decode === "function") return el.decode().catch(() => undefined);
+      const href = el.getAttribute("href") ?? el.getAttribute("xlink:href");
+      if (!href || !href.startsWith("data:")) return Promise.resolve();
+      const img = new win.Image();
+      img.src = href;
+      return img.decode().catch(() => undefined);
+    });
+    let timer;
+    const limit = new Promise((r) => {
+      timer = setTimeout(() => r(true), 5000);
+    });
+    const done = Promise.all(waits).then(() => false);
+    const out = await Promise.race([done, limit]);
+    globalThis.clearTimeout(timer);
+    return out;
   }, mode);
+  if (timedOut) console.warn(`check: SVG images were not decoded within 5 s (${mode})`);
 }
 
 /** Deterministic time for inline and <object>: pause SMIL and CSS animations at `t` seconds. */

@@ -89,7 +89,7 @@ export function imageUses(spec: PlatformCosmoSpec): { id: string; index: number;
  * ones (`image/too-many`), and the embedded total stays under the cap (`image/too-large`, error)
  * and the warning level (`budget/images`). Cheap: sizes only, no bytes are touched.
  */
-export function checkFigureImages(
+export function checkSpecImages(
   spec: PlatformCosmoSpec,
   images: ImageAssetResolver | undefined,
   limits: ImageLimits = DEFAULT_IMAGE_LIMITS,

@@ -16,7 +16,7 @@ import type {
   RenderOutput,
 } from "../contracts/index.js";
 import { gifEncoder } from "./gif.js";
-import { validateRenderOptions } from "./options.js";
+import { pngStepDiagnostic, validateRenderOptions } from "./options.js";
 import { pngSize } from "./png.js";
 import { bufferingSink, MAX_OUTPUT_BYTES, OutputTooLargeError } from "./stream.js";
 
@@ -234,8 +234,9 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
     const dur = w.durations[k] ?? 0;
     const close = start + dur;
     const hold = model.assembly ? assemblyAnim(model.assembly, speed).ends[k] : undefined;
-    // never into the next step's window
-    const t = Math.min(hold ?? close - dur * 0.001, close - 1e-6);
+    // `ends` is loop seconds, `close` and the frame clock are output seconds: divide by speed
+    // (as assemblySettled does), and never reach into the next step's window
+    const t = Math.min(hold !== undefined ? hold / speed : close - dur * 0.001, close - 1e-6);
     const frame = deps.animator.animate(model, { speed, mode: "frame", time: t });
     const at = deps.animator.animate(model, { speed, motion, mode: "step", step });
     return {
@@ -252,17 +253,9 @@ export const exportOutputs: ExportFn = async (model, kinds, deps, options) => {
     const scale = options.png?.scale ?? 2;
     const step = options.png?.step;
     const count = model.scene.timeline.length;
-    if (step !== undefined && step > count) {
-      diagnostics.push({
-        severity: "error",
-        code: "options/invalid-png-step",
-        path: "/png/step",
-        message:
-          count === 0
-            ? "png.step needs a spec with steps; this one has none."
-            : `png.step ${step} is beyond the ${count} step(s) of the spec.`,
-        suggestion: count === 0 ? "Use png.time or omit it." : `Use a step from 1 to ${count}.`,
-      });
+    const badStep = step === undefined ? undefined : pngStepDiagnostic(step, count);
+    if (badStep) {
+      diagnostics.push(badStep);
     } else if (!tooLarge("png", scale, 1)) {
       try {
         outputs.push({

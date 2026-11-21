@@ -6,6 +6,7 @@ import type {
   EmitFn,
   ExportFn,
   OptimizeFn,
+  DcPack,
   OutputKind,
   PartShapeRegistry,
   RasterizeFn,
@@ -22,11 +23,11 @@ import type {
 import { createAnimator } from "../anim/index.js";
 import { countElements, emit, themeVars } from "../emit/index.js";
 import { exportOutputs, rasterize } from "../export/index.js";
-import { validateRenderOptions } from "../export/options.js";
+import { pngStepDiagnostic, validateRenderOptions } from "../export/options.js";
 import { optimize } from "../optimize/index.js";
 import { buildScene } from "../scene/index.js";
 import { validate } from "../schema/index.js";
-import { checkFigureImages } from "./boards/index.js";
+import { checkSpecImages } from "./boards/index.js";
 import { buildModel, buildModelWithDiagnostics, inputsOf } from "./model.js";
 
 export { buildModel } from "./model.js";
@@ -54,17 +55,27 @@ function err(code: string, path: string, message: string, suggestion?: string): 
   return { severity: "error", code, path, message, ...(suggestion ? { suggestion } : {}) };
 }
 
-/** `assembly/unknown-shape` for every `pack:id` shape of an assembly part the registry lacks. */
+/**
+ * `assembly/unknown-shape` for every `pack:id` shape of an assembly part that neither the
+ * registry nor the DC pack resolves (validate leaves such refs unchecked without a registry).
+ */
 function unresolvedShapes(
   spec: PlatformCosmoSpec,
   parts: PartShapeRegistry | undefined,
+  dc: DcPack | undefined,
 ): Diagnostic[] {
+  const dcShapes = dc?.shapes;
+  const resolves = (ref: string): boolean =>
+    parts?.get(ref) !== undefined ||
+    (dcShapes !== undefined &&
+      ref.startsWith(`${dcShapes.id}:`) &&
+      dcShapes.shapes.some((x) => `${dcShapes.id}:${x.id}` === ref));
   const out: Diagnostic[] = [];
   const walk = (list: readonly SpecPart[] | undefined, base: string): void => {
     (list ?? []).forEach((part, j) => {
       const at = `${base}/parts/${j}`;
       const ref = part.shape;
-      if (ref !== undefined && ref.includes(":") && !ref.startsWith("dc:") && !parts?.get(ref)) {
+      if (ref !== undefined && ref.includes(":") && !resolves(ref)) {
         out.push({
           severity: "error",
           code: "assembly/unknown-shape",
@@ -253,14 +264,14 @@ export function createRender(deps: RenderDeps): RenderFn {
 
       // Figures (schema 1.2.0): every image they use must be provided, and the embedded total
       // must fit the caps, before anything is placed or encoded.
-      const imageDiagnostics = checkFigureImages(parsed, options.images);
+      const imageDiagnostics = checkSpecImages(parsed, options.images);
       diagnostics.push(...imageDiagnostics);
       if (imageDiagnostics.some((d) => d.severity === "error")) return fail(diagnostics);
 
       // A pack shape nothing can resolve is an error, never a silent box (validate leaves such
       // refs unchecked without a registry; drawing is where they must exist). `dc:` shapes come
       // from the DC pack the scene reads, not from the registry.
-      const shapeDiagnostics = unresolvedShapes(parsed, options.parts);
+      const shapeDiagnostics = unresolvedShapes(parsed, options.parts, options.dc);
       diagnostics.push(...shapeDiagnostics);
       if (shapeDiagnostics.length > 0) return fail(diagnostics);
 
@@ -314,23 +325,8 @@ export function createRender(deps: RenderDeps): RenderFn {
       if (diagnostics.some((d) => d.severity === "error")) return fail(diagnostics, scene);
       // png.step is checked once the timeline length is known, before any work.
       if (kinds.includes("png") && options.png?.step !== undefined) {
-        const count = scene.timeline.length;
-        if (options.png.step > count) {
-          return fail(
-            [
-              ...diagnostics,
-              err(
-                "options/invalid-png-step",
-                "/png/step",
-                count === 0
-                  ? "png.step needs a spec with steps; this one has none."
-                  : `png.step ${options.png.step} is beyond the ${count} step(s) of the spec.`,
-                count === 0 ? "Use png.time or omit it." : `Use a step from 1 to ${count}.`,
-              ),
-            ],
-            scene,
-          );
-        }
+        const bad = pngStepDiagnostic(options.png.step, scene.timeline.length);
+        if (bad) return fail([...diagnostics, bad], scene);
       }
 
       const name = options.name ?? "diagram";

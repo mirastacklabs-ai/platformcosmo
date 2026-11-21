@@ -101,6 +101,24 @@ try {
         "const done = arguments[arguments.length - 1]; requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 50)));",
       args: [],
     }).catch((e) => console.log("settle failed (screenshot may predate the paint):", e.message));
+  // Every SVG <image> decoded (bounded, 5 s) in the document that renders it, before any frame is
+  // taken: data-URI rasters decode lazily. Logs a timeout; never fails the run.
+  const decodeImages = async (mode) => {
+    const timedOut = await wd("POST", s("/execute/async"), {
+      script: `const m = arguments[0], done = arguments[arguments.length - 1];
+        const doc = m === 'object' ? document.getElementById('el').contentDocument : document;
+        const win = doc.defaultView;
+        const waits = [...doc.querySelectorAll('image')].map((el) => {
+          if (typeof el.decode === 'function') return el.decode().catch(() => undefined);
+          const h = el.getAttribute('href') || el.getAttribute('xlink:href');
+          if (!h || !h.startsWith('data:')) return Promise.resolve();
+          const i = new win.Image(); i.src = h; return i.decode().catch(() => undefined);
+        });
+        Promise.race([Promise.all(waits).then(() => false), new Promise((r) => setTimeout(() => r(true), 5000))]).then(done);`,
+      args: [mode],
+    }).catch(() => undefined);
+    if (timedOut) console.log(`SVG images were not decoded within 5 s (${mode})`);
+  };
   // Element screenshot of the page's box (#box on probe pages, #host on diagram pages): it
   // snapshots the web view itself, so it does not depend on the Safari window being painted on
   // screen (the full-window screenshot was blank on small-display runners). SAFARI_SHOT=window
@@ -261,6 +279,7 @@ try {
               await sleep(150);
             }
           }
+          await decodeImages(mode);
           await sleep(400);
           const frames = [];
           for (let i = 0; i < 3; i++) {
@@ -365,14 +384,7 @@ try {
           }
           if (!ready) throw new Error("object document did not load");
         }
-        // every SVG <image> decoded before any frame is taken (data-URI rasters decode lazily)
-        await wd("POST", s("/execute/async"), {
-          script: `const m = arguments[0], done = arguments[arguments.length - 1];
-            const doc = m === 'object' ? document.getElementById('el').contentDocument : document;
-            const hrefs = [...doc.querySelectorAll('image')].map((i) => i.getAttribute('href') || i.getAttribute('xlink:href')).filter((h) => h && h.startsWith('data:'));
-            Promise.all(hrefs.map((h) => { const i = new Image(); i.src = h; return i.decode().catch(() => undefined); })).then(() => done(true));`,
-          args: [mode],
-        }).catch(() => undefined);
+        await decodeImages(mode);
         await sleep(300);
         await diag(`${file}/${mode}`);
         let animated = false;
