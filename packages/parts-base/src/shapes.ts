@@ -7,7 +7,7 @@ import { defineShape, type ParamSpec } from "./define.js";
  * orientation per shape (turn it with the part's `rotate`). Devices with a front (psu, e1s,
  * nic-ocp3, chassis-2u, fan) put it at +y, the side the iso viewer sees, matching DC racks and
  * `"front": "+y"` in the spec. Each shape is authored at its default size and scaled per axis
- * when the spec gives `size`. `depthBox` is the solid core (see `finish`): fingers, ears,
+ * when the spec gives `size`. `depthBox` is the solid core (see `finishGeometry`): fingers, ears,
  * handles, connectors and sockets are drawn but excluded, so a part seated on a board is not
  * enclosed by it.
  * Nothing here copies a vendor's industrial design; sizes follow public form-factor envelopes
