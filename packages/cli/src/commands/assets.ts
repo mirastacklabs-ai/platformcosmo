@@ -247,31 +247,34 @@ async function doctor(ctx: Ctx, args: string[]): Promise<number> {
   const p = parse(args, { json: { type: "boolean" } });
   oneInput(p, "assets doctor", 0, "no arguments");
   const diags: Diagnostic[] = [];
-  // The renderer decodes every image: a 1x1 PNG round trip proves resvg-wasm starts.
+  // The renderer decodes every image: a 1x1 PNG round trip proves resvg starts.
   const probe = await decodeImage(encodePng({ width: 1, height: 1, data: new Uint8Array(4) }));
   const renderer = probe.value !== undefined;
   if (!renderer) diags.push(...probe.diagnostics);
-  const tools: Record<string, { found: boolean; path?: string }> = {};
-  for (const t of ["ffmpeg", "mutool", "pdftoppm"]) {
-    const path = await toolPath(ctx.deps.env, t);
-    tools[t] = path === undefined ? { found: false } : { found: true, path };
+  // The PDF tools are looked up once, in the fixed directories `assets pdf render` uses; ffmpeg is
+  // informational only and is still found through PATH.
+  const pdfTools: Record<string, { found: boolean; path?: string }> = {};
+  for (const t of TOOL_NAMES) {
+    const path = await findTool(toolDirs(ctx.deps.pdfRender), t);
+    pdfTools[t] = path === undefined ? { found: false } : { found: true, path };
   }
+  const ff = await toolPath(ctx.deps.env, "ffmpeg");
+  const tools: Record<string, { found: boolean; path?: string }> = {
+    ffmpeg: ff === undefined ? { found: false } : { found: true, path: ff },
+    mutool: pdfTools.mutool!,
+    pdftoppm: pdfTools.pdftoppm!,
+  };
   for (const [name, t] of Object.entries(tools)) {
     if (!t.found) {
       diags.push({
         severity: "warning",
         code: "asset/tool-missing",
         path: "",
-        message: `optional tool ${name} was not found on PATH`,
+        message: `optional tool ${name} was not found ${name === "ffmpeg" ? "on PATH" : `in ${toolDirs(ctx.deps.pdfRender).join(":")}`}`,
         suggestion: "only needed for PDF and video work; image and figure commands run without it",
         params: { tool: name },
       });
     }
-  }
-  const pdfTools: Record<string, { found: boolean; path?: string }> = {};
-  for (const t of TOOL_NAMES) {
-    const path = await findTool(ctx.deps.env, t);
-    pdfTools[t] = path === undefined ? { found: false } : { found: true, path };
   }
   const pdfChosen = TOOL_NAMES.find((t) => pdfTools[t]!.found);
   const payload = {
@@ -294,7 +297,7 @@ async function doctor(ctx: Ctx, args: string[]): Promise<number> {
         available: pdfChosen !== undefined,
         tool: pdfChosen ?? null,
         tools: pdfTools,
-        searchedDirs: toolDirs(ctx.deps.env),
+        searchedDirs: [...toolDirs(ctx.deps.pdfRender)],
         timeoutMs: RENDER_LIMITS.timeoutMs,
         maxOutputBytes: RENDER_LIMITS.maxOutputBytes,
         dpi: { ...DPI_RANGE },
@@ -314,12 +317,12 @@ async function doctor(ctx: Ctx, args: string[]): Promise<number> {
   };
   const summary = [
     `node ${payload.node} on ${payload.platform}`,
-    `renderer (resvg-wasm): ${payload.renderer}`,
+    `renderer (resvg): ${payload.renderer}`,
     `symlink refusal at open (O_NOFOLLOW): ${HAS_NOFOLLOW ? "yes" : "no (checked after open instead)"}`,
     `swap detection after open: ${payload.readGuard === "proc-fd" ? "/proc/self/fd path comparison (Linux)" : "directories writable by other users are refused (no /proc here); a rename race by the directory's owner stays possible"}`,
     `allowed directory for inputs and outputs: ${payload.assetsRoot}${payload.assetsRootEnv === null ? "" : ` (bounded by PCOSMO_ASSETS_ROOT=${payload.assetsRootEnv})`}`,
     ...Object.entries(tools).map(([n, t]) => `${n}: ${t.found ? t.path : "not found (optional)"}`),
-    `pdf renderer (pdftoppm or mutool, for assets pdf render): ${pdfChosen === undefined ? "not found in " + toolDirs(ctx.deps.env).join(":") + " (optional; compose and extract work without it)" : (pdfTools[pdfChosen]!.path ?? pdfChosen)}`,
+    `pdf renderer (pdftoppm or mutool, for assets pdf render): ${pdfChosen === undefined ? "not found in " + toolDirs(ctx.deps.pdfRender).join(":") + " (optional; compose and extract work without it)" : (pdfTools[pdfChosen]!.path ?? pdfChosen)}`,
     `pdf limits: ${DEFAULT_PDF_LIMITS.maxFileBytes} bytes per file, ${MAX_PAGES_PER_COMMAND} pages per command, ${DEFAULT_PDF_LIMITS.maxImagePixels} px per extracted image, ${RENDER_LIMITS.timeoutMs} ms per render`,
     `limits: ${MAX_PIXELS} px per source, ${MANIFEST_LIMITS.parts} parts, ${MAX_MULTIPLY_ADDS} multiply-adds, ${ASSET_LIMITS.maxBytes} bytes per file`,
   ];

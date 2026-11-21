@@ -62,6 +62,11 @@ const DIGITS: readonly (readonly string[])[] = [
   ["111", "101", "111", "001", "111"],
 ];
 
+/** Seam for tests: the canvas allocation (observable, so a test can prove none happens). */
+export const hooks = {
+  allocate: (bytes: number): Uint8Array => new Uint8Array(bytes).fill(255),
+};
+
 export interface ComposeResult {
   readonly raster: Raster;
   /** Placements skipped because the work budget ran out. */
@@ -80,7 +85,8 @@ export function composeRaster(
   const size = canvasSize(view);
   if (!size) throw new RangeError("canvas over the pixel cap");
   const { width: cw, height: ch } = size;
-  const out = new Uint8Array(cw * ch * 4).fill(255);
+  const out = hooks.allocate(cw * ch * 4);
+  const shrunk = new Map<Raster, Map<number, Raster>>();
   let spent = 0;
   let skipped = 0;
   for (const p of placements) {
@@ -110,7 +116,23 @@ export function composeRaster(
     const ratio = Math.max(Math.hypot(A, B) / src.width, Math.hypot(C, D) / src.height);
     if (ratio < 0.5) {
       const target = Math.ceil(Math.max(src.width, src.height) * ratio);
-      if (target >= 1 && target <= 8192) src = shrink(src, target).value ?? src;
+      if (target >= 1 && target <= 8192) {
+        let byTarget = shrunk.get(p.raster);
+        if (!byTarget) shrunk.set(p.raster, (byTarget = new Map()));
+        let small = byTarget.get(target);
+        if (!small) {
+          // a shrink reads every source pixel: charge them to the work budget (once per size)
+          const read = p.raster.width * p.raster.height;
+          if (spent + read > budget) {
+            skipped++;
+            continue;
+          }
+          spent += read;
+          small = shrink(p.raster, target).value ?? p.raster;
+          byTarget.set(target, small);
+        }
+        src = small;
+      }
     }
     const sw = src.width;
     const sh = src.height;

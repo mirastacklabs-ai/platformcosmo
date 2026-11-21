@@ -568,6 +568,83 @@ describe("pdf text", () => {
   });
 });
 
+describe("pdf text: Unicode smuggling (Q07)", () => {
+  test("tag characters, variation selectors, private use and noncharacters are replaced", async () => {
+    const dir = await work();
+    // 1: TAG LATIN A (U+E0041), 2: VARIATION SELECTOR-16, 3: U+E0100, 4: private use U+E000,
+    // 5: U+2028 LINE SEPARATOR, 6: zero-width joiner U+200D, 7: "A"
+    const cmap = g.bytes(
+      "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n" +
+        "1 begincodespacerange <0000> <FFFF> endcodespacerange\n" +
+        "7 beginbfchar <0001> <DB40DC41> <0002> <FE0F> <0003> <DB40DD00> <0004> <E000> " +
+        "<0005> <2028> <0006> <200D> <0007> <0041> endbfchar\n" +
+        "endcmap CMapName currentdict /CMap defineresource pop end end",
+    );
+    await put(
+      dir,
+      "t.pdf",
+      g.onePage(
+        "BT /F1 12 Tf 10 100 Td <00070001000200030004000500060007> Tj ET",
+        "/Font << /F1 10 0 R >>",
+        [
+          [
+            10,
+            "<< /Type /Font /Subtype /Type0 /BaseFont /S /Encoding /Identity-H /DescendantFonts [11 0 R] /ToUnicode 12 0 R >>",
+          ],
+          [
+            11,
+            "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /S /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 500 >>",
+          ],
+          [12, "<< >>", cmap],
+        ],
+      ),
+    );
+    const r = await pdf(dir, ["text", "t.pdf", "--page", "1", "--json"]);
+    expect(r.code, r.stdout).toBe(0);
+    const text = json(r.stdout)
+      .runs.map((x: { text: string }) => x.text)
+      .join("");
+    const bad = String.fromCodePoint(0xfffd);
+    expect(text).toBe(`A${bad.repeat(6)}A`);
+    for (const cp of [0xe0041, 0xfe0f, 0xe0100, 0xe000, 0x2028, 0x200d]) {
+      expect(r.stdout).not.toContain(String.fromCodePoint(cp));
+    }
+    const t = await pdf(dir, ["text", "t.pdf", "--page", "1"]);
+    expect(t.stdout).not.toContain(String.fromCodePoint(0xe0041));
+  });
+});
+
+describe("compose: the canvas is never allocated over the cap (Q06/Q15)", () => {
+  test("an over-cap compose allocates nothing; a normal one allocates exactly the canvas", async () => {
+    const { hooks } = await import("../src/pdfcompose.js");
+    const real = hooks.allocate;
+    const sizes: number[] = [];
+    hooks.allocate = (n) => (sizes.push(n), real(n));
+    try {
+      const dir = await work();
+      await put(dir, "a.pdf", g.rasterPdf());
+      const big = await pdf(dir, [
+        "compose",
+        "a.pdf",
+        "--page",
+        "1",
+        "-o",
+        "b.png",
+        "--dpi",
+        "1200",
+        "--json",
+      ]);
+      expect(big.code).toBe(1);
+      expect(sizes).toEqual([]);
+      const ok = await pdf(dir, ["compose", "a.pdf", "--page", "1", "-o", "c.png", "--json"]);
+      expect(ok.code).toBe(0);
+      expect(sizes).toEqual([534 * 400 * 4]);
+    } finally {
+      hooks.allocate = real;
+    }
+  });
+});
+
 describe("encrypted documents", () => {
   const kinds = ["rc4-40", "rc4-128", "rc4-v4", "aes-128", "aes-256-r5", "aes-256-r6"] as const;
   test.each(kinds)(
@@ -604,7 +681,7 @@ describe("encrypted documents", () => {
         render: ["--page", "1", "-o", "o.png"],
       }[sub]!;
       const r = await pdf(dir, [sub, "u.pdf", ...args, "--json"], {
-        env: { PCOSMO_PDF_TOOLS_DIR: dir },
+        pdfRender: { toolDirs: [dir] },
       });
       expect(r.code).toBe(1);
       const j = json(r.stdout);
@@ -631,6 +708,56 @@ describe("diagnostics", () => {
         const r = await pdf(dir, [sub!, f, ...rest, "--json"]);
         expectKnownCodes(json(r.stdout).diagnostics);
       }
+    }
+  });
+});
+
+describe("clean: text from a PDF as data", () => {
+  test("normalises, strips control, bidi and lone surrogates, never splits a pair", async () => {
+    const { clean } = await import("../src/commands/assets-pdf.js");
+    expect(clean("e\u0301")).toBe("\u00e9"); // NFC
+    expect(clean("a\u202eb\u2066c\u0007d\ufeffe\ue000f")).toBe(
+      "a\ufffdb\ufffdc\ufffdd\ufffde\ufffdf",
+    );
+    expect(clean("a\ud800b")).toBe("a\ufffdb"); // lone surrogate
+    const s = "\u{1f600}".repeat(5);
+    expect(clean(s, 3)).toBe("\u{1f600}".repeat(3)); // cut on code points, no half pair
+    expect(clean("x\u{1f600}", 2)).toBe("x\u{1f600}");
+  });
+});
+
+describe("pdf extract --all: manifest cap", () => {
+  test("too many manifest entries stops with a pdf/too-large warning", async () => {
+    const { manifestLimits } = await import("../src/commands/assets-pdf.js");
+    const dir = await work();
+    await put(dir, "a.pdf", g.rasterPdf());
+    const was = manifestLimits.entries;
+    manifestLimits.entries = 1;
+    try {
+      const r = await pdf(dir, ["extract", "a.pdf", "--all", "--min-px", "0", "-d", "o", "--json"]);
+      const j = json(r.stdout);
+      expect(j.diagnostics.map((d: Diag) => d.code)).toContain("pdf/too-large");
+      expect(
+        JSON.parse(await readFile(join(dir, "o", "manifest.json"), "utf8")).images,
+      ).toHaveLength(1);
+    } finally {
+      manifestLimits.entries = was;
+    }
+  });
+
+  test("a manifest over the byte cap is an error and writes nothing", async () => {
+    const { manifestLimits } = await import("../src/commands/assets-pdf.js");
+    const dir = await work();
+    await put(dir, "a.pdf", g.rasterPdf());
+    const was = manifestLimits.bytes;
+    manifestLimits.bytes = 10;
+    try {
+      const r = await pdf(dir, ["extract", "a.pdf", "--all", "--min-px", "0", "-d", "o", "--json"]);
+      expect(r.code).toBe(1);
+      expect(json(r.stdout).diagnostics.map((d: Diag) => d.code)).toContain("pdf/too-large");
+      expect(await readdir(dir)).not.toContain("o");
+    } finally {
+      manifestLimits.bytes = was;
     }
   });
 });

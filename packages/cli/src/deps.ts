@@ -33,8 +33,8 @@ export interface Watcher {
 export interface Deps {
   core: CoreApi;
   themes?: ThemeRegistry | undefined;
-  /** Tests only: tighter limits for the external PDF renderer (`assets pdf render`). */
-  pdfRender?: Partial<import("./pdftool.js").RenderLimits> | undefined;
+  /** Tests only: tighter limits and tool directories for the external PDF renderer (`assets pdf render`). */
+  pdfRender?: import("./pdftool.js").RenderSeam | undefined;
   validateTheme?: ValidateThemeFn | undefined;
   dcPack?: DcPack | undefined;
   /** Packs shipped inside the CLI (icons-base, …); they win over user packs on duplicate ids. */

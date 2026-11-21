@@ -37,6 +37,8 @@ import { staleOutputs, relFromCwd } from "../outputs.js";
 import {
   DPI_RANGE,
   RENDER_LIMITS,
+  renderSize,
+  toolDirs,
   TOOL_NAMES,
   pickTool,
   renderPage,
@@ -77,10 +79,13 @@ const MAX_LISTED_IMAGES = 20_000;
 /** Files and bytes written by `extract --all`. */
 const MAX_EXTRACT_FILES = 1000;
 const MAX_EXTRACT_BYTES = 128 * 1024 * 1024;
+/** Manifest entries (placements) written by one `extract --all`. */
+/** (an object so a test can lower the caps) */
+export const manifestLimits = { entries: 100_000, bytes: 32 * 1024 * 1024 };
 /** `compose`: placements painted, source bytes embedded in an SVG, decoded source pixels. */
 const MAX_COMPOSED = 512;
 const MAX_SVG_SOURCE_BYTES = 96 * 1024 * 1024;
-const MAX_DECODED_PIXELS = 256 * 1024 * 1024;
+const MAX_DECODED_PIXELS = 64 * 1024 * 1024;
 /** `text`: runs printed. `info`: pages printed. */
 const MAX_TEXT_RUNS = 20_000;
 const MAX_INFO_PAGES = 2000;
@@ -214,30 +219,45 @@ function pagesRange(
 // ---------------------------------------------------------------------------------------------
 
 /** Text that came from the PDF, as data: no control or bidi characters, bounded. */
-const UNSAFE = new RegExp(
-  // eslint-disable-next-line no-control-regex
-  "[\\u0000-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u206f\\ufeff]",
-  "g",
-);
-const clean = (s: string, max = 400): string => s.replace(UNSAFE, "\ufffd").slice(0, max);
+const UNSAFE = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\p{Variation_Selector}]/gu;
+/** NFC-normalised, unsafe characters replaced, cut to `max` code points (never inside a pair). */
+export const clean = (s: string, max = 400): string => {
+  const t = s.normalize("NFC").replace(UNSAFE, "\ufffd");
+  return t.length <= max ? t : [...t].slice(0, max).join("");
+};
 
-/** A parser diagnostic as a CLI diagnostic (message cleaned; the parser's params kept). */
+/** `clean` over every string in a parsed value (arrays and objects, depth-limited). */
+export function cleanDeep<T>(v: T, depth = 0): T {
+  if (typeof v === "string") return clean(v, 600) as T;
+  if (depth > 6 || v === null || typeof v !== "object") return v;
+  if (Array.isArray(v)) return v.slice(0, 1000).map((x) => cleanDeep(x, depth + 1)) as T;
+  const out: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(v).slice(0, 200)) out[clean(k, 80)] = cleanDeep(x, depth + 1);
+  return out as T;
+}
+
+/** A parser diagnostic as a CLI diagnostic (message and params cleaned). */
 function pdfDiag(d: PdfDiagnostic): Diagnostic {
   return {
     severity: d.severity,
     code: d.code,
     path: d.path,
-    message: stripControl(d.message).slice(0, 600),
+    message: clean(stripControl(d.message), 600),
     ...(d.suggestion === undefined ? {} : { suggestion: d.suggestion }),
-    params: d.params as Record<string, unknown>,
+    params: cleanDeep(d.params as Record<string, unknown>),
   };
 }
 
+const manifestBytes = (entries: readonly Record<string, unknown>[]): number =>
+  entries.reduce((n, e) => n + JSON.stringify(e).length + 2, 0);
+
+/** One dedupe set per command (keyed by its diagnostics array). */
+const seenByCommand = new WeakMap<Diagnostic[], Set<string>>();
+
 /** Adds parser diagnostics without repeating one that is already there. */
 function addPdf(diags: Diagnostic[], list: readonly PdfDiagnostic[]): void {
-  const seen = new Set(
-    diags.map((d) => `${d.code}|${d.message}|${JSON.stringify(d.params ?? null)}`),
-  );
+  let seen = seenByCommand.get(diags);
+  if (!seen) seenByCommand.set(diags, (seen = new Set()));
   for (const d of list) {
     const x = pdfDiag(d);
     const key = `${x.code}|${x.message}|${JSON.stringify(x.params ?? null)}`;
@@ -335,14 +355,16 @@ async function infoCmd(ctx: Ctx, args: string[]): Promise<number> {
       pages,
       pagesTruncated: info.pages.length > pages.length,
       producer: info.producer === null ? null : clean(info.producer),
-      encryption: info.encryption,
+      encryption: cleanDeep(info.encryption),
       repaired: info.repaired,
     },
   };
   const summary = [
     `PDF ${info.version ?? "?"}, ${info.pageCount} page${info.pageCount === 1 ? "" : "s"}${info.repaired ? " (repaired)" : ""}`,
     `producer: ${info.producer === null ? "-" : JSON.stringify(clean(info.producer))}`,
-    ...(info.encryption === null ? [] : [`encryption: ${JSON.stringify(info.encryption)}`]),
+    ...(info.encryption === null
+      ? []
+      : [`encryption: ${JSON.stringify(cleanDeep(info.encryption))}`]),
     ...pages.map(
       (g) =>
         `page ${g.page}: ${g.width} x ${g.height} pt${g.rotate ? `, rotated ${g.rotate}` : ""}`,
@@ -365,7 +387,7 @@ function imageRecord(img: PdfImage): Record<string, unknown> {
     width: img.width,
     height: img.height,
     format: img.format,
-    filters: img.filters,
+    filters: img.filters.map((f) => clean(f, 40)),
     colourSpace: img.colourSpace === null ? null : clean(img.colourSpace, 80),
     bitsPerComponent: img.bitsPerComponent,
     components: img.components,
@@ -548,6 +570,10 @@ async function extractCmd(ctx: Ctx, args: string[]): Promise<number> {
     addPdf(diags, l.diagnostics);
     for (const img of l.images) {
       if (stop) break;
+      if (entries.length >= manifestLimits.entries) {
+        limitDiag(pg, `more than ${manifestLimits.entries} manifest entries`);
+        break;
+      }
       const ext = mask ? "png" : extOf(img.format);
       if (ext === undefined || !img.withinCaps || img.format === "unsupported") continue;
       if (Math.min(img.width, img.height) < minPx) continue;
@@ -596,6 +622,19 @@ async function extractCmd(ctx: Ctx, args: string[]): Promise<number> {
         bboxPercent: img.bboxPercent,
       });
     }
+  }
+  if (!stop && manifestBytes(entries) > manifestLimits.bytes) {
+    // entries are small and bounded in number; this is the byte backstop
+    entries.length = 0;
+    files.length = 0;
+    diags.push({
+      severity: "error",
+      code: "pdf/too-large",
+      path: "",
+      message: `manifest.json would be over ${manifestLimits.bytes} bytes`,
+      suggestion: "use --pages a-b to extract in smaller parts",
+      params: { page: null, image: null, bbox: null },
+    });
   }
   const manifest = {
     schema: "pcosmo-pdf-extract/1",
@@ -715,7 +754,7 @@ async function composeCmd(ctx: Ctx, args: string[]): Promise<number> {
   const list = o.doc.listImages(page, { hash: false });
   addPdf(diags, list.diagnostics);
   const markers: Marker[] = annotate
-    ? list.images.map((i) => ({ index: i.index, bbox: i.bbox }))
+    ? list.images.slice(0, MAX_COMPOSED).map((i) => ({ index: i.index, bbox: i.bbox }))
     : [];
   // Sources: one entry per distinct XObject (inline images are their own).
   const keyOf = (i: PdfImage): string => (i.object === null ? `i${i.index}` : `o${i.object}`);
@@ -880,7 +919,7 @@ async function renderCmd(ctx: Ctx, args: string[]): Promise<number> {
   }
   const view = viewFor(o.doc, page, dpi, c, diags);
   if (!view) return fin(ctx, json, "pdf render", diags, {}, [], []);
-  const tool = await pickTool(ctx.deps.env, toolOpt as ToolName | undefined);
+  const tool = await pickTool(toolDirs(ctx.deps.pdfRender), toolOpt as ToolName | undefined);
   if (!tool) {
     diags.push({
       severity: "error",
@@ -903,14 +942,18 @@ async function renderCmd(ctx: Ctx, args: string[]): Promise<number> {
     });
     return fin(ctx, json, "pdf render", diags, {}, [], []);
   }
+  // The pixel bound goes to the tool itself (argv), clamped to 16 MP, so it holds whatever page
+  // size or UserUnit the tool reads from the file.
+  const size = renderSize(pg.width, pg.height, dpi);
   const res = await renderPage({
-    env: ctx.deps.env,
     rootDir: root,
     tool,
     pdf: o.bytes,
     page,
-    dpi,
-    ...(ctx.deps.pdfRender ? { limits: ctx.deps.pdfRender } : {}),
+    px: size.px,
+    py: size.py,
+    rotate: pg.rotate,
+    seam: ctx.deps.pdfRender,
   });
   if (!res.ok) {
     const missing = res.reason === "missing" || res.reason === "unsupported";

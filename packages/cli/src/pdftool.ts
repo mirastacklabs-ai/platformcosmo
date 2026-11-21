@@ -4,36 +4,51 @@
  * code on an untrusted PDF, so everything about the call is fixed here and nothing in it comes from
  * the PDF or from a free-form option:
  *
- *   - no shell: `spawn(absolutePath, argv, { shell: false })`;
- *   - the argument list is a constant template; the only variable parts are two integers this
- *     module formats itself (the page number and the dpi), both range-checked by the caller;
- *   - the tool is found in a fixed list of directories (`DEFAULT_TOOL_DIRS`, or only the optional
- *     `PCOSMO_PDF_TOOLS_DIR` the user's own environment sets), never through the inherited PATH;
- *   - the environment is minimal: `PATH` (the search directories, then the fixed list), `LANG=C`, `HOME`/`TMPDIR` pointing
- *     into the private directory; nothing is inherited (no `LD_*`, `DYLD_*`, proxies, tokens);
- *   - the PDF is the safely read byte array, written into a fixed-name file in the
- *     private directory and handed over as descriptor 3 (`/dev/fd/3`); no path is passed;
+ *   - no shell for the tool: it is started as `/bin/sh -c '<fixed script>' <tool> <argv...>`, a
+ *     constant script that applies `ulimit -f` (RLIMIT_FSIZE, the real bound on what the tool can
+ *     write) and `ulimit -v` (address space, where the OS supports it) and then `exec "$0" "$@"`.
+ *     The tool path and the arguments are positional parameters, never part of the script text;
+ *     the two numbers in the script are integers this module computes;
+ *   - the argument list is a constant template over integers this module formats itself: the page
+ *     number and the output size in pixels. The pixel size is passed to the tool (`-scale-to-x/y`,
+ *     `draw -w/-h`), computed from the page size and dpi and clamped to 16 MP, so the tool cannot
+ *     exceed it whatever page size or UserUnit it reads from the file;
+ *   - the tool is found in a fixed list of directories (`DEFAULT_TOOL_DIRS`), never through the
+ *     inherited PATH, and there is no environment override (tests inject directories through the
+ *     `Deps.pdfRender` seam);
+ *   - the environment is minimal: `PATH` (the fixed list), `LANG=C`, `HOME`/`TMPDIR` pointing into
+ *     the private directory; nothing is inherited (no `LD_*`, `DYLD_*`, proxies, tokens);
+ *   - the PDF is the safely read byte array, written (full-write loop) into a fixed-name file in
+ *     the private directory, closed, reopened read-only and handed over as descriptor 3
+ *     (`/dev/fd/3`) so the tool cannot write through it; no path is passed;
  *   - the tool runs with the private directory as its working directory and writes one fixed
- *     relative name there (`out.png`); the directory is created `0700` with a random name below
- *     the allowed root and removed afterwards;
- *   - a timeout kills the whole process group (the child is a group leader), and so does exceeding
- *     the output cap, which a poll of the private directory enforces while the tool runs;
- *   - stdout and stderr are drained into bounded buffers (the child is killed past the cap);
+ *     relative name there (`out.png`). The directory is created `0700` with a random name below
+ *     the allowed root, checked with `lstat` (directory, ours, mode 0700), refused when the root is
+ *     writable by other users (and not sticky), and removed afterwards, also when SIGINT, SIGTERM
+ *     or SIGHUP arrive while the tool runs (the group is killed, the directory removed, the signal
+ *     re-raised). Any subdirectory or non-regular file the tool creates fails the render;
+ *   - the child is a process-group leader; a timeout, an output over the cap (polled every 20 ms,
+ *     on top of RLIMIT_FSIZE), a flood on stdout/stderr or a forbidden entry kills the group. On
+ *     Linux, when `unshare --user --pid --fork --kill-child --mount-proc` works unprivileged
+ *     (probed once), the tool also runs without network and in its own PID namespace, so the kernel kills every
+ *     descendant when the wrapper dies;
  *   - afterwards the produced file is read through `readFileSafe` (no symlink, regular file, size
  *     cap), must start with the PNG signature and declare dimensions within the 16 MP cap before
- *     anything decodes it. Whatever else the tool left in the directory is ignored and removed.
+ *     anything decodes it.
  *
- * Residual: Node has no rlimit or sandbox, so a tool that is itself compromised can still act as
- * the user (read files, use the network) for the time it runs; the cap on its time, memory
- * (not limited), and output bound what it can leave behind, not what it can do. Windows is not
- * supported (no process groups, no `/dev/fd`).
+ * Residual (documented, not closed): without a PID namespace a descendant that calls `setsid`
+ * leaves the process group and survives the kill (on a host where `unshare` is unavailable, such
+ * as many containers). Node has no seccomp or filesystem sandbox, so a compromised tool can still
+ * read and write anything the user can, and use the network, while it runs; RLIMIT_FSIZE,
+ * the timeout and the private directory bound what it leaves behind, not what it can do. Writes
+ * outside the private directory are not prevented. Windows is not supported.
  */
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, rmSync } from "node:fs";
 import { access, lstat, mkdir, open, opendir, rm, stat } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
-import { readFileSafe } from "./images.js";
+import { join } from "node:path";
+import { foreignWritableDir, readFileSafe } from "./images.js";
 
 export const TOOL_NAMES = ["pdftoppm", "mutool"] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -49,7 +64,7 @@ export const DEFAULT_TOOL_DIRS: readonly string[] = [
 export interface RenderLimits {
   /** Wall-clock time for one render. */
   readonly timeoutMs: number;
-  /** Size of the produced PNG. */
+  /** Size of the produced PNG (also RLIMIT_FSIZE for the tool). */
   readonly maxOutputBytes: number;
   /** Bytes kept from stdout / stderr each. */
   readonly maxStreamBytes: number;
@@ -57,7 +72,16 @@ export interface RenderLimits {
   readonly maxPixels: number;
   /** Output pixels per side. */
   readonly maxSide: number;
+  /** Address-space limit for the tool in KiB (`ulimit -v`, honoured on Linux). */
+  readonly maxVirtualKb: number;
 }
+
+/** Test-only seam (`Deps.pdfRender`): tighter limits and the directories to look for tools in. */
+export type RenderSeam = Partial<RenderLimits> & {
+  readonly toolDirs?: readonly string[];
+  /** false: never use `unshare`. */
+  readonly useUnshare?: boolean;
+};
 
 export const RENDER_LIMITS: RenderLimits = Object.freeze({
   timeoutMs: 60_000,
@@ -65,6 +89,7 @@ export const RENDER_LIMITS: RenderLimits = Object.freeze({
   maxStreamBytes: 64 * 1024,
   maxPixels: 16_777_216,
   maxSide: 16_384,
+  maxVirtualKb: 8 * 1024 * 1024,
 });
 
 export const DPI_RANGE = { min: 10, max: 1200, default: 150 } as const;
@@ -72,22 +97,28 @@ const OUT_NAME = "out.png";
 const IN_NAME = "in";
 const POLL_MS = 20;
 const MAX_DIR_ENTRIES = 16;
+const SHELL = "/bin/sh";
+const UNSHARE_FLAGS = [
+  "--user",
+  "--map-root-user",
+  "--net", // a new, empty network namespace: the tool has no network
+  "--pid",
+  "--fork",
+  "--kill-child",
+  "--mount-proc",
+] as const;
 
-type Env = Readonly<Record<string, string | undefined>>;
+/** The directories searched (fixed; the seam may replace them in tests). */
+export const toolDirs = (seam?: RenderSeam): readonly string[] =>
+  seam?.toolDirs ?? DEFAULT_TOOL_DIRS;
 
-/**
- * The directories searched: the fixed list, or only `PCOSMO_PDF_TOOLS_DIR` when the user sets it
- * to an absolute path (for tests and for tools installed elsewhere). Never the inherited PATH.
- */
-export function toolDirs(env: Env): string[] {
-  const own = env.PCOSMO_PDF_TOOLS_DIR;
-  return own !== undefined && own !== "" && isAbsolute(own) ? [own] : [...DEFAULT_TOOL_DIRS];
-}
-
-/** Absolute path of an executable regular file called `name` in `toolDirs`, or undefined. */
-export async function findTool(env: Env, name: ToolName): Promise<string | undefined> {
+/** Absolute path of an executable regular file called `name` in `dirs`, or undefined. */
+export async function findTool(
+  dirs: readonly string[],
+  name: ToolName,
+): Promise<string | undefined> {
   if (process.platform === "win32") return undefined;
-  for (const dir of toolDirs(env)) {
+  for (const dir of dirs) {
     const p = join(dir, name);
     try {
       if ((await stat(p)).isFile()) {
@@ -103,35 +134,109 @@ export async function findTool(env: Env, name: ToolName): Promise<string | undef
 
 /** The first available tool (pdftoppm, then mutool), or the one asked for. */
 export async function pickTool(
-  env: Env,
+  dirs: readonly string[],
   want?: ToolName,
 ): Promise<{ name: ToolName; path: string } | undefined> {
   for (const name of want === undefined ? TOOL_NAMES : [want]) {
-    const path = await findTool(env, name);
+    const path = await findTool(dirs, name);
     if (path !== undefined) return { name, path };
   }
   return undefined;
 }
 
-/** The fixed argument lists. `page` and `dpi` are integers the caller validated. */
-export function toolArgv(tool: ToolName, page: number, dpi: number): string[] {
-  const p = String(Math.trunc(page));
-  const r = String(Math.trunc(dpi));
-  return tool === "pdftoppm"
-    ? ["-png", "-singlefile", "-cropbox", "-r", r, "-f", p, "-l", p, "/dev/fd/3", "out"]
-    : ["draw", "-q", "-F", "png", "-r", r, "-o", OUT_NAME, "/dev/fd/3", p];
+/**
+ * The output size in pixels for a page of `pw` x `ph` pt at `dpi`, clamped so that
+ * `px * py <= maxPixels` and each side `<= maxSide`.
+ */
+export function renderSize(
+  pw: number,
+  ph: number,
+  dpi: number,
+  maxPixels = RENDER_LIMITS.maxPixels,
+  maxSide = RENDER_LIMITS.maxSide,
+): { px: number; py: number } {
+  const safe = (v: number): number => (Number.isFinite(v) && v > 0 ? v : 1);
+  let px = Math.max(1, Math.ceil((safe(pw) * dpi) / 72));
+  let py = Math.max(1, Math.ceil((safe(ph) * dpi) / 72));
+  const k = Math.min(1, Math.sqrt(maxPixels / (px * py)), maxSide / px, maxSide / py);
+  if (k < 1) {
+    px = Math.max(1, Math.floor(px * k));
+    py = Math.max(1, Math.floor(py * k));
+  }
+  return { px, py };
 }
 
-export function minimalEnv(env: Env, home: string): Record<string, string> {
+/** The fixed argument lists. `page`, `px` and `py` are integers the caller computed. */
+export function toolArgv(tool: ToolName, page: number, px: number, py: number): string[] {
+  const p = String(Math.trunc(page));
+  const x = String(Math.trunc(px));
+  const y = String(Math.trunc(py));
+  return tool === "pdftoppm"
+    ? [
+        "-png",
+        "-singlefile",
+        "-cropbox",
+        "-scale-to-x",
+        x,
+        "-scale-to-y",
+        y,
+        "-f",
+        p,
+        "-l",
+        p,
+        "/dev/fd/3",
+        "out",
+      ]
+    : ["draw", "-q", "-F", "png", "-w", x, "-h", y, "-o", OUT_NAME, "/dev/fd/3", p];
+}
+
+/** The constant script of the limit wrapper; the two numbers are integers computed here. */
+export function limitScript(fsizeBlocks: number, vmemKb: number): string {
+  return `ulimit -f ${Math.trunc(fsizeBlocks)}; ulimit -v ${Math.trunc(vmemKb)} 2>/dev/null; exec "$0" "$@"`;
+}
+
+export function minimalEnv(dirs: readonly string[], home: string): Record<string, string> {
   return {
-    PATH: [...toolDirs(env), ...DEFAULT_TOOL_DIRS.filter((d) => !toolDirs(env).includes(d))].join(
-      ":",
-    ),
+    PATH: [...new Set([...dirs, ...DEFAULT_TOOL_DIRS])].join(":"),
     LANG: "C",
     LC_ALL: "C",
     HOME: home,
     TMPDIR: home,
   };
+}
+
+let unsharePath: Promise<string | undefined> | undefined;
+
+/** Path of a working unprivileged `unshare` (Linux only; probed once), or undefined. */
+export function unshareAvailable(): Promise<string | undefined> {
+  unsharePath ??= (async () => {
+    if (process.platform !== "linux") return undefined;
+    for (const dir of ["/usr/bin", "/bin", "/usr/local/bin"]) {
+      const p = join(dir, "unshare");
+      try {
+        await access(p, constants.X_OK);
+      } catch {
+        continue;
+      }
+      const ok = await new Promise<boolean>((done) => {
+        try {
+          const c = spawn(p, [...UNSHARE_FLAGS, "/bin/true"], {
+            shell: false,
+            stdio: "ignore",
+            env: { PATH: DEFAULT_TOOL_DIRS.join(":") },
+          });
+          const t = setTimeout(() => (c.kill("SIGKILL"), done(false)), 3000);
+          c.on("error", () => (clearTimeout(t), done(false)));
+          c.on("close", (code) => (clearTimeout(t), done(code === 0)));
+        } catch {
+          done(false);
+        }
+      });
+      if (ok) return p;
+    }
+    return undefined;
+  })();
+  return unsharePath;
 }
 
 export type RenderFailure =
@@ -172,17 +277,21 @@ export function pngSize(b: Uint8Array): { width: number; height: number } | unde
   return { width: dv.getUint32(16), height: dv.getUint32(20) };
 }
 
-/** True when `entries` (a bounded scan of the private directory) hold more than `cap` bytes. */
-async function dirBytes(dir: string): Promise<{ bytes: number; entries: number }> {
+/** A bounded scan of the private directory: bytes of the tool's files, entries, forbidden ones. */
+async function scanDir(
+  dir: string,
+): Promise<{ bytes: number; entries: number; forbidden: string | undefined }> {
   let bytes = 0;
   let entries = 0;
+  let forbidden: string | undefined;
   try {
     for await (const e of await opendir(dir)) {
       entries++;
       if (entries > MAX_DIR_ENTRIES) break;
       try {
         const st = await lstat(join(dir, e.name));
-        if (st.isFile() && e.name !== IN_NAME) bytes += st.size;
+        if (!st.isFile()) forbidden ??= "a subdirectory, link or special file was created";
+        else if (e.name !== IN_NAME) bytes += st.size;
       } catch {
         // vanished
       }
@@ -190,31 +299,50 @@ async function dirBytes(dir: string): Promise<{ bytes: number; entries: number }
   } catch {
     // gone
   }
-  return { bytes, entries };
+  return { bytes, entries, forbidden };
 }
 
 export interface RenderRequest {
-  readonly env: Env;
   /** The root the private directory is created below (already confined by the caller). */
   readonly rootDir: string;
   readonly tool: { readonly name: ToolName; readonly path: string };
   readonly pdf: Uint8Array;
   readonly page: number;
-  readonly dpi: number;
-  readonly limits?: Partial<RenderLimits>;
+  /** Output size in pixels (the caller clamps with `renderSize`). */
+  readonly px: number;
+  readonly py: number;
+  /** The page's /Rotate as our parser read it (0, 90, 180, 270). */
+  readonly rotate?: number;
+  readonly seam?: RenderSeam | undefined;
 }
 
 /** Runs the renderer once. Never throws. The private directory is always removed. */
 export async function renderPage(req: RenderRequest): Promise<RenderResult> {
   if (process.platform === "win32") return fail("unsupported", "not supported on Windows");
-  const lim: RenderLimits = { ...RENDER_LIMITS, ...req.limits };
+  const lim: RenderLimits = { ...RENDER_LIMITS, ...req.seam };
   const work = join(req.rootDir, `.pcosmo-render-${randomBytes(8).toString("hex")}`);
   try {
+    const rs = await lstat(req.rootDir);
+    if (foreignWritableDir(rs.mode, rs.uid, process.getuid?.())) {
+      return fail(
+        "setup",
+        "the directory is writable by other users (and not sticky); use a private directory",
+      );
+    }
     await mkdir(work, { mode: 0o700 });
+    const st = await lstat(work);
+    if (
+      !st.isDirectory() ||
+      st.isSymbolicLink() ||
+      (process.getuid && st.uid !== process.getuid()) ||
+      (st.mode & 0o777) !== 0o700
+    ) {
+      return fail("setup", "the private directory is not private");
+    }
   } catch (e) {
     return fail(
       "setup",
-      `cannot create a private directory (${(e as NodeJS.ErrnoException).code})`,
+      `cannot create a private directory (${(e as NodeJS.ErrnoException).code ?? "error"})`,
     );
   }
   try {
@@ -226,32 +354,60 @@ export async function renderPage(req: RenderRequest): Promise<RenderResult> {
   }
 }
 
+type Outcome =
+  | { kind: "done"; code: number | null; signal: string | null; stderr: string }
+  | { kind: RenderFailure; detail: string };
+
 async function renderIn(
   work: string,
   req: RenderRequest,
   lim: RenderLimits,
 ): Promise<RenderResult> {
-  // The input: a file with a fixed name in the private directory, handed over as fd 3 (it stays
-  // linked: re-opening /dev/fd/3 of an unlinked file fails on some file systems).
+  // The input: a fixed-name file in the private directory, written fully, closed, reopened
+  // read-only and handed over as fd 3 (it stays linked: re-opening /dev/fd/3 of an unlinked file
+  // fails on some file systems).
   const inName = join(work, IN_NAME);
-  const fh = await open(
+  const wfh = await open(
     inName,
-    constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0),
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0),
     0o600,
   );
   try {
-    await fh.write(req.pdf, 0, req.pdf.length, 0);
-    const outcome = await new Promise<
-      | { kind: "done"; code: number | null; signal: string | null; stderr: string }
-      | { kind: RenderFailure; detail: string }
-    >((resolveRun) => {
+    let off = 0;
+    while (off < req.pdf.length) {
+      const { bytesWritten } = await wfh.write(req.pdf, off, req.pdf.length - off, off);
+      if (bytesWritten <= 0) throw new Error("short write of the input copy");
+      off += bytesWritten;
+    }
+  } finally {
+    await wfh.close();
+  }
+  const fh = await open(inName, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  const dirs = toolDirs(req.seam);
+  // pdftoppm applies -scale-to-x/-y before /Rotate: swap them for a page rotated 90 or 270
+  const swap = req.tool.name === "pdftoppm" && (req.rotate === 90 || req.rotate === 270);
+  const argv = swap
+    ? toolArgv(req.tool.name, req.page, req.py, req.px)
+    : toolArgv(req.tool.name, req.page, req.px, req.py);
+  const script = limitScript(Math.floor(lim.maxOutputBytes / 512), lim.maxVirtualKb);
+  const unshare = req.seam?.useUnshare === false ? undefined : await unshareAvailable();
+  const file = unshare ?? SHELL;
+  const fileArgs = [
+    ...(unshare ? [...UNSHARE_FLAGS, SHELL] : []),
+    "-c",
+    script,
+    req.tool.path,
+    ...argv,
+  ];
+  try {
+    const outcome = await new Promise<Outcome>((resolveRun) => {
       let settled = false;
       let child;
       try {
-        child = spawn(req.tool.path, toolArgv(req.tool.name, req.page, req.dpi), {
+        child = spawn(file, fileArgs, {
           shell: false,
           cwd: work,
-          env: minimalEnv(req.env, work),
+          env: minimalEnv(dirs, work),
           stdio: ["ignore", "pipe", "pipe", fh.fd],
           detached: true, // its own process group, so one kill reaches every descendant
           windowsHide: true,
@@ -275,22 +431,43 @@ async function renderIn(
           // already gone
         }
       };
+      // SIGINT / SIGTERM / SIGHUP while the tool runs: kill the group, remove the directory,
+      // then let the signal take its course.
+      const handlers = new Map<NodeJS.Signals, () => void>();
+      const dropSignals = (): void => {
+        for (const [sig, h] of handlers) process.removeListener(sig, h);
+        handlers.clear();
+      };
+      for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+        const h = (): void => {
+          killGroup();
+          try {
+            rmSync(work, { recursive: true, force: true });
+          } catch {
+            // best effort
+          }
+          dropSignals();
+          process.kill(process.pid, sig);
+        };
+        handlers.set(sig, h);
+        process.on(sig, h);
+      }
       let stderr = "";
       let streamed = 0;
       let abort: { kind: RenderFailure; detail: string } | undefined;
-      const end = (v: Parameters<typeof resolveRun>[0]): void => {
+      const end = (v: Outcome): void => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         clearInterval(poll);
-        killGroup(); // stragglers of the group
+        dropSignals();
         child.stdout?.destroy();
         child.stderr?.destroy();
         resolveRun(v);
       };
       const stop = (kind: RenderFailure, detail: string): void => {
         abort ??= { kind, detail };
-        killGroup();
+        killGroup(); // abort paths only: a normal exit leaves nothing to kill
         // a descendant that left the group could keep the pipes open: do not wait for 'close'
         setTimeout(() => end(abort as { kind: RenderFailure; detail: string }), 500).unref();
       };
@@ -311,8 +488,9 @@ async function renderIn(
         lim.timeoutMs,
       );
       const poll = setInterval(() => {
-        void dirBytes(work).then(({ bytes, entries }) => {
-          if (bytes > lim.maxOutputBytes) {
+        void scanDir(work).then(({ bytes, entries, forbidden }) => {
+          if (forbidden) stop("bad-output", forbidden);
+          else if (bytes > lim.maxOutputBytes) {
             stop("output-too-large", `output over ${lim.maxOutputBytes} bytes`);
           } else if (entries > MAX_DIR_ENTRIES) stop("output-too-large", "too many files created");
         });
@@ -325,6 +503,9 @@ async function renderIn(
       });
     });
     if (outcome.kind !== "done") return fail(outcome.kind, outcome.detail);
+    if (outcome.signal === "SIGXFSZ") {
+      return fail("output-too-large", "the tool hit the file size limit (SIGXFSZ)");
+    }
     if (outcome.code !== 0) {
       return fail(
         "exit",
@@ -334,6 +515,8 @@ async function renderIn(
   } finally {
     await fh.close().catch(() => undefined);
   }
+  const scan = await scanDir(work);
+  if (scan.forbidden) return fail("bad-output", scan.forbidden);
   // The tool wrote `out.png` (pdftoppm: root "out" + ".png"; mutool: -o out.png).
   const r = await readFileSafe(work, OUT_NAME, lim.maxOutputBytes);
   if (!r.ok) {

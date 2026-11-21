@@ -92,13 +92,20 @@ command (`pdf/too-large` warning when the default range is cut); `extract --mask
 `p<page>-i<index>-mask.png`; `compose` writes `.png` (white canvas, bilinear, at most 16 MP) or
 `.svg` (page-sized, each distinct image once in `<defs>`, one `<use>` per placement) and takes
 `--dpi 10-1200` (default 96); `render` takes `--dpi 10-1200` (default 150) and `--tool
-pdftoppm|mutool`, applies the 16 MP cap to the whole page before starting the tool, then crops the
+pdftoppm|mutool`, and passes the output size in pixels to the tool itself (`-scale-to-x/-scale-to-y`,
+`draw -w/-h`, clamped to 16 MP) so a hostile page size or `/UserUnit` cannot exceed it, then crops the
 validated, re-encoded PNG. The renderer is found only in `/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin`
-(or the one directory `PCOSMO_PDF_TOOLS_DIR` names), never through the inherited `PATH`; the call
-is a fixed argument list over two integers, with a minimal environment, the PDF on descriptor 3,
-a private `0700` directory below the allowed root as working directory, a 60 s timeout, a 64 MiB
-output cap and a process-group kill (see `packages/cli/src/pdftool.ts`). Missing tool:
-`pdf/renderer-missing`; any other tool failure or refused output: `pdf/renderer-failed`.
+(there is no environment override), never through the inherited `PATH`; it is started as
+`/bin/sh -c 'ulimit -f N; ulimit -v M; exec "$0" "$@"' <tool> <argv>` (positional arguments only;
+`-f` is RLIMIT_FSIZE, the real bound on what it writes; `-v` is honoured on Linux), with a fixed
+argument list over integers, a minimal environment, the PDF on a read-only descriptor 3, a private
+`0700` directory below the allowed root as working directory (a root writable by others is refused;
+a subdirectory or special file in it fails the render), a 60 s timeout, a 64 MiB output cap, a
+process-group kill and cleanup on SIGINT/SIGTERM/SIGHUP (see `packages/cli/src/pdftool.ts`). On Linux
+the tool also runs under `unshare --user --net --pid --fork --kill-child --mount-proc` when that works
+unprivileged. Residual: without that PID namespace a descendant that calls `setsid` escapes the
+group kill, and writes outside the private directory are bounded by RLIMIT_FSIZE, not prevented.
+Missing tool: `pdf/renderer-missing`; any other tool failure or refused output: `pdf/renderer-failed`.
 `assets doctor` reports the PDF limits and the renderer search result under `pdf`. At most 200
 diagnostics are printed per command (errors first).
 
