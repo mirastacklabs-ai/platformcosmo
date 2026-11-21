@@ -30,6 +30,7 @@
  */
 import type {
   AssemblyUnits,
+  CloseupHost,
   DcPack,
   AssetSource,
   Box3,
@@ -38,7 +39,6 @@ import type {
   QuarterTurn,
   SceneAssemblies,
   SceneAssembly,
-  SceneAssemblyNode,
   Vec3,
 } from "../../contracts/index.js";
 import { AssemblyModel, LEAF_ERROR, MAX_DEPTH } from "../../schema/assembly-tree.js";
@@ -47,6 +47,7 @@ import type { PlatformCosmoSpec, SpecPart } from "../../schema/types.gen.js";
 import { unitMm } from "./frame.js";
 import { levelLimit, levelOverflow, type Level, type LevelKind } from "./levels.js";
 import { AssemblyPrograms } from "./plan.js";
+import { buildRackAssemblies, hasSlotCloseups, targetedRacks, type RackBuild } from "./racks.js";
 import {
   assemblyNodes,
   buildAssemblies,
@@ -60,24 +61,7 @@ export const SIZE_TOLERANCE = 0.1;
 export const SMALL_RATIO = 0.5;
 const EPS = 1e-9;
 
-/** A coarse node outside the spec assemblies that carries a close-up (a DC rack slot, E-1). */
-export interface CloseupHost {
-  /** Scene path, e.g. `r2/srv`. */
-  readonly path: string;
-  /** Spec `closeup`: assembly, figure or storyboard id. */
-  readonly closeup: string;
-  /** World box of the host in the main scene. */
-  readonly box: Box3;
-  /**
-   * Interior the template must fit, in millimetres along the WORLD axes (a DC slot: the 450 mm
-   * interior of the 540 mm device box, §8.5). Absent: not reconciled.
-   */
-  readonly interiorMm?: Vec3;
-  /** World side of the host's front (default `+y`). */
-  readonly front?: FrontSide;
-  /** JSON pointer of the spec field, for diagnostics. */
-  readonly pointer?: string;
-}
+export type { CloseupHost } from "../../contracts/index.js";
 
 export interface CloseupOptions extends Pick<
   AssemblyBuildOptions,
@@ -437,15 +421,21 @@ const CHECK_CODES: ReadonlySet<string> = new Set([
   "budget/levels",
 ]);
 
-/** @internal Used by the CLI's `validate` and `build`; not public API. */
+/** Codes of a rack in assembly mode that only building it finds (§8.1, §8.2, §13), plus the above. */
+const RACK_CODES: ReadonlySet<string> = new Set([
+  ...CHECK_CODES,
+  "assembly/below-ground",
+  "budget/assembly-parts",
+]);
+
+/** @internal Used by the CLI's `validate`; not public API. */
 export interface CloseupCheckContext extends Pick<AssemblyBuildOptions, "parts"> {
-  /** DC pack: reports `assembly/size-mismatch` of `racks[].slots[].assembly` (§8.2). */
-  readonly dc?: DcPack;
   /**
-   * Check close-ups (default true). `render` already reports those through the scene, so
-   * `build` passes false and asks only for the slot internals, which the scene does not build.
+   * DC pack: builds the racks a step action targets, so `assembly/size-mismatch` of
+   * `racks[].slots[].assembly` (§8.2) and the close-ups of rack slots (`slots[].closeup`, §8.5)
+   * are checked as the scene checks them.
    */
-  readonly closeups?: boolean;
+  readonly dc?: DcPack;
 }
 
 const internalError = (what: string, e: unknown): Diagnostic => ({
@@ -473,11 +463,15 @@ function hasCloseup(spec: PlatformCosmoSpec): boolean {
 
 /**
  * The size and depth diagnostics of close-ups (`assembly/size-mismatch`, `assembly/closeup-turned`,
- * `assembly/too-deep`, `budget/levels`) and of slot internals, for `pcosmo validate` and `build`:
- * the scene computes the close-up ones with the same code, but validation of the spec alone does
- * not build it. Call it only for a spec without errors; it never throws (an internal failure is
- * one `render/internal-error` per section, the other section's result is kept). Sorted by
- * (path, code); empty, and no work, when the spec has no `closeup` and no slot `assembly`.
+ * `assembly/too-deep`, `budget/levels`) and of the racks in assembly mode (slot internals'
+ * `assembly/size-mismatch`, `assembly/below-ground`, the rack's `budget/assembly-parts`), for
+ * `pcosmo validate`: the scene
+ * computes them with the same code and the same single planner (the targeted racks first, then
+ * the spec assemblies, then the close-up instances, slot close-ups included), but validation of the
+ * spec alone does not build it. Call it only for a spec without errors; it never throws (an
+ * internal failure is one `render/internal-error` per section, the other sections' results are
+ * kept). Sorted by (path, code); empty, and no work, when the spec has no `closeup` and no rack
+ * a step action targets.
  * @internal
  */
 export function closeupDiagnostics(
@@ -485,62 +479,44 @@ export function closeupDiagnostics(
   ctx: CloseupCheckContext = {},
 ): Diagnostic[] {
   const out: Diagnostic[] = [];
-  if (ctx.closeups !== false && hasCloseup(spec)) {
+  const dc = ctx.dc;
+  const targeted = new Set(dc?.buildAssembly === undefined ? [] : targetedRacks(spec));
+  const slotCloseups = dc?.slotHosts !== undefined && hasSlotCloseups(spec);
+  // every targeted rack: what only the built rack can show (internals that do not fit, a move
+  // below the floor, the rack's part budget) fails `build`, so `validate` reports it too
+  const needDc = dc !== undefined && (targeted.size > 0 || slotCloseups);
+  const closeups = hasCloseup(spec) || slotCloseups;
+  if (!needDc && !closeups) return out;
+  const shared = {
+    ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
+    ...(dc?.shapes === undefined ? {} : { dcShapes: dc.shapes }),
+  };
+  // one planner, in the scene's order: racks, spec assemblies, close-up instances
+  const programs = new AssemblyPrograms(spec);
+  let racks: RackBuild | undefined;
+  if (needDc) {
     try {
-      const programs = new AssemblyPrograms(spec);
-      const built = programs.attach(
-        buildAssemblies(spec, {
-          reach: programs.reach,
-          ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
-          ...(ctx.dc?.shapes === undefined ? {} : { dcShapes: ctx.dc.shapes }),
-        }),
-      );
-      if (built.assemblies.some((a) => assemblyNodes(a).some((n) => n.closeup !== undefined))) {
-        const c = buildCloseups(spec, built.assemblies, {
-          programs,
-          ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
-          ...(ctx.dc?.shapes === undefined ? {} : { dcShapes: ctx.dc.shapes }),
-        });
+      racks = buildRackAssemblies(spec, dc, dc.buildScene(spec), { planner: programs, ...shared });
+      out.push(...racks.diagnostics.filter((d) => RACK_CODES.has(d.code)));
+    } catch (e) {
+      out.push(internalError("slot internals", e));
+      racks = undefined;
+    }
+  }
+  if (closeups) {
+    try {
+      const built = programs.attach(buildAssemblies(spec, { reach: programs.reach, ...shared }));
+      const base = [...built.assemblies, ...(racks?.assemblies ?? [])];
+      const hosts = racks?.hosts ?? [];
+      if (
+        hosts.length > 0 ||
+        base.some((a) => assemblyNodes(a).some((n) => n.closeup !== undefined))
+      ) {
+        const c = buildCloseups(spec, base, { programs, hosts, ...shared });
         out.push(...c.diagnostics.filter((d) => CHECK_CODES.has(d.code)));
       }
     } catch (e) {
       out.push(internalError("close-ups", e));
-    }
-  }
-  const dc = ctx.dc;
-  const withSlots = (spec.racks ?? []).filter((r) =>
-    (r.slots ?? []).some((sl) => sl.assembly !== undefined),
-  );
-  if (dc?.buildAssembly !== undefined && withSlots.length > 0) {
-    // Slot internals (§8.2): the DC pack builds the rack in assembly mode (only racks a step
-    // action targets) and reports `assembly/size-mismatch` of each slot template.
-    try {
-      const frag = dc.buildScene(spec);
-      const model = new AssemblyModel(spec);
-      const templates: Record<string, SceneAssemblyNode> = {};
-      const tids = new Set(
-        withSlots.flatMap((r) => (r.slots ?? []).flatMap((sl) => sl.assembly ?? [])),
-      );
-      for (const id of [...tids].sort(cmp)) {
-        // a true-scale instance of the template alone, as `buildCloseups` builds one (unknown,
-        // oversized or cyclic templates are reported by validation and get no instance)
-        const t = buildTemplateInstance(spec, model, id, id, {
-          lift: false,
-          ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
-          ...(dc.shapes === undefined ? {} : { dcShapes: dc.shapes }),
-          leafBudget: LEAF_ERROR,
-        });
-        if (t !== undefined) templates[id] = t.assembly.root;
-      }
-      for (const r of withSlots) {
-        out.push(
-          ...dc
-            .buildAssembly(spec, r.id, frag, templates)
-            .diagnostics.filter((d) => CHECK_CODES.has(d.code)),
-        );
-      }
-    } catch (e) {
-      out.push(internalError("slot internals", e));
     }
   }
   return sortDiagnostics(out);

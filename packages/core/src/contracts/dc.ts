@@ -12,8 +12,14 @@
  * 2-tile gap, and routes node↔DC edges to DC object `ports` (or box centers).
  * Rack slot size: spec `size` wins; otherwise the component's `heightU`.
  */
-import type { PlatformCosmoSpec, SpecState } from "../schema/types.gen.js";
-import type { PartShapePack, SceneAssembly, SceneAssemblyNode } from "./assembly.js";
+import type { PlatformCosmoSpec, SpecExplodeProgram, SpecState } from "../schema/types.gen.js";
+import type {
+  CloseupHost,
+  PartShapePack,
+  SceneAssemblies,
+  SceneAssembly,
+  SceneAssemblyNode,
+} from "./assembly.js";
 import type { Diagnostic } from "./diagnostics.js";
 import type { Box3, Vec3 } from "./geometry.js";
 import type { SceneEdge, SceneFlow, SceneGroup, SceneObject, ScenePart } from "./scene.js";
@@ -88,6 +94,26 @@ export interface DcSceneFragment {
   readonly diagnostics: readonly Diagnostic[];
 }
 
+/**
+ * Core's program planner (`AssemblyPrograms`), one per scene: spec assemblies, racks and close-up
+ * instances resolve through it, so they share one work budget and one level machine. The DC pack
+ * registers a rack's synthetic program bodies (`drawers`, slot `internals`, assemblies §8.1-§8.2)
+ * and resolves the rack's programs, base pose and reach through it. The planner's own
+ * diagnostics belong to its owner (the scene reports them once); `buildAssembly` does not copy them.
+ */
+export interface DcAssemblyPlanner {
+  /**
+   * Program bodies the spec does not carry for the assembly `id`, by (owner path below it, ""
+   * for the root, and program id). Call before `attach` or `reach` see the assembly.
+   */
+  registerSynthetic(
+    id: string,
+    programs: (owner: string, program: string) => SpecExplodeProgram | undefined,
+  ): void;
+  attach<T extends SceneAssemblies>(built: T): T;
+  reach(probe: SceneAssembly): Box3 | undefined;
+}
+
 export interface DcPack {
   readonly registry: DcComponentRegistry;
   /** Lays out the hall (rows, aisles, racks, equipment, cables) on the 600 mm grid from the world origin. */
@@ -106,7 +132,15 @@ export interface DcPack {
     fragment: DcSceneFragment,
     /** Resolved template trees (local units) for `slots[].assembly`, by template id (A2). */
     templates: Readonly<Record<string, SceneAssemblyNode>>,
+    /** The scene's shared planner; absent: the pack resolves with a planner of its own. */
+    planner?: DcAssemblyPlanner,
   ): { readonly assembly?: SceneAssembly; readonly diagnostics: readonly Diagnostic[] };
+  /**
+   * Close-up hosts of rack slots with `slots[].closeup` (assemblies §8.4, §8.5), every rack,
+   * targeted or not, in spec order: the slot's 1.1 object box, the 19-inch interior of the device
+   * (450 mm wide) and the rack's front side in world (mirrored rows: `-y`).
+   */
+  slotHosts?(spec: PlatformCosmoSpec, fragment: DcSceneFragment): readonly CloseupHost[];
   /** `dc:` part shapes (rack devices usable inside any assembly). */
   readonly shapes?: PartShapePack;
 }
