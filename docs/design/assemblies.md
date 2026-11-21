@@ -895,16 +895,20 @@ and explains it:
    - **Mounting depth.** A part carried by another (its bottom touches the carrier's top,
      over its footprint, the carrier having height: a heat sink on a CPU on a board; a card on
      a board in a case; a sensor on a lid) leaves before its carrier, top-most first, so the
-     carrier never passes through it (`assembly/transit-collision`). A carried part is never
-     left in a later class than its carrier: it joins the carrier's class (a component on a
-     lid is a cover; a part on a component that overhangs the body is a component), except
-     under a cover on a hidden side, which leaves last anyway. Within a class the stages are
-     split by level and named `Internals (level n)`, `Components (level n)`, `Covers (level
-n)` (level 0 sits on the body or a seat, levels are counted among parts of the class). With
-     several levels the internals use `+z` instead of `lift` (`lift` layers equal-height parts
-     together and can sort a board below its heat sinks).
+     carrier never passes through it (`assembly/transit-collision`). A part carried by a cover,
+     internal or component is never left in a later class than its carrier: it joins the
+     carrier's class (a component on a lid is a cover; a part on a component that overhangs the
+     body is a component). Carriers that are sub-assemblies or shells, loose parts, fasteners,
+     or covers on a hidden side (which leave last anyway) do not fold. Contact is the carried
+     part's bottom at the carrier's top within 1% of the carrier's height, either way (a part
+     sunk into a recess, or a small gap). Within a class the stages are split by level and
+     named `Internals (level n)`, `Components (level n)`, `Covers (level n)` (level 0 sits on
+     the body or a seat; levels are counted among the parts of the class). With several levels
+     the internals use `+z` instead of `lift` (`lift` layers equal-height parts together and
+     can sort a board below its heat sinks).
    - **Moving as one.** Parts of an internals level that interpenetrate at rest (a crank
-     through its rods) form a separate stage `Internals (moving as one)`: `+z`, one number
+     through its rods) form a separate stage, `Internals (moving as one)` or `Internals (level n, moving as one)`
+     with several levels: `+z`, one number
      (the top of the body and of every shell over them, above the lowest of them, plus the
      default gap), `stagger: 0`, never split into chunks of 24, so no transit collision can
      arise between them. The other parts of the level move normally.

@@ -323,13 +323,16 @@ interface Ctx {
   items: Item[];
 }
 
-/** `q` holds `it` on its top face: `it` starts at `q`'s top (touching), over its footprint. */
+/**
+ * `q` holds `it` on its top face: `it` starts at `q`'s top over its footprint, give or take 1% of
+ * the carrier's height (a part sunk into a recess, or a small gap).
+ */
 const carries = (q: Item, it: Item): boolean =>
   q.box !== undefined &&
   it.box !== undefined &&
   !q.isGroup &&
   q.box.max[2] > q.box.min[2] + TOL &&
-  Math.abs(it.box.min[2] - q.box.max[2]) <= TOL &&
+  Math.abs(it.box.min[2] - q.box.max[2]) <= Math.max(TOL, 0.01 * (q.box.max[2] - q.box.min[2])) &&
   overlapXY(it.box, q.box) > 0;
 
 const sel = (it: Item): string => (it.count > 1 ? `${it.id}-*` : it.id);
@@ -455,6 +458,7 @@ function suggestOwner(
   // the carrier's class, where mounting levels order the two.
   const RANK: PartClass[] = ["fastener", "cover", "unit", "internal", "mounted", "loose"];
   const FOLD = new Set<PartClass>(["cover", "internal", "mounted"]);
+  const folded = new Map<Item, string>();
   for (let pass = 0; pass < items.length; pass++) {
     let changed = false;
     for (const it of items) {
@@ -465,6 +469,10 @@ function suggestOwner(
         if (q.cls === "cover" && hidden(direction(q, "cover", body, []))) continue;
         if (RANK.indexOf(q.cls) < RANK.indexOf(it.cls)) {
           it.cls = q.cls;
+          folded.set(
+            it,
+            `${it.id} joins ${q.cls === "mounted" ? "components" : `${q.cls}s`} (carried by ${q.id})`,
+          );
           changed = true;
         }
       }
@@ -623,6 +631,7 @@ function suggestOwner(
   const names = (c: Item[]): string[] => c.map((it) => it.id);
   const explanation = [
     ...why,
+    ...[...folded.values()],
     `${stages.length} stage${stages.length === 1 ? "" : "s"}: fasteners first, then covers, sub-assemblies, internals, parts mounted on the body and loose parts; parts mounted on another part leave before it; hidden-side covers last with the rest faded`,
     `timing: stagger ${STAGGER} s outside-in${rigid ? ", 0 for parts that move as one" : ""}, ${DURATION} s per part; a step of ${stepDuration} s plays the whole program`,
     `labels shown for stages with ${LABELS_MAX} parts or fewer, or whose parts all have a label`,

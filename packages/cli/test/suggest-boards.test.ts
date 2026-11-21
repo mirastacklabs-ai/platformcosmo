@@ -470,3 +470,41 @@ describe("cover wording", () => {
     expect(s.classes.mounted).toEqual(["c1", "sheet"]);
   });
 });
+
+describe("carrying tolerance", () => {
+  test("a part sunk 0.5% into its carrier, and one with a 0.5% gap, are both carried", () => {
+    const rep = suggest({
+      assemblies: [
+        {
+          id: "a",
+          parts: [
+            { id: "plate", role: "body", at: [0, 0, 0], size: [100, 100, 2] },
+            { id: "deck", at: [0, 0, 2], size: [50, 50, 10] },
+            { id: "sunk", label: "S", at: [5, 5, 11.95], size: [5, 5, 5] },
+            { id: "gap", label: "G", at: [30, 30, 12.05], size: [5, 5, 5] },
+          ],
+        },
+      ],
+    });
+    expect(stagesOf(rep)).toEqual([
+      ["Components (level 1)", "+z", 50, "show", "sunk,gap"],
+      ["Components (level 0)", "+z", 25, "show", "deck"],
+    ]);
+  });
+
+  test("a folded part is explained", () => {
+    const rep = suggest({
+      assemblies: [
+        {
+          id: "a",
+          parts: [
+            { id: "plate", role: "body", at: [0, 0, 0], size: [100, 100, 2] },
+            { id: "lid", type: "lid", at: [0, 0, 2], size: [100, 100, 2] },
+            { id: "sensor", at: [10, 10, 4], size: [10, 10, 5] },
+          ],
+        },
+      ],
+    });
+    expect(rep.suggestions[0]!.explanation).toContain("sensor joins covers (carried by lid)");
+  });
+});
