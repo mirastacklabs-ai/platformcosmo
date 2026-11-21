@@ -287,7 +287,7 @@ function notices() {
   }
   return `${lines.join("\n").trimEnd()}\n`;
 }
-// Size guard. Baseline: 5,842,266 bytes (D-1 on top of D-2a: shape packs, suggest and the image
+// Size guard. Baseline: 5,842,308 bytes (D-1 on top of D-2a: shape packs, suggest and the image
 // and asset commands; 5,382,188 with the brand fonts before those). The guard sits about 1.3%
 // above, so any growth needs a decision: raise it only with a PR note that lists what grew and why.
 const MAX_BUNDLE_BYTES = 5_920_000;

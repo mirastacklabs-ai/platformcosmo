@@ -776,7 +776,12 @@ export interface AssemblyIdScheme {
 export interface PartsBuilder {
   part(id: string, fields?: Omit<SpecPart, "id">): this;
   /** Sub-assembly; `build` adds its children and programs (selectors relative to it). */
-  sub(id: string, fields: Omit<SpecPart, "id" | "parts">, build: (b: PartsBuilder) => void): this;
+  sub(
+    id: string,
+    fields: Omit<SpecPart, "id" | "parts" | "programs">,
+    build: (b: PartsBuilder) => void,
+  ): this;
+  /** A builder passed here is snapshotted (its `toJSON()` is taken) when this is called. */
   program(program: SpecProgram | ProgramBuilder | BuildProgramBuilder): this;
 }
 
@@ -805,12 +810,25 @@ export interface FigureBuilder {
 }
 
 /**
+ * Top-level spec fields the builder has no method for (canvas, legend, nodes, edges, flows,
+ * equipment, rows, aisles, cables, facility, ...). Passed through unchanged by `spec(meta, rest)`.
+ */
+export type SpecRest = Partial<
+  Omit<
+    PlatformCosmoSpec,
+    "$schema" | "meta" | "images" | "figures" | "storyboards" | "assemblies" | "racks" | "steps"
+  >
+>;
+
+/**
  * Whole-spec builder; `toJSON()` output still goes through `validate`. Output equality is
  * defined on RFC 8785 (JCS) canonical JSON, so key order is irrelevant; arrays keep call order.
  */
 export interface SpecBuilder {
+  /** A builder passed here is snapshotted (its `toJSON()` is taken) when this is called. */
   assembly(a: SpecAssembly | AssemblyBuilder): this;
   rack(rack: SpecRack): this;
+  /** A builder passed here is snapshotted (its `toJSON()` is taken) when this is called. */
   figure(f: SpecFigure | FigureBuilder): this;
   storyboard(s: SpecStoryboard): this;
   image(image: SpecImage): this;
@@ -820,11 +838,15 @@ export interface SpecBuilder {
 
 /**
  * Builder entry points exported by `@platformcosmo/core` (A2, `scene/assembly/builder.ts`):
- * `spec(meta)`, `assembly(id, fields)`, `explode(id, fields)`. No I/O, no scene, no defaults
- * filled in (the engine applies schema defaults).
+ * `spec(meta, rest?)`, `assembly(id, fields)`, `explode(id, fields)`. No I/O, no scene, no
+ * defaults filled in (the engine applies schema defaults).
+ *
+ * `toJSON()` output is unvalidated: run `validate()` before rendering. Empty builders emit
+ * invalid empty arrays on purpose (`parts: []`, `stages: []`, `steps: []`) so the schema reports
+ * them, instead of the builder throwing.
  */
 export interface AssemblyBuilders {
-  spec(meta: Omit<PlatformCosmoSpec["meta"], "version">): SpecBuilder;
+  spec(meta: Omit<PlatformCosmoSpec["meta"], "version">, rest?: SpecRest): SpecBuilder;
   assembly(id: string, fields?: Omit<SpecAssembly, "id" | "parts" | "programs">): AssemblyBuilder;
   explode(id: string, fields?: Omit<SpecExplodeProgram, "id" | "stages" | "kind">): ProgramBuilder;
   build(id: string, fields?: Omit<SpecBuildProgram, "id" | "steps" | "kind">): BuildProgramBuilder;
