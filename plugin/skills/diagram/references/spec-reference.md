@@ -1,7 +1,8 @@
 # Spec reference (format major 1, schema revision 1.1.0)
 
 Source of truth: `https://platformcosmo.io/schema/v1.json`. Unknown fields are rejected.
-A spec needs at least one of `nodes`, `racks`, `equipment`, `figures` (figure-only specs have no nodes).
+A spec needs at least one of `nodes`, `racks`, `equipment`, `assemblies`, `figures` (figure-only and assembly-only specs have no nodes).
+`assemblies[]` (parts, packs, explode programs, `steps[].assembly`) are in [assemblies](assemblies.md) and [from a plan](from-plan.md).
 
 ## Root
 

@@ -35,12 +35,13 @@ import {
   weakBehind,
 } from "./enclosure.js";
 import type { Bounds, Vec } from "./enclosure.js";
+import { copyKey, planCopies } from "./copies.js";
 
 /**
- * Depth epochs WITHOUT copies (assemblies §9.3–§9.5; track A1-2a). Input: the depth items of the
- * assembly layer (leaves, halves of split leaves, static scene objects) at rest, and the loop's
- * moves. Output: certified epochs, one DOM order valid for all of them, face-exit clips and
- * diagnostics. Pure, deterministic, never throws on bad input.
+ * Depth epochs and copies (assemblies §9.3–§9.5; tracks A1-2a, A1-2b). Input: the depth items of
+ * the assembly layer (leaves, halves of split leaves, static scene objects) at rest, and the
+ * loop's moves. Output: certified epochs, one DOM order (with depth copies) valid for all of them,
+ * face-exit clips and diagnostics. Pure, deterministic, never throws on bad input.
  *
  * Occluders. Only solids that FILL their `depthBox` (`solid && fills`: one box/plate/card
  * primitive) enclose, hide, clip, join blocks and order by weak-behind: every §9.5 rule reasons
@@ -85,15 +86,21 @@ import type { Bounds, Vec } from "./enclosure.js";
  *    halves ≥ `minInterval`); only the uncertain pairs and items are re-tested in the halves. At
  *    the limit the pose at the midpoint time decides and the interval is approximate
  *    (`assembly/depth-approx`, naming the pair).
- * 5. One DOM order (Phase 1b has no copies): the union of every interval's edges. A pair whose
- *    two directions both occur would need a copy: a heuristic direction yields to a certified or
- *    forced one, else the shorter (then later) direction is dropped; its intervals are
- *    approximate (`assembly/depth-approx`, `copy: true`). Remaining cycles are broken by §9.3:
- *    heuristic edges first, then certified, then forced (only when a cycle has nothing else),
- *    each time the edge with the smallest centre-depth difference (ties by item keys); a dropped
- *    certified or forced edge is `assembly/depth-cycle` and makes its intervals approximate. A
- *    Kahn sort (lowest centre depth at t = 0, then key) emits the order.
- * 6. Epochs: adjacent intervals with the same visible set (hence the same order) merge. More than
+ * 5. One DOM order. Edges of pairs with one direction (or whose other direction is heuristic, which
+ *    yields) hold for the whole loop. A pair whose certified or forced directions BOTH occur needs
+ *    a copy (A1-2b): the final intervals are grouped greedily into maximal runs in which no such
+ *    pair changes direction, and each group gets its own order (the loop-wide edges, the group's
+ *    directions, and a chain keeping the static items in one fixed order, so static items never
+ *    need a copy). `planCopies` (copies.ts) then embeds every epoch's order in one DOM order with
+ *    copies (LIS construction, §9.4). Copies beyond `maxCopyRatio` × items (0.5), or orders over
+ *    the work budget, fall back to the Phase 1b path (`budget/depth-copies` / `budget/time`): one
+ *    order, the conflicting direction held shorter (then later) is dropped, its intervals
+ *    approximate (`assembly/depth-approx`, `copy: true`). In every order, cycles are broken by
+ *    §9.3: heuristic edges first, then certified, then forced (only when a cycle has nothing
+ *    else), each time the edge with the smallest centre-depth difference (ties by item keys); a
+ *    dropped certified or forced edge is `assembly/depth-cycle` and makes its intervals
+ *    approximate. A Kahn sort (lowest centre depth at t = 0, then key) emits the order.
+ * 6. Epochs: adjacent intervals with the same visible set and order group merge. More than
  *    `maxEpochsPerTransition` epochs in one transition (a maximal run of moving phases): epochs are
  *    merged evenly and marked approximate.
  * `transit-collision`: sampled at interior times of every moving phase for pairs whose relative
@@ -208,6 +215,11 @@ export interface DepthBudgets {
   readonly maxCycleDrops: number;
   /** Diagnostics per code (one more summarizes the rest). */
   readonly maxDiagnosticsPerCode: number;
+  /**
+   * §9.4 / §13: depth copies beyond the first of each item, as a fraction of the items (0.5).
+   * Beyond it the epochs are merged into one order (`budget/depth-copies` warning, approximate).
+   */
+  readonly maxCopyRatio: number;
 }
 
 /**
@@ -228,6 +240,7 @@ export const DEFAULT_DEPTH_BUDGETS: DepthBudgets = {
   maxCollisionSamples: 1_000_000,
   maxCycleDrops: 10_000,
   maxDiagnosticsPerCode: 50,
+  maxCopyRatio: 0.5,
 };
 
 export interface DepthEpochOptions {
@@ -267,17 +280,23 @@ export interface DepthEpochStats {
   readonly approximateIntervals: number;
   readonly collisionSamples: number;
   readonly cycleDrops: number;
+  /** Pairs with both directions recorded (a copy is needed when both are certified or forced). */
   readonly copyConflicts: number;
+  /** Depth copies beyond the first of each item (0 when the epochs were merged instead). */
+  readonly copies: number;
 }
 
 export interface DepthEpochResult {
   /** Cover `[0, loop]`, time order; consecutive epochs differ in order. */
   readonly epochs: readonly DepthEpoch[];
-  /** Sorted by item; `copies` is always 1 (no copies in Phase 1b). */
+  /** Sorted by item; `copies` ≥ 1 (§9.4), a clipped item's clip on every copy. */
   readonly items: readonly AssemblyDrawItem[];
-  /** Sorted by item. */
+  /** Sorted by item; `clip` is the clip path id shared by every copy of the item. */
   readonly clips: readonly DepthClip[];
-  /** The one DOM order (back to front) every epoch's `order` is a subsequence of. */
+  /**
+   * The one DOM order (back to front) of copy keys (`item`, `item__c<k>`, `copyKey`); every
+   * epoch's `order` is a subsequence of it.
+   */
   readonly order: readonly string[];
   /** Maximal runs of moving phases. */
   readonly transitions: readonly { readonly t0: number; readonly t1: number }[];
@@ -569,8 +588,8 @@ class Diags {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Certified depth epochs for one loop (Phase 1b: no copies). `loop` is the loop length in
- * seconds at speed 1 (0 without steps: one static epoch).
+ * Certified depth epochs and the one DOM order with depth copies for one loop. `loop` is the loop
+ * length in seconds at speed 1 (0 without steps: one static epoch).
  */
 export function depthEpochs(
   items: readonly DepthItemInput[],
@@ -601,6 +620,60 @@ interface PairEdges {
   readonly j: number;
   fwd?: EdgeDir; // i before j
   bwd?: EdgeDir; // j before i
+}
+
+/** Directed edges, parallel arrays (strength 3: the static chain of the copy path, never dropped). */
+interface EdgeList {
+  readonly from: number[];
+  readonly to: number[];
+  readonly str: number[];
+  readonly diff: number[];
+  readonly occ: (readonly number[])[];
+}
+
+const newEdges = (): EdgeList => ({ from: [], to: [], str: [], diff: [], occ: [] });
+
+function addEdge(
+  ed: EdgeList,
+  from: number,
+  to: number,
+  str: number,
+  diff: number,
+  occ: readonly number[],
+): void {
+  ed.from.push(from);
+  ed.to.push(to);
+  ed.str.push(str);
+  ed.diff.push(diff);
+  ed.occ.push(occ);
+}
+
+/** Strength of the static chain edges (above forced: a cycle always has another edge to drop). */
+const CHAIN = 3;
+
+interface KahnHooks {
+  /** After a cycle-breaking drop of edge `e`. */
+  drop(e: number): void;
+  /** Before a fallback release; false aborts the sort. */
+  release(): boolean;
+  /** A pending in-edge ignored by a fallback release. */
+  released(e: number): void;
+}
+
+/** An epoch over item indices (keys and copies are applied by the caller). */
+interface IndexEpoch {
+  readonly t0: number;
+  readonly t1: number;
+  readonly order: readonly number[];
+  readonly approximate: boolean;
+}
+
+/** Epochs, the DOM order and the draw items of one way to order the loop. */
+interface Ordered {
+  readonly epochs: DepthEpoch[];
+  readonly transitions: { t0: number; t1: number }[];
+  readonly order: string[];
+  readonly items: AssemblyDrawItem[];
 }
 
 interface Span {
@@ -688,6 +761,12 @@ class EpochSolver {
   private collisionSamples = 0;
   private cycleDrops = 0;
   private copyConflicts = 0;
+  private extraCopies = 0;
+  /**
+   * Why the copy path did not apply although a pair needed a copy (named in the one-order path's
+   * `assembly/depth-approx` `copy: true` messages); set by `withCopies`.
+   */
+  private noCopy = "";
   private readonly inputNotArray: boolean;
   private degraded = false;
   private collided = new Set<number>();
@@ -764,6 +843,7 @@ class EpochSolver {
       collisionSamples: this.collisionSamples,
       cycleDrops: this.cycleDrops,
       copyConflicts: this.copyConflicts,
+      copies: this.extraCopies,
     };
   }
 
@@ -830,8 +910,8 @@ class EpochSolver {
     for (const sp of spans) this.solvePhase(this.phase(sp));
     this.statPhases = spans.length;
     this.statMoving = spans.filter((s) => s.moving).length;
-    const order = this.domOrder();
-    const { epochs, transitions } = this.buildEpochs(order, spans);
+    const { epochs, transitions, order, items } =
+      this.withCopies(spans) ?? this.withoutCopies(spans);
     const approximate: { t0: number; t1: number }[] = [];
     for (const f of this.finals) {
       if (!f.approximate) continue;
@@ -841,9 +921,9 @@ class EpochSolver {
     }
     return {
       epochs,
-      items: this.drawItems(),
+      items,
       clips: this.clips,
-      order: order.map((i) => this.it[i]!.key),
+      order,
       transitions,
       approximate,
       diagnostics: this.diags.finish(),
@@ -2471,57 +2551,119 @@ class EpochSolver {
     for (let q = 0; q < occ.length; q += 2) this.approxRanges.push(occ[q]!, occ[q + 1]!);
   }
 
+  /** The direction kept for a pair: a heuristic direction yields to a certified or forced one;
+   * between two of equal kind the one held longer wins (strength does not decide which epochs
+   * are right), then the earlier one. `lose` is the other direction when both occur. */
+  private winner(pe: PairEdges): { d: EdgeDir; fwd: boolean; lose?: EdgeDir } | undefined {
+    if (pe.fwd && pe.bwd) {
+      const f = pe.fwd;
+      const b = pe.bwd;
+      const hf = f.strength === H ? 0 : 1;
+      const hb = b.strength === H ? 0 : 1;
+      const fwin =
+        hf !== hb
+          ? hf > hb
+          : f.duration !== b.duration
+            ? f.duration > b.duration
+            : f.first <= b.first;
+      return fwin ? { d: f, fwd: true, lose: b } : { d: b, fwd: false, lose: f };
+    }
+    if (pe.fwd) return { d: pe.fwd, fwd: true };
+    if (pe.bwd) return { d: pe.bwd, fwd: false };
+    return undefined;
+  }
+
+  /** Both directions of the pair are certified or forced: one DOM order needs a copy. */
+  private static strongConflict(pe: PairEdges): boolean {
+    return (
+      pe.fwd !== undefined && pe.bwd !== undefined && pe.fwd.strength >= C && pe.bwd.strength >= C
+    );
+  }
+
+  private sortedPairs(): PairEdges[] {
+    return [...this.pairEdges.keys()].sort((a, b) => a - b).map((k) => this.pairEdges.get(k)!);
+  }
+
+  /** Phase 1b path (and the fallback beyond the copy budget): one order, no copies. */
   private domOrder(): number[] {
-    const n = this.it.length;
-    const efrom: number[] = [];
-    const eto: number[] = [];
-    const estr: Strength[] = [];
-    const ediff: number[] = [];
-    const eocc: (readonly number[])[] = [];
-    const keys = [...this.pairEdges.keys()].sort((a, b) => a - b);
-    for (const k of keys) {
-      const pe = this.pairEdges.get(k)!;
-      let keep: { d: EdgeDir; fwd: boolean } | undefined;
-      if (pe.fwd && pe.bwd) {
-        const f = pe.fwd;
-        const b = pe.bwd;
-        // A heuristic direction always yields to a certified or forced one; between two
-        // certified/forced directions the one held longer wins (strength does not decide which
-        // epochs are right), then the earlier one.
-        const hf = f.strength === H ? 0 : 1;
-        const hb = b.strength === H ? 0 : 1;
-        const fwin =
-          hf !== hb
-            ? hf > hb
-            : f.duration !== b.duration
-              ? f.duration > b.duration
-              : f.first <= b.first;
-        const lose = fwin ? b : f;
-        keep = fwin ? { d: f, fwd: true } : { d: b, fwd: false };
+    const ed = newEdges();
+    for (const pe of this.sortedPairs()) {
+      const keep = this.winner(pe);
+      if (!keep) continue;
+      if (keep.lose) {
         this.copyConflicts++;
-        if (lose.strength >= C) {
-          this.markApprox(lose.occ);
-          const [x, y] = fwin ? [pe.j, pe.i] : [pe.i, pe.j];
+        if (keep.lose.strength >= C) {
+          this.markApprox(keep.lose.occ);
+          const [x, y] = keep.fwd ? [pe.j, pe.i] : [pe.i, pe.j];
           this.diags.add(
             {
               severity: "info",
               code: "assembly/depth-approx",
               path: this.pointer(this.it[x]!.key),
-              message: `"${this.it[x]!.key}" must be drawn before "${this.it[y]!.key}" in some epochs and after it in others; that needs a depth copy (Phase 3), so those epochs are approximate.`,
+              message: `"${this.it[x]!.key}" must be drawn before "${this.it[y]!.key}" in some epochs and after it in others; no depth copy is made for it (${this.noCopy}), so those epochs are approximate.`,
               params: { items: [this.it[x]!.key, this.it[y]!.key], copy: true },
             },
             `c${pe.i}/${pe.j}`,
           );
         }
-      } else if (pe.fwd) keep = { d: pe.fwd, fwd: true };
-      else if (pe.bwd) keep = { d: pe.bwd, fwd: false };
-      if (!keep) continue;
-      efrom.push(keep.fwd ? pe.i : pe.j);
-      eto.push(keep.fwd ? pe.j : pe.i);
-      estr.push(keep.d.strength);
-      ediff.push(keep.d.diff);
-      eocc.push(keep.d.occ);
+      }
+      addEdge(
+        ed,
+        keep.fwd ? pe.i : pe.j,
+        keep.fwd ? pe.j : pe.i,
+        keep.d.strength,
+        keep.d.diff,
+        keep.d.occ,
+      );
     }
+    let released = false;
+    const r = this.kahn(ed, {
+      drop: (e) => {
+        if (ed.str[e]! < C) return;
+        this.markApprox(ed.occ[e]!);
+        this.cycleDiag(ed, e, `${e}`);
+      },
+      release: () => {
+        if (!released) {
+          released = true;
+          this.overBudget();
+        }
+        return true;
+      },
+      released: (e) => this.markApprox(ed.occ[e]!),
+    })!;
+    this.cycleDrops += r.drops;
+    return r.order;
+  }
+
+  private cycleDiag(ed: EdgeList, e: number, dedupe: string, sink?: [Diagnostic, string][]): void {
+    const from = this.it[ed.from[e]!]!.key;
+    const to = this.it[ed.to[e]!]!.key;
+    const s = ed.str[e] as Strength;
+    const d: Diagnostic = {
+      severity: "info",
+      code: "assembly/depth-cycle",
+      path: this.pointer(from),
+      message: `The ${STRENGTH_NAME[s]} depth edge "${from}" before "${to}" was dropped to break a cycle; the affected epochs are approximate.`,
+      params: { from, to, strength: STRENGTH_NAME[s] },
+    };
+    if (sink) sink.push([d, dedupe]);
+    else this.diags.add(d, dedupe);
+  }
+
+  /**
+   * Kahn sort of all items under `ed` (release rule: lowest centre depth at t = 0, then key), with
+   * the §9.3 cycle rule: per nontrivial strongly connected component, the least edge by
+   * (strength, centre-depth difference, keys) is dropped (`hooks.drop`). Over the cycle budget a
+   * fallback release places the best unplaced item and ignores its pending in-edges
+   * (`hooks.released`); `hooks.release` returning false aborts (null).
+   */
+  private kahn(ed: EdgeList, hooks: KahnHooks): { order: number[]; drops: number } | null {
+    const n = this.it.length;
+    const efrom = ed.from;
+    const eto = ed.to;
+    const estr = ed.str;
+    const ediff = ed.diff;
     const E = efrom.length;
     const out: number[][] = Array.from({ length: n }, () => []);
     const inn: number[][] = Array.from({ length: n }, () => []);
@@ -2549,49 +2691,27 @@ class EpochSolver {
       if (f !== 0) return f < 0;
       return cmpStr(this.it[eto[a]!]!.key, this.it[eto[b]!]!.key) < 0;
     };
-    let released = false;
+    let drops = 0;
     let tarjanWork = 0;
     const drop = (e: number): void => {
       dropped[e] = 1;
-      this.cycleDrops++;
+      drops++;
       const t = eto[e]!;
       indeg[t]!--;
       if (indeg[t] === 0 && !placed[t]) heap.push(t);
-      if (estr[e]! >= C) {
-        this.markApprox(eocc[e]!);
-        this.diags.add(
-          {
-            severity: "info",
-            code: "assembly/depth-cycle",
-            path: this.pointer(this.it[efrom[e]!]!.key),
-            message: `The ${STRENGTH_NAME[estr[e]!]} depth edge "${this.it[efrom[e]!]!.key}" before "${this.it[t]!.key}" was dropped to break a cycle; the affected epochs are approximate.`,
-            params: {
-              from: this.it[efrom[e]!]!.key,
-              to: this.it[t]!.key,
-              strength: STRENGTH_NAME[estr[e]!],
-            },
-          },
-          `${e}`,
-        );
-      }
+      hooks.drop(e);
     };
     while (order.length < n) {
       if (heap.size() === 0) {
-        if (
-          this.cycleDrops >= this.budgets.maxCycleDrops ||
-          tarjanWork > this.budgets.maxCycleDrops * 1000
-        ) {
+        if (drops >= this.budgets.maxCycleDrops || tarjanWork > this.budgets.maxCycleDrops * 1000) {
           // Fallback release: the best unplaced node; its pending in-edges are ignored.
+          if (!hooks.release()) return null;
           let pick = -1;
           for (let i = 0; i < n; i++) if (!placed[i] && (pick < 0 || better(i, pick))) pick = i;
-          if (!released) {
-            released = true;
-            this.overBudget();
-          }
           for (const e of inn[pick]!) {
             if (!dropped[e] && !placed[efrom[e]!]) {
               dropped[e] = 1;
-              this.markApprox(eocc[e]!);
+              hooks.released(e);
             }
           }
           indeg[pick] = 0;
@@ -2615,7 +2735,7 @@ class EpochSolver {
         if (indeg[t] === 0 && !placed[t]) heap.push(t);
       }
     }
-    return order;
+    return { order, drops };
   }
 
   /**
@@ -2700,40 +2820,364 @@ class EpochSolver {
   }
 
   // -------------------------------------------------------------------------------------------
+  // Orders: one (Phase 1b, fallback) or one per group with depth copies (A1-2b)
+  // -------------------------------------------------------------------------------------------
+
+  private keyed(epochs: readonly IndexEpoch[], use?: readonly (readonly number[])[]): DepthEpoch[] {
+    return epochs.map((e, k) => ({
+      t0: e.t0,
+      t1: e.t1,
+      order: e.order.map((i, q) => copyKey(this.it[i]!.key, use?.[k]?.[q] ?? 0)),
+      approximate: e.approximate,
+    }));
+  }
+
+  /** One DOM order for the whole loop, no copies (Phase 1b; the fallback of the copy path). */
+  private withoutCopies(spans: readonly Span[]): Ordered {
+    const order = this.domOrder();
+    const sink: Diagnostic[] = [];
+    const { epochs, transitions } = this.buildEpochs([order], undefined, spans, sink);
+    for (const d of sink) this.diags.add(d);
+    return {
+      epochs: this.keyed(epochs),
+      transitions,
+      order: order.map((i) => this.it[i]!.key),
+      items: this.drawItems(),
+    };
+  }
+
+  /**
+   * §9.4 with copies. Undefined (nothing changed) when no pair needs a copy, when certification
+   * ran over its budget, or when copies do not fit (`budget/depth-copies`, `budget/time`): the
+   * caller then takes the one-order path.
+   */
+  private withCopies(spans: readonly Span[]): Ordered | undefined {
+    const pairs = this.sortedPairs();
+    if (!pairs.some(EpochSolver.strongConflict)) return undefined;
+    if (this.degraded) {
+      // already reported as budget/time by the certification
+      this.noCopy = "depth certification ran over its work budget";
+      return undefined;
+    }
+    const n = this.it.length;
+    const F_ = this.finals;
+    const K = F_.length;
+    const budgets = this.budgets;
+    // Loop-wide edges, and the pairs whose certified or forced direction changes.
+    const base = newEdges();
+    const conflicts: PairEdges[] = [];
+    let both = 0;
+    for (const pe of pairs) {
+      if (pe.fwd && pe.bwd) both++;
+      if (EpochSolver.strongConflict(pe)) {
+        conflicts.push(pe);
+        continue;
+      }
+      const keep = this.winner(pe)!;
+      const [a, b] = keep.fwd ? [pe.i, pe.j] : [pe.j, pe.i];
+      addEdge(base, a, b, keep.d.strength, keep.d.diff, keep.d.occ);
+    }
+    // Directions per final interval: code 2c (i before j) or 2c + 1 (j before i).
+    const at: number[][] = Array.from({ length: K }, () => []);
+    let work = 0;
+    for (let c = 0; c < conflicts.length; c++) {
+      const pe = conflicts[c]!;
+      for (const [dir, d] of [
+        [0, pe.fwd!],
+        [1, pe.bwd!],
+      ] as const) {
+        for (let q = 0; q < d.occ.length; q += 2) {
+          const [k0, k1] = this.finalRange(d.occ[q]!, d.occ[q + 1]!);
+          work += k1 - k0;
+          if (work > budgets.maxPhaseWork) return this.copiesOverWork(work);
+          for (let k = k0; k < k1; k++) at[k]!.push(2 * c + dir);
+        }
+      }
+    }
+    // Groups: maximal runs of final intervals in which no conflicting pair changes direction
+    // (greedy, so as few orders as possible). Both directions inside one interval (only at
+    // tolerance-wide overlaps): the loop-wide winner, approximate.
+    const localApprox: number[] = [];
+    /** Diagnostics reported only when the copy path is taken. */
+    const pending: [Diagnostic, string][] = [];
+    const dirOf = new Int8Array(conflicts.length).fill(-1);
+    let touched: number[] = [];
+    const groupOf = new Int32Array(K);
+    const groups: { k0: number; k1: number; dirs: number[] }[] = [];
+    for (let k = 0; k < K; k++) {
+      const raw = at[k]!;
+      const codes: number[] = [];
+      for (let q = 0; q < raw.length; q++) {
+        const c = raw[q]! >> 1;
+        if (codes.length > 0 && codes[codes.length - 1]! >> 1 === c) {
+          if (codes[codes.length - 1] !== raw[q]) {
+            const pe = conflicts[c]!;
+            const fwd = this.winner(pe)!.fwd;
+            codes[codes.length - 1] = 2 * c + (fwd ? 0 : 1);
+            localApprox.push(F_[k]!.ta, F_[k]!.tb);
+            const [x, y] = fwd ? [pe.i, pe.j] : [pe.j, pe.i];
+            const [a, b] = [this.it[x]!.key, this.it[y]!.key];
+            pending.push([
+              {
+                severity: "info",
+                code: "assembly/depth-approx",
+                path: this.pointer(a),
+                message: `"${a}" and "${b}" need both orders inside [${fmtT(F_[k]!.ta)}, ${fmtT(F_[k]!.tb)}] s (a tolerance-wide overlap); "${a}" is drawn first there, approximate.`,
+                params: { items: [a, b], t0: F_[k]!.ta, t1: F_[k]!.tb },
+              },
+              `b${pe.i}/${pe.j}`,
+            ]);
+          }
+          continue;
+        }
+        codes.push(raw[q]!);
+      }
+      let fits = groups.length > 0;
+      for (let q = 0; fits && q < codes.length; q++) {
+        const c = codes[q]! >> 1;
+        if (dirOf[c]! >= 0 && dirOf[c] !== (codes[q]! & 1)) fits = false;
+      }
+      if (!fits) {
+        for (const c of touched) dirOf[c] = -1;
+        touched = [];
+        groups.push({ k0: k, k1: k, dirs: [] });
+      }
+      const g = groups[groups.length - 1]!;
+      for (const code of codes) {
+        const c = code >> 1;
+        if (dirOf[c]! >= 0) continue;
+        dirOf[c] = code & 1;
+        touched.push(c);
+        g.dirs.push(code);
+      }
+      g.k1 = k + 1;
+      groupOf[k] = groups.length - 1;
+    }
+    work = 2 * groups.length * (2 * n + base.from.length + conflicts.length); // with retries
+    if (work > budgets.maxPhaseWork) return this.copiesOverWork(work);
+    // Static items keep one order in every group (a chain of edges that is never dropped), so
+    // they never need a copy: the order of the loop-wide edges alone decides it.
+    const isStatic = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      isStatic[i] = this.chain[i]!.every((m) => vecCmp(this.mv[m]!.from, this.mv[m]!.to) === 0)
+        ? 1
+        : 0;
+    }
+    const abort = { drop: () => undefined, release: () => false, released: () => undefined };
+    const ref = this.kahn(base, abort);
+    if (ref === null) return this.copiesOverCycles();
+    const chain = ref.order.filter((i) => isStatic[i]);
+    let drops = 0;
+    const cycles: [Diagnostic, string][] = [];
+    const orders: number[][] = [];
+    for (const g of groups) {
+      const ga = F_[g.k0]!.ta;
+      const gb = F_[g.k1 - 1]!.tb;
+      // All loop-wide edges keep the orders of neighbouring groups alike (fewer copies); if they
+      // close a cycle that costs a certified or forced edge, the group's own edges (those that
+      // occur in it, §9.3 step 4) are tried too and the one with fewer such drops is kept.
+      let best = this.orderGroup(base, chain, conflicts, g.dirs, ga, gb, false);
+      if (best === null) return this.copiesOverCycles();
+      if (best.strong > 0) {
+        const own = this.orderGroup(base, chain, conflicts, g.dirs, ga, gb, true);
+        if (own === null) return this.copiesOverCycles();
+        if (own.strong < best.strong) best = own;
+      }
+      drops += best.drops;
+      cycles.push(...best.cycles);
+      localApprox.push(...best.approx);
+      orders.push(best.order);
+    }
+    // Epochs over the groups, then the copies; undone when the copies do not fit.
+    const flags = F_.map((f) => f.approximate);
+    const mark = this.approxRanges.length;
+    this.approxRanges.push(...localApprox);
+    const sink: Diagnostic[] = [];
+    const built = this.buildEpochs(orders, groupOf, spans, sink);
+    const limit = Math.floor(Math.max(0, budgets.maxCopyRatio) * n);
+    const plan = planCopies(
+      n,
+      orders[groupOf[0]!]!,
+      built.epochs.map((e) => e.order),
+      (i) => isStatic[i] === 1,
+      limit,
+    );
+    if (!plan.ok) {
+      F_.forEach((f, k) => {
+        f.approximate = flags[k]!;
+      });
+      this.approxRanges.length = mark;
+      if (plan.reason === "budget") {
+        this.noCopy = "beyond the copy budget, budget/depth-copies";
+        this.diags.add({
+          severity: "warning",
+          code: "budget/depth-copies",
+          path: "",
+          message: `The depth order needs more than ${limit} depth copies (${budgets.maxCopyRatio} × ${n} items); the epochs are merged into one order and approximate.`,
+          params: { limit, items: n },
+        });
+      } else {
+        // The static chain keeps every static item in one order, so this needs a fallback
+        // release inside a group; reported rather than silent.
+        const key = this.it[plan.item]!.key;
+        this.noCopy = `the static item "${key}" would need one`;
+        this.diags.add({
+          severity: "info",
+          code: "assembly/depth-approx",
+          path: this.pointer(key),
+          message: `The static item "${key}" would need a depth copy (static items are never copied); the epochs are merged into one order and approximate.`,
+          params: { item: key, copy: true },
+        });
+      }
+      return undefined;
+    }
+    for (const [d, k] of [...pending, ...cycles]) this.diags.add(d, k);
+    for (const d of sink) this.diags.add(d);
+    this.cycleDrops += drops;
+    this.copyConflicts += both;
+    this.extraCopies = plan.plan.extra;
+    return {
+      epochs: this.keyed(built.epochs, plan.plan.use),
+      transitions: built.transitions,
+      order: plan.plan.dom.map(([i, c]) => copyKey(this.it[i]!.key, c)),
+      items: this.drawItems(plan.plan.copies),
+    };
+  }
+
+  /**
+   * The order of one copy group: `base` (only the edges occurring in [ga, gb] when `own`), the
+   * static chain and the group's conflict directions, with the §9.3 cycle rule. Dropped certified
+   * or forced edges are collected (diagnostics and approximate ranges inside the group), not
+   * reported, so the caller can choose; null when the cycle budget runs out.
+   */
+  private orderGroup(
+    base: EdgeList,
+    chain: readonly number[],
+    conflicts: readonly PairEdges[],
+    dirs: readonly number[],
+    ga: number,
+    gb: number,
+    own: boolean,
+  ): {
+    order: number[];
+    drops: number;
+    strong: number;
+    cycles: [Diagnostic, string][];
+    approx: number[];
+  } | null {
+    const ed = newEdges();
+    const inGroup = (occ: readonly number[]): boolean => {
+      for (let q = 0; q < occ.length; q += 2) {
+        if (occ[q]! < gb - TIME_EPS && occ[q + 1]! > ga + TIME_EPS) return true;
+      }
+      return false;
+    };
+    for (let e = 0; e < base.from.length; e++) {
+      if (own && !inGroup(base.occ[e]!)) continue;
+      addEdge(ed, base.from[e]!, base.to[e]!, base.str[e]!, base.diff[e]!, base.occ[e]!);
+    }
+    for (let q = 0; q + 1 < chain.length; q++) addEdge(ed, chain[q]!, chain[q + 1]!, CHAIN, 0, []);
+    for (const code of dirs) {
+      const pe = conflicts[code >> 1]!;
+      const d = code & 1 ? pe.bwd! : pe.fwd!;
+      addEdge(ed, code & 1 ? pe.j : pe.i, code & 1 ? pe.i : pe.j, d.strength, d.diff, d.occ);
+    }
+    const cycles: [Diagnostic, string][] = [];
+    const approx: number[] = [];
+    let strong = 0;
+    const r = this.kahn(ed, {
+      drop: (e) => {
+        if (ed.str[e]! < C || ed.str[e]! === CHAIN) return;
+        // `strong` counts EVERY certified or forced drop: it only decides whether the group's
+        // own edges are tried (any drop means the loop-wide set is cyclic here, and the own-edge
+        // order is then the principled one; counting only in-group drops picked orders that
+        // need more copies). Only a drop whose edge holds inside the group makes it approximate
+        // and is reported; its own group reports it otherwise.
+        strong++;
+        const occ = ed.occ[e]!;
+        let inside = false;
+        for (let q = 0; q < occ.length; q += 2) {
+          const a = Math.max(ga, occ[q]!);
+          const b = Math.min(gb, occ[q + 1]!);
+          if (b > a + TIME_EPS) {
+            approx.push(a, b);
+            inside = true;
+          }
+        }
+        if (!inside) return;
+        this.cycleDiag(ed, e, `g${ed.from[e]}/${ed.to[e]}`, cycles);
+      },
+      release: () => false,
+      released: () => undefined,
+    });
+    return r === null ? null : { order: r.order, drops: r.drops, strong, cycles, approx };
+  }
+
+  /** The cycle budget ran out while ordering a copy group (fallback release needed). */
+  private copiesOverCycles(): undefined {
+    this.noCopy = "ordering with copies ran over the cycle budget, budget/time";
+    this.diags.add({
+      severity: "warning",
+      code: "budget/time",
+      path: "",
+      message: `Ordering the depth copies ran over the cycle budget (${this.budgets.maxCycleDrops} drops); the epochs are merged into one order and approximate.`,
+      params: { limit: this.budgets.maxCycleDrops },
+    });
+    return undefined;
+  }
+
+  private copiesOverWork(work: number): undefined {
+    this.noCopy = "ordering with copies would exceed the work budget, budget/time";
+    this.diags.add({
+      severity: "warning",
+      code: "budget/time",
+      path: "",
+      message: `Depth copies need ${work} units of ordering work, more than ${this.budgets.maxPhaseWork}; the epochs are merged into one order and approximate.`,
+      params: { work, limit: this.budgets.maxPhaseWork },
+    });
+    return undefined;
+  }
+
+  // -------------------------------------------------------------------------------------------
   // Epochs
   // -------------------------------------------------------------------------------------------
 
   /**
-   * Epochs from the final intervals: runs of equal visibility, merged per transition beyond the
-   * cap. Two streaming passes over the visibility toggles, so memory is O(items + intervals),
-   * never intervals × items.
+   * Final intervals [k0, k1) overlapping the open range (a, b); a zero-length loop has one
+   * instant interval that every range covers.
+   */
+  private finalRange(a: number, b: number): [number, number] {
+    const F_ = this.finals;
+    const K = F_.length;
+    if (this.loop === 0) return K > 0 ? [0, 1] : [0, 0];
+    let lo = 0;
+    let hi = K;
+    while (lo < hi) {
+      const m = (lo + hi) >> 1;
+      if (F_[m]!.tb > a + TIME_EPS) hi = m;
+      else lo = m + 1;
+    }
+    let k1 = lo;
+    while (k1 < K && F_[k1]!.ta < b - TIME_EPS) k1++;
+    return [lo, k1];
+  }
+
+  /**
+   * Epochs from the final intervals: runs of equal visibility (and order group), merged per
+   * transition beyond the cap. `orders[g]` is the full order of group g; `groupOf[k]` the group
+   * of final interval k (absent: one group). Two streaming passes over the visibility toggles, so
+   * memory is O(items + intervals), never intervals × items. Cap diagnostics go to `sink`.
    */
   private buildEpochs(
-    order: readonly number[],
+    orders: readonly (readonly number[])[],
+    groupOf: Int32Array | undefined,
     spans: readonly Span[],
-  ): { epochs: DepthEpoch[]; transitions: { t0: number; t1: number }[] } {
+    sink: Diagnostic[],
+  ): { epochs: IndexEpoch[]; transitions: { t0: number; t1: number }[] } {
     const F_ = this.finals;
     const K = F_.length;
     const n = this.it.length;
-    const firstAfter = (t: number): number => {
-      let lo = 0;
-      let hi = K;
-      while (lo < hi) {
-        const m = (lo + hi) >> 1;
-        if (F_[m]!.tb > t + TIME_EPS) hi = m;
-        else lo = m + 1;
-      }
-      return lo;
-    };
-    // Final intervals [k0, k1) overlapping the open range (a, b); a zero-length loop has one
-    // instant interval that every range covers.
-    const range = (a: number, b: number): [number, number] => {
-      if (this.loop === 0) return K > 0 ? [0, 1] : [0, 0];
-      const k0 = firstAfter(a);
-      let k1 = k0;
-      while (k1 < K && F_[k1]!.ta < b - TIME_EPS) k1++;
-      return [k0, k1];
-    };
+    const range = (a: number, b: number): [number, number] => this.finalRange(a, b);
     for (let q = 0; q < this.approxRanges.length; q += 2) {
       const [k0, k1] = range(this.approxRanges[q]!, this.approxRanges[q + 1]!);
       for (let k = k0; k < k1; k++) F_[k]!.approximate = true;
@@ -2769,7 +3213,9 @@ class EpochSolver {
     }
     const runs: Run[] = [];
     for (let k = 0; k < K; k++) {
-      if (runs.length === 0 || changes(k)) {
+      const visibility = runs.length === 0 || changes(k);
+      const regroup = groupOf !== undefined && k > 0 && groupOf[k] !== groupOf[k - 1];
+      if (visibility || regroup) {
         runs.push({ k0: k, k1: k + 1, approximate: F_[k]!.approximate });
       } else {
         const r = runs[runs.length - 1]!;
@@ -2799,7 +3245,7 @@ class EpochSolver {
       const keep = new Set<number>();
       for (let q = 1; q < cap; q++) keep.add(inside[Math.floor((q * inside.length) / cap)]!);
       for (const r of inside) if (!keep.has(r)) keepBoundary[r] = 0;
-      this.diags.add({
+      sink.push({
         severity: "info",
         code: "assembly/depth-approx",
         path: "",
@@ -2830,12 +3276,13 @@ class EpochSolver {
     }
     // Pass 2: replay the toggles; snapshot the order when reaching each group's chosen run.
     const hidden = new Uint8Array(n);
-    const epochs: DepthEpoch[] = [];
+    const epochs: IndexEpoch[] = [];
     let k = 0;
     for (const grp of groups) {
       const target = runs[grp.pick]!.k0;
       for (; k <= target; k++) for (const i of toggles[k]!) hidden[i] = hidden[i]! ^ 1;
-      const ord = order.filter((i) => !hidden[i]).map((i) => this.it[i]!.key);
+      const order = orders[groupOf === undefined ? 0 : groupOf[target]!]!;
+      const ord = order.filter((i) => !hidden[i]);
       const t0 = F_[runs[grp.g]!.k0]!.ta;
       const t1 = F_[runs[grp.h - 1]!.k1 - 1]!.tb;
       const prev = epochs[epochs.length - 1];
@@ -2853,16 +3300,15 @@ class EpochSolver {
     return { epochs, transitions };
   }
 
-  private drawItems(): AssemblyDrawItem[] {
+  /** Draw items with `copies[i]` copies each (default 1); a clip applies to every copy. */
+  private drawItems(copies?: readonly number[]): AssemblyDrawItem[] {
     const clipOf = new Map(this.clips.map((c) => [c.item, c]));
-    return this.it.map((x) => {
+    return this.it.map((x, i) => {
       const c = clipOf.get(x.key);
-      return {
-        item: x.key,
-        path: x.path ?? x.key,
-        copies: 1,
-        ...(c ? { clips: { 0: { clip: c.clip, solid: c.solid } } } : {}),
-      };
+      const k = copies?.[i] ?? 1;
+      const clips: Record<number, { clip: string; solid: string }> = {};
+      if (c) for (let q = 0; q < k; q++) clips[q] = { clip: c.clip, solid: c.solid };
+      return { item: x.key, path: x.path ?? x.key, copies: k, ...(c ? { clips } : {}) };
     });
   }
 }
@@ -2901,7 +3347,7 @@ function fmtT(t: number): string {
   return String(Math.round(t * 1e4) / 1e4);
 }
 
-function sameList(a: readonly string[], b: readonly string[]): boolean {
+function sameList<T>(a: readonly T[], b: readonly T[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;

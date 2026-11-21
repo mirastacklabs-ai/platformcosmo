@@ -3,7 +3,9 @@
  * §11.3, §12). From the resolved assemblies and their step plan this builds
  *
  *  - the depth epochs (A1-2a) over the loop's moves, and the ONE DOM order every epoch is a
- *    subsequence of (Phase 1b: one copy per item, `copies = 1`);
+ *    subsequence of, with depth copies where the order changes (A1-2b, §9.4): copy k ≥ 1 of an
+ *    item is a full duplicate of its subtree with every id suffixed `__c<k>`, and its own
+ *    visibility track; `ids.copyIds` lists an element's ids across copies;
  *  - the wrapper chain of §9.4 per item (`host > clip > motion > visible > fade > part`) and its
  *    tracks (`PartTrack`). The DOM is neutral (seated, everything visible, no pose attributes):
  *    every output applies `frameAt(t)` (static: `frameAt(0)`) as attribute overrides or CSS;
@@ -51,13 +53,15 @@ import { resolveStoryboard } from "../../scene/storyboards.js";
 import { closesLoop, resolveFigure } from "../../scene/boards.js";
 import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
 import { stepTimes } from "../boards/timeline.js";
+import { parseCopyKey } from "../../depth/copies.js";
+import { copySuffix } from "../../emit/ids.js";
 import { ELEMENT_WARN, MAX_LEVELS } from "../../scene/assembly/levels.js";
 import { MAX_VIEWS } from "../../scene/assembly/views.js";
 import { levelOf } from "../../scene/assembly/levels.js";
 import { buildLevelGroups, levelFocusRect, roundRect } from "./levels.js";
 import { groupTracks, placementAttr } from "./groups.js";
 import { scopeIds, viewNode, viewRender } from "./views.js";
-import { clipDef, partGroup, wrap, type DomContext, type Wrappers } from "./dom.js";
+import { clipDef, partGroup, withIdSuffix, wrap, type DomContext, type Wrappers } from "./dom.js";
 import { buildLabels, type LabelTrack, type TextSpec } from "./labels.js";
 import { andVisibility, presenceTracks, presentWindows, type PresenceTracks } from "./builds.js";
 import { buildLoop, type StageRun } from "./loop.js";
@@ -324,9 +328,39 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
   const staticByKey = new Map(statics.map((s) => [s.key, s]));
   const staticFades: StaticFadeTrack[] = [];
 
-  for (const key of result.order) {
+  // Per item (shared by its copies): the copy-0 part group, the motion tracks, the fade track.
+  interface ItemDom {
+    readonly inner: SvgElement;
+    readonly host: readonly TrackKey[];
+    readonly motion: readonly TrackKey[];
+    readonly opacity: OpacityKey[];
+    readonly clip: string | undefined;
+  }
+  const itemDom = new Map<string, ItemDom>();
+  const copiesOf = new Map(result.items.map((i) => [i.item, i.copies]));
+  /**
+   * Copy-0 element id → the ids of that element in every copy (copy 0 first), for items with more
+   * than one copy (`copyIds`). Recorded as emitted: wrapper ids come from the (possibly
+   * view-scoped) scheme, part-group ids from `withIdSuffix`.
+   */
+  const copyList = new Map<string, string[]>();
+  const collectIds = (node: SvgNode, n: number): void => {
+    if (typeof node !== "object" || !("tag" in node)) return;
+    const id = node.attrs?.["id"];
+    if (typeof id === "string") {
+      copyList.set(
+        id,
+        Array.from({ length: n }, (_, k) => `${id}${copySuffix(k)}`),
+      );
+    }
+    for (const kid of node.children ?? []) collectIds(kid, n);
+  };
+
+  for (const copyKey of result.order) {
+    const { item: key, copy } = parseCopyKey(copyKey);
     const st = staticByKey.get(key);
     if (st !== undefined) {
+      // static items are never copied (§9.4)
       const opacity = windowsTrack(staticWindows, FADE_OPACITY, total);
       if (opacity.length === 0) {
         objects.push(st.node);
@@ -341,66 +375,106 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     const path = pathOf.get(key);
     const leaf = path === undefined ? undefined : leafByPath.get(path);
     if (path === undefined || leaf === undefined) continue;
-    const half = key === `${path}__back` ? "back" : key === `${path}__front` ? "front" : undefined;
-    const clip = clipOf.get(key);
-    const chain = index.chain(path);
-    let host: readonly TrackKey[] = [];
-    let motion: readonly TrackKey[];
-    if (clip !== undefined) {
-      const solidPath = pathOf.get(clip.solid);
-      const solidChain = solidPath === undefined ? [] : index.chain(solidPath);
-      host = offsetTrack(plain(solidChain), total, projection, extraTimes);
-      motion = offsetTrack(relativeMoves(chain, solidChain), total, projection, extraTimes);
-    } else {
-      motion = offsetTrack(plain(chain), total, projection, extraTimes);
+    let dom = itemDom.get(key);
+    if (dom === undefined) {
+      const half =
+        key === `${path}__back` ? "back" : key === `${path}__front` ? "front" : undefined;
+      const clip = clipOf.get(key);
+      const chain = index.chain(path);
+      let host: readonly TrackKey[] = [];
+      let motion: readonly TrackKey[];
+      if (clip !== undefined) {
+        const solidPath = pathOf.get(clip.solid);
+        const solidChain = solidPath === undefined ? [] : index.chain(solidPath);
+        host = offsetTrack(plain(solidChain), total, projection, extraTimes);
+        motion = offsetTrack(relativeMoves(chain, solidChain), total, projection, extraTimes);
+        // one static clip path, shared by every copy (defined in the solid's frame)
+        domCtx.defs.push(clipDef(domCtx, clip.clip, clip.prism));
+      } else {
+        motion = offsetTrack(plain(chain), total, projection, extraTimes);
+      }
+      const top = labels.top.get(path);
+      const inner = partGroup(domCtx, leaf, half, top === undefined ? {} : { extra: [top] });
+      const opacity = windowsTrack(fadeWindows.get(path) ?? [], FADE_OPACITY, total);
+      dom = { inner, host, motion, opacity, clip: clip?.clip };
+      itemDom.set(key, dom);
+      const n = copiesOf.get(key) ?? 1;
+      if (n > 1) collectIds(inner, n);
     }
+    const { host, motion } = dom;
+    // this copy's epochs (§9.4) AND the leaf's presence (B-3: built parts exist from their move's
+    // start): a copy never shows while its leaf is absent. Fades are per item: every copy shares
+    // them, presence fades included.
     let visibility = visibilityTrack(
-      result.epochs.map((e, i) => ({ t0: e.t0, visible: (epochSets[i] as Set<string>).has(key) })),
+      result.epochs.map((e, i) => ({
+        t0: e.t0,
+        visible: (epochSets[i] as Set<string>).has(copyKey),
+      })),
       total,
     );
-    let opacity = windowsTrack(fadeWindows.get(path) ?? [], FADE_OPACITY, total);
-    // built parts exist from their move's start (B-3): the presence tracks join the epochs'
+    let opacity = dom.opacity;
     const pt = pres.get(path);
     if (pt !== undefined) {
       visibility = andVisibility(visibility, pt.visibility, total);
       if (pt.opacity.length > 0) opacity = pt.opacity;
     }
-    const track: PartTrack = { copy: key, host, motion, visibility, opacity };
+    const track: PartTrack = { copy: copyKey, host, motion, visibility, opacity };
     tracks.push(track);
     const w: { -readonly [K in keyof Wrappers]: Wrappers[K] } = {};
-    const reg: { -readonly [K in keyof Registered]: Registered[K] } = { key, track };
-    if (clip !== undefined) {
+    const reg: { -readonly [K in keyof Registered]: Registered[K] } = { key: copyKey, track };
+    if (dom.clip !== undefined) {
       if (host.length > 0) {
-        const hid = ids.partHost(key);
+        const hid = ids.partHost(key, copy);
         const tf = translateOf(evalOffset(host, 0));
         w.host = { id: hid, ...(tf === undefined ? {} : { transform: tf }) };
         reg.host = hid;
       }
-      domCtx.defs.push(clipDef(domCtx, clip.clip, clip.prism));
-      w.clip = clip.clip;
+      w.clip = dom.clip;
     }
     if (motion.length > 0) {
-      const mid = ids.partMotion(key);
+      const mid = ids.partMotion(key, copy);
       const tf = translateOf(evalOffset(motion, 0));
       w.motion = { id: mid, ...(tf === undefined ? {} : { transform: tf }) };
       reg.motion = mid;
     }
     if (visibility.length > 0) {
-      const vid = ids.partVisible(key);
+      const vid = ids.partVisible(key, copy);
       w.visible = { id: vid, hidden: !evalVisible(visibility, 0) };
       reg.visible = vid;
     }
     if (opacity.length > 0) {
-      const fid = ids.partFade(key);
+      const fid = ids.partFade(key, copy);
       w.fade = { id: fid, opacity: round2(evalOpacity(opacity, 0)) };
       reg.fade = fid;
     }
     registered.push(reg);
-    const top = labels.top.get(path);
-    objects.push(
-      wrap(partGroup(domCtx, leaf, half, top === undefined ? {} : { extra: [top] }), w, domCtx),
-    );
+    if (copy === 0) {
+      const n = copiesOf.get(key) ?? 1;
+      if (n > 1) {
+        const wrappers: [unknown, (item: string, copy?: number) => string][] = [
+          [w.host, ids.partHost],
+          [w.motion, ids.partMotion],
+          [w.visible, ids.partVisible],
+          [w.fade, ids.partFade],
+        ];
+        for (const [has, idOf] of wrappers) {
+          if (has === undefined) continue;
+          copyList.set(
+            idOf(key, 0),
+            Array.from({ length: n }, (_, k) => idOf(key, k)),
+          );
+        }
+      }
+    }
+    const inner = copy === 0 ? dom.inner : withIdSuffix(dom.inner, copySuffix(copy), domCtx);
+    objects.push(wrap(inner, w, domCtx));
   }
+  // Copy-aware ids (§9.4): `copyIds(id)` lists `id`, `id__c1`, … for every element of a copied
+  // item (wrappers, part group, faces, overlay, top-face label); B emits per-id rules for all.
+  const asmIds: IdScheme & AssemblyIdScheme = {
+    ...ids,
+    copyIds: (id) => copyList.get(id) ?? [id],
+  };
 
   // ---- reach bounds (§10): swept boxes of every phase -------------------------------------
   const extents: Rect[] = [...labels.extents];
@@ -462,8 +536,11 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     }
     for (const s of staticFades) opacity[s.id] = round2(evalOpacity(s.opacity, t));
     for (const lt of labelTracks) {
-      if (lt.motion.length > 0) transforms[lt.id] = translateFull(evalOffset(lt.motion, t));
-      opacity[lt.id] = round2(evalOpacity(lt.opacity, t));
+      // a top-face label rides inside its part, so each copy has its own (copyIds)
+      for (const id of asmIds.copyIds(lt.id)) {
+        if (lt.motion.length > 0) transforms[id] = translateFull(evalOffset(lt.motion, t));
+        opacity[id] = round2(evalOpacity(lt.opacity, t));
+      }
     }
     hidden.sort();
     visible.sort();
@@ -526,7 +603,7 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
 
   // ---- depth items, model ------------------------------------------------------------------
   const model: AssemblyRenderModelX = {
-    ids,
+    ids: asmIds,
     items: result.items,
     epochs: result.epochs,
     tracks: tracks.sort((a, b) => (a.copy < b.copy ? -1 : a.copy > b.copy ? 1 : 0)),
