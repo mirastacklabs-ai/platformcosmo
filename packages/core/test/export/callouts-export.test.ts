@@ -1,6 +1,16 @@
 import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import { render, validate, type RenderOptions, type RenderResult } from "../../src/index.js";
+import {
+  buildModel,
+  buildScene,
+  render,
+  validate,
+  type PlatformCosmoSpec,
+  type RenderOptions,
+  type RenderResult,
+} from "../../src/index.js";
+import { assemblyAnim } from "../../src/anim/assembly.js";
+import type { AssemblyRenderModelX } from "../../src/render/assembly/types.js";
 import { decodePng } from "../../src/export/png.js";
 import { UNRENDERED } from "../../src/schema/unsupported.js";
 import { fixtureTheme } from "../fixtures/theme.js";
@@ -70,6 +80,35 @@ const flyer = (): Obj => ({
     { duration: 5, assembly: [{ build: "k", program: "bd" }] },
     { duration: 5, assembly: [{ unbuild: "k", program: "bd", to: 1 }] },
     { duration: 5, assembly: [{ build: "k", program: "bd" }] },
+  ],
+});
+
+/** A tall wall stands in front of the seats: a part hovering low would be hidden by it. */
+const wallFlyer = (): Obj => ({
+  meta: { version: "1" },
+  assemblies: [
+    {
+      id: "w",
+      units: "tile",
+      parts: [
+        { id: "base", at: [0, 0, 0], size: [6, 6, 1] },
+        { id: "wall", at: [2, 2, 1], size: [3, 3, 4] },
+        { id: "a", at: [0, 0, 1], size: [1, 1, 1] },
+        { id: "b", at: [0, 3, 1], size: [1, 1, 2] },
+      ],
+      programs: [
+        {
+          id: "bd",
+          kind: "build",
+          steps: [{ add: ["base", "wall"] }, { add: ["a", "b"], from: "callout" }],
+        },
+      ],
+    },
+  ],
+  steps: [
+    { duration: 4, assembly: [{ build: "w", program: "bd", to: 1 }] },
+    { duration: 5, assembly: [{ build: "w", program: "bd" }] },
+    { duration: 5, assembly: [{ unbuild: "w", program: "bd", to: 1 }] },
   ],
 });
 
@@ -174,5 +213,95 @@ describe("callouts and sub-builds in every output", () => {
     const a = await run(flyer(), { outputs: ["animated", "static", "steps"] });
     const b = await run(flyer(), { outputs: ["animated", "static", "steps"] });
     expect(a.outputs.map((o) => o.data)).toEqual(b.outputs.map((o) => o.data));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The swap must not change the picture (§7.6): the world copy appears where the overlay copy was,
+// and nothing nearer than it may hide it (it hovers above everything present).
+// ---------------------------------------------------------------------------------------------
+
+/** Pixels that differ between two frames (any channel). */
+const diff = (a: Uint8Array, b: Uint8Array): number => {
+  let n = 0;
+  for (let i = 0; i < a.length; i += 4) {
+    if (a[i] !== b[i] || a[i + 1] !== b[i + 1] || a[i + 2] !== b[i + 2]) n++;
+  }
+  return n;
+};
+
+describe("the swap shows no pop", () => {
+  const swaps = (spec: Obj): { path: string; t: number }[] => {
+    const s = spec as unknown as PlatformCosmoSpec;
+    const m = buildModel({
+      scene: buildScene(s, {}),
+      theme: THEME,
+      font: "system",
+      prefix: "pc-t",
+      spec: s,
+    });
+    const am = m.assembly as AssemblyRenderModelX;
+    const out: { path: string; t: number }[] = [];
+    for (const f of am.flights ?? []) {
+      // a swap is where the copy and the world part change visibility at the same instant
+      const world = new Set(
+        am.tracks
+          .filter((t) => t.copy === f.path || t.copy.startsWith(`${f.path}__c`))
+          .flatMap((t) => t.visibility.map((k) => k.t)),
+      );
+      for (const k of f.visibility)
+        if (k.t > 0 && k.t < am.loop - 1e-9 && world.has(k.t)) out.push({ path: f.path, t: k.t });
+    }
+    return out;
+  };
+  const warp = (spec: Obj, speed: number): ((t: number) => number) => {
+    const s = spec as unknown as PlatformCosmoSpec;
+    const m = buildModel({
+      scene: buildScene(s, {}),
+      theme: THEME,
+      font: "system",
+      prefix: "pc-t",
+      spec: s,
+    });
+    return assemblyAnim(m.assembly!, speed).warp;
+  };
+
+  test.each([1, 0.5, 2])(
+    "the wall in front, %s x: the picture is the same either side",
+    async (speed) => {
+      const spec = wallFlyer();
+      const w = warp(spec, speed);
+      // flights run [t0, ts] (build) or [ts, t1] (unbuild); the swaps are the middle keys of
+      // visible-window ends (build) and starts (unbuild)
+      const m = swaps(spec);
+      expect(m.length).toBeGreaterThan(0);
+      const at = async (t: number) =>
+        pixels(await run(spec, { outputs: ["png"], speed, png: { scale: 1, time: t } }));
+      let checked = 0;
+      for (const { t } of m) {
+        const out = w(t) / speed;
+        const before = await at(out - 0.0003);
+        const after = await at(out + 0.0003);
+        // the two frames are 2 x 0.002 s of motion apart (the drop has hardly started, the copy
+        // has hardly moved) and one copy swapped for the other: a pop is thousands of pixels
+        expect(diff(before, after), `swap at ${t} (${speed}x)`).toBeLessThan(4000);
+        checked++;
+      }
+      expect(checked).toBe(m.length);
+    },
+  );
+
+  test("the rover's cargo and rails: the picture is the same either side of each swap", async () => {
+    const spec = rover();
+    const m = swaps(spec).filter(
+      (x) => x.path.startsWith("rover/rail") || x.path.startsWith("rover/cargo"),
+    );
+    expect(m.length).toBeGreaterThan(3);
+    for (const { path, t } of m) {
+      const at = async (x: number) =>
+        pixels(await run(spec, { outputs: ["png"], png: { scale: 1, time: x } }));
+      const d = diff(await at(t - 0.0003), await at(t + 0.0003));
+      expect(d, `${path} @${t}`).toBeLessThan(4000);
+    }
   });
 });

@@ -49,7 +49,7 @@ export interface Flights {
 
 /**
  * The callout slot (§6.5): where a step's callout sits, in screen space, left of the rest bounds
- * of the assemblies and a fifth of their height down. A flight's copy is centred on it.
+ * of the assemblies and a quarter of their height down. A flight's copy is centred on it.
  */
 export function slotOf(rest: Rect): Vec2 {
   return { x: rest.x - 36 - 0.1 * rest.width, y: rest.y + 0.25 * rest.height };
@@ -82,14 +82,28 @@ export function flightTracks(input: {
   const byLeaf = new Map<string, { run: FlightRun; from: Vec2; to: Vec2 }[]>();
   const rects: Rect[] = [];
   const rest = (l: WorldLeaf): Rect => projectBoxBounds(projection, l.geometry.bounds);
+  const under = (run: FlightRun): WorldLeaf[] =>
+    leaves.filter((l) => l.path === run.path || l.path.startsWith(`${run.path}/`));
+  // the leaves that fly together: a node's own (one run), or the leaves a step adds of a partly
+  // added sub-assembly (one run each, the same window): one rigid unit centred on the slot
+  const unitOf = new Map<string, WorldLeaf[]>();
   for (const run of runs) {
-    const under = leaves.filter((l) => l.path === run.path || l.path.startsWith(`${run.path}/`));
-    if (under.length === 0) continue;
-    const c = center(unionRects(under.map(rest)));
+    if (run.unit === undefined) continue;
+    const k = `${run.unit}\0${run.kind}\0${run.t0}\0${run.t1}`;
+    unitOf.set(k, [...(unitOf.get(k) ?? []), ...under(run)]);
+  }
+  for (const run of runs) {
+    const mine = under(run);
+    if (mine.length === 0) continue;
+    const group =
+      run.unit === undefined
+        ? mine
+        : (unitOf.get(`${run.unit}\0${run.kind}\0${run.t0}\0${run.t1}`) ?? mine);
+    const c = center(unionRects(group.map(rest)));
     const start = { x: slot.x - c.x, y: slot.y - c.y };
     // the swap is the end of a build's flight and the start of an unbuild's
     const swapT = run.kind === "build" ? run.t1 : run.t0;
-    for (const l of under) {
+    for (const l of mine) {
       const hover = screenOf(projection, index.displacement(l.path, swapT));
       const end = { x: round2(hover.x), y: round2(hover.y) };
       const s = { x: round2(start.x), y: round2(start.y) };

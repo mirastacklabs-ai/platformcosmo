@@ -386,6 +386,11 @@ export interface PartMove {
    * from the callout slot to the hover point in the overlay layer (§7.6), the rest is `offset`.
    */
   readonly overlayDuration?: number;
+  /**
+   * Moves of the leaves a step adds of a sub-assembly that earlier steps had partly added: the
+   * path of that sub-assembly. Their callout flights fly as one rigid unit (§7.6).
+   */
+  readonly unit?: string;
 }
 
 export interface ResolvedStage {
@@ -437,6 +442,14 @@ export interface ResolvedBuildStep {
     readonly path: string;
     readonly program: string;
     readonly staging: Vec3;
+    /**
+     * Per leaf the step adds below `path`: when the world copy appears (`at`) and when its move
+     * starts (`start`, = `at` unless it flies from a callout), program time, speed 1. Leaves its
+     * program does not add appear at the step's start.
+     */
+    readonly appear?: Readonly<
+      Record<string, { readonly at: number; readonly start: number; readonly swap?: true }>
+    >;
   };
   readonly start: number;
   readonly end: number;

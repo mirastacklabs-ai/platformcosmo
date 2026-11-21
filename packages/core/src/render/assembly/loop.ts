@@ -68,6 +68,8 @@ export interface FlightRun {
   readonly t1: number;
   /** The flight's curve as played (an unbuild's is mirrored). */
   readonly easing: SpecEasing;
+  /** Set when the move is one leaf of a partly added sub-assembly: its flight is one rigid unit. */
+  readonly unit?: string;
 }
 
 export interface LoopBuild {
@@ -178,9 +180,11 @@ export function buildLoop(
   for (const asm of assemblies)
     for (const f of asm.loopStart?.fades ?? []) loopFades.set(f.path, f);
   const net = new Map<string, Vec3>();
-  const firstBuild = new Set<string>();
+  /** Segment of the first build move of each path: all its moves there get the loop-start jump. */
+  const firstBuild = new Map<string, number>();
+  let segNo = 0;
   const seen = new Set<string>();
-  const buildMoves: BezierMove[] = [];
+  const buildMoves: { readonly mv: BezierMove; readonly seg: number }[] = [];
   const flights: FlightRun[] = [];
   const playBuild = (
     prog: ResolvedBuildProgram,
@@ -207,6 +211,15 @@ export function buildLoop(
     });
     // callout flights (§7.6): a move with an overlay phase plays it first (a build) or last (an
     // unbuild); only the world phase is a loop move. The swap time is the one `appearance` uses.
+    segNo++;
+    // what each node carries from earlier unbuilds, before this segment's moves (a node with two
+    // moves, a sub-assembly's slide and drop, goes back leg by leg)
+    const carried = new Map<string, Vec3>();
+    const legs = new Map<string, number>();
+    for (const m of lm) {
+      if (!carried.has(m.path)) carried.set(m.path, net.get(m.path) ?? zero);
+      legs.set(m.path, (legs.get(m.path) ?? 0) + 1);
+    }
     const swapOf = new Map<string, number>();
     for (const sm of seg.moves) {
       const ov = sm.overlayDuration ?? 0;
@@ -220,6 +233,7 @@ export function buildLoop(
           t0: ts,
           t1: r4(segStart + (sm.start + sm.duration) * a.scale),
           easing: sm.easing,
+          ...(sm.unit === undefined ? {} : { unit: sm.unit }),
         });
       } else {
         const ts = r4(segStart + r4(sm.start + ov) * a.scale);
@@ -230,6 +244,7 @@ export function buildLoop(
           t0: r4(segStart + sm.start * a.scale),
           t1: ts,
           easing: sm.easing,
+          ...(sm.unit === undefined ? {} : { unit: sm.unit }),
         });
       }
     }
@@ -243,17 +258,18 @@ export function buildLoop(
       };
       const swap = swapOf.get(m.path);
       if (swap !== undefined) mv = a.kind === "unbuild" ? { ...mv, t1: swap } : { ...mv, t0: swap };
-      const prev = net.get(m.path) ?? zero;
+      const prev = carried.get(m.path) ?? zero;
       if (a.kind === "build" && (prev.x !== 0 || prev.y !== 0 || prev.z !== 0)) {
         // rebuilt after an unbuild: it starts where the unbuild left it (its origin) and
-        // arrives at the seat; nothing is displaced before the move
-        mv = { ...mv, from: zero, to: neg(prev) };
+        // arrives at the seat; nothing is displaced before the move. With several moves each
+        // takes back its own leg.
+        mv = { ...mv, from: zero, to: (legs.get(m.path) ?? 1) > 1 ? neg(m.from) : neg(prev) };
         net.set(m.path, zero);
       } else if (a.kind === "unbuild") {
-        net.set(m.path, add(prev, m.to));
+        net.set(m.path, add(net.get(m.path) ?? zero, m.to));
       }
       moves.push(mv);
-      if (a.kind === "build") buildMoves.push(mv);
+      if (a.kind === "build") buildMoves.push({ mv, seg: segNo });
     }
     for (const ap of appearance(prog, a.from, a.to)) {
       const p = presence.get(ap.path);
@@ -365,9 +381,9 @@ export function buildLoop(
 
   // Loop start: base-pose leaves that fade out are still displaced at their origin (a build
   // move holds its `from` before it starts): they fade where they sit seated, then go back.
-  for (const m of buildMoves) {
-    if (firstBuild.has(m.path)) continue;
-    firstBuild.add(m.path);
+  for (const { mv: m, seg } of buildMoves) {
+    if (firstBuild.get(m.path) !== undefined && firstBuild.get(m.path) !== seg) continue;
+    firstBuild.set(m.path, seg);
     const ends = [...loopFades.values()]
       .filter(
         (f) => f.from === 1 && f.to === 0 && (f.path === m.path || f.path.startsWith(`${m.path}/`)),

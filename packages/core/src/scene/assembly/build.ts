@@ -217,16 +217,20 @@ interface SubPlan {
 
 /**
  * Where a sub-assembly is staged (§6.5): beside the parts placed so far along `+x`, `gap` clear
- * of them, at the height of its seat; along `-y` when `+x` would carry it further than three
+ * of them and lifted until its bottom clears their tops by `gap` (it docks by sliding over the
+ * model, then dropping); along `-y` when `+x` would carry it further than three
  * quarters of the owner's width past the owner (a long model: the staging area stays near it).
  * Local units; the sub-assembly's seat is the origin of the docking line.
  */
 function stagingOf(placed: readonly LeafBox[], sub: LBox, ownerBox: LBox, gap: number): Dir {
   const bounds = unionL(placed.map((p) => p.box)) ?? ownerBox;
+  // high enough that its bottom clears the top of every placed part by a gap: it then slides
+  // over the model without touching it and drops onto its seat
+  const lift = Math.max(0, bounds.z1 + gap - sub.z0);
   const dx = bounds.x1 + gap - sub.x0;
   const reach = ownerBox.x1 + 0.75 * (ownerBox.x1 - ownerBox.x0);
-  if (sub.x1 + dx <= reach + EPS) return [dx, 0, 0];
-  return [0, bounds.y0 - gap - sub.y1, 0];
+  if (sub.x1 + dx <= reach + EPS) return [dx, 0, lift];
+  return [0, bounds.y0 - gap - sub.y1, lift];
 }
 
 const json = (v: unknown): string => (v === undefined ? "" : (JSON.stringify(v) ?? ""));
@@ -462,8 +466,29 @@ export function resolveBuild(input: BuildInput): BuildResolved | undefined {
     const restOf = new Map(pl.movers.map((pm) => [pm.item.rel, pm]));
     // callout flight (§7.6): the overlay flight comes first and lasts as long as the drop
     const flight = st.from === "callout";
+    // a callout part hovers wholly above everything present when it lands: placed parts and the
+    // other parts of this step (a box above them all is never covered, so the overlay copy and
+    // the world copy look alike at the swap, §7.6)
+    let top1 = -Infinity;
+    let top2 = -Infinity;
+    if (flight) {
+      if (!spend(work, placed.length + ranked.length + 1)) {
+        spent = true;
+        return;
+      }
+      for (const p of placed) top1 = Math.max(top1, p.box.z1);
+      for (const m of ranked) {
+        if (m.box.z1 > top1) [top1, top2] = [m.box.z1, top1];
+        else top2 = Math.max(top2, m.box.z1);
+      }
+    }
+    const fixedHover = parseDistance(st.distance).fixed !== undefined;
     const moves: PartMove[] = ranked.flatMap((m, r) => {
-      const d = dist.distance.get(m.rel) ?? 0;
+      let d = dist.distance.get(m.rel) ?? 0;
+      if (flight && !fixedHover) {
+        const others = m.box.z1 >= top1 - EPS ? top2 : top1;
+        d = Math.max(d, others + gap - m.box.z0);
+      }
       const one = {
         // seat - origin: the part starts at -offset and ends on its seat
         offset: toWorld(asm.frame, [-m.u[0] * d, -m.u[1] * d, -m.u[2] * d]),
@@ -475,7 +500,7 @@ export function resolveBuild(input: BuildInput): BuildResolved | undefined {
       const pm = restOf.get(m.rel) as PMover;
       // a partly added sub-assembly: its remaining leaves move together, one move each
       return pm.partial
-        ? pm.rest.map((l) => ({ path: l.path, ...one }))
+        ? pm.rest.map((l) => ({ path: l.path, ...one, unit: m.item.node.path }))
         : [{ path: m.item.node.path, ...one }];
     });
     let subBuild: ResolvedBuildStep["subBuild"];
@@ -489,14 +514,38 @@ export function resolveBuild(input: BuildInput): BuildResolved | undefined {
         built = Math.max(built, ss.end);
         for (const m of ss.moves) moves.push({ ...m, start: r4(start + m.start) });
       }
-      moves.push({
-        path: sub.path,
-        offset: { x: -staging.x + 0, y: -staging.y + 0, z: -staging.z + 0 },
-        start: r4(start + built),
-        duration: r4(duration),
-        easing,
-      });
-      subBuild = { path: sub.path, program: sub.program.id, staging };
+      // dock: slide over to above the seat, then drop onto it (two moves of one node)
+      let at = r4(start + built);
+      const [sx, sy, sz] = staged;
+      for (const leg of [[-sx, -sy, 0] as Dir, [0, 0, -sz] as Dir]) {
+        if (leg.every((v) => v === 0)) continue;
+        moves.push({
+          path: sub.path,
+          offset: toWorld(asm.frame, leg),
+          start: at,
+          duration: r4(duration),
+          easing,
+        });
+        at = r4(at + duration);
+      }
+      // when each leaf appears (the sub-assembly's own program says; the rest at the start)
+      const own = new Map(
+        appearance(sub.program, 0, sub.program.steps.length).map((a) => [a.path, a]),
+      );
+      const appear: Record<string, { at: number; start: number; swap?: true }> = {};
+      for (const l of pl.leaves) {
+        if (!l.path.startsWith(`${sub.path}/`)) continue;
+        const a = own.get(l.path);
+        appear[l.path] =
+          a === undefined
+            ? { at: start, start }
+            : {
+                at: r4(start + a.at),
+                start: r4(start + (a.from ?? a.at)),
+                ...(a.swap === true ? { swap: true as const } : {}),
+              };
+      }
+      subBuild = { path: sub.path, program: sub.program.id, staging, appear };
     }
     moves.sort((a, b) => a.start - b.start || cmp(a.path, b.path));
     let end = start;
@@ -623,6 +672,8 @@ export interface Appearance {
    * fade, because the overlay copy is there before (after) it at the same position.
    */
   readonly swap?: true;
+  /** Forward appearance only: when the leaf's move starts (a flight's start), segment time. */
+  readonly from?: number;
 }
 
 /**
@@ -650,10 +701,17 @@ export function appearance(program: ResolvedBuildProgram, from: number, to: numb
         m = startOf.get(segs.slice(0, k).join("/"));
       if (m === undefined) continue;
       const ov = m.overlayDuration ?? 0;
-      if (step.subBuild !== undefined && m.path === step.subBuild.path) {
-        // no move of its own inside the sub-assembly: present while it is staged
-        const at = reverse ? r4(seg.length - (step.start - off)) : r4(step.start - off);
-        out.push({ path: leaf, at, visible: !reverse });
+      const own = step.subBuild?.appear?.[leaf];
+      if (own !== undefined) {
+        // a leaf of a staged sub-assembly: its own program says when it appears (the step's start
+        // for a leaf that program does not add), whatever dock moves the leaf's chain has
+        out.push({
+          path: leaf,
+          at: reverse ? r4(seg.length - (own.start - off)) : r4(own.at - off),
+          visible: !reverse,
+          ...(own.swap === true ? { swap: true as const } : {}),
+          ...(reverse ? {} : { from: r4(own.start - off) }),
+        });
         continue;
       }
       out.push({
@@ -661,6 +719,7 @@ export function appearance(program: ResolvedBuildProgram, from: number, to: numb
         at: reverse ? r4(m.start + m.duration - ov) : r4(m.start + ov),
         visible: !reverse,
         ...(ov > 0 ? { swap: true as const } : {}),
+        ...(reverse ? {} : { from: r4(m.start) }),
       });
     }
   }

@@ -6,6 +6,7 @@ import {
   createAnimator,
   emit,
   type AssemblyFrameState,
+  validate,
   type Diagnostic,
   type PlatformCosmoSpec,
   type RenderModel,
@@ -67,6 +68,15 @@ function expectedAttrs(f: AssemblyFrameState): Record<string, Record<string, str
 }
 const objectId = (am: AssemblyRenderModel, path: string): string =>
   (am.ids as unknown as { object(p: string): string }).object(path);
+interface Box3Like {
+  readonly origin: { readonly x: number; readonly y: number; readonly z: number };
+  readonly size: { readonly x: number; readonly y: number; readonly z: number };
+}
+interface SceneAssemblyNodeLike {
+  readonly path: string;
+  readonly world: Box3Like;
+  readonly children: readonly SceneAssemblyNodeLike[];
+}
 const near = (a: number, b: number, tol = 0.011): void => expect(Math.abs(a - b)).toBeLessThan(tol);
 const xy = (v: unknown): [number, number] => {
   const m = /translate\((-?[\d.]+) (-?[\d.]+)\)/.exec(String(v));
@@ -196,8 +206,8 @@ describe("callout flights: the moves", () => {
   test("the world copy appears when the flight ends and leaves when the lift ends", () => {
     const up = appearance(bd, 1, 2);
     expect(up).toEqual([
-      { path: "k/a", at: 0.6, visible: true, swap: true },
-      { path: "k/b", at: 0.7, visible: true, swap: true },
+      { path: "k/a", at: 0.6, visible: true, swap: true, from: 0 },
+      { path: "k/b", at: 0.7, visible: true, swap: true, from: 0.1 },
     ]);
     // reversed: the world lift is the first 0.6 s of the 1.2 s move, the flight back the rest
     const down = appearance(bd, 2, 1);
@@ -206,7 +216,7 @@ describe("callout flights: the moves", () => {
       { path: "k/a", at: 0.7, visible: false, swap: true },
     ]);
     // a plain build has no swap
-    expect(appearance(bd, 0, 1)).toEqual([{ path: "k/base", at: 0, visible: true }]);
+    expect(appearance(bd, 0, 1)).toEqual([{ path: "k/base", at: 0, visible: true, from: 0 }]);
   });
 
   test("a callout step is not the reason for a blocked-path warning when clear", () => {
@@ -439,6 +449,68 @@ describe("callout flights: depth items and copies", () => {
   });
 });
 
+describe("the hover clears everything present (no pop at the swap)", () => {
+  const wall = (extra: Obj = {}): PlatformCosmoSpec =>
+    spec({
+      assemblies: [
+        {
+          id: "w",
+          units: "tile",
+          parts: [
+            box("base", [0, 0, 0], [6, 6, 1]),
+            box("wall", [2, 2, 1], [3, 3, 4]),
+            box("a", [0, 0, 1], [1, 1, 1]),
+            box("b", [0, 3, 1], [1, 1, 2]),
+          ],
+          programs: [
+            {
+              id: "bd",
+              kind: "build",
+              steps: [{ add: ["base", "wall"] }, { add: ["a", "b"], from: "callout", ...extra }],
+            },
+          ],
+        },
+      ],
+      steps: [
+        { duration: 4, assembly: [{ build: "w", program: "bd", to: 1 }] },
+        { duration: 5, assembly: [{ build: "w", program: "bd" }] },
+      ],
+    });
+  const hover = (p: ResolvedBuildProgram, leaf: string, z0: number): number =>
+    z0 - p.steps[1]!.moves.find((m) => m.path === leaf)!.offset.z;
+
+  test("a callout part hovers with its bottom above the top of the wall and of its neighbours", () => {
+    const g = scene(wall());
+    const a = asmOf(g, "w");
+    const p = prog(a, "bd");
+    const gap = 0.1 * Math.max(a.root.local.size.x, a.root.local.size.y, a.root.local.size.z);
+    // the wall's top is z = 5; b (the taller of the two flyers) lands at 3: its own top is no
+    // reason to hover higher than the wall; a hovers above b's top too (z = 3) and the wall's
+    expect(hover(p, "w/a", 1)).toBeGreaterThanOrEqual(5 + gap - 1e-9);
+    expect(hover(p, "w/b", 1)).toBeGreaterThanOrEqual(5 + gap - 1e-9);
+    // an `above` step only clears the part's own footprint: well below the wall's top
+    const plain = prog(asmOf(scene(wall({ from: "above" })), "w"), "bd");
+    expect(hover(plain, "w/a", 1)).toBeLessThan(5);
+  });
+
+  test("a fixed distance is the author's: it is not raised", () => {
+    const p = prog(asmOf(scene(wall({ distance: 2 })), "w"), "bd");
+    expect(hover(p, "w/a", 1)).toBe(3);
+  });
+
+  test("the loop's world copy at the swap is the highest thing in the model", () => {
+    const m = build(wall());
+    const am = X(m);
+    const fl = am.flights!.find((f) => f.path === "w/a")!;
+    const ts = fl.visibility.find((k, i) => i > 0 && !k.visible)!.t;
+    const top = (path: string) =>
+      // screen y of the wrapper at the swap: smaller is higher
+      xy(am.frameAt(ts).transforms[am.ids.partMotion(path)])[1];
+    // moved up on the screen by more than the wall's height (4 tiles of the iso unit, at least)
+    expect(top("w/a")).toBeLessThan(-4 * 16);
+  });
+});
+
 describe("callout flights with depth copies (#106)", () => {
   // the swap spec of A1-2b with the arm flying in from the callout: `blk` gets a depth copy
   // later, in the explode, and the arm's whole subtree flies as one unit
@@ -504,21 +576,23 @@ describe("sub-builds: staging and docking", () => {
   const deck = prog(a, "deck-build", "t/deck");
   const step = bd.steps[1]!;
 
-  test("the sub-assembly's own program plays first, at the staging offset", () => {
+  test("the sub-assembly's own program plays first, at a staging offset above the model", () => {
     expect(deck.steps.map((s) => [s.start, s.end])).toEqual([
       [0, 0.6],
       [0.6, 1.2],
     ]);
-    expect(step.subBuild).toEqual({
+    expect(step.subBuild).toMatchObject({
       path: "t/deck",
       program: "deck-build",
-      staging: expect.objectContaining({ x: expect.any(Number), y: 0, z: 0 }),
+      staging: { x: expect.any(Number), y: 0, z: expect.any(Number) },
     });
-    // beside the model along +x: past its far edge by a gap (0.1 x the longest side)
+    // beside the model along +x: past its far edge by a gap (0.1 x the longest side), and lifted
+    // until the deck's bottom clears the top of the base by a gap
     const gap = 0.1 * Math.max(a.root.local.size.x, a.root.local.size.y, a.root.local.size.z);
     const stage = step.subBuild!.staging;
-    // the deck's own box starts at x = 1: it is shifted to base.x1 + gap
+    // the deck's own box starts at x = 1 and z = 1 (the base's top): shifted to base.x1 + gap
     expect(stage.x).toBeCloseTo((4 + gap - 1) * a.frame.scale.x, 6);
+    expect(stage.z).toBeCloseTo(gap * a.frame.scale.z, 6);
     const inner = step.moves.filter((m) => m.path.startsWith("t/deck/"));
     expect(inner.map((m) => [m.path, m.start])).toEqual([
       ["t/deck/pillar", step.start],
@@ -526,21 +600,20 @@ describe("sub-builds: staging and docking", () => {
     ]);
   });
 
-  test("then the unit docks: staging to seat along a straight line, after the last inner step", () => {
-    const dock = step.moves.find((m) => m.path === "t/deck")!;
-    expect(dock.start).toBeCloseTo(step.start + 1.2, 9);
-    expect(dock.duration).toBe(0.6);
-    expect(dock.offset).toEqual({
-      x: -step.subBuild!.staging.x + 0,
-      y: -step.subBuild!.staging.y + 0,
-      z: -step.subBuild!.staging.z + 0,
-    });
-    expect(step.end).toBeCloseTo(step.start + 1.8, 9);
+  test("then the unit docks in two moves: slide over to above the seat, then drop", () => {
+    const [slide, drop] = step.moves.filter((m) => m.path === "t/deck");
+    const stage = step.subBuild!.staging;
+    expect(slide!.start).toBeCloseTo(step.start + 1.2, 9);
+    expect(slide!.duration).toBe(0.6);
+    expect(slide!.offset).toEqual({ x: -stage.x + 0, y: -stage.y + 0, z: 0 });
+    expect(drop!.start).toBeCloseTo(step.start + 1.8, 9);
+    expect(drop!.offset).toEqual({ x: 0, y: 0, z: -stage.z + 0 });
+    expect(step.end).toBeCloseTo(step.start + 2.4, 9);
     // nothing else of the step is lost: the step adds the deck's leaves, once
     expect(step.adds).toEqual(["t/deck/pillar", "t/deck/slab"]);
   });
 
-  test("the parts are at the staging offset while the sub-build plays, seated after docking", () => {
+  test("the parts are at staging while the sub-build plays, above the seat after the slide, seated after the drop", () => {
     const moves = step.moves.map((m) => ({
       path: m.path,
       t0: m.start,
@@ -552,9 +625,10 @@ describe("sub-builds: staging and docking", () => {
     const idx = new MoveIndex(moves);
     const at = (t: number) => idx.displacement("t/deck/pillar", t);
     const stage = step.subBuild!.staging;
-    // pillar's own move is over at start + 0.6; the dock has not started: it sits at staging
-    expect(at(step.start + 1.0).x).toBeCloseTo(stage.x, 6);
-    expect(at(step.start + 1.0).z).toBeCloseTo(0, 6);
+    // pillar's own move is over at start + 0.6; the slide has not started: it sits at staging
+    expect(at(step.start + 1.0)).toEqual({ x: stage.x, y: stage.y, z: stage.z });
+    // slid over: above its seat
+    expect(at(step.start + 1.8)).toEqual({ x: 0, y: 0, z: stage.z });
     // docked
     expect(at(step.end)).toEqual({ x: 0, y: 0, z: 0 });
   });
@@ -575,21 +649,92 @@ describe("sub-builds: staging and docking", () => {
     expect(down.find((x) => x.path === "t/deck/pillar")!.at).toBe(buildSegment(p, 2, 1).length);
   });
 
-  test("unbuild mirrors: the dock plays backwards first, then the sub-assembly's steps in reverse", () => {
+  test("unbuild mirrors: the drop plays backwards first, then the slide, then the steps in reverse", () => {
     const seg = buildSegment(bd, 2, 1);
     expect(seg.kind).toBe("unbuild-played");
+    const legs = seg.moves.filter((m) => m.path === "t/deck");
     const by = (p: string) => seg.moves.find((m) => m.path === p)!;
-    const len = seg.length;
-    expect(len).toBe(1.8);
-    expect(by("t/deck").start).toBe(0);
-    // reversed offsets: the unit goes back to staging
-    const fwd = step.moves.find((m) => m.path === "t/deck")!;
-    expect(by("t/deck").offset.x).toBe(-fwd.offset.x + 0);
-    // the slab (last inner step) un-builds right after the dock, the pillar after it
-    expect(by("t/deck/slab").start).toBeCloseTo(0.6, 6);
-    expect(by("t/deck/pillar").start).toBeCloseTo(1.2, 6);
+    expect(seg.length).toBeCloseTo(2.4, 9);
+    const stage = step.subBuild!.staging;
+    // reversed: up first (the drop's reverse), then back to staging
+    expect(legs.map((m) => [m.start, m.offset.x, m.offset.z])).toEqual([
+      [0, 0, stage.z],
+      [0.6, stage.x, 0],
+    ]);
+    // the slab (last inner step) un-builds right after the slide, the pillar after it
+    expect(by("t/deck/slab").start).toBeCloseTo(1.2, 6);
+    expect(by("t/deck/pillar").start).toBeCloseTo(1.8, 6);
     const down = appearance(bd, 2, 1);
     expect(down.every((x) => !x.visible)).toBe(true);
+  });
+
+  test("the docking unit's swept box meets no placed part", () => {
+    const sweptClear = (g: SceneGraph, id: string, progId: string, stepNo: number): void => {
+      const asm = asmOf(g, id);
+      const p = prog(asm, progId);
+      const st = p.steps[stepNo]!;
+      const sub = st.subBuild!;
+      const nodes = new Map<string, SceneAssemblyNodeLike>();
+      const walk = (n: SceneAssemblyNodeLike): void => {
+        nodes.set(n.path, n);
+        n.children.forEach(walk);
+      };
+      walk(asm.root as unknown as SceneAssemblyNodeLike);
+      const unit = nodes.get(sub.path)!.world;
+      // placed: the base and every earlier step's leaves
+      const placed = [...p.base, ...p.steps.slice(0, stepNo).flatMap((s) => s.adds)].map(
+        (l) => nodes.get(l)!.world,
+      );
+      const legs = st.moves.filter((m) => m.path === sub.path);
+      expect(legs).toHaveLength(2);
+      const drop = legs[1]!.offset;
+      const S = sub.staging;
+      const W = { x: 0, y: 0, z: -drop.z + 0 };
+      const at = (b: Box3Like, d: { x: number; y: number; z: number }): Box3Like => ({
+        origin: { x: b.origin.x + d.x, y: b.origin.y + d.y, z: b.origin.z + d.z },
+        size: b.size,
+      });
+      const hull = (d0: typeof S, d1: typeof S): Box3Like => {
+        const a0 = at(unit, d0);
+        const a1 = at(unit, d1);
+        const o = {
+          x: Math.min(a0.origin.x, a1.origin.x),
+          y: Math.min(a0.origin.y, a1.origin.y),
+          z: Math.min(a0.origin.z, a1.origin.z),
+        };
+        return {
+          origin: o,
+          size: {
+            x: Math.max(a0.origin.x, a1.origin.x) + unit.size.x - o.x,
+            y: Math.max(a0.origin.y, a1.origin.y) + unit.size.y - o.y,
+            z: Math.max(a0.origin.z, a1.origin.z) + unit.size.z - o.z,
+          },
+        };
+      };
+      const hit = (a: Box3Like, b: Box3Like): boolean =>
+        (["x", "y", "z"] as const).every(
+          (k) =>
+            Math.min(a.origin[k] + a.size[k], b.origin[k] + b.size[k]) -
+              Math.max(a.origin[k], b.origin[k]) >
+            1e-9,
+        );
+      const zero = { x: 0, y: 0, z: 0 };
+      // the unit's own leaves are the step's; `placed` holds none of them
+      for (const [name, box] of [
+        ["slide", hull(S, W)],
+        ["drop", hull(W, zero)],
+      ] as const) {
+        // (what the straight line from staging to the seat would have met, for the record)
+        if (id === "rover" && name === "slide") {
+          expect(placed.some((b) => hit(hull(S, zero), b))).toBe(true);
+        }
+        const bad = placed.filter((b) => hit(box, b));
+        expect(bad.length, `${id}: ${name} meets a placed part`).toBe(0);
+      }
+    };
+    sweptClear(g, "t", "bd", 1);
+    sweptClear(scene(subSpec(true)), "t", "bd", 1);
+    sweptClear(scene(rover()), "rover", "build", 5);
   });
 
   test("when +x would carry it far from a long model it is staged along -y", () => {
@@ -651,6 +796,126 @@ describe("sub-builds: staging and docking", () => {
   });
 });
 
+describe("round-2 details", () => {
+  test("the leaves a step adds of a partly added sub-assembly fly as one rigid unit", () => {
+    const s = spec({
+      assemblies: [
+        {
+          id: "t",
+          units: "tile",
+          parts: [
+            box("base", [0, 0, 0], [6, 6, 1]),
+            {
+              id: "u",
+              parts: [
+                box("p1", [0, 0, 1], [1, 1, 1]),
+                box("p2", [2, 0, 1], [1, 1, 1]),
+                box("p3", [4, 0, 1], [1, 1, 1]),
+              ],
+            },
+          ],
+          programs: [
+            {
+              id: "bd",
+              kind: "build",
+              steps: [{ add: ["base", "u/p1"] }, { add: ["u"], from: "callout" }],
+            },
+          ],
+        },
+      ],
+      steps: [
+        { duration: 4, assembly: [{ build: "t", program: "bd", to: 1 }] },
+        { duration: 5, assembly: [{ build: "t", program: "bd" }] },
+      ],
+    });
+    const am = X(build(s));
+    const p2 = am.flights!.find((f) => f.path === "t/u/p2")!;
+    const p3 = am.flights!.find((f) => f.path === "t/u/p3")!;
+    expect(am.flights!.map((f) => f.path)).toEqual(["t/u/p2", "t/u/p3"]);
+    // one rigid unit: the same translation, centred on the slot, so they keep their distance
+    const start = (f: typeof p2) => f.motion.find((k) => k.t === f.visibility[1]!.t)!.offset;
+    expect(start(p2)).toEqual(start(p3));
+  });
+
+  test("a leaf of a nested sub-build that its program does not add appears at the step's start", () => {
+    const s = spec({
+      assemblies: [
+        {
+          id: "t",
+          units: "tile",
+          parts: [
+            box("base", [0, 0, 0], [6, 6, 1]),
+            {
+              id: "deck",
+              parts: [
+                box("pillar", [1, 1, 1], [1, 1, 2]),
+                {
+                  id: "rail",
+                  parts: [box("r1", [3, 1, 1], [1, 1, 1]), box("r2", [4, 1, 1], [1, 1, 1])],
+                  programs: [{ id: "rail-build", kind: "build", steps: [{ add: ["r1"] }] }],
+                },
+              ],
+              programs: [
+                {
+                  id: "deck-build",
+                  kind: "build",
+                  steps: [{ add: ["pillar"] }, { add: ["rail"], subBuild: "rail" }],
+                },
+              ],
+            },
+          ],
+          programs: [
+            {
+              id: "bd",
+              kind: "build",
+              steps: [{ add: ["base"] }, { add: ["deck"], subBuild: "deck" }],
+            },
+          ],
+        },
+      ],
+    });
+    const g = scene(s);
+    const a = asmOf(g, "t");
+    const p = prog(a, "bd");
+    const deck = prog(a, "deck-build", "t/deck");
+    const ap = appearance(p, 1, 2);
+    const at = (l: string) => ap.find((x) => x.path === l)!.at;
+    // r2 is in no program: it is there when the deck's second step starts (not at its dock)
+    expect(at("t/deck/rail/r2")).toBeCloseTo(deck.steps[1]!.start, 9);
+    expect(at("t/deck/rail/r1")).toBeGreaterThanOrEqual(deck.steps[1]!.start);
+    expect(at("t/deck/pillar")).toBe(0);
+  });
+
+  test("validate shows the build-program warnings the scene reports", () => {
+    const s = spec({
+      assemblies: [
+        {
+          id: "t",
+          units: "tile",
+          parts: [
+            box("base", [0, 0, 0], [4, 4, 1]),
+            {
+              id: "deck",
+              parts: [box("pillar", [1, 1, 1], [1, 1, 2])],
+              programs: [{ id: "deck-build", kind: "build", steps: [{ add: ["pillar"] }] }],
+            },
+          ],
+          programs: [
+            {
+              id: "bd",
+              kind: "build",
+              steps: [{ add: ["base"] }, { add: ["deck/pillar"], subBuild: "deck" }],
+            },
+          ],
+        },
+      ],
+      steps: [{ duration: 4, assembly: [{ build: "t", program: "bd" }] }],
+    });
+    const codesOf = validate(s).diagnostics.map((d) => d.code);
+    expect(codesOf).toContain("assembly/subbuild-not-added");
+  });
+});
+
 describe("sub-builds: render", () => {
   const m = build(subSpec());
   const am = X(m);
@@ -684,10 +949,14 @@ describe("sub-builds: render", () => {
     // inner steps take 1.2 s of the action: at 1.0 s the pillar is at staging, away from home
     const staged = t(1.0);
     expect(Math.hypot(staged[0], staged[1])).toBeGreaterThan(20);
-    // the dock plays 1.2 .. 1.8 s
+    // the slide plays 1.2 .. 1.8 s: it ends straight above the seat (no sideways offset left)
     const mid = t(1.5);
     expect(Math.hypot(mid[0], mid[1])).toBeLessThan(Math.hypot(staged[0], staged[1]));
-    expect(t(1.8)).toEqual([0, 0]);
+    const over = t(1.8);
+    expect(over[0]).toBe(0);
+    expect(over[1]).toBeLessThan(0); // still lifted: up on the screen
+    // the drop plays 1.8 .. 2.4 s
+    expect(t(2.4)).toEqual([0, 0]);
   });
 
   test("no `assembly/unsupported` for the group A2-7 lifts", () => {
@@ -728,8 +997,8 @@ describe("the brick rover", () => {
     const main = prog(asmOf(g, "rover"), "build");
     expect(main.steps[5]!.subBuild).toMatchObject({ path: "rover/cab", program: "cab-build" });
     expect(main.steps[5]!.subBuild!.staging.x).toBeGreaterThan(0);
-    // the step runs the cab's three steps (3.1 s with its 0.6 s dock... 2.5 s + the dock)
-    expect(main.steps[5]!.end - main.steps[5]!.start).toBeCloseTo(3.1, 6);
+    // the step runs the cab's three steps (2.5 s), then the slide and the drop (0.6 s each)
+    expect(main.steps[5]!.end - main.steps[5]!.start).toBeCloseTo(3.7, 6);
   });
 
   test("frame equals frameAt on a time grid over the whole loop", () => {

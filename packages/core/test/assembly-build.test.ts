@@ -158,7 +158,7 @@ describe("the brick rover (§19.5)", () => {
     expect(new Set(all).size).toBe(all.length);
     expect([...all].sort()).toEqual([...a.leaves].sort());
     // step windows follow each other; stagger 0.1, duration 0.6 (schema defaults). Step 6 plays
-    // the cab's own 3.1 s program at its staging spot, then docks (0.6 s); step 7's cargo and
+    // the cab's own 2.5 s program at its staging spot, then docks (slide, drop: 1.2 s); step 7's cargo and
     // rails fly in from the callout first (1.2 s each: 0.6 flight + 0.6 drop, staggered by 0.1)
     expect(main.steps.map((s) => [s.start, s.end])).toEqual([
       [0, 0.6],
@@ -166,9 +166,9 @@ describe("the brick rover (§19.5)", () => {
       [1.4, 2.3],
       [2.3, 3.3],
       [3.3, 3.9],
-      [3.9, 7],
-      [7, 8.5],
-      [8.5, 9.5],
+      [3.9, 7.6],
+      [7.6, 9.1],
+      [9.1, 10.1],
     ]);
   });
 
@@ -1147,12 +1147,12 @@ describe("view switches of an action (Q03, Q08)", () => {
     ]);
     // reversed: the segment is 1.2 s long; step 6 un-happens first (back to 90), then step 5 (0)
     const L = b!.actions[0]!.length / b!.actions[0]!.scale;
-    // the cab step is 3.1 s long now (sub-build + dock): step 5 un-happens after it
+    // the cab step is 3.7 s long now (sub-build, slide, drop): step 5 un-happens after it
     expect(u!.actions[0]!.views).toEqual([
       { at: 0, view: 90 },
-      { at: 3.1, view: 0 },
+      { at: 3.7, view: 0 },
     ]);
-    expect(L).toBeCloseTo(3.7, 4);
+    expect(L).toBeCloseTo(4.3, 4);
     expect(g.assemblies!.plan.map((p) => p.view)).toEqual([0, 0, 0]);
   });
 
@@ -1211,13 +1211,21 @@ describe("segments for toLoopMoves (Q04) and ties (Q06)", () => {
     expect(built.every((m) => m.t1 <= fwd.length + 1e-9)).toBe(true);
     // unbuild: the right input is `forward`; its loop times equal the played segment's times
     const good = toLoopMoves(rev.forward, { at: 0, kind: "unbuild", length: rev.length });
+    // (a node can have two moves, a sub-assembly's slide and drop: match by time too)
     for (const m of good) {
-      const played = rev.moves.find((x) => x.path === m.path)!;
-      expect(m.t0).toBeCloseTo(played.start, 3);
+      const played = rev.moves.find((x) => x.path === m.path && Math.abs(x.start - m.t0) < 1e-3)!;
+      expect(played, m.path).toBeDefined();
       expect(m.t1).toBeCloseTo(played.start + played.duration, 3);
       // ends at -offset of the forward move: back at the origin
-      const f = fwd.moves.find((x) => x.path === m.path)!;
-      near([m.to.x, m.to.y, m.to.z], [-f.offset.x, -f.offset.y, -f.offset.z]);
+      const f = fwd.moves.filter((x) => x.path === m.path);
+      expect(
+        f.some((x) =>
+          [x.offset.x, x.offset.y, x.offset.z].every(
+            (v, i) => Math.abs(-v - [m.to.x, m.to.y, m.to.z][i]!) < 1e-6,
+          ),
+        ),
+        m.path,
+      ).toBe(true);
     }
     // the wrong input (the played moves) is mirrored a second time: times differ somewhere
     const bad = toLoopMoves(rev.moves, { at: 0, kind: "unbuild", length: rev.length });

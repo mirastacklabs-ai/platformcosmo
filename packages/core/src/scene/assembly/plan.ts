@@ -1161,8 +1161,9 @@ export interface AssemblyPlanContext {
 
 /**
  * `assembly/compressed` of the whole step plan (assemblies and figures through one step loop),
- * for `validate`: the scene computes the same plan with the same helpers but does not report it,
- * so a diagnostic never appears twice. Empty without assemblies or steps.
+ * for `validate`: the scene computes the same plan with the same helpers but does not report it.
+ * Also the build-program warnings the scene reports (`build-path-blocked`, `subbuild-not-added`):
+ * `render` merges the two lists by code and path. Empty without assemblies or steps.
  */
 export function assemblyPlanDiagnostics(
   spec: PlatformCosmoSpec,
@@ -1183,6 +1184,16 @@ export function assemblyPlanDiagnostics(
     if (!figures.has(figure.id)) figures.set(figure.id, figure);
   });
   const views = stepViews(spec, ctx.isFocusTarget);
-  return programs.plan(built.assemblies, figures, views, ctx.gated ? { gated: ctx.gated } : {})
-    .compression;
+  const planned = programs.plan(
+    built.assemblies,
+    figures,
+    views,
+    ctx.gated ? { gated: ctx.gated } : {},
+  );
+  // the build-program warnings a scene reports too (resolution happens in `plan`), so `validate`
+  // shows them: a blocked drop, a `subBuild` the step does not add whole
+  const build = programs.diagnostics.filter(
+    (d) => d.code === "assembly/build-path-blocked" || d.code === "assembly/subbuild-not-added",
+  );
+  return [...build, ...planned.compression];
 }
