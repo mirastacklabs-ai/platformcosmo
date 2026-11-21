@@ -200,9 +200,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > cut 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -775,9 +775,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > cut 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -1022,9 +1022,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > cut 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -1093,9 +1093,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > cut 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -1175,9 +1175,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > cut 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -1427,9 +1427,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > fade 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -1942,9 +1942,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > fade 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -2169,9 +2169,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > fade 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -2240,9 +2240,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > fade 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -2322,9 +2322,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > fade 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -2406,7 +2406,7 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > fade 1`] = `
 
 exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
 {
-  "dom": "<g id="pc-t-bd_book"><g id="pc-t-bi_book__m.1" opacity="0"><g id="pc-t-bi_book__mw.1" clip-path="url(#pc-t-bi_book__cp)"><g id="pc-t-bi_book__mc.1"><use href="#pc-t-im_sha256-AG2OISr_2fTxapfI0MlMd5sOwOzw1Z_2bzgfHZRSKe1uSWg_3d" transform="translate(0 -217.6) scale(0.4 0.4)"/></g></g></g><g id="pc-t-bi_book__m.2" opacity="0"><g id="pc-t-bi_book__mw.2" clip-path="url(#pc-t-bi_book__cp)"><g id="pc-t-bi_book__mc.2"><use href="#pc-t-im_sha256-ezJhXIiTyCso0qC5vPW3zIdTmV2i989vP5ePOVMiQXI_3d" transform="translate(0 -217.6) scale(0.4 0.4)"/></g></g></g><g id="pc-t-bi_book__m.3"><g id="pc-t-bi_book__mw.3" clip-path="url(#pc-t-bi_book__cp)"><g id="pc-t-bi_book__mc.3"><use href="#pc-t-im_sha256-QqK6POwLsKKPwOFSOiCe4HXtlk_2bq3D5X53r67bbRBEI_3d" transform="translate(0 -217.6) scale(0.4 0.4)"/></g></g></g><g id="pc-t-bi_book__co.1" opacity="0"><use href="#pc-t-im_sha256-JtKPh1ctNZ3ycE9XmPza7SDBX_2fEdVMHQCfvSqbmvRMM_3d" transform="translate(19.06 -263.38) scale(0.491 0.491)"/><text x="33.79" y="-226.23" font-size="12" text-anchor="middle" class="pc-t-t-primary pc-t-tb">2x</text><g id="pc-t-bi_book__fl.1" opacity="0"><g id="pc-t-bi_book__fp.1" transform="translate(94.21 151.16)"><use href="#pc-t-im_sha256-JtKPh1ctNZ3ycE9XmPza7SDBX_2fEdVMHQCfvSqbmvRMM_3d" transform="translate(19.06 -263.38) scale(0.491 0.491)"/></g></g></g><g id="pc-t-bi_book__co.2" opacity="0"><use href="#pc-t-im_sha256-HJf1YW_2bOzwn6ABVm3e66uRHQxfIRE5xekD9V3l31HBQ_3d" transform="translate(19.06 -263.38) scale(0.491 0.491)"/><text x="33.79" y="-226.23" font-size="12" text-anchor="middle" class="pc-t-t-primary pc-t-tb">1x</text><use href="#pc-t-im_sha256-JtKPh1ctNZ3ycE9XmPza7SDBX_2fEdVMHQCfvSqbmvRMM_3d" transform="translate(75.38 -263.38) scale(0.491 0.491)"/><text x="90.11" y="-226.23" font-size="12" text-anchor="middle" class="pc-t-t-primary pc-t-tb">3x</text><rect class="pc-t-board" x="205.31" y="-268.29" width="45.06" height="45.06"/><g id="pc-t-bi_book__sf.2.0" opacity="0"><use href="#pc-t-im_sha256-QeMiwTZa4Ev2H0m0BkHcPiT4SSJjc28I5givOnLBSuM_3d" transform="translate(207.31 -266.29) scale(0.8212 0.8212)"/></g><g id="pc-t-bi_book__sd.2" opacity="0"><g id="pc-t-bi_book__sp.2" transform="translate(-125.44 95.36)"><use href="#pc-t-im_sha256-192zbbzDTx6WiGemKL4bjPTVZFevOPXqylVnH9Z8WSQ_3d" transform="translate(207.31 -266.29) scale(0.8212 0.8212)"/></g></g><g id="pc-t-bi_book__fl.2" opacity="0"><g id="pc-t-bi_book__fp.2" transform="translate(40.45 103.16)"><use href="#pc-t-im_sha256-HJf1YW_2bOzwn6ABVm3e66uRHQxfIRE5xekD9V3l31HBQ_3d" transform="translate(19.06 -263.38) scale(0.491 0.491)"/><use href="#pc-t-im_sha256-JtKPh1ctNZ3ycE9XmPza7SDBX_2fEdVMHQCfvSqbmvRMM_3d" transform="translate(75.38 -263.38) scale(0.491 0.491)"/></g></g></g><g id="pc-t-bi_book__cap.1" opacity="0"><text x="8" y="-8.6" font-size="14" class="pc-t-t-primary pc-t-tb">1</text><text x="21.38" y="-8.6" font-size="12" class="pc-t-t-secondary">Attach the base</text></g><g id="pc-t-bi_book__cap.2" opacity="0"><text x="8" y="-8.6" font-size="14" class="pc-t-t-primary pc-t-tb">2</text><text x="23.08" y="-8.6" font-size="12" class="pc-t-t-secondary">Add the slope</text></g><g id="pc-t-bi_book__cap.3"><text x="8" y="-8.6" font-size="14" class="pc-t-t-primary pc-t-tb">3</text></g><rect class="pc-t-board" x="0" y="-273.92" width="256" height="273.92"/><path class="pc-t-leader" d="M0 -217.6L256 -217.6"/><path class="pc-t-leader" d="M0 -25.6L256 -25.6"/></g>",
+  "dom": "<g id="pc-t-bd_book"><g id="pc-t-bi_book__m.1" opacity="0"><g id="pc-t-bi_book__mw.1" clip-path="url(#pc-t-bi_book__cp)" transform="translate(256 0)"><g id="pc-t-bi_book__mc.1" transform="translate(-256 0)"><use href="#pc-t-im_sha256-AG2OISr_2fTxapfI0MlMd5sOwOzw1Z_2bzgfHZRSKe1uSWg_3d" transform="translate(0 -217.6) scale(0.4 0.4)"/></g></g></g><g id="pc-t-bi_book__m.2" opacity="0"><g id="pc-t-bi_book__mw.2" clip-path="url(#pc-t-bi_book__cp)" transform="translate(256 0)"><g id="pc-t-bi_book__mc.2" transform="translate(-256 0)"><use href="#pc-t-im_sha256-ezJhXIiTyCso0qC5vPW3zIdTmV2i989vP5ePOVMiQXI_3d" transform="translate(0 -217.6) scale(0.4 0.4)"/></g></g></g><g id="pc-t-bi_book__m.3"><g id="pc-t-bi_book__mw.3" clip-path="url(#pc-t-bi_book__cp)"><g id="pc-t-bi_book__mc.3"><use href="#pc-t-im_sha256-QqK6POwLsKKPwOFSOiCe4HXtlk_2bq3D5X53r67bbRBEI_3d" transform="translate(0 -217.6) scale(0.4 0.4)"/></g></g></g><g id="pc-t-bi_book__co.1" opacity="0"><use href="#pc-t-im_sha256-JtKPh1ctNZ3ycE9XmPza7SDBX_2fEdVMHQCfvSqbmvRMM_3d" transform="translate(19.06 -263.38) scale(0.491 0.491)"/><text x="33.79" y="-226.23" font-size="12" text-anchor="middle" class="pc-t-t-primary pc-t-tb">2x</text><g id="pc-t-bi_book__fl.1" opacity="0"><g id="pc-t-bi_book__fp.1" transform="translate(94.21 151.16)"><use href="#pc-t-im_sha256-JtKPh1ctNZ3ycE9XmPza7SDBX_2fEdVMHQCfvSqbmvRMM_3d" transform="translate(19.06 -263.38) scale(0.491 0.491)"/></g></g></g><g id="pc-t-bi_book__co.2" opacity="0"><use href="#pc-t-im_sha256-HJf1YW_2bOzwn6ABVm3e66uRHQxfIRE5xekD9V3l31HBQ_3d" transform="translate(19.06 -263.38) scale(0.491 0.491)"/><text x="33.79" y="-226.23" font-size="12" text-anchor="middle" class="pc-t-t-primary pc-t-tb">1x</text><use href="#pc-t-im_sha256-JtKPh1ctNZ3ycE9XmPza7SDBX_2fEdVMHQCfvSqbmvRMM_3d" transform="translate(75.38 -263.38) scale(0.491 0.491)"/><text x="90.11" y="-226.23" font-size="12" text-anchor="middle" class="pc-t-t-primary pc-t-tb">3x</text><rect class="pc-t-board" x="205.31" y="-268.29" width="45.06" height="45.06"/><g id="pc-t-bi_book__sf.2.0" opacity="0"><use href="#pc-t-im_sha256-QeMiwTZa4Ev2H0m0BkHcPiT4SSJjc28I5givOnLBSuM_3d" transform="translate(207.31 -266.29) scale(0.8212 0.8212)"/></g><g id="pc-t-bi_book__sd.2" opacity="0"><g id="pc-t-bi_book__sp.2" transform="translate(-125.44 95.36)"><use href="#pc-t-im_sha256-192zbbzDTx6WiGemKL4bjPTVZFevOPXqylVnH9Z8WSQ_3d" transform="translate(207.31 -266.29) scale(0.8212 0.8212)"/></g></g><g id="pc-t-bi_book__fl.2" opacity="0"><g id="pc-t-bi_book__fp.2" transform="translate(40.45 103.16)"><use href="#pc-t-im_sha256-HJf1YW_2bOzwn6ABVm3e66uRHQxfIRE5xekD9V3l31HBQ_3d" transform="translate(19.06 -263.38) scale(0.491 0.491)"/><use href="#pc-t-im_sha256-JtKPh1ctNZ3ycE9XmPza7SDBX_2fEdVMHQCfvSqbmvRMM_3d" transform="translate(75.38 -263.38) scale(0.491 0.491)"/></g></g></g><g id="pc-t-bi_book__cap.1" opacity="0"><text x="8" y="-8.6" font-size="14" class="pc-t-t-primary pc-t-tb">1</text><text x="21.38" y="-8.6" font-size="12" class="pc-t-t-secondary">Attach the base</text></g><g id="pc-t-bi_book__cap.2" opacity="0"><text x="8" y="-8.6" font-size="14" class="pc-t-t-primary pc-t-tb">2</text><text x="23.08" y="-8.6" font-size="12" class="pc-t-t-secondary">Add the slope</text></g><g id="pc-t-bi_book__cap.3"><text x="8" y="-8.6" font-size="14" class="pc-t-t-primary pc-t-tb">3</text></g><rect class="pc-t-board" x="0" y="-273.92" width="256" height="273.92"/><path class="pc-t-leader" d="M0 -217.6L256 -217.6"/><path class="pc-t-leader" d="M0 -25.6L256 -25.6"/></g>",
   "tracks": {
     "fades": [
       {
@@ -2574,9 +2574,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -3119,9 +3119,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -3356,9 +3356,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -3427,9 +3427,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -3509,13 +3509,13 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
-            "x": 0,
+            "x": -256,
             "y": 0,
           },
           {
@@ -3558,8 +3558,41 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
               1,
               1,
             ],
-            "t": 10,
+            "t": 4,
             "x": 0,
+            "y": 0,
+          },
+          {
+            "easing": [
+              0.42,
+              0,
+              0.58,
+              1,
+            ],
+            "t": 5.6,
+            "x": 0,
+            "y": 0,
+          },
+          {
+            "easing": [
+              0,
+              0,
+              1,
+              1,
+            ],
+            "t": 6.1,
+            "x": -256,
+            "y": 0,
+          },
+          {
+            "easing": [
+              0,
+              0,
+              1,
+              1,
+            ],
+            "t": 10,
+            "x": -256,
             "y": 0,
           },
         ],
@@ -3569,13 +3602,13 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
-            "x": 0,
+            "x": -256,
             "y": 0,
           },
           {
@@ -3613,9 +3646,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
           },
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 6.1,
@@ -3629,8 +3662,19 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
               1,
               1,
             ],
+            "t": 6.6,
+            "x": -256,
+            "y": 0,
+          },
+          {
+            "easing": [
+              0,
+              0,
+              1,
+              1,
+            ],
             "t": 10,
-            "x": 0,
+            "x": -256,
             "y": 0,
           },
         ],
@@ -3640,9 +3684,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -3700,13 +3744,13 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
-            "x": 0,
+            "x": 256,
             "y": 0,
           },
           {
@@ -3749,8 +3793,41 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
               1,
               1,
             ],
-            "t": 10,
+            "t": 4,
             "x": 0,
+            "y": 0,
+          },
+          {
+            "easing": [
+              0.42,
+              0,
+              0.58,
+              1,
+            ],
+            "t": 5.6,
+            "x": 0,
+            "y": 0,
+          },
+          {
+            "easing": [
+              0,
+              0,
+              1,
+              1,
+            ],
+            "t": 6.1,
+            "x": 256,
+            "y": 0,
+          },
+          {
+            "easing": [
+              0,
+              0,
+              1,
+              1,
+            ],
+            "t": 10,
+            "x": 256,
             "y": 0,
           },
         ],
@@ -3760,13 +3837,13 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
-            "x": 0,
+            "x": 256,
             "y": 0,
           },
           {
@@ -3804,9 +3881,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
           },
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 6.1,
@@ -3820,8 +3897,19 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
               1,
               1,
             ],
+            "t": 6.6,
+            "x": 256,
+            "y": 0,
+          },
+          {
+            "easing": [
+              0,
+              0,
+              1,
+              1,
+            ],
             "t": 10,
-            "x": 0,
+            "x": 256,
             "y": 0,
           },
         ],
@@ -3831,9 +3919,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,
@@ -3891,9 +3979,9 @@ exports[`transitions: a snapshot each (fade, wipe, cut) > wipe 1`] = `
         "keys": [
           {
             "easing": [
+              0.42,
               0,
-              0,
-              1,
+              0.58,
               1,
             ],
             "t": 0,

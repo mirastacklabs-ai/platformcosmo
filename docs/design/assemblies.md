@@ -799,6 +799,7 @@ keyframe names are derived from sorted inputs only.
 | views / levels                               | ≤ 4 / ≤ 4 deep, ≤ 8 total                        | `budget/views`, `budget/levels` |
 | elements                                     | existing warn > 5000 (all levels, views, copies) | `budget/elements`               |
 | images                                       | §11.4                                            | `budget/images`                 |
+| storyboard animated elements                 | ≤ 12000 (else a static rest frame)               | `budget/board-tracks`           |
 | build time                                   | 2 s at 300 leaves, 10 s at 2000                  | `budget/time`                   |
 
 **Size classes.** `typical` (PLAN §6, under 150 KB); `assembly` (no images, ≤ 300 leaves:
@@ -848,16 +849,20 @@ mini step flies on its own and docks at `attach` (percent of the fitted model im
 model changes; copies and the docked image are gone when the model image has changed. Captions
 change in two halves (old out, new in) so two never overlap.
 
+**Draw order.** Figures and storyboards are ordered together by one key, the depth of their anchor
+(`pos`: nearer = larger x + y, then id), after the 3D content.
+
 **Transitions.** `fade` cross-fades the two model images; `cut` swaps them; `wipe` reveals the new
 image from the left: its group sits in a clip window (one `clipPath` per panel) that slides in
-over the panel while the image slides the opposite way, both plain translate tracks, so the CSS
+over the panel while the image slides the opposite way, both plain translate tracks; the old image's window slides out to the right
+in the same time (the complementary reveal), so a transparent new image never shows the old one under the sweep; so the CSS
 loop, the attribute frames of PNG, GIF and MP4 and reduced motion read the same keys (resvg has
 no animated clip). `unbuild` plays every frame's keys backward with mirrored easing: an exact
 time reverse, not a second animation (a test compares them).
 
 **Images.** Every frame image goes through the image pipeline of §11 (`imageUses` lists model,
 parts and sub-build images; `image/not-found`, `image/too-large`, `image/too-many`, `budget/images`
-apply unchanged), `source` of the storyboard and of its images feed the credits line, and a
+apply unchanged; a `label` is the thumbnail's `<title>`), `source` of the storyboard and of its images feed the credits line, and a
 storyboard whose first model image is missing draws no panel. Focus on a storyboard frames the
 panel; a manual `pos` that lands on other content warns (`layout/overlap` at `/storyboards/<i>/pos`).
 The merge-guard group is `storyboards` (`from: "callout"` and `subBuild` stay in `phase3`).
@@ -992,6 +997,8 @@ suggestions):
 | `asset/annotation-erased`                                                                                       | info                                              | figure end moved onto its drawn stroke, or ink inside a mask erased (ingestion §6.4)                                                                             |
 | `asset/rim-stroke`                                                                                              | info / warning (undecided)                        | figure template rim pixels a board stroke touches: peeled, or undecided (ingestion §6.4)                                                                         |
 | `budget/assembly-parts`, `budget/depth-copies`, `budget/views`, `budget/levels`, `budget/images`, `budget/time` | warning / error                                   | §13                                                                                                                                                              |
+| `budget/board-tracks`                                                                                           | warning                                           | storyboards animate more than 12000 elements (about 25 per frame at most): they are drawn as the static rest frame (last frame only, no tracks)                  |
+| `layout/callout-count-hidden`                                                                                   | info                                              | a storyboard callout too narrow or low for a part's `<count>x`: the thumbnail is drawn, the count is not                                                         |
 | `options/invalid-png-step`                                                                                      | error                                             | `png.step` is not a positive integer, is given with `png.time`, or is beyond the timeline                                                                        |
 
 ## 19. Examples

@@ -14,12 +14,14 @@
  */
 import type {
   AssemblyStepPlan,
+  Diagnostic,
   ImageAsset,
   ImageAssetResolver,
   Rect,
   SceneFlatBoard,
   SvgElement,
   SvgNode,
+  Vec3,
 } from "../../contracts/index.js";
 import { h } from "../../emit/xml.js";
 import { fmt } from "../../geometry/index.js";
@@ -58,7 +60,10 @@ export interface BoardsShared {
   readonly extents: Rect[];
   readonly focus: Record<string, Rect>;
   readonly trackDefs: ((tm: Timing) => { pose?: PoseTrack; fade?: FadeTrack })[];
+  readonly diagnostics: Diagnostic[];
   addAsset(a: ImageAsset): void;
+  /** Adds a panel node to the objects layer; panels of every kind are ordered by `anchor`. */
+  place(node: SvgNode, anchor: Vec3, id: string): void;
 }
 
 const LABEL_CLASS = "t-primary";
@@ -134,6 +139,26 @@ function fitRect(a: ImageAsset, r: Rect): Rect {
   const w = a.width * s;
   const hh = a.height * s;
   return { x: r.x + (r.width - w) / 2, y: r.y + (r.height - hh) / 2, width: w, height: hh };
+}
+
+/** `<title>` child (the part's name, for tooltips and screen readers) when there is a label. */
+const titled = (el: SvgElement, label: string | undefined): SvgElement =>
+  label === undefined || label === "" ? el : { ...el, children: [h("title", null, label)] };
+
+/** Animated elements above which the storyboards are drawn as a static rest frame (§13). */
+export const MAX_BOARD_ELEMENTS = 12000;
+
+/** Upper bound of the animated elements one frame adds. */
+function frameElements(f: ResolvedFrame, wipe: boolean): number {
+  const callout = f.parts.length > 0 || f.sub.length > 0;
+  return (
+    2 + // model, caption
+    (wipe ? 2 : 0) +
+    (callout ? 1 : 0) +
+    (f.parts.length > 0 ? 2 : 0) +
+    f.sub.length +
+    (f.sub.length > 0 ? 1 : 0)
+  );
 }
 
 const translate = (x: number, y: number): string => `translate(${fmt(x)} ${fmt(y)})`;
@@ -221,11 +246,11 @@ function trackOf(
     keys.push({ t, v, e });
   };
   const rest = valueAt(el, n);
-  push(0, rest, LINEAR);
   const from = valueAt(el, start);
-  if (from.some((x, i) => x !== (rest[i] as number))) {
-    push(r4(Math.min(MAX_RAMP, Math.max(MIN_RAMP, bt.firstAt))), from, LINEAR);
-  }
+  const ramps = from.some((x, i) => x !== (rest[i] as number));
+  // the opening ramp from the rest frame eases (§14)
+  push(0, rest, ramps ? EASE : LINEAR);
+  if (ramps) push(r4(Math.min(MAX_RAMP, Math.max(MIN_RAMP, bt.firstAt))), from, LINEAR);
   const mine = [
     ...(bt.runs.get(el.frame)?.map((r) => ({ r, k: el.inK })) ?? []),
     ...(el.outK === undefined
@@ -269,6 +294,23 @@ export function buildStoryboards(
   levels: { readonly start: (id: string) => number; readonly end: (id: string) => number },
 ): void {
   const f2 = (n: number): number => Number(fmt(n));
+  const total = boards.reduce((sum, b) => {
+    const sp = spec.storyboards?.find((x) => x.id === b.id);
+    if (sp === undefined) return sum;
+    const wipe = sp.transition === "wipe";
+    return sum + resolveStoryboard(sp).frames.reduce((a, f) => a + frameElements(f, wipe), 0);
+  }, 0);
+  const staticOnly = total > MAX_BOARD_ELEMENTS;
+  if (staticOnly) {
+    shared.diagnostics.push({
+      severity: "warning",
+      code: "budget/board-tracks",
+      path: "/storyboards",
+      message: `The storyboards animate about ${total} elements (budget ${MAX_BOARD_ELEMENTS}); they are drawn as a static rest frame`,
+      suggestion: "Split the booklet into several specs, or use fewer frames, parts and mini steps",
+      params: { elements: total, budget: MAX_BOARD_ELEMENTS },
+    });
+  }
   const ordered = [...boards].sort(
     (a, b) => a.anchor.x + a.anchor.y - (b.anchor.x + b.anchor.y) || (a.id < b.id ? -1 : 1),
   );
@@ -279,7 +321,18 @@ export function buildStoryboards(
     const first = images.get((sb.frames[0] as ResolvedFrame).model);
     const geo = storyboardGeometry(sb, first);
     if (geo === undefined) continue;
-    drawBoard(ctx, shared, sb, board, geo, images, levels, f2);
+    drawBoard(
+      ctx,
+      shared,
+      sb,
+      board,
+      geo,
+      images,
+      levels,
+      f2,
+      staticOnly,
+      spec.storyboards?.findIndex((x) => x.id === board.id) ?? 0,
+    );
   }
 }
 
@@ -292,6 +345,8 @@ function drawBoard(
   images: ImageAssetResolver,
   levels: { readonly start: (id: string) => number; readonly end: (id: string) => number },
   f2: (n: number) => number,
+  staticOnly: boolean,
+  specIndex: number,
 ): void {
   const { ids, prefix: P } = ctx;
   const n = sb.frames.length;
@@ -315,6 +370,8 @@ function drawBoard(
   const wipe = sb.transition === "wipe";
   const capCut = sb.transition === "cut";
 
+  // over budget: only the finished frame is drawn, with no tracks (a static rest frame)
+  const frames = staticOnly ? [sb.frames[n - 1] as ResolvedFrame] : sb.frames;
   const elems: Elem[] = [];
   /** Rest-frame attributes of an element (the DOM shows level n). */
   const restOf = (el: Elem): V => valueAt(el, n);
@@ -337,9 +394,9 @@ function drawBoard(
   const clipId = item("cp");
   let usesClip = false;
 
-  sb.frames.forEach((f, idx) => {
+  frames.forEach((f, idx) => {
     const k = f.index;
-    const nf = sb.frames[idx + 1];
+    const nf = frames[idx + 1];
     const T = frameTiming(f);
     const Tn = nf === undefined ? undefined : frameTiming(nf);
     const D = T.length;
@@ -400,6 +457,20 @@ function drawBoard(
             ],
             D,
           ),
+          // the old image keeps the complementary part: its window slides out to the right
+          // while the next image's slides in, so a transparent new image never shows it
+          ...(Tn === undefined
+            ? {}
+            : {
+                outK: lkeys(
+                  [
+                    [0, [0, 0]],
+                    [Tn.changeStart, [0, 0], EASE],
+                    [Tn.changeEnd, [W, 0]],
+                  ],
+                  Dn,
+                ),
+              }),
         });
         const counter = add({
           id: item(`mc.${k}`),
@@ -413,6 +484,18 @@ function drawBoard(
             ],
             D,
           ),
+          ...(Tn === undefined
+            ? {}
+            : {
+                outK: lkeys(
+                  [
+                    [0, [0, 0]],
+                    [Tn.changeStart, [0, 0], EASE],
+                    [Tn.changeEnd, [-W, 0]],
+                  ],
+                  Dn,
+                ),
+              }),
         });
         modelNodes.push(
           h(
@@ -488,17 +571,28 @@ function drawBoard(
     };
     const regionW = W - 2 * pad - (f.sub.length > 0 ? subSide + pad : 0);
     const textH = ctx.labelSize * 1.3;
-    const thumbH = Math.max(8, geo.calloutH - 2 * pad - textH);
+    const inner = geo.calloutH - 2 * pad;
+    // counts need a line under the thumbnail; on a callout too low for one, thumbnails take it all
+    const roomForText = inner - textH >= 8;
+    const thumbH = roomForText ? inner - textH : inner;
     const cell = f.parts.length > 0 ? Math.min(geo.calloutH, regionW / f.parts.length) : 0;
-    const box = Math.max(4, Math.min(cell - 4, thumbH));
-    const thumbs: { rect: Rect; asset: ImageAsset; count: number }[] = [];
+    // never larger than its cell or the strip (narrow panels), and none under 2 px
+    const box = Math.max(0, Math.min(cell - 2, thumbH, inner));
+    const thumbs: { rect: Rect; asset: ImageAsset; count: number; label?: string; at: number }[] =
+      [];
     f.parts.forEach((p, i) => {
       const a = images.get(p.image);
-      if (a === undefined) return;
+      if (a === undefined || box < 2) return;
       shared.addAsset(a);
       const cx = calloutRect.x + pad + i * cell + cell / 2;
       const slot: Rect = { x: cx - box / 2, y: calloutRect.y + pad, width: box, height: box };
-      thumbs.push({ rect: fitRect(a, slot), asset: a, count: p.count });
+      thumbs.push({
+        rect: fitRect(a, slot),
+        asset: a,
+        count: p.count,
+        at: i,
+        ...(p.label === undefined ? {} : { label: p.label }),
+      });
     });
 
     const attach =
@@ -517,9 +611,15 @@ function drawBoard(
 
     const kids: SvgNode[] = [];
     // the thumbnails and their counts (static; flights are copies)
+    let hidden = 0;
     thumbs.forEach((t) => {
+      const label = `${t.count}x`;
+      kids.push(titled(imageUse(ids.image(t.asset.hash), t.asset, t.rect), t.label));
+      if (!roomForText || measureText(label, ctx.labelSize, "bold") > cell) {
+        hidden++;
+        return;
+      }
       kids.push(
-        imageUse(ids.image(t.asset.hash), t.asset, t.rect),
         ctx.text({
           x: f2(t.rect.x + t.rect.width / 2),
           y: f2(calloutRect.y + pad + box + ctx.labelSize * 1.05),
@@ -527,10 +627,20 @@ function drawBoard(
           anchor: "middle",
           cls: LABEL_CLASS,
           bold: true,
-          content: `${t.count}x`,
+          content: label,
         }),
       );
     });
+    if (hidden > 0) {
+      shared.diagnostics.push({
+        severity: "info",
+        code: "layout/callout-count-hidden",
+        path: `/storyboards/${specIndex}/frames/${f.index - 1}/parts`,
+        message: `The <count>x of ${hidden} part${hidden === 1 ? "" : "s"} in step ${f.number} of storyboard "${sb.id}" does not fit its thumbnail cell and is not drawn`,
+        suggestion: "Make the storyboard wider (width), or use fewer parts in this step",
+        params: { id: sb.id, frame: f.index, hidden },
+      });
+    }
     if (f.sub.length > 0) {
       kids.push(
         h("rect", {
@@ -555,7 +665,7 @@ function drawBoard(
         height: Math.max(2, subRect.height - 4),
       };
       const r = fitRect(a, slot);
-      const use = imageUse(ids.image(a.hash), a, r);
+      const use = titled(imageUse(ids.image(a.hash), a, r), f.sub[i]?.label);
       const t = T.subAt[i] as number;
       const lastSub = i === f.sub.length - 1;
       if (!lastSub) {
@@ -680,7 +790,7 @@ function drawBoard(
     }
     return b;
   };
-  for (const el of elems) {
+  for (const el of staticOnly ? [] : elems) {
     shared.trackDefs.push((tm) => {
       const keys = trackOf(el, n, start, end, timingOf(tm));
       if (keys === undefined) return {};
@@ -722,7 +832,7 @@ function drawBoard(
     );
   }
   shared.defs.push(...defs);
-  shared.objects.push(
+  shared.place(
     h(
       "g",
       { id: ids.board(sb.id) },
@@ -739,6 +849,8 @@ function drawBoard(
       geo.calloutH > 0 ? line(f2(panel.y + geo.calloutH)) : null,
       line(capRect.y),
     ),
+    board.anchor,
+    sb.id,
   );
   const reach: Rect[] = [panel];
   if (sb.label !== undefined) {

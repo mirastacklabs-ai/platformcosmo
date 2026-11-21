@@ -618,33 +618,6 @@ describe("motion: frame mode = CSS = tracks; reduced motion; unbuild; closure", 
     );
   });
 
-  test("frame mode equals the CSS value at sampled times, and the tracks (boardsAt)", () => {
-    const tracks = boardsOf(model)!.tracks(1);
-    let moving = 0;
-    for (let t = 0; t < loop; t += 0.13) {
-      const frame = animate(model, { speed: 1, mode: "frame", time: t }).attrs!;
-      const direct = boardsAt(tracks, t);
-      for (const id of ids) {
-        const r = rules.get(id)!;
-        const css = cssAt(kf.get(r.name)!, r.tf, r.dur, t);
-        const f = frame[id]!;
-        expect(f).toEqual(direct[id]);
-        if (f.transform !== undefined) {
-          const [x, y] = transformOf(f.transform);
-          expect(x, `${id} x @${t}`).toBeCloseTo(css[0] as number, 1);
-          expect(y, `${id} y @${t}`).toBeCloseTo(css[1] as number, 1);
-          if (Math.abs(x) > 1 && Math.abs(x) < 80) moving++;
-        } else expect(f.opacity as number, `${id} @${t}`).toBeCloseTo(css[0] as number, 1);
-      }
-    }
-    expect(moving).toBeGreaterThan(5); // mid-flight samples were compared, not just rest poses
-    // the clock is the output clock at another speed
-    const at = (speed: number, time: number) =>
-      animate(model, { speed, mode: "frame", time }).attrs![item(model, "m.2")];
-    expect(at(2, 3)).toEqual(at(1, 6));
-    expect(at(1, loop + 3.3)).toEqual(at(1, 3.3));
-  });
-
   test("frame 0 is the rest frame, the finished model (as the DOM shows it)", () => {
     const f0 = animate(model, { speed: 1, mode: "frame", time: 0 }).attrs!;
     expect(f0[item(model, "m.3")]).toEqual({ opacity: 1 });
@@ -660,9 +633,8 @@ describe("motion: frame mode = CSS = tracks; reduced motion; unbuild; closure", 
     const end = fp.keys[fp.keys.length - 1]!;
     expect(Math.hypot(end.x, end.y)).toBeGreaterThan(10);
     const fl = t.fades.find((p) => p.id === item(model, "fl.2"))!;
-    // step 2 starts at 4 s; frame 2's flight is 1.0 .. 1.6 s into the frame (after frame 1's... frame 2 only: from 1)
-    const a = t.stepStarts[1]! + 1.0 + 1.4; // the build 1 -> 3 starts at frame 2: offset 0
-    void a;
+    // step 2 (from 4 s) builds frames 2 and 3 from level 1: frame 2 plays first, its flight
+    // is 1.0 .. 1.6 s into the frame
     const start = t.stepStarts[1]!;
     expect(fadeAt(fl.keys, start + 0.5)).toBe(0); // callout intro: the copies are still hidden
     expect(fadeAt(fl.keys, start + 1.3)).toBe(1); // in flight
@@ -971,5 +943,189 @@ describe("rest frame with a last callout", () => {
     expect(attrOf(d, item(model, "co.1"), "opacity")).toBe("0");
     expect(attrOf(d, item(model, "co.2"), "opacity")).toBe("1");
     expect(attrOf(d, item(model, "m.2"), "opacity")).toBe("1");
+  });
+});
+
+describe.each(["fade", "wipe", "cut"] as const)("frame mode = CSS = tracks, %s", (transition) => {
+  const { model, scene } = pipeline(board({ transition }, STEPS));
+  const loop = scene.timeline.reduce((sum, x) => sum + x.duration, 0);
+  const layer = animate(model, { speed: 1, mode: "loop" });
+  const rules = parseRules(layer.css);
+  const kf = parseKeyframes(layer.css);
+  const ids = [...rules.keys()].filter((i) => /-bi_book__/.test(i));
+
+  test("frame mode equals the CSS value at sampled times, and the tracks (boardsAt)", () => {
+    const tracks = boardsOf(model)!.tracks(1);
+    let moving = 0;
+    for (let t = 0; t < loop; t += 0.13) {
+      const frame = animate(model, { speed: 1, mode: "frame", time: t }).attrs!;
+      const direct = boardsAt(tracks, t);
+      for (const id of ids) {
+        const r = rules.get(id)!;
+        const css = cssAt(kf.get(r.name)!, r.tf, r.dur, t);
+        const f = frame[id]!;
+        expect(f).toEqual(direct[id]);
+        if (f.transform !== undefined) {
+          const [x, y] = transformOf(f.transform);
+          expect(x, `${id} x @${t}`).toBeCloseTo(css[0] as number, 1);
+          expect(y, `${id} y @${t}`).toBeCloseTo(css[1] as number, 1);
+          if (Math.abs(x) > 1 && Math.abs(x) < 80) moving++;
+        } else expect(f.opacity as number, `${id} @${t}`).toBeCloseTo(css[0] as number, 1);
+      }
+    }
+    expect(moving).toBeGreaterThan(5); // mid-flight samples were compared, not just rest poses
+    // the clock is the output clock at another speed
+    const at = (speed: number, time: number) =>
+      animate(model, { speed, mode: "frame", time }).attrs![item(model, "m.2")];
+    expect(at(2, 3)).toEqual(at(1, 6));
+    expect(at(1, loop + 3.3)).toEqual(at(1, 3.3));
+  });
+});
+
+describe("wipe: complementary reveal, no bleed-through", () => {
+  const { model } = pipeline(board({ transition: "wipe" }, STEPS.slice(0, 2)));
+  const t = boardsOf(model)!.tracks(1);
+  const pose = (key: string) => t.poses.find((p) => p.id === item(model, key))!;
+
+  test("at mid-change the old image's visible clip is the right half, the new one's the left", () => {
+    // step 2 starts at 4 s and plays frame 2 (2.1 s: change 1.6 .. 2.1) then frame 3 (0.5 s)
+    const f3 = t.stepStarts[1]! + 2.1; // frame 3 begins: its change is 0 .. 0.5
+    const mid = f3 + 0.25;
+    // frame 2 (old) leaves to the right while frame 3 (new) enters from the left, both half way
+    expect(poseAt(pose("mw.2").keys, mid).x).toBeCloseTo(128, 0);
+    expect(poseAt(pose("mc.2").keys, mid).x).toBeCloseTo(-128, 0); // the image itself stays put
+    expect(poseAt(pose("mw.3").keys, mid).x).toBeCloseTo(-128, 0);
+    expect(poseAt(pose("mc.3").keys, mid).x).toBeCloseTo(128, 0);
+    // before the change the old window is whole, after it it is out
+    expect(poseAt(pose("mw.2").keys, f3).x).toBeCloseTo(0, 1);
+    expect(poseAt(pose("mw.2").keys, f3 + 0.5).x).toBeCloseTo(256, 1);
+    // the frame's attributes agree (translate only, so resvg and every browser draw the same)
+    const attrs = animate(model, { speed: 1, mode: "frame", time: mid }).attrs!;
+    expect(attrs[item(model, "mw.2")]!.transform).toMatch(/^translate\(12[78]/);
+  });
+
+  test("an unbuild reverses it exactly, with the old image's window", () => {
+    const back = boardsOf(
+      pipeline(
+        board({ transition: "wipe" }, [
+          { duration: 8, assembly: [{ build: "book", to: 3 }] },
+          { duration: 8, assembly: [{ unbuild: "book", to: 0 }] },
+        ]),
+      ).model,
+    )!.tracks(1);
+    const w = back.poses.find((p) => /__mw\.2$/.test(p.id))!;
+    const L = 4;
+    for (let x = 0.1; x < L; x += 0.2) {
+      expect(poseAt(w.keys, 0.0 + x).x).toBeCloseTo(poseAt(w.keys, 8 + (L - x)).x, 0);
+    }
+  });
+});
+
+describe("budget, narrow panels, labels, order, opening ease", () => {
+  test("too many animated elements: budget/board-tracks and a static rest frame", async () => {
+    const many = Array.from({ length: 500 }, (_v, i) => ({
+      number: i + 1,
+      model: i % 2 === 0 ? "m1" : "m2",
+      parts: [{ image: "t-2x4" }],
+      sub: Array.from({ length: 19 }, () => ({ image: "s1" })),
+    }));
+    const spec = board({ frames: many }, [{ duration: 400, assembly: [{ build: "book" }] }]);
+    const v = validate(spec);
+    expect(errors(v.diagnostics)).toEqual([]);
+    const r = await render(spec, {
+      theme: THEME,
+      font: "system",
+      outputs: ["animated"],
+      images: IMAGES(),
+    });
+    const d = r.diagnostics.filter((x) => x.code === "budget/board-tracks");
+    expect(d).toHaveLength(1);
+    expect(d[0]).toMatchObject({ severity: "warning", path: "/storyboards" });
+    const svg = r.outputs[0]!.data as string;
+    expect(svg).not.toContain("@keyframes"); // no board tracks: a static diagram
+    expect((svg.match(/-bi_book__m\./g) ?? []).length).toBe(1); // the finished frame only
+    // under the budget the same board animates
+    const fine = board({ frames: many.slice(0, 50) }, [
+      { duration: 400, assembly: [{ build: "book" }] },
+    ]);
+    const ok = await render(fine, {
+      theme: THEME,
+      font: "system",
+      outputs: ["animated"],
+      images: IMAGES(),
+    });
+    expect(ok.diagnostics.filter((x) => x.code === "budget/board-tracks")).toEqual([]);
+    expect(ok.outputs[0]!.data as string).toContain("@keyframes");
+  }, 60_000);
+
+  test("narrow width: layout/callout-count-hidden is reported by render, per frame", async () => {
+    const r = await render(board({ width: 1 }, STEPS.slice(0, 2)), {
+      theme: THEME,
+      font: "system",
+      outputs: ["animated"],
+      images: IMAGES(),
+    });
+    expect(errors(r.diagnostics)).toEqual([]);
+    const d = r.diagnostics.filter((x) => x.code === "layout/callout-count-hidden");
+    expect(d.map((x) => [x.path, x.severity])).toEqual([
+      ["/storyboards/0/frames/0/parts", "info"],
+      ["/storyboards/0/frames/1/parts", "info"],
+    ]);
+    // every thumbnail stays inside the (tiny) callout strip: no <use> wider than the panel
+    const svg = r.outputs[0]!.data as string;
+    for (const m of svg.matchAll(/scale\(([\d.]+) ([\d.]+)\)/g)) {
+      expect(Number(m[1]) * 60).toBeLessThanOrEqual(32);
+    }
+  });
+
+  test("a wide panel draws every count and none is reported", async () => {
+    const r = await render(board({ width: 16 }, STEPS.slice(0, 2)), {
+      theme: THEME,
+      font: "system",
+      outputs: ["animated"],
+      images: IMAGES(),
+    });
+    expect(r.diagnostics.filter((x) => x.code === "layout/callout-count-hidden")).toEqual([]);
+  });
+
+  test("part and mini-step labels are <title> on the thumbnails, never ignored", () => {
+    const frames = [
+      {
+        model: "m1",
+        parts: [{ image: "t-2x4", label: "Plate 2x4" }],
+        sub: [{ image: "s1", label: "Sub <1>" }, { image: "s2" }],
+      },
+    ];
+    const { model } = pipeline(board({ frames }, [{ duration: 8, assembly: [{ build: "book" }] }]));
+    const dom = boardDom(svgOf(model, { speed: 1, mode: "loop" }), model);
+    expect(dom).toContain("<title>Plate 2x4</title>");
+    expect(dom).toContain("<title>Sub &lt;1&gt;</title>");
+    expect((dom.match(/<title>/g) ?? []).length).toBe(2);
+  });
+
+  test("figures and storyboards are drawn in one depth order by their anchor", () => {
+    const figure = { id: "fig", base: "m1", parts: [{ id: "p", image: "s1", seat: [0, 0] }] };
+    const order = (extra: Spec): string[] => {
+      const { model } = pipeline(board({ pos: { x: 0, y: 0 } }, undefined, extra));
+      const svg = svgOf(model, { speed: 1, mode: "frame", time: 0 });
+      return [...svg.matchAll(/<g id="pc-t-bd_(\w+)"/g)].map((m) => m[1] as string);
+    };
+    // the figure stands nearer (larger x + y) than the storyboard at the origin, and farther
+    expect(order({ figures: [{ ...figure, pos: { x: 20, y: 20 } }] })).toEqual(["book", "fig"]);
+    expect(order({ figures: [{ ...figure, pos: { x: -30, y: -30 } }] })).toEqual(["fig", "book"]);
+    // equal depth: by id
+    expect(order({ figures: [{ ...figure, id: "aaa", pos: { x: 0, y: 0 } }] })).toEqual([
+      "aaa",
+      "book",
+    ]);
+  });
+
+  test("the opening ramp eases away from the rest frame", () => {
+    const { model } = pipeline(board({}, [{ duration: 8, assembly: [{ build: "book", to: 3 }] }]));
+    const t = boardsOf(model)!.tracks(1);
+    const m3 = t.fades.find((f) => f.id === item(model, "m.3"))!;
+    expect(m3.keys[0]!.easing).toEqual([0.42, 0, 0.58, 1]);
+    expect(m3.keys[0]!.v).toBe(1);
+    expect(m3.keys[1]!.v).toBe(0);
   });
 });

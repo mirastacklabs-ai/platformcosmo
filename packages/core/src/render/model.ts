@@ -723,6 +723,7 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     fit: (text, size, bold, maxWidth) => fit(text, size, bold, maxWidth),
   });
   if (boardsBuild) {
+    diagnostics.push(...boardsBuild.diagnostics);
     layers.background.push(...boardsBuild.defs);
     layers.objects.push(...boardsBuild.objects);
     extents.push(...boardsBuild.extents);
