@@ -339,6 +339,113 @@ export function windowsTrack(
   return keys;
 }
 
+/**
+ * `windowsTrack` with a level per window: the opacity is the lowest level of the windows that
+ * hold `t` (1 outside every window), with the same eased ramps at each change (a change ramps over
+ * `ramp`, at most half the span that follows it). Used where windows of different levels overlap
+ * (a cable hidden while its slot is displaced inside a fade-others window).
+ */
+export function levelsTrack(
+  windows: readonly { readonly a: number; readonly b: number; readonly value: number }[],
+  loop: number,
+  ramp = 0.2,
+): OpacityKey[] {
+  if (windows.length === 0 || loop <= 0) return [];
+  const clamp = (t: number): number => Math.max(0, Math.min(loop, t));
+  const cuts = [...new Set([0, loop, ...windows.flatMap((w) => [clamp(w.a), clamp(w.b)])])].sort(
+    (x, y) => x - y,
+  );
+  // piecewise-constant level, adjacent equal spans merged
+  const spans: { a: number; b: number; v: number }[] = [];
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const a = cuts[i] as number;
+    const b = cuts[i + 1] as number;
+    if (b - a <= EPS) continue;
+    const mid = (a + b) / 2;
+    let v = 1;
+    for (const w of windows) if (w.a <= mid && mid <= w.b) v = Math.min(v, w.value);
+    const last = spans[spans.length - 1];
+    if (last !== undefined && last.v === v) last.b = b;
+    else spans.push({ a, b, v });
+  }
+  if (spans.every((x) => x.v === 1)) return [];
+  const keys: OpacityKey[] = [];
+  const push = (t: number, opacity: number, easing: OpacityKey["easing"]): void => {
+    const tt = r4(clamp(t));
+    const last = keys[keys.length - 1];
+    if (last !== undefined && tt <= last.t + EPS) {
+      if (tt < last.t - EPS) return;
+      keys[keys.length - 1] = { t: last.t, opacity: round2(opacity), easing };
+      return;
+    }
+    keys.push({ t: tt, opacity: round2(opacity), easing });
+  };
+  let level = 1;
+  if ((spans[0] as { v: number }).v === 1) push(0, 1, "linear");
+  for (const sp of spans) {
+    if (sp.v !== level) {
+      const r = Math.max(1e-4, Math.min(ramp, (sp.b - sp.a) / 2));
+      push(sp.a, level, "ease-in-out");
+      push(sp.a + r, sp.v, "linear");
+      level = sp.v;
+    }
+  }
+  const last = keys[keys.length - 1] as OpacityKey;
+  if (last.t < loop - EPS) push(loop, last.opacity, "linear");
+  return keys;
+}
+
+/**
+ * Loop windows in which any of `paths` is away from its rest pose (the displacement of the node,
+ * its own moves and its ancestors', is not zero), merged; sorted. Exact between move breakpoints.
+ */
+export function displacedWindows(
+  index: MoveIndex,
+  paths: readonly string[],
+  loop: number,
+): { a: number; b: number }[] {
+  const moves = paths.flatMap((p) => index.chain(p));
+  if (moves.length === 0 || loop <= 0) return [];
+  const cuts = [
+    ...new Set([
+      0,
+      loop,
+      ...moves.flatMap((m) => [m.t0, m.t1]).map((t) => Math.max(0, Math.min(loop, t))),
+    ]),
+  ].sort((x, y) => x - y);
+  const out: { a: number; b: number }[] = [];
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const a = cuts[i] as number;
+    const b = cuts[i + 1] as number;
+    if (b - a <= EPS) continue;
+    const mid = (a + b) / 2;
+    const away = paths.some((p) => {
+      const d = index.displacement(p, mid);
+      return Math.abs(d.x) + Math.abs(d.y) + Math.abs(d.z) > 1e-9;
+    });
+    if (!away) continue;
+    const last = out[out.length - 1];
+    if (last !== undefined && a <= last.b + EPS) last.b = b;
+    else out.push({ a, b });
+  }
+  return out;
+}
+
+/** The parts of `[0, loop]` outside the sorted, disjoint `windows`, as presence windows. */
+export function complementWindows(
+  windows: readonly { readonly a: number; readonly b: number }[],
+  loop: number,
+): [number, number][] {
+  const out: [number, number][] = [];
+  let at = 0;
+  for (const w of windows) {
+    if (w.a > at + EPS) out.push([at, w.a]);
+    at = Math.max(at, w.b);
+  }
+  if (loop > at + EPS) out.push([at, loop]);
+  return out;
+}
+
 export function evalOpacity(keys: readonly OpacityKey[], t: number): number {
   const first = keys[0];
   if (first === undefined) return 1;

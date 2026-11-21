@@ -18,6 +18,11 @@ export interface StaticItem {
   readonly key: string;
   readonly box: import("../../contracts/index.js").Box3;
   readonly node: import("../../contracts/index.js").SvgNode;
+  /**
+   * Node paths the item is attached to (a cable's endpoints in a rack in assembly mode): it is
+   * hidden while any of them is displaced from its rest pose (§8.1).
+   */
+  readonly follows?: readonly string[];
 }
 
 export type { AssemblyStaticFade as StaticFadeTrack, AssemblyStepClock as StepClock };
