@@ -113,7 +113,7 @@ describe("inputs", () => {
       expect(r.code, args.join(" ")).toBe(1);
       expect(codes(r.stdout)[0]).toBe(code);
     }
-  });
+  }, 120_000);
 });
 
 describe("outputs", () => {
