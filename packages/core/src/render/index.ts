@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { PlatformCosmoSpec } from "../schema/types.gen.js";
+import type { PlatformCosmoSpec, SpecPart } from "../schema/types.gen.js";
 import type {
   Animator,
   Diagnostic,
@@ -7,6 +7,7 @@ import type {
   ExportFn,
   OptimizeFn,
   OutputKind,
+  PartShapeRegistry,
   RasterizeFn,
   RenderFn,
   RenderModel,
@@ -51,6 +52,33 @@ const DC_KEYS = ["racks", "equipment", "rows", "aisles", "cables", "facility"] a
 
 function err(code: string, path: string, message: string, suggestion?: string): Diagnostic {
   return { severity: "error", code, path, message, ...(suggestion ? { suggestion } : {}) };
+}
+
+/** `assembly/unknown-shape` for every `pack:id` shape of an assembly part the registry lacks. */
+function unresolvedShapes(
+  spec: PlatformCosmoSpec,
+  parts: PartShapeRegistry | undefined,
+): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  const walk = (list: readonly SpecPart[] | undefined, base: string): void => {
+    (list ?? []).forEach((part, j) => {
+      const at = `${base}/parts/${j}`;
+      const ref = part.shape;
+      if (ref !== undefined && ref.includes(":") && !ref.startsWith("dc:") && !parts?.get(ref)) {
+        out.push({
+          severity: "error",
+          code: "assembly/unknown-shape",
+          path: `${at}/shape`,
+          message: `Shape "${ref}" is not installed, so it cannot be drawn`,
+          suggestion: "Install the shape pack, or pass it in RenderOptions.parts",
+          params: { shape: ref },
+        });
+      }
+      walk(part.parts, at);
+    });
+  };
+  (spec.assemblies ?? []).forEach((a, i) => walk(a.parts, `/assemblies/${i}`));
+  return out;
 }
 
 /** RFC 8785 (JCS) canonical JSON. Numbers use ECMAScript serialization, which JCS mandates. */
@@ -227,11 +255,19 @@ export function createRender(deps: RenderDeps): RenderFn {
       diagnostics.push(...imageDiagnostics);
       if (imageDiagnostics.some((d) => d.severity === "error")) return fail(diagnostics);
 
+      // A pack shape nothing can resolve is an error, never a silent box (validate leaves such
+      // refs unchecked without a registry; drawing is where they must exist). `dc:` shapes come
+      // from the DC pack the scene reads, not from the registry.
+      const shapeDiagnostics = unresolvedShapes(parsed, options.parts);
+      diagnostics.push(...shapeDiagnostics);
+      if (shapeDiagnostics.length > 0) return fail(diagnostics);
+
       const scene = deps.buildScene(parsed, {
         labelSize: theme.font.label,
         ...(options.icons ? { icons: options.icons } : {}),
         ...(options.dc ? { dc: options.dc } : {}),
         ...(options.images ? { images: options.images } : {}),
+        ...(options.parts ? { parts: options.parts } : {}),
       });
       diagnostics.push(...scene.diagnostics);
       if (diagnostics.some((d) => d.severity === "error")) return fail(diagnostics, scene);
@@ -272,6 +308,28 @@ export function createRender(deps: RenderDeps): RenderFn {
       });
       diagnostics.push(...built.diagnostics);
       const model = built.model;
+      // Nothing is animated, emitted or exported (no ffmpeg run) for a spec that will fail.
+      if (diagnostics.some((d) => d.severity === "error")) return fail(diagnostics, scene);
+      // png.step is checked once the timeline length is known, before any work.
+      if (kinds.includes("png") && options.png?.step !== undefined) {
+        const count = scene.timeline.length;
+        if (options.png.step > count) {
+          return fail(
+            [
+              ...diagnostics,
+              err(
+                "options/invalid-png-step",
+                "/png/step",
+                count === 0
+                  ? "png.step needs a spec with steps; this one has none."
+                  : `png.step ${options.png.step} is beyond the ${count} step(s) of the spec.`,
+                count === 0 ? "Use png.time or omit it." : `Use a step from 1 to ${count}.`,
+              ),
+            ],
+            scene,
+          );
+        }
+      }
 
       const name = options.name ?? "diagram";
       const finish = (svg: string) => (doOptimize ? deps.optimize(svg) : svg);

@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "vitest";
 import { render } from "../../packages/core/src/index.js";
+import { registry as hwRegistry } from "../../packages/parts-base/src/index.js";
 import { decodePng } from "../../packages/core/src/export/png.js";
 import { fixtureTheme } from "../../packages/core/test/fixtures/theme.js";
 import { realPng, resolverOf } from "../../packages/core/test/figure-fixtures.js";
@@ -70,6 +71,8 @@ async function generateAssemblies(): Promise<Record<string, unknown>> {
     darkTheme: fixtureTheme("dark", true),
     font: "system" as const,
     images,
+    // the real `hw:` pack: the GPU example draws DIMMs, heat sinks and fans from it
+    parts: hwRegistry,
   };
   const info: Record<string, { animate: [number, number]; mids: number[] }> = {};
   for (const ex of ASSEMBLY_EXAMPLES) {

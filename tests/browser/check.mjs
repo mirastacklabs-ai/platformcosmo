@@ -1,4 +1,4 @@
-/* global document, matchMedia, getComputedStyle, Image, setTimeout, fetch, URL, Buffer */
+/* global document, matchMedia, getComputedStyle, Image, setTimeout, fetch, URL, Buffer, window */
 /**
  * Browser check (PLAN M2 exit): loads each SVG of the input directory in <img>, inline and
  * <object> in chromium, firefox and webkit (over http://127.0.0.1) and checks that it animates,
@@ -84,6 +84,7 @@ async function open(page, mode, file, strip = false) {
     );
   }
   await page.evaluate(() => document.fonts.ready);
+  if (mode !== "img") await decodeImages(page, mode);
   return page.locator("#host").boundingBox();
 }
 
@@ -93,6 +94,28 @@ const shot = async (page, box) =>
       clip: { x: box.x, y: box.y, width: box.width, height: box.height },
     })
   ).toString("base64");
+
+/**
+ * Waits until every SVG <image> of the diagram has loaded and decoded (assembly diagrams embed
+ * raster images as data URIs; a lazily decoded one would repaint between two seeks to one time).
+ */
+async function decodeImages(page, mode) {
+  await page.evaluate(async (m) => {
+    const doc = m === "object" ? document.getElementById("el").contentDocument : document;
+    const hrefs = [...doc.querySelectorAll("image")].map(
+      (i) => i.getAttribute("href") ?? i.getAttribute("xlink:href"),
+    );
+    await Promise.all(
+      hrefs
+        .filter((h) => h && h.startsWith("data:"))
+        .map((h) => {
+          const img = new Image();
+          img.src = h;
+          return img.decode().catch(() => undefined);
+        }),
+    );
+  }, mode);
+}
 
 /** Deterministic time for inline and <object>: pause SMIL and CSS animations at `t` seconds. */
 async function seek(page, mode, t) {
@@ -112,6 +135,16 @@ async function seek(page, mode, t) {
     [mode, t],
   );
   await sleep(250);
+  // two animation frames, so the browser has painted the seeked state before a screenshot
+  await page.evaluate(
+    ([m]) => {
+      const win = m === "object" ? document.getElementById("el").contentWindow : window;
+      return new Promise((resolve) =>
+        win.requestAnimationFrame(() => win.requestAnimationFrame(resolve)),
+      );
+    },
+    [mode],
+  );
 }
 
 /** Pixel analysis in a scratch page of the same browser (decodes PNG via canvas). */
@@ -271,8 +304,8 @@ async function checkAnimates(name, browser, blocked, file, mode, probe) {
       name,
       file,
       mode,
-      "time control is deterministic (same time twice: <0.1% of pixels differ, assembly diagrams <0.5%)",
-      same.diff < (info?.assemblies?.[file] ? 0.005 : 0.001) ? "pass" : "fail",
+      "time control is deterministic (same time twice: <0.1% of pixels differ)",
+      same.diff < 0.001 ? "pass" : "fail",
       `${(same.diff * 100).toFixed(3)}% differ`,
     );
     const px = await pixels(scratch, a);
