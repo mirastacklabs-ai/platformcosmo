@@ -763,6 +763,10 @@ export interface AssemblyStepClock {
   readonly duration: number;
   /** Motion window opens. */
   readonly open: number;
+  /** Opening camera transition of the step at speed 1 (step 1 when it zooms); absent = `open - start`. */
+  readonly lead?: number;
+  /** Loop-start fade floor in output seconds (0.4) when step 1 holds for the fades (§7.4), else absent. */
+  readonly hold?: number;
   /** Closing hold ends: the END pose of the step is shown here. */
   readonly end: number;
 }

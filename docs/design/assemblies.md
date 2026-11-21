@@ -340,7 +340,7 @@ Step `i` spans `[T_i, T_i + d_i]`. Its **motion window** opens at `m_i = T_i + l
 transitions sit at the end of the previous step, D27) and closes at
 `c_i = T_i + d_i − tr_i − 0.2` where `tr_i = min(0.8, 0.25·d_i)` is the closing camera
 transition (0 when the next view is the same) and 0.2 s is a hold so the settled pose is seen.
-For the last step `tr_n` also applies when the end pose of any program differs from its base pose and no camera transition follows (the loop closure of §7.4 needs that window). All times use the output clock: `tr` and `lead` are `min(0.8, 0.25·d/speed)` seconds of output, i.e. that many times `speed` loop seconds.
+For the last step `tr_n` also applies when the end pose of any program differs from its base pose, or the view in effect after it is not view 0 (§7.7), and no camera transition follows (the loop closure of §7.4 needs that window). Step 1 opens its motion window at `max(lead_1, f)` where `f` is the end of the loop-start fades of §7.4 (`f = max(lead_1, 0.4)` when any assembly has them, else 0), so the build never overlaps the fades; `lead(D)` in the suggestion below is then `max(min(0.8, 0.25·D), f)` for step 1. All times use the output clock: `tr` and `lead` are `min(0.8, 0.25·d/speed)` seconds of output, i.e. that many times `speed` loop seconds.
 If the step's actions need `L_i > c_i − m_i`, all of them are compressed uniformly by
 `scale = (c_i − m_i)/L_i` (`ResolvedAction.scale`), with `assembly/compressed` (info; warning
 below 0.5) whose suggestion gives the duration that fits: `"duration": D`, the smallest whole
@@ -356,11 +356,14 @@ number of seconds with `D − lead(D) − tr(D) − 0.2 ≥ L_i`, where `lead(D)
   the parts not present at that level fade out during `[0, max(lead_1, 0.4)]`, and the parts
   present at that level but not in the base pose (`pose: "empty"` with a build starting at 3)
   fade in over the same window. The scene lists these as `SceneAssembly.loopStart`, computed
-  with the plan's own `lead_1`.
+  with the plan's own `lead_1`. Step 1's motion window opens only when they end (§7.3), so a
+  build in step 1 never hides or reorders a part that is still fading out.
 - **Loop closure**: during the last step's closing transition `tr_n` (with the camera's ease
   back to the overview) every program returns to its base level: explode levels by a fast
   implode (all moves reversed together, no stagger, compressed into `tr_n`); build levels by
-  fades (parts present at rest but not at the end fade in, others out). Ending with an
+  fades (parts present at rest but not at the end fade in, others out). When the last step ends in a view other than 0
+  (§7.7), the view groups cross-fade back to view 0 in the same window (over `VIEW_FADE`, ending
+  at the loop end), so the restart shows no snap. Ending with an
   explicit implode step avoids the fast return; the skill does that. When the last step is not zoomed the window `tr_n = min(0.8, 0.25·d_n)` is still reserved at its end for the fast return, so the loop restart never snaps.
 - **Focus on assemblies**: `focus` on an assembly, sub-assembly or part frames its box at the
   END pose of the step (`AssemblyRenderModel.focusRect(step, id)`), so an exploded unit fits
@@ -467,10 +470,15 @@ spec `closeup` stays an ordinary id (a node `closeup`, a slot `r1/closeup`) with
 using the same figure as close-up get two independent instances. A close-up's pose persists
 while it is not shown.
 
-Each level is a sibling group of the main camera (`ids.level(id)`) with its own camera and
-overview transform. Entering runs during the focus transition: the parent camera zooms toward
-the node (≤ 3×) while the level cross-fades in, starting with its rest bounds mapped onto the
-node's zoomed screen rect and easing to its own overview; leaving reverses it. Levels nest
+Each level is a group inside the camera group (`ids.level(id)`) with its own camera and
+overview transform. Entering runs during the focus transition: the level cross-fades in, starting with its rest
+bounds mapped onto the node's screen rect and easing to its own overview; leaving reverses it. The
+parent camera does **not** zoom toward the node during entry (`zoomFor` ignores level ids): the
+level group sits inside the camera group, so a zoomed parent camera would also scale and shift
+the level's overview placement, and every level placement track (and the host rects it eases
+from) would need the inverse camera as well. The level instead starts on the node's rect at
+the unzoomed overview and grows to its overview, which keeps the swap jump-free and the
+camera tracks of the main world unchanged. Levels nest
 (≤ 4 deep, ≤ 8 instances per spec). Per-step outputs and frames render the level in effect.
 Element and byte budgets count every level.
 

@@ -51,6 +51,7 @@ import { projectBoxBounds, unionRects } from "../../geometry/index.js";
 import { endsAwayFromBase } from "../../scene/assembly/timing.js";
 import { closesLoop, resolveFigure } from "../../scene/boards.js";
 import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
+import { LOOP_START_MIN } from "../../scene/assembly/build.js";
 import { stepTimes } from "../boards/timeline.js";
 import { parseCopyKey } from "../../depth/copies.js";
 import { copySuffix } from "../../emit/ids.js";
@@ -224,6 +225,8 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     start: t.start,
     duration: t.duration,
     open: t.open,
+    ...(t.window.lead > 0 ? { lead: t.window.lead } : {}),
+    ...(t.window.hold > 0 ? { hold: LOOP_START_MIN } : {}),
     end: t.end,
   }));
   const loopBuild = buildLoop(assemblies, plan, times, total, closeLast, input.foreign);
@@ -744,7 +747,11 @@ export function buildAssemblyRender(
   const basePoses: Record<string, readonly { program: string; level: number }[]> = {};
   for (const a of assemblies) basePoses[a.id] = a.basePose;
   for (const l of levels) if (l.assembly !== undefined) basePoses[l.path] = l.assembly.basePose;
-  let closeLast = endsAwayFromBase(plan[plan.length - 1]?.poses, basePoses);
+  let closeLast = endsAwayFromBase(
+    plan[plan.length - 1]?.poses,
+    basePoses,
+    plan[plan.length - 1]?.view ?? 0,
+  );
   if (!closeLast && ctx.spec?.figures !== undefined) {
     closeLast = closesLoop(
       ctx.spec.figures.map((f, i) => resolveFigure(f, i).figure),
