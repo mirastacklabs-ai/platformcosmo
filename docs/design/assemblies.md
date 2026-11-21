@@ -381,7 +381,14 @@ rack, `DcPack.buildAssembly` returns a `SceneAssembly` (source `dc`):
   (faceplate, body, LEDs). Slot ids `frame` are reserved in assembly mode
   (`assembly/reserved-id`).
 - `front` = the rack's front side in world (mirrored rows: `−y`), so `drawer` slides devices
-  out of the front.
+  out of the front. A rack in a mirrored row is **turned half a turn** (a row facing the other
+  way), not reflected: asymmetric details (a single PDU, a device's LED side) change sides
+  relative to the 1.1 look, which reflected only `y`. The DC pack records which racks it
+  mirrored (`buildDcScene` keeps the flag beside the fragment, so the fragment's bytes do not
+  change).
+- A **cover** (door, panel, lid) given `direction: "drawer"` leaves along its own outward normal,
+  not the owner's front: the rear-door heat exchanger goes rear (`−front`), a cover on the front
+  side goes front, so a door never slides through the devices.
 - Built-in program `drawers` (when `racks[].programs` has none): stage 1 doors (`frame/role:cover`,
   `drawer`), stage 2 every slot (`drawer`, `top-down`, stagger 0.1 s). Custom `programs` are
   explode programs only (the schema refuses build programs on racks) and select slot ids,
@@ -394,7 +401,11 @@ rack, `DcPack.buildAssembly` returns a `SceneAssembly` (source `dc`):
 `racks[].slots[].assembly: "<template>"` makes the device a sub-assembly with internals: the DC
 pack builds the device as `tray` + `lid` (role `cover`) + faceplate, and the template's parts
 are placed inside at true scale (template units must be physical; a template larger than the
-interior is a warning `assembly/size-mismatch` and is scaled down uniformly). The slot's own
+interior is a warning `assembly/size-mismatch` and is scaled down uniformly). The interior is
+the 19-inch one, 450 mm wide and centred in the chassis (§8.5); devices are front-mounted, so
+the template's front (its maximum `y`) meets the interior's front and its minimum `x` and `z`
+meet the interior's side and floor. A template with no parts keeps a lid-only `internals`
+program (1 stage) and a `assembly/size-mismatch` warning. The slot's own
 program is `internals`: lid up, then the template's default program (its `program`, else its
 first explode program), so it has 1 + that many stages; if the template's `program` is a build
 program, `internals` has 1 + its step count. Templates do not carry their own chassis or lid.
@@ -438,7 +449,9 @@ Element and byte budgets count every level.
 ### 8.5 Size reconciliation
 
 Physical units are true scale in DC context (1 tile = 600 mm; 19-inch rack interior 450 mm
-wide, 2U = 88.9 mm). A close-up of a physical part with a physical template is matched to the
+wide, 2U = 88.9 mm). The pack's device box stays the 1.1 one (540 mm wide, filling the rack
+between its posts) so 1.1 output is byte-identical; slot internals are fitted into the centred
+450 mm interior inside it. A close-up of a physical part with a physical template is matched to the
 part's world box at true scale; a mismatch above 10% on any axis gives
 `assembly/size-mismatch` and the close-up is fitted uniformly (contain). Figures and
 storyboards (pixel units) are fitted to the part's zoomed screen rect. The skill takes real
@@ -1001,6 +1014,10 @@ All examples validate against `schema/v1.json` (checked when this design was wri
   ]
 }
 ```
+
+The first stage's `drawer` on `frame/role:cover` moves the rear-door heat exchanger out of the
+rear (its own outward normal, §8.1), not through the devices; the other stages' slots slide out
+of the front.
 
 ### 19.2 GPU server internals with an image-fed GPU card
 
