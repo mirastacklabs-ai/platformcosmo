@@ -281,6 +281,7 @@ export function createRender(deps: RenderDeps): RenderFn {
 
       if (kinds.includes("animated")) {
         const layer = animator.animate(model, { speed, motion, mode: "loop" });
+        diagnostics.push(...(layer.diagnostics ?? []));
         const raw = deps.emit(model, layer, { font });
         elements = countElements(raw);
         outputs.push({
