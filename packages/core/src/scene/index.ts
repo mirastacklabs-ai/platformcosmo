@@ -573,6 +573,7 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
       color: resolveColor as (c: string) => string | undefined,
       ...(context.parts === undefined ? {} : { parts: context.parts }),
       ...(dcShapes === undefined ? {} : { dcShapes }),
+      ...(context.images ? { images: context.images } : {}),
     });
     assemblyScene = programs.attach(assemblyScene);
     diagnostics.push(...assemblyScene.diagnostics);

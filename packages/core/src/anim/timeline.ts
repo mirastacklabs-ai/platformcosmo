@@ -46,7 +46,8 @@ const MAX_ZOOM = 3;
 /** Zoom onto the step's focus rect; undefined for the full view (no focus, unknown target, tiny zoom). */
 export function zoomFor(model: RenderModel, step: SceneStep | undefined): Zoom | undefined {
   if (!step?.focus) return undefined;
-  const r = model.focusRects[step.focus];
+  // an assembly node is framed at the end pose of this step (§7.4), labels included
+  const r = model.assembly?.focusRect(step.index, step.focus) ?? model.focusRects[step.focus];
   const v = model.viewBox;
   if (!r || !(v.width > 0) || !(v.height > 0)) return undefined;
   const pad = Math.max(24, 0.25 * Math.max(r.width, r.height));
