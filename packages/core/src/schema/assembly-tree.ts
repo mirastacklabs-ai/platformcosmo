@@ -9,7 +9,7 @@
  * `use` instances share their template's children instead of copying them, and DC rack frames
  * and slots without a template are opaque (their parts come from the DC pack).
  */
-import type { Diagnostic } from "../contracts/index.js";
+import type { Diagnostic, SceneAssemblyNode } from "../contracts/index.js";
 import type { PlatformCosmoSpec, SpecAssembly, SpecPart, SpecProgram } from "./types.gen.js";
 import { globMatch } from "./glob.js";
 import { q } from "./suggest.js";
@@ -366,6 +366,45 @@ export class AssemblyModel {
     });
     this.trees.set(-1 - ri, root);
     return root;
+  }
+
+  /**
+   * The rack as the DC pack built it in assembly mode (`root`: the scene tree, §8.1): the
+   * validation rack tree with the frame and every slot opened up to the scene's nodes (frame
+   * parts, device parts; around a template, the pack's `tray`, `lid`, `faceplate/…`, `rear/…`),
+   * so rack-program selectors are checked over exactly the nodes the scene resolves them over.
+   * A slot's template children keep their nodes (and programs). Not memoized: call it once per
+   * rack; `rackTree` itself is unchanged (paths through an opaque node still pass).
+   */
+  builtRackTree(ri: number, root: SceneAssemblyNode): TNode | undefined {
+    const base = this.rackTree(ri);
+    if (base === undefined) return undefined;
+    const convert = (n: SceneAssemblyNode, ptr: string): TNode => ({
+      id: n.id,
+      kind: "part",
+      ptr,
+      tags: [...n.tags],
+      ...(n.type === undefined ? {} : { type: n.type }),
+      role: n.role,
+      progs: [],
+      opaque: false,
+      children: n.children.map((c) => convert(c, ptr)),
+      group: n.kind === "sub",
+    });
+    const built = new Map(root.children.map((c) => [c.id, c]));
+    return {
+      ...base,
+      children: base.children.map((t) => {
+        const scene = built.get(t.id);
+        if (scene === undefined) return t;
+        const own = new Map(t.children.map((c) => [c.id, c]));
+        return {
+          ...t,
+          opaque: false,
+          children: scene.children.map((c) => own.get(c.id) ?? convert(c, t.ptr)),
+        };
+      }),
+    };
   }
 
   /**

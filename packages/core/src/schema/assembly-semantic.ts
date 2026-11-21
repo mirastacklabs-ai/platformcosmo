@@ -21,6 +21,9 @@ import type {
   PartShapeRegistry,
 } from "../contracts/index.js";
 import { planFigureSteps, resolveFigure, stepViews, type ResolvedFigure } from "../scene/boards.js";
+import { AssemblyPrograms } from "../scene/assembly/plan.js";
+import { buildRackAssemblies, rackTargeted, targetedRacks } from "../scene/assembly/racks.js";
+import { MAX_LEVEL_DEPTH } from "../scene/assembly/levels.js";
 import { UNRENDERED, type GuardGroup } from "./unsupported.js";
 import { globMatch } from "./glob.js";
 import { LevelMachine, checkLevel, type LevelAction, type LevelFail } from "./assembly-levels.js";
@@ -239,6 +242,8 @@ interface Check {
   known?: readonly string[];
   /** Placement-check calls made so far. */
   placed?: number;
+  /** Racks in assembly mode with `programs`, as the DC pack built them, by rack index. */
+  readonly builtRacks: ReadonlyMap<number, TNode>;
 }
 
 /** Candidates for a did-you-mean search, bounded (deterministic: the first ones in order). */
@@ -315,6 +320,7 @@ export function assemblyDiagnostics(
     work: 0,
     hints: HINT_BUDGET,
     matches: new Map(),
+    builtRacks: builtRackTrees(spec, model, ctx),
   };
 
   checkCycles(c);
@@ -323,6 +329,7 @@ export function assemblyDiagnostics(
   (spec.racks ?? []).forEach((r, i) => checkRack(c, r, i));
   checkStoryboards(c);
   checkSteps(c);
+  checkCloseupChains(c);
   out.push(...model.diagnostics);
   if (model.capped) {
     out.push(
@@ -334,6 +341,43 @@ export function assemblyDiagnostics(
         "Use fewer or broader selectors, or fewer parts",
       ),
     );
+  }
+  return out;
+}
+
+/**
+ * Rack-program selectors resolve over the rack the DC pack builds (§6.1, §8.1), so with a DC pack
+ * they are validated over that same tree: the targeted racks that have `programs`, built as the
+ * scene builds them (one planner for all of them). Without a pack, or when it fails, the rack
+ * tree stays opaque below the frame and plain slots (nothing there is reported).
+ */
+function builtRackTrees(
+  spec: PlatformCosmoSpec,
+  model: AssemblyModel,
+  ctx: AssemblyContext,
+): ReadonlyMap<number, TNode> {
+  const out = new Map<number, TNode>();
+  const dc = ctx.dc;
+  if (dc?.buildAssembly === undefined) return out;
+  const racks = spec.racks ?? [];
+  const wanted = targetedRacks(spec).filter((id) =>
+    racks.some((r) => r.id === id && r.programs !== undefined),
+  );
+  if (wanted.length === 0) return out;
+  try {
+    const built = buildRackAssemblies(spec, dc, dc.buildScene(spec), {
+      planner: new AssemblyPrograms(spec),
+      ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
+      ...(dc.shapes === undefined ? {} : { dcShapes: dc.shapes }),
+    });
+    for (const a of built.assemblies) {
+      const ri = racks.findIndex((r) => r.id === a.id);
+      if (ri < 0 || !wanted.includes(a.id)) continue;
+      const t = model.builtRackTree(ri, a.root);
+      if (t !== undefined) out.set(ri, t);
+    }
+  } catch {
+    out.clear(); // the DC pack failed: `closeupDiagnostics` and the render report it
   }
   return out;
 }
@@ -1233,14 +1277,9 @@ function buildProgram(c: Check, owner: TNode, prog: SpecBuildProgram, pp: string
 
 function checkRack(c: Check, r: SpecRack, ri: number): void {
   const base = `/racks/${ri}`;
-  const targeted = (c.spec.steps ?? []).some((s) =>
-    (s.assembly ?? []).some((a) => actionTarget(a).split("/")[0] === r.id),
-  );
-  // Assembly mode (§8.1): a rack is an assembly once it has programs or internals or is targeted.
-  const mode =
-    r.programs !== undefined ||
-    targeted ||
-    (r.slots ?? []).some((s) => s.assembly !== undefined || s.closeup !== undefined);
+  // Assembly mode (§8.1): only a rack a step action targets is an assembly (the scene's and the
+  // DC pack's rule); programs, internals and close-ups alone leave it a 1.1 rack.
+  const mode = rackTargeted(c.spec, r.id);
   (r.slots ?? []).forEach((s, si) => {
     const at = `${base}/slots/${si}`;
     if (mode && s.id === "frame") {
@@ -1265,9 +1304,90 @@ function checkRack(c: Check, r: SpecRack, ri: number): void {
     }
   });
   if (r.programs !== undefined) {
-    const root = c.model.rackTree(ri);
+    // over the rack the DC pack builds when there is one, so validation and the scene select the
+    // same nodes; else the opaque validation tree
+    const root = c.builtRacks.get(ri) ?? c.model.rackTree(ri);
     if (root !== undefined) checkPrograms(c, root, r.programs, `${base}/programs`);
   }
+}
+
+// ---- close-up chains (§8.4, §8.5) ------------------------------------------------------------
+
+/**
+ * `assembly/too-deep` along close-up chains: an instance is rooted at its host's path plus
+ * `closeup`, so the path prefix accumulates through nested close-ups
+ * (`r2/srv/closeup/board/cpu-1/closeup/…`). The per-reference checks above measure one level from
+ * the reference's own assembly; this walk follows every chain from what is drawn (non-template
+ * assemblies; racks: slot close-ups, and slot internals of racks in assembly mode) with the prefix
+ * the scene builds, as far as levels nest (§8.4), and reports a reference once, at its own
+ * `closeup` pointer (a reference the checks above already reported is not reported again).
+ * Charged to the work cap; cycles stop (reported as template cycles).
+ */
+function checkCloseupChains(c: Check): void {
+  const { model, spec } = c;
+  const reported = new Set(c.out.filter((d) => d.code === "assembly/too-deep").map((d) => d.path));
+  const seen = new Set<string>();
+  /** Every node of `root` with a close-up, root first; `segs` = segments of the root's path. */
+  const hosts = (
+    root: TNode,
+    path: string,
+    segs: number,
+    chain: readonly string[],
+    level: number,
+  ) => {
+    const stack: { n: TNode; path: string; depth: number }[] = [{ n: root, path, depth: 0 }];
+    while (stack.length > 0) {
+      const { n, path: at, depth } = stack.pop() as { n: TNode; path: string; depth: number };
+      if (!charge(c, 1)) return;
+      if (n.closeup !== undefined) host(n, at, segs + depth + 1, chain, level);
+      for (let k = n.children.length - 1; k >= 0; k--) {
+        const ch = n.children[k] as TNode;
+        stack.push({ n: ch, path: `${at}/${ch.id}`, depth: depth + 1 });
+      }
+    }
+  };
+  /** The close-up of `n` (instance path `at/closeup`, `segs` segments) and what nests in it. */
+  const host = (n: TNode, at: string, segs: number, chain: readonly string[], level: number) => {
+    const ref = n.closeup as string;
+    const ti = model.byId.get(ref);
+    if (ti === undefined || chain.includes(ref) || level > MAX_LEVEL_DEPTH) return;
+    const depth = segs + model.metrics(ti).height;
+    const ptr = `${n.ptr}/closeup`;
+    if (depth > MAX_DEPTH) {
+      if (!reported.has(ptr)) {
+        reported.add(ptr);
+        c.out.push(
+          mk(
+            "error",
+            "assembly/too-deep",
+            ptr,
+            `Close-up ${q(ref)} of ${q(at)} would reach ${depth} path segments through the close-ups above it (limit ${MAX_DEPTH}); it is not built`,
+            "Use a shallower host or a flatter template, or nest fewer close-ups",
+            { host: at, closeup: ref, depth, limit: MAX_DEPTH },
+          ),
+        );
+      }
+      return;
+    }
+    const key = `${ti}\0${segs}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const tree = model.tree(ti);
+    if (tree !== undefined) hosts(tree, `${at}/closeup`, segs, [...chain, ref], level + 1);
+  };
+  model.assemblies.forEach((a, i) => {
+    if (a.template === true || model.byId.get(a.id) !== i) return;
+    const tree = model.tree(i);
+    if (tree !== undefined) hosts(tree, a.id, 1, [a.id], 1);
+  });
+  (spec.racks ?? []).forEach((r, ri) => {
+    const tree = model.rackTree(ri);
+    if (tree === undefined) return;
+    if (rackTargeted(spec, r.id)) hosts(tree, r.id, 1, [], 1);
+    else
+      for (const sl of tree.children)
+        if (sl.closeup !== undefined) host(sl, `${r.id}/${sl.id}`, 3, [], 1);
+  });
 }
 
 // ---- storyboards ----------------------------------------------------------------------------

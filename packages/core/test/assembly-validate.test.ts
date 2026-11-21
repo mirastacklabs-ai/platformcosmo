@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import type { Diagnostic, PartShapeRegistry } from "../src/index.js";
-import { validate } from "../src/index.js";
+import { buildScene, validate } from "../src/index.js";
 import { matchFigureSelector } from "../src/scene/boards.js";
 import { globMatch } from "../src/schema/glob.js";
 import { assemblyDiagnostics, hasAssemblyContent } from "../src/schema/assembly-semantic.js";
@@ -269,8 +269,12 @@ describe("namespace", () => {
     });
     // plain 1.1 rack: allowed
     none(run(rack({})), "assembly/reserved-id");
+    // programs alone do not make an assembly (§8.1, targeted only; #84 Q09)
     const programs = [{ id: "p", stages: [{ parts: ["frame"] }] }];
-    expect(one(run(rack({ programs })), "assembly/reserved-id").path).toBe("/racks/0/slots/0/id");
+    none(run(rack({ programs })), "assembly/reserved-id");
+    // nor does an action on one of its slot's close-up instances
+    const viaCloseup = { steps: [{ assembly: [{ explode: "r1/frame/closeup" }] }] };
+    none(run({ ...rack({}), ...viaCloseup }), "assembly/reserved-id");
     // targeted by an action
     const targeted = run({ ...rack({}), steps: [{ assembly: [{ explode: "r1" }] }] });
     expect(one(targeted, "assembly/reserved-id").path).toBe("/racks/0/slots/0/id");
@@ -1441,6 +1445,68 @@ describe("close-up paths", () => {
       });
     none(mk(6), "assembly/too-deep"); // a/closeup + 6 levels = 8
     expect(one(mk(7), "assembly/too-deep").path).toBe("/assemblies/1/closeup");
+  });
+
+  // #89 Q04: the prefix accumulates along a chain of close-ups (each reference alone fits)
+  const chain = (n: number, first: Obj = {}): Obj => ({
+    assemblies: [
+      { id: "a0", parts: [{ id: "p", closeup: "t1" }], ...first },
+      ...Array.from({ length: n }, (_, i) => ({
+        id: `t${i + 1}`,
+        template: true,
+        parts: [{ id: "p", ...(i + 1 < n ? { closeup: `t${i + 2}` } : {}) }],
+      })),
+    ],
+  });
+  test("a chain of close-ups is measured with the accumulated path prefix", () => {
+    // a0/p/closeup/p/closeup/p/closeup/p = 8 segments: three levels fit
+    none(run(chain(3)), "assembly/too-deep");
+    // the fourth instance would hold a0/p/closeup/p/closeup/p/closeup/p/closeup/p: 10 segments
+    const d = one(run(chain(4)), "assembly/too-deep");
+    expect(d.path).toBe("/assemblies/3/parts/0/closeup");
+    expect(d.params).toEqual({
+      host: "a0/p/closeup/p/closeup/p/closeup/p",
+      closeup: "t4",
+      depth: 10,
+      limit: 8,
+    });
+  });
+  test("the scene skips the same close-up at the same pointer with the same params", () => {
+    const scene = buildScene(spec(chain(4)), {});
+    const d = code(scene.diagnostics, "assembly/too-deep");
+    expect(d.map((x) => [x.path, x.params])).toEqual([
+      [
+        "/assemblies/3/parts/0/closeup",
+        { host: "a0/p/closeup/p/closeup/p/closeup/p", closeup: "t4", depth: 10, limit: 8 },
+      ],
+    ]);
+  });
+  test("a chain is reported once, however many hosts reach it", () => {
+    const twice = chain(4);
+    const a0 = (twice["assemblies"] as Obj[])[0] as Obj;
+    a0["parts"] = [
+      { id: "p", closeup: "t1" },
+      { id: "q", closeup: "t1" },
+    ];
+    expect(code(run(twice), "assembly/too-deep")).toHaveLength(1);
+  });
+  test("a rack slot's close-up chain starts at rack/slot/closeup", () => {
+    const rack = (n: number): Obj => ({
+      ...chain(n),
+      racks: [{ id: "r1", slots: [{ id: "srv", at: 1, type: "server-2u", closeup: "t1" }] }],
+    });
+    // r1/srv/closeup/p/closeup/p/closeup/p = 8
+    none(run(rack(3)), "assembly/too-deep");
+    expect(code(run(rack(4)), "assembly/too-deep").map((x) => x.path)).toEqual([
+      "/assemblies/3/parts/0/closeup",
+    ]);
+  });
+  test("a cycle of close-ups stops (template-cycle reports it)", () => {
+    const loop = chain(2);
+    ((loop["assemblies"] as Obj[])[2] as Obj)["parts"] = [{ id: "p", closeup: "t1" }];
+    const d = run(loop);
+    none(d, "assembly/too-deep");
+    expect(code(d, "assembly/template-cycle").length).toBeGreaterThan(0);
   });
 });
 
