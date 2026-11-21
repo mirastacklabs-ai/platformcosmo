@@ -227,7 +227,7 @@ footprint-overlapping movers along `u`, the outer one ends at least `gap` beyond
 and every mover clears its seat.
 
 - **Collisions.** A final pose with interpenetrating leaves (not explained by `inserts` or
-  enclosure) is a warning `assembly/collision`. Leaves whose boxes interpenetrate at any
+  enclosure) is a warning `assembly/collision` (defined here, not emitted yet). Leaves whose boxes interpenetrate at any
   sampled time of a transition (the bisection samples of §9.3) are a warning
   `assembly/transit-collision` naming both paths and the time: moves are straight lines and
   the engine does not plan paths around obstacles.
@@ -1062,7 +1062,7 @@ suggestions):
 | `assembly/part-not-staged`                                                                                      | info                                              | a figure part that no stage moves (it stays seated)                                                                                                                   |
 | `assembly/build-path-blocked`                                                                                   | warning                                           | `above` origin blocked                                                                                                                                                |
 | `assembly/subbuild-not-added`                                                                                   | warning                                           | a step's `subBuild` names a sub-assembly its `add` does not select whole; it is added as a plain part                                                                 |
-| `assembly/collision`                                                                                            | warning                                           | interpenetrating leaves in a final pose                                                                                                                               |
+| `assembly/collision`                                                                                            | warning                                           | interpenetrating leaves in a final pose (not emitted yet)                                                                                                             |
 | `assembly/compressed`                                                                                           | info / warning (< 0.5)                            | actions compressed to fit the step (reported by validation, from the plan the scene uses)                                                                             |
 | `assembly/implicit-access`                                                                                      | info                                              | access move prepended (§8.3)                                                                                                                                          |
 | `assembly/depth-approx`                                                                                         | info                                              | an epoch could not be certified                                                                                                                                       |
