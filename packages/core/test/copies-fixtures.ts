@@ -88,3 +88,34 @@ export function clippedCopySpec(): PlatformCosmoSpec {
     ],
   } as unknown as PlatformCosmoSpec;
 }
+
+/**
+ * The one-copy swap with the arm BUILT first (B-3 build appearance): step 1 rests with the base
+ * alone, step 2 builds the arm, steps 3 and 4 swap and return. The arm's copies must stay hidden
+ * until its build move starts (outside the loop-start fade).
+ */
+export function builtCopySpec(): PlatformCosmoSpec {
+  const spec = copySwapSpec() as unknown as {
+    assemblies: { programs: unknown[] }[];
+    steps: unknown[];
+  };
+  spec.assemblies[0]!.programs.push({ id: "b", kind: "build", steps: [{ add: ["arm"] }] });
+  spec.steps = [
+    { caption: "Rest", duration: 3 },
+    { caption: "Build", duration: 3, assembly: [{ build: "kit", program: "b" }] },
+    { caption: "Over", duration: 4, assembly: [{ explode: "kit", program: "swap" }] },
+    { caption: "Back", duration: 4, assembly: [{ implode: "kit", program: "swap" }] },
+  ];
+  return spec as unknown as PlatformCosmoSpec;
+}
+
+/** The one-copy swap with a quarter-turn view (A1-4/B-3): the 270° view's swap needs a copy too. */
+export function viewCopySpec(): PlatformCosmoSpec {
+  const spec = copySwapSpec() as unknown as { assemblies: { programs: unknown[] }[] };
+  spec.assemblies[0]!.programs.push({
+    id: "b",
+    kind: "build",
+    steps: [{ add: ["base"], view: 270 }, { add: ["arm"] }],
+  });
+  return spec as unknown as PlatformCosmoSpec;
+}

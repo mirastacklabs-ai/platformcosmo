@@ -27,7 +27,7 @@ import { zoomFor } from "../../src/anim/timeline.js";
 import { fixtureTheme } from "../fixtures/theme.js";
 import { realPng, resolverOf } from "../figure-fixtures.js";
 import { buildFixture } from "./fixtures/render-model.js";
-import { clippedCopySpec, copySwapSpec } from "../copies-fixtures.js";
+import { builtCopySpec, clippedCopySpec, copySwapSpec, viewCopySpec } from "../copies-fixtures.js";
 
 // B-1: the assembly animator (docs/design/assemblies.md §7.5, §9.4, §12; tracks doc B-1).
 
@@ -286,6 +286,71 @@ describe("depth copies (A1-2b): the CSS swaps copies exactly where the frames do
       if (e.order.includes(`${item}__c1`)) swaps++;
     }
     expect(swaps).toBeGreaterThan(0);
+  });
+});
+
+describe("depth copies with builds, views and levels (A1-2b x B-3)", () => {
+  const BLK = "kit/arm/blk";
+  /** Visibility of the copies' wrappers at output time t: frame attrs and the CSS evaluator. */
+  const both = (model: RenderModel, ids: readonly string[], t: number) => {
+    const loop = animate(model, { speed: 1, mode: "loop", motion: "css" });
+    const rules = parseRules(splitReduced(loop.css).live);
+    const attrs = animate(model, { speed: 1, mode: "frame", time: t }).attrs ?? {};
+    return {
+      frame: ids.map((id) => attrs[id]?.visibility),
+      css: ids.map((id) => cssPose(loop.css, rules, id, t).visibility ?? "visible"),
+      animated: ids.every((id) => rules.has(id)),
+    };
+  };
+
+  test("a built part's copies: one visible once built, none before its build move starts", () => {
+    const model = build(builtCopySpec());
+    const am = A(model);
+    expect(am.items.find((i) => i.item === BLK)?.copies).toBe(2);
+    const ids = [0, 1].map((c) => am.ids.partVisible(BLK, c));
+    const buildStart = am.clock[1]!.open;
+    let before = 0;
+    let after = 0;
+    for (let k = 0; k < 140; k++) {
+      const t = (am.loop * (k + 0.5)) / 140;
+      const { frame, css, animated } = both(model, ids, t);
+      expect(animated).toBe(true);
+      expect(css, `t=${t}`).toEqual(frame);
+      const shown = frame.filter((v) => v === "visible").length;
+      // the loop-start fade (B-3) shows the previous loop's end pose for the first moments
+      if (t > 1 && t < buildStart - 1e-3) {
+        expect(shown, `t=${t} before the build`).toBe(0);
+        before++;
+      } else if (t > buildStart + 0.05) {
+        expect(shown, `t=${t}`).toBe(1);
+        after++;
+      }
+      expect(shown).toBeLessThanOrEqual(1);
+    }
+    expect(before).toBeGreaterThan(10);
+    expect(after).toBeGreaterThan(50);
+  });
+
+  test("a copy inside a turned view: its ids exist once and the frame equals the CSS", () => {
+    const model = build(viewCopySpec());
+    const views = A(model).views ?? [];
+    const v = views.find((x) => x.turn === 270)!;
+    const vm = v.model;
+    expect(vm.items.find((i) => i.item === BLK)?.copies).toBe(2);
+    const ids = [0, 1].map((c) => vm.ids.partVisible(BLK, c));
+    const svg = svgOf(model, animate(model, { speed: 1, mode: "loop" }));
+    for (const id of [...ids, ...vm.ids.copyIds(vm.ids.partMotion(BLK, 0))]) {
+      expect(svg.split(`id="${id}"`).length - 1, id).toBe(1);
+    }
+    for (const e of vm.epochs.slice(1)) {
+      const t0 = Math.round(e.t0 * 1e4) / 1e4;
+      for (const t of [t0 - 0.01, t0 + 0.01]) {
+        const { frame, css, animated } = both(model, ids, t);
+        expect(animated).toBe(true);
+        expect(css, `t=${t}`).toEqual(frame);
+        expect(frame.filter((x) => x === "visible").length).toBeLessThanOrEqual(1);
+      }
+    }
   });
 });
 
