@@ -1,4 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": { "@platformcosmo/core": ["../../packages/core/src/index.ts"] }
+  },
   "include": ["generate.test.ts", "vitest.config.ts", "../../packages/core/src/**/*.d.ts"]
 }
