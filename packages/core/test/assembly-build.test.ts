@@ -17,7 +17,8 @@ import {
   resolveBuild,
   viewAt,
 } from "../src/scene/assembly/build.js";
-import { AssemblyPrograms, assemblyPlanDiagnostics } from "../src/scene/assembly/plan.js";
+import { AssemblyPrograms } from "../src/scene/assembly/plan.js";
+import { assemblyPlanDiagnostics } from "../src/scene/assembly/plan-scene.js";
 import { OwnerSelectors, indexOwner, makeWork } from "../src/scene/assembly/selectors.js";
 import { AssemblyModel } from "../src/schema/assembly-tree.js";
 import type { TNode } from "../src/schema/assembly-tree.js";

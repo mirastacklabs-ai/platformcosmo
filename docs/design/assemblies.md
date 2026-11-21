@@ -423,13 +423,19 @@ with it.
   change).
 - A **cover** (door, panel, lid) given `direction: "drawer"` leaves along its own outward normal,
   not the owner's front: the rear-door heat exchanger goes rear (`−front`), a cover on the front
-  side goes front, so a door never slides through the devices.
+  side goes front, so a door never slides through the devices. In assembly mode the rear-door
+  heat exchanger hangs between the rear posts (the 1.1 rack draws it over them as one solid
+  object), so its slide rear passes no post.
 - Built-in program `drawers` (when `racks[].programs` has none): stage 1 doors (`frame/role:cover`,
   `drawer`), stage 2 every slot (`drawer`, `top-down`, stagger 0.1 s). Custom `programs` are
   explode programs only (the schema refuses build programs on racks) and select slot ids,
   `type:<slot type>` and `frame/…`; `to` is checked against their stage count.
 - Cables (and their flows) touching a displaced slot are hidden while it is displaced
-  (opacity track on the cable segments), and reappear when it is back.
+  (opacity track on the cable segments), and reappear when it is back. Displaced means the
+  slot's displacement (its own moves and its ancestors') is not zero; the segments switch at
+  once (no ramp) and leave the depth order meanwhile; the particles of a flow on such a cable
+  ride in a wrapper with the same fade.
+- The rack keeps its 1.1 label, under its 1.1 box (the rack itself never moves).
 
 ### 8.2 Slot internals
 
@@ -455,6 +461,10 @@ targeted.
 Exploding a nested target (`explode: "r1/srv"`) whose ancestors are not displaced first plays
 the target's **access move**: its own move in the parent's default program (a slot's drawer).
 The access move is ONLY the target's own move in the parent's default program (a single slot drawer), not every move of the stages up to it. It is listed in `ResolvedAction.implied` (with `only`, the moved path; `accessLength` is its share of the action's length, first on an explode, last on an implode), reported as `assembly/implicit-access` (info) and reversed by the matching implode, unless an explicit action on that parent program has taken it over in between. Nesting depth ≤ 8 path segments.
+A target needs a program of its own: in a rack, only the rack (`drawers` or its `programs`) and a
+slot with `assembly` (`internals`) have one. An action on a slot without `assembly`, a part of
+it or the frame is `assembly/unknown-program` (validation; the suggestion names the rack, whose
+`drawers` slides the slot out). A path through a close-up names the close-up instance instead.
 
 ### 8.4 Close-ups (levels of detail)
 
@@ -549,7 +559,13 @@ dimensions from documents (a 13-inch board is 330 mm) and states assumptions whe
 The objects layer of a spec with assemblies is ordered by this algorithm over **items**:
 leaves (or the `back`/`front` halves of split leaves: `tray`, `ring`), plus every other scene
 object and cable segment (static). Items use `depthBox` in world space at the current pose.
-Without assemblies, the 1.1 `depthOrder` path is used unchanged.
+Without assemblies, the 1.1 `depthOrder` path is used unchanged, and so is a scene with assemblies
+but no rack in assembly mode (its objects are drawn in their 1.1 order, the assembly layer after
+them). With a rack in assembly mode (§8.1) every other object and cable segment of the scene is a
+static item of the assembly layer: an untargeted rack, its slot devices and its front shell are
+ONE item (the rack's box), drawn in their forced 1.1 order inside it; each cable segment is its
+own item. Depth diagnostics point at the assembly of the moving item (`/assemblies/<i>`, a
+close-up instance at its template, a rack at `/racks/<i>`).
 
 ### 9.2 Static rule
 
@@ -1044,7 +1060,7 @@ suggestions):
 | `assembly/depth-cycle`                                                                                          | info                                              | a certified (or, in an all-forced cycle, forced) depth edge was dropped to break a cycle                                                                              |
 | `image/exif-ignored`                                                                                            | info                                              | malformed EXIF block; orientation 1 assumed                                                                                                                           |
 | `assembly/unknown-target`                                                                                       | error                                             | action, focus, `set`, `overrides`, `mates`, `inserts`, `use`, `closeup` matches nothing                                                                               |
-| `assembly/unknown-program`                                                                                      | error                                             | program id not found on the target (action, `program`, `subBuild`) or of the wrong kind                                                                               |
+| `assembly/unknown-program`                                                                                      | error                                             | program id not found on the target (action, `program`, `subBuild`) or of the wrong kind; a rack path with no program (§8.3)                                           |
 | `assembly/selector-empty`                                                                                       | warning                                           | selector matches no part                                                                                                                                              |
 | `assembly/moved-twice`                                                                                          | error (info in the scene, through inferred roles) | a node moved by two stages of one program, or added by two build steps (also by ancestor or descendant)                                                               |
 | `assembly/stage-out-of-range`                                                                                   | error                                             | `to` beyond the program's stages or steps                                                                                                                             |
