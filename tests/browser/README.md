@@ -31,7 +31,9 @@ so the check is not "static" but "frames inside a step are equal, different step
 ### Depth copy fixtures (A1-2b)
 
 `asm-copies.svg` (one copy swapped twice, with a top-face label inside the copy) and
-`asm-copies-clip.svg` (a clipped piston with a copy) come from `packages/core/test/copies-fixtures.ts`.
+`asm-copies-clip.svg` (a clipped piston with a copy) and `asm-copies-window.svg` (A1-2c: a piston
+clipped only while it crosses, swapped with an unclipped copy for the slide) come from
+`packages/core/test/copies-fixtures.ts`.
 `fixture.json` lists their copy swaps (`copies[file].swaps`: time and the `partVisible` ids of the
 swapping item's copies). At each swap, in inline and `<object>`, exactly one copy must be visible
 at `t - 1/60`, `t` and `t + 1/60` s, the frames across the swap must differ by less than 0.5% of the

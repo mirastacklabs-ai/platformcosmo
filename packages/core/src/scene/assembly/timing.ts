@@ -149,12 +149,17 @@ export function programSegment(
   return { kind, from, to, length, moves: moves.sort(byStartPath) };
 }
 
-/** Level of every program after the last step differs from its base (§7.4): the loop must close. */
+/**
+ * The loop must close (§7.3, §7.4): the level of some program after the last step differs from
+ * its base, or the view in effect after it (`endView`) is not the full view 0.
+ */
 export function endsAwayFromBase(
   last: Readonly<Record<string, readonly { program: string; level: number }[]>> | undefined,
   base: Readonly<Record<string, readonly { program: string; level: number }[]>>,
+  endView: number = 0,
 ): boolean {
   if (last === undefined) return false;
+  if (endView !== 0) return true;
   for (const id of Object.keys(last)) {
     const b = new Map((base[id] ?? []).map((p) => [p.program, p.level]));
     for (const p of last[id] ?? []) if (p.level !== (b.get(p.program) ?? 0)) return true;

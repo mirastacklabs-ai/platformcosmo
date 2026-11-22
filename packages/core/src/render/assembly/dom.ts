@@ -347,15 +347,81 @@ function halfOf2(leaf: WorldLeaf, primId: string): "back" | "front" | undefined 
   return undefined;
 }
 
-/** `clipPath` of a face-exit or insert clip: the hull of the projected prism, solid's rest frame. */
-export function clipDef(ctx: DomContext, id: string, prism: Box3): SvgElement {
-  const hull = convexHull(boxCorners(prism).map((c) => ctx.projection.project(c)));
+/**
+ * Half the widest part outline stroke (the `overlay` path's 1.5; faces use 1), user units: how far
+ * a window clip's sides reach past the prism so the clipped copy keeps the whole outline (A1-2c).
+ */
+export const CLIP_STROKE_PAD = 0.75;
+
+/**
+ * `clipPath` of a face-exit or insert clip: the hull of the projected prism, solid's rest frame.
+ * `pad` (with the clip `axis`): every hull edge except the ones on the clip face (`axis` = the
+ * prism's low end) moves outward by `pad`, so the outline stroke on the leaf's silhouette sides
+ * is kept while the face still cuts it. Used for window clips (A1-2c): their copies swap with
+ * unclipped copies, which must draw the same pixels.
+ */
+export function clipDef(
+  ctx: DomContext,
+  id: string,
+  prism: Box3,
+  pad?: { readonly axis: "x" | "y" | "z"; readonly width: number },
+): SvgElement {
+  let hull = convexHull(boxCorners(prism).map((c) => ctx.projection.project(c)));
+  if (pad !== undefined && pad.width > 0 && hull.length >= 3) {
+    const face = new Set(
+      boxCorners(prism)
+        .filter((c) => c[pad.axis] === prism.origin[pad.axis])
+        .map((c) => {
+          const q = ctx.projection.project(c);
+          return `${q.x},${q.y}`;
+        }),
+    );
+    hull = padHull(hull, (a, b) => (face.has(`${a.x},${a.y}`) && face.has(`${b.x},${b.y}`) ? 0 : pad.width));
+  }
   ctx.count(2);
   return h(
     "clipPath",
     { id },
     h("polygon", { points: hull.map((p) => `${fmt(p.x)},${fmt(p.y)}`).join(" ") }),
   );
+}
+
+/**
+ * A convex polygon with each edge moved outward by `dist(a, b)` (edge a → b); vertices are the
+ * intersections of neighbouring moved edges (a mitred offset, so it contains the original).
+ */
+function padHull(
+  hull: readonly { readonly x: number; readonly y: number }[],
+  dist: (a: { x: number; y: number }, b: { x: number; y: number }) => number,
+): { x: number; y: number }[] {
+  const n = hull.length;
+  let area = 0;
+  for (let i = 0; i < n; i++) {
+    const a = hull[i]!;
+    const b = hull[(i + 1) % n]!;
+    area += a.x * b.y - b.x * a.y;
+  }
+  const sign = area > 0 ? 1 : -1;
+  // edge i: point and direction after the move
+  const lines = hull.map((a, i) => {
+    const b = hull[(i + 1) % n]!;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    // outward normal of a counter-clockwise (area > 0) polygon is (dy, -dx)
+    const nx = (sign * dy) / len;
+    const ny = (-sign * dx) / len;
+    const d = dist(a, b);
+    return { px: a.x + nx * d, py: a.y + ny * d, dx, dy, nx, ny, d };
+  });
+  return hull.map((v, i) => {
+    const l1 = lines[(i + n - 1) % n]!;
+    const l2 = lines[i]!;
+    const den = l1.dx * l2.dy - l1.dy * l2.dx;
+    if (Math.abs(den) < 1e-12) return { x: v.x + l2.nx * l2.d, y: v.y + l2.ny * l2.d };
+    const t = ((l2.px - l1.px) * l2.dy - (l2.py - l1.py) * l2.dx) / den;
+    return { x: l1.px + l1.dx * t, y: l1.py + l1.dy * t };
+  });
 }
 
 /**

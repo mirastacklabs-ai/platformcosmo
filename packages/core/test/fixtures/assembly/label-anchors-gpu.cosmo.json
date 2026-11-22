@@ -1,0 +1,228 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "2U GPU server, exploded",
+    "description": "Lid off, then the GPU, then the rest."
+  },
+  "assemblies": [
+    {
+      "id": "srv",
+      "units": "mm",
+      "fit": 10,
+      "parts": [
+        {
+          "id": "chassis",
+          "shape": "hw:chassis-2u",
+          "at": [0, 0, 0],
+          "role": "body",
+          "label": "Chassis tray"
+        },
+        {
+          "id": "lid",
+          "shape": "hw:lid",
+          "at": [0, 0, 88.9],
+          "size": [482.6, 740, 3],
+          "role": "cover",
+          "label": "Lid"
+        },
+        {
+          "id": "board",
+          "shape": "hw:board",
+          "at": [20, 270, 3],
+          "mates": "chassis",
+          "label": "Motherboard"
+        },
+        {
+          "id": "cpu",
+          "shape": "hw:cpu",
+          "at": [60, 300, 15],
+          "size": [76, 56, 5],
+          "count": 2,
+          "pitch": [0, 100, 0],
+          "mates": "board",
+          "label": "CPU"
+        },
+        {
+          "id": "sink",
+          "shape": "hw:heatsink",
+          "at": [45, 290, 20],
+          "size": [105, 90, 40],
+          "count": 2,
+          "pitch": [0, 100, 0],
+          "label": "Heat sink"
+        },
+        {
+          "id": "dimm",
+          "shape": "hw:dimm",
+          "at": [165, 290, 15],
+          "count": 4,
+          "pitch": [0, 12, 0],
+          "mates": "board",
+          "label": "DIMM"
+        },
+        {
+          "id": "dimm-b",
+          "shape": "hw:dimm",
+          "at": [165, 390, 15],
+          "count": 4,
+          "pitch": [0, 12, 0],
+          "mates": "board",
+          "tags": ["dimm"]
+        },
+        {
+          "id": "gpu",
+          "shape": "hw:gpu-card",
+          "at": [30, 560, 15],
+          "size": [267, 38, 70],
+          "label": "GPU card"
+        },
+        {
+          "id": "fan",
+          "shape": "hw:fan",
+          "at": [30, 200, 3],
+          "count": 6,
+          "pitch": [70, 0, 0],
+          "label": "Fan"
+        },
+        {
+          "id": "psu",
+          "shape": "hw:psu",
+          "at": [30, 8, 3],
+          "size": [73.5, 185, 39],
+          "count": 2,
+          "pitch": [90, 0, 0],
+          "label": "PSU"
+        }
+      ],
+      "programs": [
+        {
+          "id": "suggested",
+          "label": "srv: lid, GPU, then the rest",
+          "stages": [
+            {
+              "label": "Lid",
+              "parts": ["lid"],
+              "direction": "+x",
+              "distance": "auto",
+              "order": "outside-in",
+              "stagger": 0.08,
+              "duration": 0.8,
+              "labels": "show"
+            },
+            {
+              "label": "GPU card",
+              "parts": ["gpu"],
+              "direction": "+z",
+              "distance": "auto",
+              "order": "outside-in",
+              "stagger": 0.08,
+              "duration": 0.8,
+              "labels": "show"
+            },
+            {
+              "label": "Heat sinks",
+              "parts": ["sink-*"],
+              "direction": "+z",
+              "distance": "auto",
+              "order": "outside-in",
+              "stagger": 0.08,
+              "duration": 0.8,
+              "labels": "show"
+            },
+            {
+              "label": "CPUs and DIMMs",
+              "parts": ["cpu-*", "dimm-*", "dimm-b-*"],
+              "direction": "+z",
+              "distance": "auto",
+              "order": "outside-in",
+              "stagger": 0.08,
+              "duration": 0.8,
+              "labels": "show"
+            },
+            {
+              "label": "Board, fans, PSUs",
+              "parts": ["board", "fan-*", "psu-*"],
+              "direction": "+z",
+              "distance": "auto",
+              "order": "outside-in",
+              "stagger": 0.08,
+              "duration": 0.8,
+              "labels": "show"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "caption": "Assembled 2U GPU server",
+      "duration": 2
+    },
+    {
+      "caption": "Lid off",
+      "duration": 2,
+      "assembly": [
+        {
+          "explode": "srv",
+          "program": "suggested",
+          "to": 1
+        }
+      ]
+    },
+    {
+      "caption": "GPU card out",
+      "duration": 2,
+      "assembly": [
+        {
+          "explode": "srv",
+          "program": "suggested",
+          "to": 2
+        }
+      ]
+    },
+    {
+      "caption": "Heat sinks off",
+      "duration": 2.2,
+      "assembly": [
+        {
+          "explode": "srv",
+          "program": "suggested",
+          "to": 3
+        }
+      ]
+    },
+    {
+      "caption": "CPUs and DIMMs up",
+      "duration": 3.4,
+      "assembly": [
+        {
+          "explode": "srv",
+          "program": "suggested",
+          "to": 4
+        }
+      ]
+    },
+    {
+      "caption": "Board, fans and PSUs up",
+      "duration": 3.3,
+      "assembly": [
+        {
+          "explode": "srv",
+          "program": "suggested",
+          "to": 5
+        }
+      ]
+    },
+    {
+      "caption": "Reassembled",
+      "duration": 6.6,
+      "assembly": [
+        {
+          "implode": "srv"
+        }
+      ]
+    }
+  ]
+}

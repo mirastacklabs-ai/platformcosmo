@@ -278,6 +278,12 @@ export interface DepthClip {
   /** World box in the solid's rest frame; its projection (or the leaf primitive's silhouette over it) is the clip. */
   readonly prism: Box3;
   readonly clip: string;
+  /**
+   * Clipped only in the crossing window (A1-2c): the item also has unclipped copies, so the clip
+   * keeps the outline stroke on the prism's sides (`clipDef` pads every edge but the face's) and
+   * the swap between the copies draws the same pixels.
+   */
+  readonly window?: true;
 }
 
 export interface DepthEpochStats {
@@ -1624,7 +1630,10 @@ class EpochSolver {
           hi: [-Infinity, -Infinity, -Infinity],
           meets: false,
         });
-        if (axes < 0) wcands.push({ ...fresh(), phases: [] });
+        // only leaves that fill their box: the clip is the prism over the box footprint, which
+        // is the leaf's silhouette only then (a cylinder would show the box's V-shaped corner
+        // below the face); other leaves keep the named fallback (`assembly/clip-fallback`)
+        if (axes < 0 && P.solid) wcands.push({ ...fresh(), phases: [] });
         if (P.insertsKey !== S.key) {
           if (axes < 0) continue;
           // Rigid with each other over the loop: only a seated (interpenetrating) pair matters.
@@ -1788,7 +1797,7 @@ class EpochSolver {
           overSplit++;
           break;
         }
-        this.clips.push(clip.clip);
+        this.clips.push({ ...clip.clip, window: true });
         this.clipSolid[p] = clip.solid;
         this.clipAxis[p] = clip.u;
         this.clipMembers[p] = members.map((c) => c.s);
@@ -3191,7 +3200,7 @@ class EpochSolver {
     // one-order path unchanged (a cycle inside one interval needs a dropped edge either way)
     if (!flips && grouped.groups.length < 2) return undefined;
     const { groups, groupOf, pending, localApprox } = grouped;
-    work = 2 * groups.length * (2 * n + base.from.length + conflicts.length); // with retries
+    work = 2 * groups.length * (2 * n + base.from.length + conflicts.length); // chain A, retries
     if (work > budgets.maxPhaseWork) return this.copiesOverWork(work);
     // Static items keep one order in every group (a chain of edges that is never dropped), so
     // they never need a copy: the order of the loop-wide edges alone decides it, unless that
@@ -3232,7 +3241,9 @@ class EpochSolver {
     const withA = orderAll(chainA);
     if (withA === null) return this.copiesOverCycles();
     const tries: Grouped[] = [withA];
-    if (withA.inside > 0 && chainA.length > 1) {
+    // The work charged above covers chain A's orders with their own-edge retries; chain B's are as
+    // many again, so they run only when that fits too (up to 4 group orderings in all).
+    if (withA.inside > 0 && chainA.length > 1 && 2 * work <= budgets.maxPhaseWork) {
       const chainB = this.groupChain(groups, base, conflicts, isStatic);
       if (chainB !== undefined && !sameList(chainB, chainA)) {
         const withB = orderAll(chainB);
@@ -3395,7 +3406,9 @@ class EpochSolver {
     const tails: number[] = [];
     const inT = new Uint8Array(watch ? watch.from.length : 0);
     const inList: number[] = [];
+    /** Edges left to the cycle rule in the current group (they close a cycle in its first interval). */
     const ignored = new Uint8Array(inT.length);
+    const ignoredList: number[] = [];
     const seen = new Int32Array(watch ? n : 0);
     let stamp = 0;
     let dfs = 0;
@@ -3497,10 +3510,13 @@ class EpochSolver {
           tails.length = 0;
           for (const e of inList) inT[e] = 0;
           inList.length = 0;
+          // an edge left to the cycle rule in one group is tracked again in the next
+          for (const e of ignoredList) ignored[e] = 0;
+          ignoredList.length = 0;
           for (const e of watch.at[k]!) {
-            if (ignored[e]) continue;
             if (reaches(watch.to[e]!, watch.from[e]!)) {
               ignored[e] = 1;
+              ignoredList.push(e);
               continue;
             }
             push(watch.from[e]!, watch.to[e]!);

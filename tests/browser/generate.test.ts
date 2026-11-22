@@ -15,7 +15,11 @@ import { test } from "vitest";
 import { buildModel, buildScene, render } from "../../packages/core/src/index.js";
 import type { AssemblyRenderModel, PlatformCosmoSpec } from "../../packages/core/src/index.js";
 import { parseCopyKey } from "../../packages/core/src/depth/copies.js";
-import { clippedCopySpec, copySwapSpec } from "../../packages/core/test/copies-fixtures.js";
+import {
+  clippedCopySpec,
+  copySwapSpec,
+  crossingClipSpec,
+} from "../../packages/core/test/copies-fixtures.js";
 import { registry as hwRegistry } from "../../packages/parts-base/src/index.js";
 import { decodePng } from "../../packages/core/src/export/png.js";
 import { fixtureTheme } from "../../packages/core/test/fixtures/theme.js";
@@ -61,6 +65,8 @@ const ASSEMBLY_EXAMPLES = [
 const COPY_EXAMPLES = [
   { file: "asm-copies.svg", prefix: "pc-cp", spec: () => copySwapSpec({ label: true }) },
   { file: "asm-copies-clip.svg", prefix: "pc-cc", spec: clippedCopySpec },
+  // A1-2c: clipped only while it crosses, an unclipped copy for the slide (§9.5)
+  { file: "asm-copies-window.svg", prefix: "pc-cw", spec: () => crossingClipSpec() },
 ] as const;
 
 /**

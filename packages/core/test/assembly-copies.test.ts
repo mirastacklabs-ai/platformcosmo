@@ -18,6 +18,9 @@ import {
 import type { AssemblyIdScheme, AssemblyRenderModel, IdScheme } from "../src/contracts/index.js";
 import { assemblyAnim, assemblyFrame, assemblyStepEnd } from "../src/anim/assembly.js";
 import { parseCopyKey } from "../src/depth/copies.js";
+import { decodePng } from "../src/export/png.js";
+import { rasterize } from "../src/export/rasterize.js";
+import { themeRegistry } from "../../themes/src/index.js";
 import { fixtureTheme } from "./fixtures/theme.js";
 import { clippedCopySpec, copySwapSpec, crossingClipSpec } from "./copies-fixtures.js";
 
@@ -314,6 +317,14 @@ describe("clipped only while crossing: a clipped and an unclipped copy (§9.5, A
     }
   });
 
+  test("a cylinder does not fill its box: no split, the named fallback stays (§9.5)", () => {
+    const cyl = build(crossingClipSpec({ shape: "cylinder" }));
+    const it = A(cyl.model).items.find((i) => i.item === P)!;
+    expect(it.copies).toBe(1);
+    expect(it.clips).toBeUndefined();
+    expect(cyl.codes).toContain("assembly/clip-fallback");
+  });
+
   test("one copy at a time, the epoch's; frames agree with the animation at every swap", () => {
     const v = [am.ids.partVisible(P, 0), am.ids.partVisible(P, 1)];
     const anim = assemblyAnim(am, 1);
@@ -339,6 +350,82 @@ describe("clipped only while crossing: a clipped and an unclipped copy (§9.5, A
     }
     expect(both).toBe(3); // both copies are used
   });
+});
+
+describe("window clip swaps are pixel-invisible (A1-2c, §9.5)", () => {
+  // the light theme's outline strokes (the fixture theme's faces draw none)
+  const spec = crossingClipSpec();
+  const model = buildModelWithDiagnostics({
+    scene: buildScene(spec, {}),
+    theme: themeRegistry.get("light")!,
+    font: "system",
+    prefix: "pc-t",
+    spec,
+  }).model;
+  const am = A(model);
+  const P = "kit/arm/piston";
+  /** RGBA of the frame at t, at scale 2; `show` forces one copy visible and the other hidden. */
+  async function frame(t: number, show?: 0 | 1): Promise<Uint8Array> {
+    const layer = animator.animate(model, { speed: 1, mode: "frame", time: t });
+    if (show !== undefined) {
+      const attrs = { ...(layer.attrs ?? {}) };
+      for (const c of [0, 1] as const) {
+        const id = am.ids.partVisible(P, c);
+        attrs[id] = { ...(attrs[id] ?? {}), visibility: c === show ? "visible" : "hidden" };
+      }
+      return decodePng(
+        await rasterize(emit(model, { ...layer, attrs }, { font: "system", target: "raster" }), {
+          scale: 2,
+          fonts: [],
+        }),
+      ).data;
+    }
+    return decodePng(
+      await rasterize(emit(model, layer, { font: "system", target: "raster" }), {
+        scale: 2,
+        fonts: [],
+      }),
+    ).data;
+  }
+  const diff = (a: Uint8Array, b: Uint8Array): number => {
+    let n = 0;
+    for (let q = 0; q < a.length; q += 4) {
+      if (
+        Math.abs(a[q]! - b[q]!) + Math.abs(a[q + 1]! - b[q + 1]!) + Math.abs(a[q + 2]! - b[q + 2]!) >
+        6
+      )
+        n++;
+    }
+    return n;
+  };
+  const swaps = am.epochs
+    .slice(1)
+    .filter((e, k) => {
+      const copy = (o: readonly string[]): number | undefined => {
+        const x = o.find((y) => parseCopyKey(y).item === P);
+        return x === undefined ? undefined : parseCopyKey(x).copy;
+      };
+      const a = copy(am.epochs[k]!.order);
+      const b = copy(e.order);
+      return a !== undefined && b !== undefined && a !== b;
+    })
+    .map((e) => e.t0);
+
+  test("at each swap the clipped and the unclipped copy draw the same pixels", async () => {
+    expect(swaps).toHaveLength(2);
+    for (const t of swaps) {
+      expect(diff(await frame(t, 0), await frame(t, 1)), `t=${t}`).toBe(0);
+    }
+  }, 120_000);
+
+  test("frames 1 ms either side of a swap differ by motion only (no outline pop)", async () => {
+    for (const t of swaps) {
+      const across = diff(await frame(t - 0.001), await frame(t + 0.001));
+      // the same 2 ms of motion without a swap, on one copy
+      const same = diff(await frame(t - 0.001, t < 5 ? 0 : 1), await frame(t + 0.001, t < 5 ? 0 : 1));
+      expect(across, `t=${t}`).toBeLessThanOrEqual(same + 8);
+    }
+  }, 120_000);
 });
 
 describe("copies in quarter-turn views (A1-4): copyIds lists the ids as emitted", () => {

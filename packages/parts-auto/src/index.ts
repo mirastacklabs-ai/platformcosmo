@@ -3,6 +3,8 @@ import type { PartShapePack, PartShapeRegistry } from "@platformcosmo/core";
 import { autoShapes } from "./shapes.js";
 
 export { autoShapes } from "./shapes.js";
+export { engineLayout } from "./anchors.js";
+export type { EngineLayout } from "./anchors.js";
 export { MAX_EXTENT_MM, paramSpecsOf } from "./define.js";
 export type { AutoParams, ParamSpec } from "./define.js";
 

@@ -90,6 +90,7 @@ export function createIds(
     partLabel: (path) => `${p}-pl_${seg(path)}`,
     partClip: (item, copy) => `${p}-pc_${itemSeg(item)}${copySuffix(copy)}`,
     callout: (owner, program, step) => `${p}-co_${seg(owner)}__${seg(program)}__${step}`,
+    flight: (path) => `${p}-fy_${seg(path)}`,
     view: (turn) => `${p}-vw_${turn}`,
     fadeWrap: (id) => `${p}-fw_${seg(id)}`,
     level: (id) => `${p}-lv_${seg(id)}`,

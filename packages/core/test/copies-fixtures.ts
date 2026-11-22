@@ -124,9 +124,12 @@ export function viewCopySpec(): PlatformCosmoSpec {
  * A piston clipped only while it crosses (§9.5, A1-2c): it rises out of the static block through
  * its top face, then slides sideways once clear. Its motion relative to the block has two axes,
  * so no single static clip is valid for the loop: copy 0 is clipped and drawn while it crosses,
- * copy 1 is unclipped and drawn for the slide.
+ * copy 1 is unclipped and drawn for the slide. With `shape: "cylinder"` the piston does not fill
+ * its box, so it is not split: it keeps the named fallback (`assembly/clip-fallback`).
  */
-export function crossingClipSpec(): PlatformCosmoSpec {
+export function crossingClipSpec(
+  opts: { readonly shape?: "cylinder" } = {},
+): PlatformCosmoSpec {
   return {
     meta: { version: "1", title: "Clipped while crossing" },
     assemblies: [
@@ -138,7 +141,14 @@ export function crossingClipSpec(): PlatformCosmoSpec {
           {
             id: "arm",
             at: [100, 100, 50],
-            parts: [{ id: "piston", size: [200, 200, 130], color: "#f59e0b" }],
+            parts: [
+              {
+                id: "piston",
+                size: [200, 200, 130],
+                color: "#f59e0b",
+                ...(opts.shape ? { shape: opts.shape } : {}),
+              },
+            ],
           },
         ],
         programs: [

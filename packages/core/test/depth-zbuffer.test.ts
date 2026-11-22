@@ -52,6 +52,8 @@ async function expectExact(
 /** Per-item cap on wrong pixels (share of that item's reference pixels). */
 const ITEM_CAP = 0.01;
 
+const solidBox = { solid: true, fills: true } as const;
+
 // Piston rising out of a STATIC block through its top face (§9.5), and back.
 const piston: Scene = {
   items: [
@@ -316,6 +318,57 @@ describe("clip frames (§9.4, §9.5)", () => {
       expect(all.fraction).toBeGreaterThan(0.01);
       const none = await check(scene, r, 0.3, view, { clipMode: "none" });
       expect(none.fraction).toBeGreaterThan(0.01);
+    });
+
+    it("over the pair budget: no two-copy candidates (budget/time), hidden while it crosses", () => {
+      const b = depthEpochs(scene.items, scene.moves, scene.loop, {
+        budgets: { maxPairChecks: 1 },
+      });
+      expect(b.clips).toEqual([]);
+      expect(b.stats.copies).toBe(0);
+      const w = b.diagnostics.find(
+        (d) => d.code === "budget/time" && d.message.includes("two-copy clip candidates"),
+      )!;
+      expect(w.severity).toBe("warning");
+      // piston in block and block in piston: both directions are candidates
+      expect(w.params).toMatchObject({ candidates: 2 });
+    });
+
+    it("a cylinder (does not fill its box) is not split: hidden while it crosses, named", async () => {
+      const cyl: Scene = {
+        ...scene,
+        items: [
+          scene.items[0]!,
+          { ...scene.items[1]!, fills: false },
+        ],
+        zcyl: ["e/piston"],
+      };
+      const c = solve(cyl);
+      expect(c.clips).toEqual([]);
+      expect(c.stats.copies).toBe(0);
+      expect(c.diagnostics.map((d) => d.code)).toContain("assembly/clip-fallback");
+      const v = viewOf(cyl, [0, 1, 2], 2);
+      expect(count((await check(cyl, c, 0.3, v)).got, p)).toBe(0);
+      await expectExact(cyl, c, [0.8, 1.5, 2.5, 3.2], v);
+    });
+
+    it("no second copy when the block is weak-behind the piston (flush corner, §9.5)", async () => {
+      // the piston sits in the block's +x+y corner (flush) and already crosses the deck at rest,
+      // so the block never passes a hidden face of the piston in the crossing window:
+      // block < piston is exact without a clip, and no copy is made
+      const corner: Scene = {
+        items: [
+          scene.items[0]!,
+          { key: "e/piston", path: "e/piston", box: box(2, 2, 1, 2, 2, 1.5), ...solidBox },
+        ],
+        moves: scene.moves,
+        loop: 4,
+      };
+      const c = solve(corner);
+      expect(c.clips).toEqual([]);
+      expect(c.stats.copies).toBe(0);
+      expect(c.diagnostics).toEqual([]);
+      await expectExact(corner, c, [0.3, 0.6, 1.5, 2.5, 3.4], viewOf(corner, [0, 1, 2], 2));
     });
 
     it("beyond the copy budget: hidden while it crosses (fallback), budget/depth-copies", async () => {
