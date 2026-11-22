@@ -551,7 +551,11 @@ class Diags {
   readonly list: Diagnostic[] = [];
   private readonly counts = new Map<string, number>();
   private readonly seen = new Set<string>();
-  private readonly suppressed = new Map<string, { severity: Diagnostic["severity"]; n: number }>();
+  /** Per code: how many were dropped, and the pointer of the first one (the summary's path). */
+  private readonly suppressed = new Map<
+    string,
+    { severity: Diagnostic["severity"]; n: number; path: string }
+  >();
   constructor(private readonly max: number) {}
   add(d: Diagnostic, dedupe?: string): void {
     if (dedupe !== undefined) {
@@ -567,14 +571,14 @@ class Diags {
     }
     const s = this.suppressed.get(d.code);
     if (s) s.n++;
-    else this.suppressed.set(d.code, { severity: d.severity, n: 1 });
+    else this.suppressed.set(d.code, { severity: d.severity, n: 1, path: d.path });
   }
   finish(): Diagnostic[] {
     for (const [code, s] of [...this.suppressed].sort((a, b) => cmpStr(a[0], b[0]))) {
       this.list.push({
         severity: s.severity,
         code,
-        path: "",
+        path: s.path,
         message: `${s.n} more ${code} diagnostic(s) suppressed.`,
         params: { suppressed: s.n },
       });

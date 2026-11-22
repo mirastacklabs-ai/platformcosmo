@@ -105,6 +105,36 @@ function unionOf(boxes: readonly Box3[]): Box3 | undefined {
   return box(x0, y0, z0, x1 - x0, y1 - y0, z1 - z0);
 }
 
+/**
+ * Device parts as separate leaves (assembly mode): a part whose front end hides details set into
+ * it (the chassis behind the face plate, the plate behind its ports, LEDs and vents) ends where
+ * the first such detail starts. The 1.1 drawing paints the details over it in component order;
+ * as leaves, a detail embedded in another box is an interpenetration that the depth order can
+ * only resolve by hiding one of them (clip-fallback), so the GPU node's grille or the ToR's
+ * ports vanished. The trim is a few millimetres at the front face (well under a pixel at rack
+ * scale), and nothing changes for racks drawn as 1.1 objects.
+ */
+export function settleFronts(parts: readonly ScenePart[]): ScenePart[] {
+  const EPS = 1e-9;
+  const overlaps = (a0: number, a1: number, b0: number, b1: number): boolean =>
+    a0 < b1 - EPS && b0 < a1 - EPS;
+  return parts.map((p) => {
+    if (p.id.startsWith("rear")) return p;
+    const { origin: o, size: z } = p.box;
+    let end = o.y + z.y;
+    for (const q of parts) {
+      if (q === p || q.id.startsWith("rear")) continue;
+      const a = q.box.origin;
+      const b = q.box.size;
+      if (!overlaps(o.x, o.x + z.x, a.x, a.x + b.x)) continue;
+      if (!overlaps(o.z, o.z + z.z, a.z, a.z + b.z)) continue;
+      // q starts inside p and reaches p's front face: p is its carrier
+      if (a.y > o.y + EPS && a.y < end - EPS && a.y + b.y >= o.y + z.y - EPS) end = a.y;
+    }
+    return end < o.y + z.y - EPS ? { ...p, box: { origin: o, size: { ...z, y: end - o.y } } } : p;
+  });
+}
+
 /** Component-local scene part (tiles) as a box in mm, offset by (dx, dy, dz) mm. */
 const partBox = (p: ScenePart, dx: number, dy: number, dz: number): Box3 =>
   box(
@@ -790,7 +820,7 @@ export function buildRackAssembly(
     const dy = RACK_DEPTH_MM - RACK_FRONT_INSET_MM - tileToMm(dev.bounds.size.y);
     const dz = RACK_BASE_MM + (s.at - 1) * U_MM;
     const sp = `${rackId}/${s.id}`;
-    const parts = depthSort(dev.parts);
+    const parts = settleFronts(depthSort(dev.parts));
     const sinit: NodeInit = {
       type: s.spec.type,
       ...(s.spec.label === undefined ? {} : { label: s.spec.label }),
