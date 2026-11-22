@@ -660,7 +660,7 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     const cells: { g: SvgElement; text: SvgElement }[] = [];
     if (shown.length > 0) {
       const id = `${ids.callout(first.owner, first.program, first.step)}__s${k}`;
-      rect = h("rect", { class: `${P}-capbox`, x: 0, y: 0, width: 0, height: 0, rx: 6 });
+      rect = h("rect", { class: `${P}-callout`, x: 0, y: 0, width: 0, height: 0, rx: 6 });
       const kids: SvgNode[] = [rect];
       shown.forEach((part, j) => {
         const g = h("g", { transform: "" }, copyOf(part.leaf, `__t${k}x${j}`, false));
@@ -669,7 +669,7 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
           y: 0,
           size: ctx.labelSize,
           anchor: "middle",
-          cls: "t-caption",
+          cls: "t-primary",
           bold: true,
           content: `${part.count}x`,
         });
@@ -689,7 +689,11 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
             )
           : total;
       const want = Math.max(t1, t0 + 4 * BUILD_FADE + HOLD - 2 * BUILD_FADE);
-      const end = r4(Math.max(t0 + 2e-4, Math.min(want, nextT0, total)));
+      // the hold never runs into the camera's move to the next step (its closing transition
+      // starts at `clock.end`), where the box would be rescaled and moved while it fades
+      const cs = clock[k - 1];
+      const camera = cs !== undefined && cs.end < cs.start + cs.duration - 1e-9 ? cs.end : total;
+      const end = r4(Math.max(t0 + 2 * BUILD_FADE, Math.min(want, nextT0, total, camera)));
       const ramp = Math.max(1e-4, Math.min(BUILD_FADE, (end - t0) / 2));
       const opacity: OpacityKey[] = [{ t: 0, opacity: 0, easing: "step" }];
       pushKey(opacity, { t: r4(t0), opacity: 0, easing: "linear" });

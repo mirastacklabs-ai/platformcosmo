@@ -10,6 +10,7 @@ import {
   type RenderModel,
 } from "../src/index.js";
 import { diagnosticKey } from "../src/render/index.js";
+import { placeAgain } from "../src/render/model.js";
 import { plusRects, segmentHits } from "../src/render/assembly/callout.js";
 import { zoomFor } from "../src/anim/timeline.js";
 import { projectBoxBounds } from "../src/geometry/index.js";
@@ -100,7 +101,7 @@ const staticSvg = async (o: Obj): Promise<string> => {
 };
 /** The callout box of a timeline step (rect in screen space, translate applied), from the SVG. */
 const boxOf = (svg: string, tl: number): Rect | undefined => {
-  const g = new RegExp(`<g id="[^"]*-co_[^"]*__s${tl}"[^>]*>\\s*<rect ([^>]*capbox[^>]*)/>`).exec(
+  const g = new RegExp(`<g id="[^"]*-co_[^"]*__s${tl}"[^>]*>\\s*<rect ([^>]*callout[^>]*)/>`).exec(
     svg,
   );
   if (g === null) return undefined;
@@ -357,5 +358,160 @@ describe("render()'s diagnostic dedupe key", () => {
     expect(diagnosticKey({ ...d, severity: "info" })).toBe(
       diagnosticKey({ ...d, severity: "info" }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The box is a keep-out: no copy covers it at its slot or on its flight
+// ---------------------------------------------------------------------------------------------
+
+/** One part per timeline step flies in from the callout, 1 s steps; `focus` is set on step 4. */
+const oneSecondSteps = (): Obj => {
+  const ids = ["a", "b", "c", "d"];
+  return {
+    meta: { version: "1" },
+    assemblies: [
+      {
+        id: "k",
+        units: "tile",
+        parts: [
+          { id: "base", at: [0, 0, 0], size: [6, 6, 1] },
+          ...ids.map((id, i) => ({ id, at: [i, 0, 1], size: [1, 1, 1 + (i % 2)] })),
+        ],
+        programs: [
+          {
+            id: "bd",
+            kind: "build",
+            steps: [{ add: ["base"] }, ...ids.map((id) => ({ add: [id], from: "callout" }))],
+          },
+        ],
+      },
+    ],
+    steps: [
+      { duration: 1, assembly: [{ build: "k", program: "bd", to: 1 }] },
+      { duration: 1, assembly: [{ build: "k", program: "bd", to: 2 }] },
+      { duration: 1, assembly: [{ build: "k", program: "bd", to: 3 }] },
+      { duration: 1, focus: "k/c", assembly: [{ build: "k", program: "bd", to: 4 }] },
+      { duration: 1, assembly: [{ build: "k", program: "bd", to: 5 }] },
+    ],
+  };
+};
+
+/** The 14-kind spec: every kind flies in from the callout. */
+const kinds14 = (): Obj => {
+  const parts = Array.from({ length: 14 }, (_v, i) => ({
+    id: `p${i}`,
+    at: [i, 0, 1],
+    size: [1, 1, 1 + i],
+  }));
+  return {
+    meta: { version: "1" },
+    assemblies: [
+      {
+        id: "w",
+        units: "tile",
+        parts: [{ id: "base", at: [0, 0, 0], size: [14, 1, 1] }, ...parts],
+        programs: [
+          {
+            id: "bd",
+            kind: "build",
+            steps: [{ add: ["base"] }, { add: parts.map((p) => p.id), from: "callout" }],
+          },
+        ],
+      },
+    ],
+    steps: [{ duration: 6, assembly: [{ build: "w", program: "bd", to: 2 }] }],
+  };
+};
+
+/** Every instant a flight copy is on screen while its box shows: the copy's rect vs the box. */
+async function copiesOverBox(spec: Obj): Promise<string[]> {
+  const m = modelOf(spec);
+  const am = m.assembly as AssemblyRenderModelX;
+  const svg = await staticSvg(spec);
+  const rest = new Map(
+    leavesOf(m).map((l) => [l.path, projectBoxBounds(m.projection, l.geometry.bounds)] as const),
+  );
+  const bad: string[] = [];
+  for (const fade of am.staticFades.filter((f) => f.id.includes("-co_"))) {
+    const tl = Number(/__s(\d+)$/.exec(fade.id)![1]);
+    const box = boxOf(svg, tl);
+    if (box === undefined) continue;
+    for (const f of am.flights ?? []) {
+      const wins = f.visibility.flatMap((v, i) =>
+        v.visible ? [[v.t, f.visibility[i + 1]!.t] as const] : [],
+      );
+      for (const [t0, t1] of wins) {
+        for (let k = 0; k <= 12; k++) {
+          const t = t0 + ((t1 - t0) * k) / 12;
+          const st = am.frameAt(t);
+          if ((st.opacity[fade.id] ?? 0) < 0.5) continue;
+          const tf = /translate\((-?[\d.]+) (-?[\d.]+)\)/.exec(st.transforms[f.id] ?? "");
+          if (tf === null) continue;
+          const r = rest.get(f.path)!;
+          const copy = { ...r, x: r.x + Number(tf[1]), y: r.y + Number(tf[2]) };
+          if (overlap(copy, box)) bad.push(`${f.path} @${t.toFixed(2)}`);
+        }
+      }
+    }
+  }
+  return bad;
+}
+
+describe("flying copies never cover the callout box (§7.6)", () => {
+  test("wall focus w/b (zoomed)", async () => {
+    expect(await copiesOverBox(wall("w/b"))).toEqual([]);
+  });
+  test("1 s steps, focus k/c", async () => {
+    expect(await copiesOverBox(oneSecondSteps())).toEqual([]);
+  });
+  test("14 kinds, unzoomed: no flight crosses a cell", async () => {
+    expect(await copiesOverBox(kinds14())).toEqual([]);
+  });
+});
+
+describe("hold and sharing of the box (§6.5)", () => {
+  test("two build steps in one timeline step share ONE box that never dips", () => {
+    const spec = wall();
+    spec.assemblies[0].programs[0].steps.push({ add: ["extra"], from: "callout" });
+    spec.assemblies[0].parts.push({ id: "extra", at: [4, 0, 1], size: [1, 1, 3] });
+    spec.steps[1].assembly = [{ build: "w", program: "bd", advance: 2 }];
+    const am = modelOf(spec).assembly as AssemblyRenderModelX;
+    const boxes = am.staticFades.filter((f) => f.id.includes("-co_"));
+    expect(boxes.map((b) => b.id.replace(/^.*-co_/, ""))).toEqual(["w__bd__2__s2"]);
+    const o = boxes[0]!.opacity.map((k) => k.opacity);
+    // 0 .. 1 (hold) .. 0: once up, once down
+    const dips = o.filter((v, i) => i > 0 && o[i - 1] === 1 && v < 1).length;
+    const rises = o.filter((v, i) => i > 0 && o[i - 1]! < 1 && v === 1).length;
+    expect([rises, dips]).toEqual([1, 1]);
+  });
+
+  test("the hold ends before the camera moves on and never outlives the loop", () => {
+    const m = modelOf(oneSecondSteps());
+    const am = m.assembly as AssemblyRenderModelX;
+    for (const f of am.staticFades.filter((x) => x.id.includes("-co_"))) {
+      const tl = Number(/__s(\d+)$/.exec(f.id)![1]);
+      const c = am.clock[tl - 1]!;
+      const off = f.opacity.filter((k) => k.opacity === 0).map((k) => k.t);
+      const end = Math.min(...off.filter((t) => t > c.start + 1e-6));
+      expect(end, f.id).toBeLessThanOrEqual(Math.max(c.end, c.start + 0.4) + 1e-6);
+      expect(end).toBeLessThanOrEqual(am.loop + 1e-6);
+    }
+  });
+
+  test("placing twice leaves the model as placing once", async () => {
+    const spec = wall("w/b");
+    const m = modelOf(spec);
+    const once = JSON.stringify([
+      m.assembly!.frameAt(4.25),
+      (m.assembly as AssemblyRenderModelX).flights,
+    ]);
+    placeAgain(m);
+    placeAgain(m);
+    const twice = JSON.stringify([
+      m.assembly!.frameAt(4.25),
+      (m.assembly as AssemblyRenderModelX).flights,
+    ]);
+    expect(twice).toBe(once);
   });
 });

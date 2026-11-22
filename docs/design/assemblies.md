@@ -311,11 +311,14 @@ as `count × thumbnail` (thumbnail = the leaf drawn at a fixed callout scale, or
 scale is ONE per assembly: its largest part kind fits 44 px, every other kind uses the same scale,
 so relative sizes are kept. It is drawn (`render/assembly/callout.ts`, §7.6) only for timeline
 steps that have callout flights (`from: "callout"`, §6.6), as a `capbox` panel of up to 12 cells in
-rows of four, each a thumbnail over its `<count>x`; more kinds are not drawn
-(`layout/callout-truncated`, once per timeline step). A timeline step has ONE box (its plays share
-it): it fades in with the first play and out after the last (0.2 s each), and is fully visible for
-at least 0.8 s, held over the start of the next step when the step is shorter (step lengths never
-change; a following box cuts the hold short).
+rows of four, each a thumbnail over its `<count>x`, drawn on the canvas colour with the badge stroke
+(so parts read as they do on the canvas in every theme; `callout` class, no new theme token); more
+kinds are not drawn (`layout/callout-truncated`, once per timeline step). A timeline step has ONE
+box (its plays share it): it fades in with the first play and out after the last (0.2 s each), and
+is fully visible for at least 0.8 s. Exceptions to the hold: it ends where the next callout step's
+box begins, at the loop's end, and where the camera's closing transition to the next step begins
+(a box is never rescaled or moved while it fades), so a short last or followed step shows it
+shorter.
 `view` rotates the view a quarter turn from that step on (§7.7). `unbuild` plays steps in
 reverse (time-reversed, §7.2).
 
@@ -472,8 +475,10 @@ leaves a step adds of a partly added sub-assembly too) is centred on the slot, t
 the step setting its size. Placement: the callout box goes to the free area nearest the window's
 left edge (then a quarter of its height down), the slot to the free area nearest it. Free means no
 overlap with a part (its silhouette, not its bounding rect), a non-assembly object (and its label),
-a label or a pinned overlay (caption, metric tiles) that shows in the window, and for the slot that
-no flight's straight path to its hover point crosses a non-assembly object. The box is drawn
+a label or a pinned overlay (caption, metric tiles) that shows in the window. The box is a hard
+keep-out for the slot and for the flights: the slot sits beside it, never on it, and no copy's
+straight path to its hover point crosses it (thumbnails shrink before the box is covered); the
+flights' paths also do not cross a non-assembly object. The box is drawn
 `1 / zoom` as big, so it looks the same at any zoom. When nothing is free, its thumbnails shrink
 (to 20 px); when still nothing is, the spot that covers the least is used (an overlay may cover
 part of the model; the window is never widened). Boxes and slots of steps sharing a camera window

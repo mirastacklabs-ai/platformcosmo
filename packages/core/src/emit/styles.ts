@@ -118,7 +118,7 @@ export function stripAtRules(css: string, names: readonly string[]): string {
  * is not one of ours. Tokens: `face`, `overlay`, `k-<category>-<face>`, `p-<tone>-<face>`,
  * `grp-<style|cold-aisle|hot-aisle|hall|contained>`, `glabel`, `t-<role>`, `tb`, `edge`,
  * `edge-<style>`, `cable-<kind>`, `arrow`, `elabel`, `bg`, `grid`, `metric`, `capbox`, `badgebox`,
- * `plate`, `icon`.
+ * `plate`, `callout`, `icon`.
  */
 export function ruleFor(token: string): string | undefined {
   const v = (name: string) => `var(--pc-${name})`;
@@ -167,6 +167,9 @@ export function ruleFor(token: string): string | undefined {
     return `fill:${v("edge-stroke")};stroke:${v("background")};stroke-width:1.5;stroke-linejoin:round;paint-order:stroke`;
   if (token === "board")
     return `fill:none;stroke:${v("edge-stroke")};stroke-opacity:0.35;stroke-width:1`;
+  // the parts callout box: the canvas colour, so parts read as they do on the canvas
+  if (token === "callout")
+    return `fill:${v("background")};stroke:${v("badge-fill")};stroke-width:1`;
   if (token === "shadow") return "fill:#000;fill-opacity:0.2;stroke:none";
   if (token === "elabel") return `fill:${v("edge-labelFill")};stroke:none`;
   if (token === "bg") return `fill:${v("background")}`;

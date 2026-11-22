@@ -162,15 +162,17 @@ export function placeCallout(input: {
 
   /**
    * The free spot for a `w x h` rect nearest the window's left edge (then nearest `aim` down),
-   * given the rects it must not cover; the cheapest one when none is free.
+   * given the rects it must not cover; the cheapest one when none is free. `keep` is a hard
+   * keep-out (the callout box): a spot touching it, or whose flight path crosses it, is never
+   * taken; undefined when no spot is left.
    */
   const find = (
     w: number,
     h: number,
     aim: number,
-    extra: readonly Rect[],
     pathFrom: ((x: number, y: number) => Vec2) | undefined,
-  ): { x: number; y: number; free: boolean } => {
+    keep?: Rect,
+  ): { x: number; y: number; free: boolean } | undefined => {
     const xs: number[] = [];
     for (let x = win.x + MARGIN; x + w <= win.x + win.width - MARGIN + 1e-9; x += STEP) xs.push(x);
     const ys: number[] = [];
@@ -178,63 +180,83 @@ export function placeCallout(input: {
     ys.sort((a, b) => Math.abs(a + h / 2 - aim) - Math.abs(b + h / 2 - aim) || a - b);
     if (xs.length === 0) xs.push(win.x + MARGIN);
     if (ys.length === 0) ys.push(win.y + MARGIN);
-    let best = { x: xs[0] as number, y: ys[0] as number, cost: Infinity };
+    let best: { x: number; y: number; cost: number } | undefined;
     for (const x of xs) {
       for (const y of ys) {
         const g: Rect = { x, y, width: w, height: h };
+        if (keep !== undefined && overlapArea(g, keep, 0) > 0) continue;
+        const s = pathFrom?.(x, y);
+        if (keep !== undefined && s !== undefined) {
+          // the copy has a size: its centre keeps clear of the box grown by half the copy
+          const swept = {
+            x: keep.x - cw / 2,
+            y: keep.y - ch / 2,
+            width: keep.width + cw,
+            height: keep.height + ch,
+          };
+          if (input.ends.some((e) => segmentHits(s, e, swept))) continue;
+        }
         let c = 0;
         for (const a of seen) c += overlapArea(g, a, CLEAR);
-        for (const a of extra) c += overlapArea(g, a, CLEAR);
-        if (pathFrom !== undefined) {
-          const s = pathFrom(x, y);
+        if (s !== undefined) {
           for (const e of input.ends) for (const o of walls) if (segmentHits(s, e, o)) c += 1e6;
         }
         if (c === 0) return { x, y, free: true };
-        if (c < best.cost) best = { x, y, cost: c };
+        if (best === undefined || c < best.cost) best = { x, y, cost: c };
       }
     }
-    return { x: best.x, y: best.y, free: false };
+    return best === undefined ? undefined : { x: best.x, y: best.y, free: false };
   };
 
-  // 1. the box, shrinking its thumbnails until it fits
-  let box: CalloutPlacement["box"];
-  if (parts.length > 0) {
-    let least: { x: number; y: number; layout: BoxLayout } | undefined;
-    for (const f of FACTORS) {
-      const layout = boxLayout(parts, f, labelSize);
-      const at = find(layout.width / zoom, layout.height / zoom, target, [], undefined);
-      least = { x: at.x, y: at.y, layout };
-      if (at.free) break;
-    }
-    // nothing is free even at the smallest thumbnails: the box overlays the least it can (it never widens the window)
-    const l = least as { x: number; y: number; layout: BoxLayout };
-    box = { x: Math.round(l.x), y: Math.round(l.y), layout: l.layout };
-  }
-  // 2. the copies' slot: beside the box when there is room, else the nearest free spot
   const cw = input.copy?.width ?? 0;
   const ch = input.copy?.height ?? 0;
-  if (cw === 0)
+  const copyFrom = (x: number, y: number): Vec2 => ({ x: x + cw / 2, y: y + ch / 2 });
+  const placed = (box: CalloutPlacement["box"], at: { x: number; y: number }): CalloutPlacement => {
+    const slot = { x: Math.round(at.x + cw / 2), y: Math.round(at.y + ch / 2) };
     return {
-      slot: { x: Math.round(win.x + MARGIN), y: Math.round(target) },
+      slot,
+      copy: { x: slot.x - cw / 2, y: slot.y - ch / 2, width: cw, height: ch },
       ...(box === undefined ? {} : { box }),
     };
-  const boxRect: Rect[] =
-    box === undefined
-      ? []
-      : [
-          {
-            x: box.x - GAP_BOX / 2,
-            y: box.y - GAP_BOX / 2,
-            width: box.layout.width + GAP_BOX,
-            height: box.layout.height + GAP_BOX,
-          },
-        ];
-  const aim = box === undefined ? target : box.y + box.layout.height / 2;
-  const at = find(cw, ch, aim, boxRect, (x, y) => ({ x: x + cw / 2, y: y + ch / 2 }));
-  const slot = { x: Math.round(at.x + cw / 2), y: Math.round(at.y + ch / 2) };
-  return {
-    slot,
-    copy: { x: slot.x - cw / 2, y: slot.y - ch / 2, width: cw, height: ch },
-    ...(box === undefined ? {} : { box }),
   };
+
+  // no box: only the slot
+  if (parts.length === 0) {
+    const at = find(cw, ch, target, copyFrom) ?? { x: win.x + MARGIN, y: target };
+    return cw === 0
+      ? { slot: { x: Math.round(at.x), y: Math.round(target) } }
+      : placed(undefined, at);
+  }
+
+  // 1. the box, in the free area nearest the left edge; 2. the slot beside it, never on the box
+  // and never with a flight path across it (the box is a hard keep-out). A slot that is not free
+  // of the model is better than a copy over the box: thumbnails shrink before the box is covered.
+  let fallback: CalloutPlacement | undefined;
+  let lastBox: NonNullable<CalloutPlacement["box"]> | undefined;
+  for (const f of FACTORS) {
+    const layout = boxLayout(parts, f, labelSize);
+    const at = find(layout.width / zoom, layout.height / zoom, target, undefined) as {
+      x: number;
+      y: number;
+    };
+    // nothing is free even at the smallest thumbnails: the box overlays the least it can (it never widens the window)
+    const box = { x: Math.round(at.x), y: Math.round(at.y), layout };
+    lastBox = box;
+    if (cw === 0) return { slot: { x: Math.round(win.x + MARGIN), y: Math.round(target) }, box };
+    const keep: Rect = {
+      x: box.x - GAP_BOX / 2,
+      y: box.y - GAP_BOX / 2,
+      width: layout.width / zoom + GAP_BOX,
+      height: layout.height / zoom + GAP_BOX,
+    };
+    const aim = box.y + layout.height / 2 / zoom;
+    const slot = find(cw, ch, aim, copyFrom, keep);
+    if (slot === undefined) continue;
+    if (slot.free) return placed(box, slot);
+    fallback ??= placed(box, slot);
+  }
+  if (fallback !== undefined) return fallback;
+  // literally no room beside the box at any size: the smallest box, the copies may touch it
+  const at = find(cw, ch, target, copyFrom) ?? { x: win.x + MARGIN, y: target };
+  return placed(lastBox, at);
 }

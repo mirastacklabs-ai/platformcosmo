@@ -1030,7 +1030,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   }
   // The parts callouts and callout slots go inside each step's camera window (assembly §7.6),
   // which needs the final view box and focus rects.
-  if (asmBuild?.place !== undefined) {
+  const runPlace = (): void => {
+    if (asmBuild?.place === undefined) return;
     const partial = { viewBox: vb, focusRects, assembly: asmBuild.model } as unknown as RenderModel;
     asmBuild.place({
       viewBox: vb,
@@ -1040,7 +1041,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
         return st === undefined ? undefined : zoomFor(partial, st)?.viewBox;
       },
     });
-  }
+  };
+  runPlace();
   const missing = [
     ...new Set([
       ...missingGlyphs(displayText.join(""), "display"),
@@ -1076,8 +1078,13 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     ...(asmBuild ? { assembly: asmBuild.model } : {}),
   };
   registry.set(model, inputs);
+  if (asmBuild?.place !== undefined) placers.set(model, runPlace);
   return { model, diagnostics };
 }
+
+/** Re-runs the callout placement of a built model (it is idempotent; for tests). */
+export const placeAgain = (m: RenderModel): void => placers.get(m)?.();
+const placers = new WeakMap<RenderModel, () => void>();
 
 export function buildModel(inputs: ModelInputs): RenderModel {
   return buildModelWithDiagnostics(inputs).model;
