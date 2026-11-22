@@ -1480,11 +1480,11 @@ function checkSteps(c: Check): void {
       if (rootNode === undefined) return;
       // `<rack>/<slot>/closeup/...`: the slot's close-up instance, checked as a spec host's
       // (an assembly template; a figure close-up, or one nested below it, is the figure rules')
-      const w =
-        rk === "rack" && segs[2] === "closeup"
-          ? slotCloseupWalk(c, rootNode, segs)
-          : walkOf(c, rootNode, segs);
+      const slotWalk = rk === "rack" ? slotCloseupWalk(c, rootNode, segs) : null;
+      const w = slotWalk === null ? walkOf(c, rootNode, segs) : slotWalk;
       if (w === undefined) return;
+      // a close-up that names a figure or storyboard (or anything below it) is the figure rules'
+      if (atFigure(w)) return;
       if (!w.ok) {
         c.out.push(unresolved(c, `${at}/${kind}`, `${kind} target`, target, w, segs));
         return;
@@ -1513,23 +1513,39 @@ function checkSteps(c: Check): void {
 }
 
 /**
- * The walk of `<rack>/<slot>/closeup/...` inside the slot's close-up instance; undefined when the
- * slot has no close-up, the path enters a figure's, or the work cap is spent (nothing to check).
+ * The walk of `<rack>/<slot>/closeup/...` inside the slot's close-up instance. `null`: not a
+ * close-up path (the ordinary walk applies); `undefined`: nothing to check here (the slot's
+ * close-up is a figure, the path enters a figure's, or the work cap is spent). An unknown slot,
+ * a slot without `closeup` and a typo of the reserved segment fail like a spec host's.
  */
-function slotCloseupWalk(c: Check, rack: TNode, segs: readonly string[]): Walk | undefined {
+function slotCloseupWalk(c: Check, rack: TNode, segs: readonly string[]): Walk | undefined | null {
+  if (segs.length < 3) return null;
   const slot = walkOf(c, rack, segs.slice(0, 2));
-  if (slot === undefined || !slot.ok || slot.node.closeup === undefined) return undefined;
+  if (slot === undefined) return undefined;
+  const isCloseup = segs[2] === "closeup";
+  if (!slot.ok) return isCloseup ? slot : null;
+  const typo =
+    !isCloseup &&
+    slot.node.closeup !== undefined &&
+    near(c, segs[2] as string, ["closeup"]) !== undefined;
+  if (!isCloseup && !typo) return null;
+  if (typo) return { ok: false, at: 2, parent: slot.node, reason: "missing" };
+  if (slot.node.closeup === undefined) {
+    return { ok: false, at: 2, parent: slot.node, reason: "no-closeup" };
+  }
   if (c.kinds.get(slot.node.closeup) !== "assembly") return undefined;
   const instance = c.model.closeupNode(slot.node.closeup);
   if (instance === undefined || !charge(c, 16 * segs.length)) return undefined;
   const w = c.model.walk(instance, ["closeup", ...segs.slice(3)]);
-  // entering a figure or storyboard close-up (the slot's, or one nested in the template) ends
-  // this rule: whatever is named below it is the figure rules' (A2-F)
-  const leaf = w.ok ? w.node : w.parent;
-  if (leaf.kind === "figure" || leaf.kind === "board") return undefined;
   // the walk's segments start at the instance: `at` is relative to `segs[2]`
   return w.ok ? w : { ...w, at: w.at + 2 };
 }
+
+/** Does the walk end at, or fail directly below, a figure or storyboard close-up? */
+const atFigure = (w: Walk): boolean => {
+  const leaf = w.ok ? w.node : w.parent;
+  return leaf.kind === "figure" || leaf.kind === "board";
+};
 
 const templateTarget = (path: string, what: string, id: string): Diagnostic =>
   mk(

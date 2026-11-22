@@ -471,7 +471,8 @@ it or the frame is `assembly/unknown-program` (validation; the suggestion names 
 `r1/srv/closeup/...` is checked as a spec host's `host/part/closeup/...` is (`to`, `program`,
 part paths, build vs explode programs: the same codes), through the instance tree of the slot's
 `closeup` template. A `closeup` that names a figure or storyboard, the slot's own or one nested in
-the template, ends that check; what is named below it is the figure rules'.
+the template (on a spec host too), ends that check; what is named below it is the figure rules'.
+An unknown slot, a slot without `closeup` and a typo of `closeup` are `assembly/unknown-target`, as on a spec host.
 
 ### 8.4 Close-ups (levels of detail)
 

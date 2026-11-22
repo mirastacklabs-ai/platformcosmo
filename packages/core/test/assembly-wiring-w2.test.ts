@@ -2,6 +2,7 @@
 // rack slot has no program of its own, collisions point at their assembly, and the level track
 // helpers (docs/design/assemblies.md §7.3, §8.1, §8.3, §9.3).
 import { describe, expect, test } from "vitest";
+import type { DcPack } from "../src/contracts/index.js";
 import type { Diagnostic, PlatformCosmoSpec } from "../src/index.js";
 import { buildScene } from "../src/index.js";
 import { assemblyPlanDiagnostics } from "../src/scene/assembly/plan-scene.js";
@@ -155,10 +156,82 @@ describe("actions below a plain rack slot's close-up are validated as a spec hos
     expect(slot[0]!.path).toBe(host[0]!.path);
   });
 
+  const slots = (target: string): Diagnostic[] =>
+    assemblyDiagnostics(
+      spec({
+        racks: [
+          {
+            id: "r1",
+            slots: [
+              { id: "tor", at: 40, type: "switch-tor" },
+              { id: "srv", at: 1, type: "server-2u", closeup: "tpl" },
+            ],
+          },
+        ],
+        assemblies: [tpl],
+        steps: [{ assembly: [{ explode: target }] }],
+      }),
+      LIFT,
+    );
+
+  test("an unknown slot and a slot without a close-up are unknown targets", () => {
+    for (const t of ["r1/nope/closeup", "r1/tor/closeup"]) {
+      const d = slots(t);
+      expect(
+        d.map((x) => [x.code, x.path]),
+        t,
+      ).toEqual([["assembly/unknown-target", "/steps/0/assembly/0/explode"]]);
+    }
+  });
+
+  test("a typo of the reserved segment offers the close-up", () => {
+    const d = slots("r1/srv/closup");
+    expect(d.map((x) => x.code)).toEqual(["assembly/unknown-target"]);
+    expect(d[0]!.suggestion).toContain("r1/srv/closeup");
+  });
+
   test("a valid program, and a close-up that names a figure, report nothing", () => {
     expect(slotSpec({ explode: "" }, "r1/srv/closeup")).toEqual([]);
     expect(slotSpec({ explode: "" }, "r1/srv/closeup", "fig")).toEqual([]);
     expect(slotSpec({ explode: "", to: 9 }, "r1/srv/closeup/anything", "fig")).toEqual([]);
+  });
+});
+
+describe("the figure stop rule on a spec host", () => {
+  test("actions on a close-up that names a figure are not assembly actions", () => {
+    for (const t of ["host/h/closeup", "host/h/closeup/zz"]) {
+      const d = assemblyDiagnostics(
+        spec({
+          assemblies: [
+            { id: "host", units: "mm", parts: [{ id: "h", size: [10, 10, 10], closeup: "fig" }] },
+          ],
+          figures: [{ id: "fig", parts: [] }],
+          steps: [{ assembly: [{ implode: t }] }],
+        }),
+        LIFT,
+      );
+      expect(
+        d.filter((x) => x.path.startsWith("/steps")),
+        t,
+      ).toEqual([]);
+    }
+  });
+});
+
+describe("assemblyPlanDiagnostics keeps planScene's errors", () => {
+  test("a throwing DC pack is one render/internal-error", () => {
+    const boom = () => {
+      throw new Error("boom");
+    };
+    const dc = { buildScene: boom, buildAssembly: boom } as unknown as DcPack;
+    const d = assemblyPlanDiagnostics(
+      spec({
+        racks: [{ id: "r1", slots: [{ id: "s", at: 1, type: "server-2u" }] }],
+        steps: [{ assembly: [{ explode: "r1" }] }],
+      }),
+      { dc, isFocusTarget: () => true },
+    );
+    expect(d.map((x) => x.code)).toEqual(["render/internal-error"]);
   });
 });
 
