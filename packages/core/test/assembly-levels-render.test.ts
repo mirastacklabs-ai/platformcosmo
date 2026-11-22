@@ -191,12 +191,13 @@ describe("nested close-up chain (§8.4, §19.4)", () => {
   const A = m.assembly!;
   const lv = (p: string) => A.levels!.find((l) => l.path === p)!;
   const hostBox = (p: string) => m.scene.assemblies!.levels!.find((l) => l.path === p)!.hostBox;
-  // independent: the screen bounds of a world box with the model's own projection
-  const screenOf = (b: ReturnType<typeof hostBox>): Rect => {
+  // independent: the screen bounds of a world box with a projection (default: the model's own;
+  // a level's world is drawn with its own magnified projection, §8.4)
+  const screenOf = (b: ReturnType<typeof hostBox>, p = m.projection): Rect => {
     const xs: number[] = [];
     const ys: number[] = [];
     for (let i = 0; i < 8; i++) {
-      const q = m.projection.project({
+      const q = p.project({
         x: b.origin.x + (i & 1 ? b.size.x : 0),
         y: b.origin.y + (i & 2 ? b.size.y : 0),
         z: b.origin.z + (i & 4 ? b.size.z : 0),
@@ -249,7 +250,9 @@ describe("nested close-up chain (§8.4, §19.4)", () => {
     near(l1.hostRect.y, want1.y);
     near(l1.hostRect.height, want1.height);
     const l2 = lv("hall/srv/closeup/cpu-1/closeup");
-    const local = screenOf(hostBox(l2.path));
+    // the cpu is a node of the server level: seen with that level's projection
+    expect(l1.projection.tileWidth).toBeGreaterThan(m.projection.tileWidth);
+    const local = screenOf(hostBox(l2.path), l1.projection);
     near(l2.hostLocal.x, local.x);
     near(l2.hostLocal.height, local.height);
     // in the viewport the cpu is seen through the server level's overview
@@ -331,7 +334,10 @@ describe("nested close-up chain (§8.4, §19.4)", () => {
     const dz = lift.stages[0]!.moves.find((x) => x.path === id)!.offset.z;
     expect(dz).toBeGreaterThan(0);
     const w = fins.geometry === undefined ? fins.world : fins.world;
-    const own = screenOf({ origin: { ...w.origin, z: w.origin.z + dz }, size: w.size });
+    const own = screenOf(
+      { origin: { ...w.origin, z: w.origin.z + dz }, size: w.size },
+      l2.projection,
+    );
     const placed = applyAffine(l2.overview, own);
     // the margins are viewport pixels around the placed rect
     const side = placed.x - r.x;

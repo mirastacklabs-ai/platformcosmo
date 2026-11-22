@@ -1061,7 +1061,9 @@ describe("existing output is unchanged", () => {
     "assemblies.md Brick rover": "72f287612e44146d",
     "document-ingestion.md Generic 2OU server from a spec document": "ccca9f57caea9bd6",
     "document-ingestion.md Heat-sink installation figure": "0210858f1ee3bae2",
-    "document-ingestion.md From the hall to the heat sink": "51d21be6488c12ce",
+    // D-4a: its figure is a close-up only (no board of its own), its instances are planned, and
+    // the story gained the board step
+    "document-ingestion.md From the hall to the heat sink": "edb9f768876d94fa",
     // R-2: the scene now carries the storyboard (boards, plan, images) the guard used to refuse
     "document-ingestion.md Booklet storyboard": "37b6db4a9865fdaf",
   };

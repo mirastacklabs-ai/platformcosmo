@@ -14,6 +14,7 @@ import type {
   OutputKind,
   RenderModel,
   RenderOutput,
+  SvgNode,
 } from "../contracts/index.js";
 import { gifEncoder } from "./gif.js";
 import { stepEndTime } from "../render/assembly/tracks.js";
@@ -67,17 +68,25 @@ function withRootSize(
  * Zoomed step/frame outputs shrink the viewBox, and the overlay layer (caption box, metric tiles,
  * legend) is laid out for the full view: wrap it in the inverse zoom so it stays where it would
  * be on screen. Done on the model (an attribute, which resvg honours; CSS `transform` it does not).
+ * Close-up level groups (§8.4) come first in the layer and stay in the camera, as the animated
+ * SVG has them (only the pinned overlays get the inverse zoom there).
  */
 function pinOverlay(m: RenderModel, animation: AnimationLayer): RenderModel {
   const vb = animation.viewBox;
   if (!vb || m.layers.overlay.length === 0) return m;
+  const levelIds = new Set((m.assembly?.levels ?? []).map((l) => l.group));
+  const isLevel = (n: SvgNode): boolean =>
+    typeof n !== "string" && !("raw" in n) && levelIds.has(String(n.attrs?.id ?? ""));
+  const levels = m.layers.overlay.filter(isLevel);
+  const pinned = m.layers.overlay.filter((n) => !isLevel(n));
+  if (pinned.length === 0) return m;
   const s = m.viewBox.width / vb.width;
   const transform = `translate(${r2(vb.x - m.viewBox.x / s)} ${r2(vb.y - m.viewBox.y / s)}) scale(${t4(1 / s)})`;
   return {
     ...m,
     layers: {
       ...m.layers,
-      overlay: [{ tag: "g", attrs: { transform }, children: m.layers.overlay }],
+      overlay: [...levels, { tag: "g", attrs: { transform }, children: pinned }],
     },
   };
 }

@@ -21,13 +21,21 @@ import type {
   AssemblyAffine,
   AssemblyLevelRender,
   AssemblyRenderModel,
+  Box3,
   Projection,
   Rect,
   SceneLevel,
   SvgNode,
 } from "../../contracts/index.js";
 import { h } from "../../emit/xml.js";
-import { fmt, projectBoxBounds, round2, unionRects } from "../../geometry/index.js";
+import {
+  createProjection,
+  fmt,
+  projectBoxBounds,
+  round2,
+  unionRects,
+} from "../../geometry/index.js";
+import type { FigureLevel } from "../boards/index.js";
 import { levelOf } from "../../scene/assembly/levels.js";
 import type { GroupBuild } from "./index.js";
 
@@ -42,12 +50,17 @@ export const roundRect = (r: Rect): Rect => ({
   height: round2(r.height),
 });
 
-/** The affine map that fits `src` inside `dst` (uniform scale, centred); scale 1 if degenerate. */
-export function containAffine(src: Rect, dst: Rect): AssemblyAffine {
+/**
+ * The affine map that fits `src` inside `dst` (uniform scale, centred, at most `max`); scale 1 if
+ * degenerate.
+ */
+export function containAffine(src: Rect, dst: Rect, max = Infinity): AssemblyAffine {
   const cx = (r: Rect): number => r.x + r.width / 2;
   const cy = (r: Rect): number => r.y + r.height / 2;
-  const scale =
-    finite(src) && finite(dst) ? Math.min(dst.width / src.width, dst.height / src.height) : 1;
+  const scale = Math.min(
+    max,
+    finite(src) && finite(dst) ? Math.min(dst.width / src.width, dst.height / src.height) : 1,
+  );
   const s = Number.isFinite(scale) && scale > 0 ? scale : 1;
   const dx = Number.isFinite(cx(dst)) ? cx(dst) : 0;
   const dy = Number.isFinite(cy(dst)) ? cy(dst) : 0;
@@ -80,8 +93,32 @@ export interface LevelsDeps {
   readonly target: Rect;
   /** The main scene's node rects, for hosts living in it. */
   readonly main: Pick<GroupBuild, "nodeRect">;
-  /** Builds the group of an assembly level (its own world, shared loop clock). */
-  readonly build: (level: SceneLevel) => GroupBuild;
+  /**
+   * Builds the group of an assembly level (its own world, shared loop clock) with `projection`:
+   * the main one magnified so the level's reach fills `target` (`levelProjection`).
+   */
+  readonly build: (level: SceneLevel, projection: Projection) => GroupBuild;
+  /** The content of a figure level, drawn in `area` (`BoardsBuild.levelFigure`). */
+  readonly figure?: (path: string, area: Rect) => FigureLevel | undefined;
+}
+
+/** Share of the target a level's geometry may fill at rest (labels take the rest). */
+const LEVEL_FILL = 0.8;
+
+/**
+ * The projection a level is drawn with: the main one magnified (tile width and z scale times
+ * `k`) so the level's reach bounds fill `LEVEL_FILL` of `target`. Drawing the level at that size,
+ * rather than scaling its group, keeps outlines and labels at their normal width; the overview
+ * then places it at a scale near 1. `k` is floored to 2 decimals (deterministic); a degenerate
+ * box keeps the main projection.
+ */
+export function levelProjection(projection: Projection, reach: Box3, target: Rect): Projection {
+  const r = projectBoxBounds(projection, reach);
+  if (!finite(r) || !finite(target)) return projection;
+  const k =
+    Math.floor(LEVEL_FILL * Math.min(target.width / r.width, target.height / r.height) * 100) / 100;
+  if (!Number.isFinite(k) || k <= 0 || k === 1) return projection;
+  return createProjection({ tileWidth: projection.tileWidth * k, zScale: projection.zScale * k });
 }
 
 export interface LevelsBuild {
@@ -108,9 +145,12 @@ export function buildLevelGroups(levels: readonly SceneLevel[], deps: LevelsDeps
   const byPath = new Map<string, AssemblyLevelRender>();
   const { projection, margin: m } = deps;
 
+  /** The projection of each level (a host box lives in its parent's). */
+  const projOf = new Map<string, Projection>();
   for (const l of levels) {
     const parent = l.parent === undefined ? undefined : byPath.get(l.parent);
-    const hostLocal = roundRect(projectBoxBounds(projection, l.hostBox));
+    const parentProjection = (parent && projOf.get(parent.path)) ?? projection;
+    const hostLocal = roundRect(projectBoxBounds(parentProjection, l.hostBox));
     const toViewport = (r: Rect): Rect =>
       parent === undefined ? r : applyAffine(parent.overview, r);
     const hostRect = toViewport(hostLocal);
@@ -123,18 +163,36 @@ export function buildLevelGroups(levels: readonly SceneLevel[], deps: LevelsDeps
 
     let group: GroupBuild | undefined;
     let model: AssemblyRenderModel | undefined;
+    let own = projection;
+    let content: readonly SvgNode[] = [];
     let rest = hostLocal;
     let reach = hostLocal;
     if (l.assembly !== undefined) {
-      group = deps.build(l);
+      own = levelProjection(projection, l.assembly.reachBounds, deps.target);
+      projOf.set(l.path, own);
+      group = deps.build(l, own);
       groups.set(l.path, group);
       model = group.model;
-      rest = roundRect(projectBoxBounds(projection, l.assembly.restBounds));
+      content = [...group.objects, ...group.labels];
+      rest = roundRect(projectBoxBounds(own, l.assembly.restBounds));
       reach = roundRect(unionRects([rest, ...group.extents]));
       defs.push(...group.defs);
       diagnostics.push(...group.diagnostics);
+    } else if (l.kind === "figure") {
+      // the figure is drawn in the target area itself (its overview is then about 1)
+      const f = deps.figure?.(l.path, deps.target);
+      if (f !== undefined) {
+        content = f.nodes;
+        rest = roundRect(f.rest);
+        reach = roundRect(f.reach);
+      }
     }
-    const overview = containAffine(reach, deps.target);
+    // a level drawn at its own scale (magnified projection, or a figure drawn in the area) is
+    // placed 1:1, centred; only an unscaled level is scaled to the area
+    const fitted = containAffine(reach, deps.target);
+    const scaled = own !== projection || (content.length > 0 && l.assembly === undefined);
+    const overview =
+      scaled && fitted.scale > 1 ? containAffine(reach, deps.target, 1) : fitted;
     const enter = containAffine(rest, hostRect);
     const hostAt = (step: number): Rect => {
       const r =
@@ -151,6 +209,7 @@ export function buildLevelGroups(levels: readonly SceneLevel[], deps: LevelsDeps
       ...(l.parent === undefined ? {} : { parent: l.parent }),
       group: deps.levelId(l.path),
       ...(model === undefined ? {} : { model }),
+      projection: own,
       rest,
       reach,
       hostLocal,
@@ -166,13 +225,7 @@ export function buildLevelGroups(levels: readonly SceneLevel[], deps: LevelsDeps
     out.push(rec);
     byPath.set(l.path, rec);
     // The group rests hidden at its overview placement (B-3 animates opacity and transform).
-    nodes.push(
-      h(
-        "g",
-        { id: rec.group, transform: matrixAttr(overview), opacity: 0 },
-        ...(group === undefined ? [] : [...group.objects, ...group.labels]),
-      ),
-    );
+    nodes.push(h("g", { id: rec.group, transform: matrixAttr(overview), opacity: 0 }, ...content));
   }
   return { levels: out, nodes, defs, diagnostics, groups };
 }

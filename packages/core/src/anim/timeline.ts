@@ -46,10 +46,38 @@ const MAX_ZOOM = 3;
 /** Zoom onto the step's focus rect; undefined for the full view (no focus, unknown target, tiny zoom). */
 export function zoomFor(model: RenderModel, step: SceneStep | undefined): Zoom | undefined {
   if (!step?.focus) return undefined;
-  // an assembly node is framed at the end pose of this step (§7.4), labels included
-  const r = model.assembly?.focusRect(step.index, step.focus) ?? model.focusRects[step.focus];
-  const v = model.viewBox;
-  if (!r || !(v.width > 0) || !(v.height > 0)) return undefined;
+  // an assembly node is framed at the end pose of this step (§7.4), labels included; a node
+  // inside a close-up level where that level's overview puts it (the level group is in the
+  // camera). A level's own root does not zoom: the level is shown at its overview (§8.4).
+  const asm = model.assembly;
+  if (asm?.levels?.some((l) => l.path === step.focus) === true) return undefined;
+  const own = asm?.focusRect(step.index, step.focus);
+  const r = own ?? model.focusRects[step.focus] ?? asm?.levelFocusRect?.(step.index, step.focus);
+  if (r === undefined) return undefined;
+  const z = zoomOnto(model.viewBox, r);
+  if (z === undefined || own === undefined) return z;
+  // an assembly step: a label it brings in that the window would cut is framed too, once (§7.4)
+  const cut = (asm?.stepLabels?.(step.index) ?? []).filter(
+    (q) => overlaps(q, z.viewBox) && !inside(q, z.viewBox),
+  );
+  return cut.length === 0 ? z : zoomOnto(model.viewBox, unionOf([r, ...cut]));
+}
+
+const overlaps = (a: Rect, b: Rect): boolean =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+const inside = (a: Rect, b: Rect): boolean =>
+  a.x >= b.x && a.y >= b.y && a.x + a.width <= b.x + b.width && a.y + a.height <= b.y + b.height;
+const unionOf = (rs: readonly Rect[]): Rect => {
+  const x0 = Math.min(...rs.map((q) => q.x));
+  const y0 = Math.min(...rs.map((q) => q.y));
+  const x1 = Math.max(...rs.map((q) => q.x + q.width));
+  const y1 = Math.max(...rs.map((q) => q.y + q.height));
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+};
+
+/** The zoom that frames `r` in the view box `v` (padding, 3x cap); undefined for a tiny zoom. */
+function zoomOnto(v: Rect, r: Rect): Zoom | undefined {
+  if (!(v.width > 0) || !(v.height > 0)) return undefined;
   const pad = Math.max(24, 0.25 * Math.max(r.width, r.height));
   const w = r.width + 2 * pad;
   const h = r.height + 2 * pad;

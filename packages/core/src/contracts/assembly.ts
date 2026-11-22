@@ -38,7 +38,7 @@ import type {
   SpecStoryboard,
 } from "../schema/types.gen.js";
 import type { Diagnostic } from "./diagnostics.js";
-import type { Box3, FaceName, Rect, Vec2, Vec3 } from "./geometry.js";
+import type { Box3, FaceName, Projection, Rect, Vec2, Vec3 } from "./geometry.js";
 import type { SanitizedSvg } from "./icons.js";
 import type { PartTone } from "./scene.js";
 
@@ -841,7 +841,16 @@ export interface AssemblyLevelRender {
   readonly group: string;
   /** The level's own model (ids, tracks, epochs, frames in LOCAL coordinates); assemblies only. */
   readonly model?: AssemblyRenderModel;
-  /** Rest bounds of the level's content, local. Figure and storyboard levels: `hostLocal`. */
+  /**
+   * The projection the level is drawn with: the main one magnified so the level's reach fills
+   * the overview area (§8.4), so outlines and labels keep their width. Figure and storyboard
+   * levels: the main one (their content is drawn in viewport units).
+   */
+  readonly projection: Projection;
+  /**
+   * Rest bounds of the level's content, local. Figure levels: the figure panel; storyboard
+   * levels: `hostLocal`.
+   */
   readonly rest: Rect;
   /** Everything the level draws (swept boxes, labels, leaders), local. */
   readonly reach: Rect;
@@ -919,6 +928,11 @@ export interface AssemblyRenderModel {
    * level give undefined (see `levelFocusRect`).
    */
   focusRect(step: number, id: string): Rect | undefined;
+  /**
+   * Label boxes (leaders included) that fade in during a step, at the step's END pose, in the
+   * view in effect: the camera widens a zoom to hold a label it would cut (§7.4).
+   */
+  stepLabels?(step: number): readonly Rect[];
   /**
    * Focus rect of an id inside a close-up level, in OVERLAY (viewport) coordinates: the level's
    * own rect placed by its overview, with the focus margins. Level paths are not in

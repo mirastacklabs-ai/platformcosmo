@@ -50,7 +50,7 @@ import { h } from "../../emit/xml.js";
 import { projectBoxBounds, unionRects } from "../../geometry/index.js";
 import { endsAwayFromBase } from "../../scene/assembly/timing.js";
 import { resolveStoryboard } from "../../scene/storyboards.js";
-import { closesLoop, resolveFigure } from "../../scene/boards.js";
+import { closesLoop, loopFigures } from "../../scene/boards.js";
 import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
 import { LOOP_START_MIN } from "../../scene/assembly/build.js";
 import { stepTimes } from "../boards/timeline.js";
@@ -59,7 +59,7 @@ import { copySuffix } from "../../emit/ids.js";
 import { ELEMENT_WARN, MAX_LEVELS } from "../../scene/assembly/levels.js";
 import { MAX_VIEWS } from "../../scene/assembly/views.js";
 import { levelOf } from "../../scene/assembly/levels.js";
-import { buildLevelGroups, levelFocusRect, roundRect } from "./levels.js";
+import { buildLevelGroups, levelFocusRect, roundRect, type LevelsDeps } from "./levels.js";
 import { groupTracks, placementAttr } from "./groups.js";
 import { scopeIds, viewNode, viewRender } from "./views.js";
 import { clipDef, partGroup, withIdSuffix, wrap, type DomContext, type Wrappers } from "./dom.js";
@@ -127,6 +127,14 @@ export interface AssemblyRenderContext {
   readonly budgets?: Partial<DepthBudgets>;
   /** Focus rect margins, as `RenderModel.focusRects` (default none). */
   readonly focusMargin?: { readonly side: number; readonly bottom: number };
+  /**
+   * Screen rect of the main scene's other content (1.1 objects, figure panels): with the main
+   * assemblies' extents it is the overview area a close-up level fills (§8.4). Absent: the
+   * assemblies' extents alone.
+   */
+  readonly overviewArea?: Rect;
+  /** Content of figure close-up levels (`BoardsBuild.levelFigure`). */
+  readonly levelFigure?: LevelsDeps["figure"];
 }
 
 /** What `AssemblyBuild.place` needs once the view box is final (§7.6). */
@@ -1028,6 +1036,12 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     loop: total,
     settled: loopBuild.settled,
     focusRect,
+    stepLabels: (step) => {
+      const c = clock[step - 1];
+      return c === undefined
+        ? []
+        : labels.rectsShownIn(c.start, stepEndTime(Math.min(c.end, total)));
+    },
     frameAt,
     stepEnd,
     elements: countElements([...objects, ...labels.nodes, ...domCtx.defs]),
@@ -1172,7 +1186,7 @@ export function buildAssemblyRender(
   );
   if (!closeLast && (ctx.spec?.figures !== undefined || ctx.spec?.storyboards !== undefined)) {
     closeLast = closesLoop(
-      (ctx.spec.figures ?? []).map((f, i) => resolveFigure(f, i).figure),
+      loopFigures(ctx.spec, levels),
       plan,
       (ctx.spec.storyboards ?? []).map((b) => resolveStoryboard(b)),
     );
@@ -1241,7 +1255,15 @@ export function buildAssemblyRender(
   }
 
   // ---- close-up levels ---------------------------------------------------------------------
-  const target = roundRect(unionRects(main.extents));
+  const target = roundRect(
+    unionRects([...main.extents, ...(ctx.overviewArea === undefined ? [] : [ctx.overviewArea])]),
+  );
+  // a level is its own world: drawn with its own projection, without the main scene's labels
+  const levelCtx = (p: Projection): AssemblyRenderContext => {
+    const { fixedLabels: _main, ...rest } = ctx;
+    void _main;
+    return { ...rest, projection: p };
+  };
   const lv =
     levels.length === 0
       ? undefined
@@ -1251,8 +1273,9 @@ export function buildAssemblyRender(
           margin: ctx.focusMargin ?? { side: 0, bottom: 0 },
           target,
           main,
-          build: (l) =>
-            buildGroup(ctx, {
+          ...(ctx.levelFigure === undefined ? {} : { figure: ctx.levelFigure }),
+          build: (l, p) =>
+            buildGroup(levelCtx(p), {
               assemblies: l.assembly === undefined ? [] : [l.assembly],
               ids,
               statics: [],
@@ -1369,6 +1392,11 @@ export function buildAssemblyRender(
       const v = plan[step - 1]?.view ?? 0;
       const inView = v === 0 ? undefined : viewGroups.find((x) => x.turn === v);
       return (inView?.group.model ?? main.model).focusRect(step, id);
+    },
+    stepLabels: (step) => {
+      const v = plan[step - 1]?.view ?? 0;
+      const inView = v === 0 ? undefined : viewGroups.find((x) => x.turn === v);
+      return (inView?.group.model ?? main.model).stepLabels?.(step) ?? [];
     },
     levelFocusRect: (step, id) =>
       lv === undefined

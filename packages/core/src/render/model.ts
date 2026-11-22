@@ -842,6 +842,9 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       }),
     fit: (text, size, bold, maxWidth) => fit(text, size, bold, maxWidth),
     focusMargin: { side: MARGIN_FOCUS, bottom: labelSize + 6 },
+    // close-up levels fill the main scene's overview area (§8.4)
+    ...(extents.length > 0 ? { overviewArea: unionRects(extents) } : {}),
+    ...(boardsBuild?.levelFigure === undefined ? {} : { levelFigure: boardsBuild.levelFigure }),
   });
   if (asmResult) diagnostics.push(...asmResult.diagnostics);
   const asmBuild = asmResult !== undefined && "model" in asmResult ? asmResult : undefined;

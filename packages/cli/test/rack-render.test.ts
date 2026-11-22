@@ -1,8 +1,7 @@
 // W-2: a rack in assembly mode drawn in its hall (assemblies 8.1, 9.1): it shares the depth order
 // with the other objects and cable segments, cables (and their particles) hide while a slot they
 // touch is displaced, the rack keeps its 1.1 label, and the rear-door heat exchanger slides out
-// clear of the posts. Phase 2 is still gated: scenes come from `buildScene` directly and renders
-// from `createRender` with the guard dropped from validate (as closeup-cli.test.ts does).
+// clear of the posts. Scenes come from `buildScene` directly, renders from `createRender`.
 import { readFileSync } from "node:fs";
 import * as core from "@platformcosmo/core";
 import { dcPack } from "@platformcosmo/dc-pack";
@@ -43,18 +42,8 @@ const idsOf = (nodes: readonly core.SvgNode[], out: string[] = []): string[] => 
   return out;
 };
 
-const lifted: typeof core.validate = (s, c) => {
-  const r = core.validate(s, c);
-  const diagnostics = r.diagnostics.filter(
-    (d) =>
-      d.code !== "assembly/unsupported" &&
-      !(
-        d.code === "assembly/unknown-target" &&
-        /^\/steps\/\d+\/assembly\/\d+\/(explode|implode)$/.test(d.path)
-      ),
-  );
-  return { valid: !diagnostics.some((d) => d.severity === "error"), spec: s as never, diagnostics };
-};
+/** The shipped validate: phase 2 is lifted (D-4a). */
+const lifted: typeof core.validate = core.validate;
 const render = core.createRender({
   validate: lifted,
   buildScene: core.buildScene,
@@ -252,6 +241,66 @@ describe("the rack label is an obstacle for part labels (N1)", () => {
       const h = Number(rect.attrs!["height"]);
       const hit = x < a.x1 && a.x0 < x + w && y < a.y1 && a.y0 < y + h;
       expect(hit, String(g.attrs!["id"])).toBe(false);
+    }
+  });
+});
+
+describe("D-4a: a targeted rack keeps its 1.1 look at rest", () => {
+  test("device fronts set into their carrier are leaves of their own: nothing falls back to hiding", async () => {
+    // before: the GPU node's grille (gpu/front, set 3 mm into the chassis) and the ToR's ports and
+    // LEDs (set into the face plate) interpenetrated their carrier and were hidden until clear
+    const r = await render(targeting("rack-a1"), {
+      dc: dcPack,
+      themes: themeRegistry,
+      font: "system",
+      outputs: ["static"],
+    });
+    const hidden = r.diagnostics.filter((d) => d.code === "assembly/clip-fallback");
+    // only the uplink cable that runs into the ToR's front stays (named, never silent)
+    for (const d of hidden) expect(d.message, d.message).toMatch(/^"cable_uplink-a_\d+" crosses/);
+    const m = modelOf(targeting("rack-a1"));
+    const leaves = m.scene.assemblies!.assemblies.find((a) => a.id === "rack-a1")!;
+    const find = (path: string): core.SceneAssemblyNode | undefined => {
+      const walk = (n: core.SceneAssemblyNode): core.SceneAssemblyNode | undefined =>
+        n.path === path ? n : n.children.map(walk).find((x) => x !== undefined);
+      return walk(leaves.root);
+    };
+    const chassis = find("rack-a1/gpu/chassis")!;
+    const front = find("rack-a1/gpu/front")!;
+    // the chassis ends where the grille starts
+    expect(chassis.local.origin.y + chassis.local.size.y).toBeCloseTo(front.local.origin.y, 6);
+  }, 120000);
+});
+
+describe("D-4a: the camera never cuts a label its step brings in (§7.4)", () => {
+  test("§19.4 step 2: every label that fades in lies inside the zoom window", () => {
+    const md = readFileSync(new URL("../../../docs/design/assemblies.md", import.meta.url), "utf8");
+    const json = [...md.matchAll(/```json\n([\s\S]*?)```/g)]
+      .map((x) => x[1] as string)
+      .find((j) => j.includes('"title": "Rack to server to internals"'))!;
+    const m = modelOf(JSON.parse(json) as core.PlatformCosmoSpec);
+    const animator = core.createAnimator();
+    for (const step of [2, 4]) {
+      // the step output's view box is the step's camera window
+      const v = animator.animate(m, { speed: 1, mode: "step", step }).viewBox!;
+      expect(v).toBeDefined();
+      const labels = m.assembly!.stepLabels!(step);
+      expect(labels.length).toBeGreaterThan(0);
+      for (const q of labels) {
+        const out =
+          q.x + q.width <= v.x ||
+          q.x >= v.x + v.width ||
+          q.y + q.height <= v.y ||
+          q.y >= v.y + v.height;
+        const inside =
+          q.x >= v.x - 0.01 &&
+          q.y >= v.y - 0.01 &&
+          q.x + q.width <= v.x + v.width + 0.01 &&
+          q.y + q.height <= v.y + v.height + 0.01;
+        expect(out || inside, `step ${step}: ${JSON.stringify(q)} in ${JSON.stringify(v)}`).toBe(
+          true,
+        );
+      }
     }
   });
 });
