@@ -6,6 +6,7 @@
 import { watch } from "node:fs";
 import { homedir } from "node:os";
 import * as core from "@platformcosmo/core";
+import * as coreInternal from "@platformcosmo/core/internal";
 import type { DcPack, LoadedIconPack, ThemeRegistry, ValidateThemeFn } from "@platformcosmo/core";
 import * as dcPackModule from "@platformcosmo/dc-pack";
 import * as partsAuto from "@platformcosmo/parts-auto";
@@ -34,11 +35,11 @@ export function defaultDeps(): Deps {
       parseSpec: core.parseSpec,
       validate: core.validate,
       render: core.render,
-      closeupDiagnostics: core.closeupDiagnostics,
+      closeupDiagnostics: coreInternal.closeupDiagnostics,
       createIconResolver: core.createIconResolver,
       sanitizeSvg: core.sanitizeSvg,
       fetchIconPack: core.fetchIconPack,
-      buildAssemblies: core.buildAssemblies,
+      buildAssemblies: coreInternal.buildAssemblies,
       gifEncoder: core.gifEncoder,
     },
     themes: named<ThemeRegistry>(themesModule, "themeRegistry"),

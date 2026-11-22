@@ -7,7 +7,16 @@ export { MAX_PIXELS, MAX_MULTIPLY_ADDS, createRaster, luminanceOverWhite } from 
 export { encodePng } from "./png.js";
 export { decodeImage, applyOrientation } from "./decode.js";
 export type { DecodeOptions, DecodedImage } from "./decode.js";
-export { crop, trim, opaqueBounds, removeBackground, shrink, shrinkImage } from "./ops.js";
+export {
+  crop,
+  trim,
+  opaqueBounds,
+  removeBackground,
+  shrink,
+  shrinkImage,
+  zoom,
+  ZOOM_RANGE,
+} from "./ops.js";
 export type { BackgroundOptions, BackgroundResult, ShrunkImage } from "./ops.js";
 export { floodFill, label, labelBox } from "./cc.js";
 export type { Connectivity, Labels } from "./cc.js";

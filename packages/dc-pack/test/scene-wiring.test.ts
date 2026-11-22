@@ -6,9 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  AssemblyPrograms,
   buildScene,
-  closeupDiagnostics,
   validate,
   type DcAssemblyPlanner,
   type Diagnostic,
@@ -18,6 +16,7 @@ import {
   type SceneAssemblyNode,
   type SceneGraph,
 } from "@platformcosmo/core";
+import { AssemblyPrograms, closeupDiagnostics } from "@platformcosmo/core/internal";
 import { dcPack, assemblyPlanner } from "../src/index.js";
 
 type Json = Record<string, unknown>;

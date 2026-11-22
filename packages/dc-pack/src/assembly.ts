@@ -36,7 +36,7 @@ import { U_MM } from "./units.js";
 /** Oversize above which a slot template warns (assemblies 8.5; the template is shrunk either way). */
 const SIZE_TOLERANCE = 0.1;
 import { partKind, tileToMm, unitMm } from "./shapes.js";
-import { AssemblyPrograms, rackTargeted, reassignSplit } from "@platformcosmo/core";
+import { AssemblyPrograms, rackTargeted, reassignSplit } from "@platformcosmo/core/internal";
 import type {
   AssemblyFrame,
   Box3,
