@@ -276,7 +276,11 @@ program does not add is there from the step's start, also in a nested sub-assemb
 earlier step added part of it): `assembly/subbuild-not-added` (warning), added as a plain part.
 
 The parts **callout** groups the step's leaves by (shape, size, color, image)
-as `count × thumbnail` (thumbnail = the leaf drawn at a fixed callout scale, or its image).
+as `count × thumbnail` (thumbnail = the leaf drawn at a fixed callout scale, or its image). It is
+drawn as a box (`render/assembly/callout.ts`, §7.6): a `capbox` panel of up to 12 cells in rows of
+four, each a thumbnail (at most 44 px on its longer side, never enlarged) over its `<count>x`; more
+kinds are not drawn (`layout/callout-truncated`). The box shows while its step's moves play (fading
+in and out over 0.2 s each), once per play of the step.
 `view` rotates the view a quarter turn from that step on (§7.7). `unbuild` plays steps in
 reverse (time-reversed, §7.2).
 
@@ -396,18 +400,21 @@ deep copy of its part group (ids suffixed `__f`, listed by `copyIds`) in one wra
 `<g id=ids.flight(path)>` that carries `transform`, `visibility` and `opacity` tracks
 (`AssemblyRenderModelX.flights`). It is not a depth item: it is drawn after every depth item
 of its group (so it follows the camera and the view cross-fades of its group, and labels stay
-above it). The **callout slot** is a point of the group's screen space: left of the assemblies'
-rest bounds by 36 px plus a tenth of their width, a quarter of their height down; the copy of
-a node (a leaf, or a sub-assembly flying as one unit; the leaves a step adds of a partly added sub-assembly too) is centred on it. Its end is the world
+above it). The **callout slot** is a point of the group's screen space, left of a reference rect at 16 px
+clear of it and a quarter of its height down: the step's focus rect (the node the camera frames,
+§7.4) or, without focus, the rest bounds of the assemblies. The copy of
+a node (a leaf, or a sub-assembly flying as one unit; the leaves a step adds of a partly added sub-assembly too) is centred on it, the largest copy of the step
+setting the clearance; the callout box sits left of the copies, 12 px clear of them, centred on the
+slot's height. The group of box and copies moves left until it covers no part's rest rect. The
+focus rect of a step also holds the box and the copies at the slot of the callouts played in it,
+so the camera's zoomed view always shows where the flights start. Its end is the world
 copy's own screen translation at the swap time (the same sum of moves, projection and rounding),
 so the swap has no jump at any speed. The world copy is hidden until the swap (a build) and
 appears opaque at it, with no fade; the copy fades in over the first 0.2 s of the flight. An
 unbuild is the exact reverse: the world copy lifts to the hover point, vanishes at the swap and
 the copy flies back to the slot, fading out over the last 0.2 s (the curve is mirrored). Reduced
-motion shows each step's end pose, where no copy is shown. The flights' hull (the copy at the
-slot and at the hover point) is part of the reach bounds, so the view box holds them. The
-parts callout itself (the box with `count x thumbnail`) is not drawn yet (follow-up); only the
-flights start from its slot.
+motion shows each step's end pose, where no copy and no box is shown. The flights' hull (the copy at the
+slot and at the hover point) and the boxes are part of the reach bounds, so the view box holds them.
 
 ### 7.7 Quarter-turn views
 
@@ -1150,6 +1157,7 @@ suggestions):
 | `asset/rim-stroke`                                                                                              | info / warning (undecided)                        | figure template rim pixels a board stroke touches: peeled, or undecided (ingestion §6.4)                                                                              |
 | `budget/assembly-parts`, `budget/depth-copies`, `budget/views`, `budget/levels`, `budget/images`, `budget/time` | warning / error                                   | §13                                                                                                                                                                   |
 | `layout/callout-count-hidden`                                                                                   | info                                              | a storyboard callout too narrow or low for a part's `<count>x`: the thumbnail is drawn, the count is not                                                              |
+| `layout/callout-truncated`                                                                                      | info                                              | a build step with more than 12 part kinds: its callout box shows the first 12                                                                                         |
 | `options/invalid-png-step`                                                                                      | error                                             | `png.step` is not a positive integer, is given with `png.time`, or is beyond the timeline                                                                             |
 
 ## 19. Examples

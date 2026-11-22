@@ -63,9 +63,16 @@ import { groupTracks, placementAttr } from "./groups.js";
 import { scopeIds, viewNode, viewRender } from "./views.js";
 import { clipDef, partGroup, withIdSuffix, wrap, type DomContext, type Wrappers } from "./dom.js";
 import { buildLabels, type LabelTrack, type TextSpec } from "./labels.js";
-import { andVisibility, presenceTracks, presentWindows, type PresenceTracks } from "./builds.js";
-import { flightTracks, slotOf } from "./flights.js";
-import { buildLoop, type StageRun } from "./loop.js";
+import {
+  BUILD_FADE,
+  andVisibility,
+  presenceTracks,
+  presentWindows,
+  type PresenceTracks,
+} from "./builds.js";
+import { flightSizes, flightTracks, pushKey } from "./flights.js";
+import { layoutCallout, MAX_CELLS, type CalloutLayout } from "./callout.js";
+import { buildLoop, r4, type StageRun } from "./loop.js";
 import {
   MoveIndex,
   evalOffset,
@@ -470,8 +477,88 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     const inner = copy === 0 ? dom.inner : withIdSuffix(dom.inner, copySuffix(copy), domCtx);
     objects.push(wrap(inner, w, domCtx));
   }
-  // ---- callout flights (§7.6) ---------------------------------------------------------------
-  // The overlay copy of each flying leaf: not a depth item, drawn after every item of the group.
+  // ---- focus rects at the END pose (§7.4) -------------------------------------------------
+  const nodeLeaves = new Map<string, WorldLeaf[]>();
+  for (const l of leaves) {
+    let p = l.path;
+    for (;;) {
+      const list = nodeLeaves.get(p);
+      if (list === undefined) nodeLeaves.set(p, [l]);
+      else list.push(l);
+      const k = p.lastIndexOf("/");
+      if (k < 0) break;
+      p = p.slice(0, k);
+    }
+  }
+  const m = ctx.focusMargin ?? { side: 0, bottom: 0 };
+  const nodeRect = (step: number, id: string): Rect | undefined => {
+    const c = clock[step - 1];
+    const list = nodeLeaves.get(id);
+    if (c === undefined || list === undefined) return undefined;
+    const at = stepEndTime(Math.min(c.end, total));
+    const rects = list.map((l) => {
+      const d = index.displacement(l.path, at);
+      const b = l.geometry.bounds;
+      return projectBoxBounds(projection, {
+        origin: { x: b.origin.x + d.x, y: b.origin.y + d.y, z: b.origin.z + d.z },
+        size: b.size,
+      });
+    });
+    // what the camera frames also holds the labels and leaders shown during this step (the
+    // camera's lead sits inside it, boards/timeline.ts; the previous step's tail is not framed)
+    return unionRects([...rects, ...labels.rectsUnder(id, c.start, at)]);
+  };
+  // ---- parts callouts and callout flights (§6.5, §7.6) --------------------------------------
+  // One layout per play of a build step (`loopBuild.callouts`): the box, and the slot its flights
+  // start from, placed left of the step's focus rect (the camera frames the box and the slot with
+  // it) or, without focus, of the rest bounds of the assemblies (callout.ts).
+  const restOf = (l: WorldLeaf): Rect => projectBoxBounds(projection, l.geometry.bounds);
+  const restRects = leaves.map(restOf);
+  const restAll = restRects.length === 0 ? undefined : unionRects(restRects);
+  const sizes = flightSizes(loopBuild.flights, leaves, projection);
+  const calloutRuns = loopBuild.callouts;
+  interface Play {
+    readonly step: number;
+    readonly shown: readonly { readonly count: number; readonly leaf: WorldLeaf }[];
+    readonly layout: CalloutLayout;
+  }
+  const plays: (Play | undefined)[] = calloutRuns.map((run, i) => {
+    if (restAll === undefined) return undefined;
+    // the timeline step playing at the start of the run, and what it frames
+    let step = 0;
+    for (const c of clock) if (c.start <= run.t0 + EPS) step = c.step;
+    const focus = scene.timeline.find((s) => s.index === step)?.focus;
+    const ref = (focus === undefined ? undefined : nodeRect(step, focus)) ?? restAll;
+    const shown = run.entries.slice(0, MAX_CELLS).flatMap((e) => {
+      const leaf = leafByPath.get(e.sample);
+      return leaf === undefined ? [] : [{ count: e.count, leaf }];
+    });
+    if (run.entries.length > MAX_CELLS) {
+      diagnostics.push({
+        severity: "info",
+        code: "layout/callout-truncated",
+        path: "/assemblies",
+        message: `Step ${run.step} of build program "${run.program}" has ${run.entries.length} part kinds; its callout shows the first ${MAX_CELLS}`,
+        suggestion: "Split the step, or group its parts into sub-assemblies",
+        params: { program: run.program, step: run.step, kinds: run.entries.length },
+      });
+    }
+    const layout = layoutCallout({
+      ref,
+      avoid: restRects,
+      copy: sizes.get(i),
+      parts: shown.map((x) => {
+        const r = restOf(x.leaf);
+        return { width: r.width, height: r.height, count: x.count };
+      }),
+      labelSize: ctx.labelSize,
+    });
+    return { step, shown, layout };
+  });
+  const slots = new Map<number, Vec2>();
+  plays.forEach((p, i) => {
+    if (p !== undefined) slots.set(i, p.layout.slot);
+  });
   const flights =
     loopBuild.flights.length === 0 || leaves.length === 0
       ? undefined
@@ -481,31 +568,92 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
           leaves,
           index,
           projection,
-          slot: slotOf(
-            unionRects(leaves.map((l) => projectBoxBounds(projection, l.geometry.bounds))),
-          ),
+          slots,
           loop: total,
         });
   const flightList = flights?.tracks ?? [];
   const idOf = (n: SvgNode): unknown =>
     typeof n === "object" && "tag" in n ? n.attrs?.["id"] : undefined;
-  for (const ft of flightList) {
-    const leaf = leafByPath.get(ft.path);
-    if (leaf === undefined) continue;
+  /** A copy of a leaf's part group, ids suffixed; what it defines again (clips) is not repeated. */
+  const copyOf = (leaf: WorldLeaf, suffix: string, register: boolean): SvgElement => {
     const before = domCtx.defs.length;
     const group = partGroup(domCtx, leaf, undefined, {});
-    // what the copy defines again (image clips, same ids) is already there
     const known = new Set(domCtx.defs.slice(0, before).map(idOf));
     const fresh = domCtx.defs.splice(before).filter((d) => !known.has(idOf(d)));
     domCtx.defs.push(...fresh);
-    // the copy's ids are listed with the item's copies, so per-id rules reach it too
-    const list = (node: SvgNode): void => {
-      if (typeof node !== "object" || !("tag" in node)) return;
-      const id = node.attrs?.["id"];
-      if (typeof id === "string") copyList.set(id, [...(copyList.get(id) ?? [id]), `${id}__f`]);
-      for (const kid of node.children ?? []) list(kid);
-    };
-    list(group);
+    if (register) {
+      // the copy's ids are listed with the item's copies, so per-id rules reach it too
+      const list = (node: SvgNode): void => {
+        if (typeof node !== "object" || !("tag" in node)) return;
+        const id = node.attrs?.["id"];
+        if (typeof id === "string") {
+          copyList.set(id, [...(copyList.get(id) ?? [id]), `${id}${suffix}`]);
+        }
+        for (const kid of node.children ?? []) list(kid);
+      };
+      list(group);
+    }
+    return withIdSuffix(group, suffix, domCtx);
+  };
+  // the callout boxes: below the flying copies, which start beside them
+  const boxIds = new Map<string, number>();
+  const boxRects: Rect[] = [];
+  const P = ctx.prefix;
+  calloutRuns.forEach((run, i) => {
+    const play = plays[i];
+    const box = play?.layout.box;
+    if (play === undefined || box === undefined) return;
+    boxRects.push(box);
+    const base = ids.callout(run.owner, run.program, run.step);
+    const nth = boxIds.get(base) ?? 0;
+    boxIds.set(base, nth + 1);
+    const id = nth === 0 ? base : `${base}__r${nth}`;
+    const kids: SvgNode[] = [
+      h("rect", {
+        class: `${P}-capbox`,
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height,
+        rx: 6,
+      }),
+    ];
+    play.shown.forEach((part, k) => {
+      const cell = play.layout.cells[k];
+      if (cell === undefined) return;
+      const r = restOf(part.leaf);
+      const sc = Math.round(cell.scale * 10000) / 10000;
+      const tf = `translate(${round2(cell.center.x - sc * (r.x + r.width / 2))} ${round2(cell.center.y - sc * (r.y + r.height / 2))})${sc < 1 ? ` scale(${sc})` : ""}`;
+      kids.push(h("g", { transform: tf }, copyOf(part.leaf, `__t${i}x${k}`, false)));
+      kids.push(
+        ctx.text({
+          x: cell.label.x,
+          y: cell.label.y,
+          size: ctx.labelSize,
+          anchor: "middle",
+          cls: "t-caption",
+          bold: true,
+          content: `${part.count}x`,
+        }),
+      );
+    });
+    // visible over the step's own window: fades in as it starts and out as it ends
+    const ramp = Math.max(1e-4, Math.min(BUILD_FADE, (run.t1 - run.t0) / 2));
+    const opacity: OpacityKey[] = [{ t: 0, opacity: 0, easing: "step" }];
+    pushKey(opacity, { t: run.t0, opacity: 0, easing: "linear" });
+    pushKey(opacity, { t: r4(run.t0 + ramp), opacity: 1, easing: "linear" });
+    pushKey(opacity, { t: r4(run.t1 - ramp), opacity: 1, easing: "linear" });
+    pushKey(opacity, { t: run.t1, opacity: 0, easing: "step" });
+    const last = opacity[opacity.length - 1] as OpacityKey;
+    if (last.t < total - EPS) opacity.push({ t: r4(total), opacity: 0, easing: "linear" });
+    staticFades.push({ key: id, id, opacity });
+    const o0 = round2(evalOpacity(opacity, 0));
+    objects.push(h("g", { id, ...(o0 < 1 ? { opacity: o0 } : {}) }, ...kids));
+  });
+  for (const ft of flightList) {
+    const leaf = leafByPath.get(ft.path);
+    if (leaf === undefined) continue;
+    const copy = copyOf(leaf, "__f", true);
     const tf = translateOf(evalOffset(ft.motion, 0));
     const o0 = round2(evalOpacity(ft.opacity, 0));
     objects.push(
@@ -517,7 +665,7 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
           ...(evalVisible(ft.visibility, 0) ? {} : { visibility: "hidden" }),
           ...(o0 < 1 ? { opacity: o0 } : {}),
         },
-        withIdSuffix(group, "__f", domCtx),
+        copy,
       ),
     );
   }
@@ -569,7 +717,7 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     );
   }
   // flights: the copy at the callout slot and at the hover point (§10)
-  reachRects.push(...(flights?.rects ?? []));
+  reachRects.push(...(flights?.rects ?? []), ...boxRects);
   const reach = reachRects.length === 0 ? undefined : unionRects(reachRects);
   if (reach !== undefined) extents.push(reach);
 
@@ -619,40 +767,19 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     return stateAt(c === undefined ? 0 : stepEndTime(Math.min(c.end, total)));
   };
 
-  // ---- focus rects at the END pose (§7.4) -------------------------------------------------
-  const nodeLeaves = new Map<string, WorldLeaf[]>();
-  for (const l of leaves) {
-    let p = l.path;
-    for (;;) {
-      const list = nodeLeaves.get(p);
-      if (list === undefined) nodeLeaves.set(p, [l]);
-      else list.push(l);
-      const k = p.lastIndexOf("/");
-      if (k < 0) break;
-      p = p.slice(0, k);
-    }
-  }
-  const m = ctx.focusMargin ?? { side: 0, bottom: 0 };
-  const nodeRect = (step: number, id: string): Rect | undefined => {
-    const c = clock[step - 1];
-    const list = nodeLeaves.get(id);
-    if (c === undefined || list === undefined) return undefined;
-    const at = stepEndTime(Math.min(c.end, total));
-    const rects = list.map((l) => {
-      const d = index.displacement(l.path, at);
-      const b = l.geometry.bounds;
-      return projectBoxBounds(projection, {
-        origin: { x: b.origin.x + d.x, y: b.origin.y + d.y, z: b.origin.z + d.z },
-        size: b.size,
-      });
-    });
-    // what the camera frames also holds the labels and leaders shown during this step (the
-    // camera's lead sits inside it, boards/timeline.ts; the previous step's tail is not framed)
-    return unionRects([...rects, ...labels.rectsUnder(id, c.start, at)]);
-  };
+  // what the camera frames of a timeline step also holds the callouts played in it (their box and
+  // the copies at their slot): the slot is on screen under zoom
+  const calloutRects = new Map<number, Rect[]>();
+  plays.forEach((p) => {
+    if (p === undefined) return;
+    const list = calloutRects.get(p.step) ?? [];
+    list.push(...[p.layout.box, p.layout.copy].filter((r): r is Rect => r !== undefined));
+    calloutRects.set(p.step, list);
+  });
   const focusRect = (step: number, id: string): Rect | undefined => {
-    const r = nodeRect(step, id);
-    if (r === undefined) return undefined;
+    const n = nodeRect(step, id);
+    if (n === undefined) return undefined;
+    const r = unionRects([n, ...(calloutRects.get(step) ?? [])]);
     return {
       x: round2(r.x - m.side),
       y: round2(r.y - m.side),

@@ -275,8 +275,11 @@ describe("the swap shows no pop", () => {
       // visible-window ends (build) and starts (unbuild)
       const m = swaps(spec);
       expect(m.length).toBeGreaterThan(0);
+      // scale 2, threshold 4000: a clean swap differs by 1.4-2.9k pixels (the part's own motion);
+      // with the old low hover (the part hidden behind the wall for a frame) it was 4.6-6.3k, so
+      // this fails without the hover fix at every speed (scale 1 could not tell the two apart)
       const at = async (t: number) =>
-        pixels(await run(spec, { outputs: ["png"], speed, png: { scale: 1, time: t } }));
+        pixels(await run(spec, { outputs: ["png"], speed, png: { scale: 2, time: t } }));
       let checked = 0;
       for (const { t } of m) {
         const out = w(t) / speed;

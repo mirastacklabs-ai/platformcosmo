@@ -289,9 +289,13 @@ export function createRender(deps: RenderDeps): RenderFn {
         ...(options.parts ? { parts: options.parts } : {}),
       });
       // validation reports the build-program warnings too: once each
-      const known = new Set(diagnostics.map((d) => `${d.code}\0${d.path}\0${d.message}`));
+      const known = new Set(
+        diagnostics.map((d) => `${d.severity}\0${d.code}\0${d.path}\0${d.message}`),
+      );
       diagnostics.push(
-        ...scene.diagnostics.filter((d) => !known.has(`${d.code}\0${d.path}\0${d.message}`)),
+        ...scene.diagnostics.filter(
+          (d) => !known.has(`${d.severity}\0${d.code}\0${d.path}\0${d.message}`),
+        ),
       );
       if (diagnostics.some((d) => d.severity === "error")) return fail(diagnostics, scene);
 
