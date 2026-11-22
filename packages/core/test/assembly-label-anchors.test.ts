@@ -345,9 +345,10 @@ describe("unmoved parts under a labelled group are named by it", () => {
     return { ...r, a: r.model.assembly as AssemblyRenderModelX };
   };
 
-  test("the engine example has 14 leader labels; its valves and piston parts are reported", () => {
+  test("the engine example has 11 leader labels; its valves and piston parts are reported", () => {
     const { a, diagnostics } = render(example("Inline-4"));
-    expect(tracksOf(a).filter((t) => t.kind === "leader")).toHaveLength(14);
+    // instances of one counted part moved together share one label (D-4a): 14 before
+    expect(tracksOf(a).filter((t) => t.kind === "leader")).toHaveLength(11);
     const omitted = diagnostics.filter((d) => d.code === "assembly/label-omitted");
     expect(omitted.length).toBeGreaterThanOrEqual(16);
     expect(omitted.map((d) => (d.params as { part: string }).part)).toContain(
@@ -356,9 +357,14 @@ describe("unmoved parts under a labelled group are named by it", () => {
     expect(omitted.some((d) => d.message.includes("whose label names it"))).toBe(true);
   });
 
-  test("the GPU example keeps its 39 leader labels", () => {
-    const { a } = render(example("2U GPU"));
-    expect(tracksOf(a).filter((t) => t.kind === "leader")).toHaveLength(39);
+  test("the GPU example has 13 leader labels: one per counted part moved together", () => {
+    const { a, diagnostics } = render(example("2U GPU"));
+    // 39 before D-4a: every DIMM, fan and drive had its own pill
+    expect(tracksOf(a).filter((t) => t.kind === "leader")).toHaveLength(13);
+    const carried = diagnostics.filter(
+      (d) => d.code === "assembly/label-omitted" && d.message.includes("every instance"),
+    );
+    expect(carried.length).toBe(39 - 13);
   });
 });
 

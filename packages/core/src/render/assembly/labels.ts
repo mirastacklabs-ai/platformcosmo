@@ -77,6 +77,8 @@ import {
 import type { WorldLeaf } from "./world.js";
 
 const GAP = 18;
+/** A counted part's instance path: `<parent>/<id>-<n>`. */
+const COUNTED = /^(.+)-([1-9][0-9]*)$/;
 const EPS = 1e-9;
 /** Fraction of a move over which its label fades in (§6.6). */
 const FADE_FRACTION = 0.2;
@@ -139,6 +141,8 @@ export interface LabelOutput {
    * during that window must contain.
    */
   readonly rectsUnder: (path: string, a: number, b: number) => Rect[];
+  /** Label boxes (with leaders) that fade in during [a, b], at their pose at `b`. */
+  readonly rectsShownIn: (a: number, b: number) => Rect[];
 }
 
 interface NodeInfo {
@@ -422,7 +426,27 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       firstShow.set(path, { ...prev, details: true });
     }
   };
+  // Instances of one counted part (`<id>-<n>` siblings with the same label) that a stage moves
+  // together are named by ONE label, on the lowest-numbered of them (§6.6): eight DIMMs show one
+  // "DIMM", not eight piled-up pills.
+  /** Instances whose label a sibling shows, with that sibling. */
+  const carried = new Map<string, string>();
+  const siblingKey = (path: string, label: string): string | undefined => {
+    const m = COUNTED.exec(path);
+    return m === null ? undefined : `${m[1] as string}\u0000${label}`;
+  };
   for (const run of runs) {
+    const first = new Map<string, { path: string; n: number }>();
+    if (run.kind !== "implode" && run.stage.labels === "show") {
+      for (const mv of run.moves) {
+        const inf = info.get(mv.path);
+        const key = inf === undefined ? undefined : siblingKey(mv.path, inf.label);
+        if (key === undefined) continue;
+        const n = Number(COUNTED.exec(mv.path)?.[2]);
+        const cur = first.get(key);
+        if (cur === undefined || n < cur.n) first.set(key, { path: mv.path, n });
+      }
+    }
     for (const mv of run.moves) {
       const inf = info.get(mv.path);
       if (run.kind === "implode") {
@@ -430,11 +454,22 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
         continue;
       }
       if (inf === undefined || run.stage.labels !== "show") continue;
+      const key = siblingKey(mv.path, inf.label);
+      const rep = key === undefined ? undefined : first.get(key)?.path;
+      if (rep !== undefined && rep !== mv.path) {
+        if (!carried.has(mv.path)) carried.set(mv.path, rep);
+        continue;
+      }
       const dur = mv.t1 - mv.t0;
       addEvent(mv.path, { t: r4(mv.t1 - dur * FADE_FRACTION), kind: "in", t1: mv.t1 });
       noteShow(mv.path, run, mv.t1);
     }
   }
+  // a carried instance that never shows a label of its own has no events at all
+  const unlabelled = [...carried.keys()]
+    .sort()
+    .filter((path) => !(events.get(path) ?? []).some((e) => e.kind === "in"));
+  for (const path of unlabelled) events.delete(path);
   // A labelled node that no stage moves (or moves only through an ancestor) shows its label
   // with the first `labels: show` stage of its assembly and hides with the implode, like the
   // moved ones (it is placed after them). A leaf of a `labels: always` assembly has its top-face
@@ -456,6 +491,14 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       params: { part: path, label: inf.label },
     });
   };
+  for (const path of unlabelled) {
+    const by = carried.get(path) as string;
+    omit(
+      path,
+      `it moves with ${JSON.stringify(by)}, whose label names every instance of its part`,
+      "Give the instances different labels to label each one",
+    );
+  }
   // an unmoved node under a labelled ancestor is named by that ancestor's label: no label of its own
   const statics: string[] = [];
   for (const path of unmoved) {
@@ -879,7 +922,26 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     }
     return out;
   };
-  return { nodes, tracks, extents, elements, top: topLabels, diagnostics, rectsUnder };
+  /** Labels that appear during [a, b] (their node moved in): where they are at `b`. */
+  const rectsShownIn = (a: number, b: number): Rect[] => {
+    const out: Rect[] = [];
+    for (const e of shown) {
+      if (evalOpacity(e.keys, a) > 0 || evalOpacity(e.keys, b) <= 0) continue;
+      const o = evalOffset(e.motion, b);
+      for (const q of e.rest) out.push({ ...q, x: q.x + o.x, y: q.y + o.y });
+    }
+    return out;
+  };
+  return {
+    nodes,
+    tracks,
+    extents,
+    elements,
+    top: topLabels,
+    diagnostics,
+    rectsUnder,
+    rectsShownIn,
+  };
 }
 
 /** Opacity 1 while the displacement equals its t = 0 value, 0 otherwise (step changes). */
