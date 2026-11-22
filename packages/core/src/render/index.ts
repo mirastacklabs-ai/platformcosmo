@@ -327,7 +327,8 @@ export function createRender(deps: RenderDeps): RenderFn {
         ...(options.icons ? { icons: options.icons } : {}),
         ...(parsed.figures !== undefined ||
         parsed.storyboards !== undefined ||
-        parsed.assemblies !== undefined
+        parsed.assemblies !== undefined ||
+        scene.assemblies !== undefined
           ? { spec: parsed, ...(options.images ? { images: options.images } : {}) }
           : {}),
       });

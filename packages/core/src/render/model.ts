@@ -20,7 +20,7 @@ import type {
 import { depthOrder, orderGroups } from "../depth/index.js";
 import type { PlatformCosmoSpec } from "../schema/types.gen.js";
 import { levelOf } from "../scene/assembly/levels.js";
-import { buildAssemblyRender } from "./assembly/index.js";
+import { buildAssemblyRender, type StaticItem } from "./assembly/index.js";
 import { buildBoards } from "./boards/index.js";
 import { createIds, iconDef } from "../emit/index.js";
 import { h } from "../emit/xml.js";
@@ -327,12 +327,63 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     ],
     projection,
   );
+  // A rack in assembly mode (§8.1) is drawn by its assembly, which shares the depth order with
+  // every other object and cable segment (§9.1): they become its statics instead of being drawn
+  // here. A 1.1 scene (and any scene without such a rack) keeps this order byte for byte.
+  const dcAssemblies = new Set(
+    (scene.assemblies?.assemblies ?? []).filter((a) => a.source === "dc").map((a) => a.id),
+  );
+  const shareDepth = dcAssemblies.size > 0;
+  /** Static items for the assembly layer, in this (1.1) order; a rack's objects are one item. */
+  const statics: StaticItem[] = [];
+  const rackOf = (o: SceneObject): string | undefined => {
+    if (o.source !== "dc") return undefined;
+    const base = o.id.endsWith("_front") ? o.id.slice(0, -"_front".length) : o.id.split("/")[0]!;
+    return objectById.get(base)?.type === "rack" ? base : undefined;
+  };
+  const rackItems = new Map<string, { box: Box3; nodes: SvgNode[] }>();
+  const staticTarget = (o: SceneObject): SvgNode[] => {
+    const rack = rackOf(o);
+    // a rack, its slot devices and its front shell keep their forced 1.1 order inside one item
+    const key = rack === undefined ? `obj_${o.id}` : `rack_${rack}`;
+    let it = rackItems.get(key);
+    if (it === undefined) {
+      it = { box: (rack === undefined ? o : (objectById.get(rack) as SceneObject)).box, nodes: [] };
+      rackItems.set(key, it);
+      statics.push({ key, box: it.box, node: h("g", null) });
+    }
+    return it.nodes;
+  };
+  /** Cable endpoints inside a rack in assembly mode: the cable follows their displacement (§8.1). */
+  const cableFollows = (e: SceneEdge): string[] =>
+    [e.from, e.to].filter((id) => dcAssemblies.has(id.split("/")[0] as string)).sort();
   const anchors: Record<string, ObjectAnchor> = {};
   const iconRefs = new Set<string>();
   const labelNodes: SvgNode[] = [];
   const floorNodes: SvgNode[] = []; // appended after the group slabs, so slabs never cover them
   const arrowNodes: SvgNode[] = [];
   const placed: Rect[] = []; // label boxes, so edge labels can step aside
+  /** The label under an object's silhouette `bbox`. */
+  const objectLabel = (label: string, bbox: Rect, cls: string): void => {
+    const center = { x: round2(bbox.x + bbox.width / 2) };
+    const text = fit(label, labelSize, "medium", 150 * fs);
+    const y = bbox.y + bbox.height + labelSize + 3;
+    labelNodes.push(
+      textEl({
+        x: center.x,
+        y,
+        size: labelSize,
+        anchor: "middle",
+        cls,
+        medium: true,
+        content: text,
+      }),
+    );
+    const w = measureText(text, labelSize, "medium");
+    const r = { x: center.x - w / 2, y: y - labelSize, width: w, height: labelSize + 4 };
+    extents.push(r);
+    placed.push(r);
+  };
 
   let openSeg: { edgeId: string; id: string; cls: string; pts: Vec2[] } | undefined;
   const flushSeg = () => {
@@ -344,6 +395,26 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   };
   for (const id of [...floorIds, ...order]) {
     const seg = cableSegments.get(id);
+    if (seg && shareDepth) {
+      // one static item per segment (never merged: neighbours may sort apart around a leaf)
+      const [i] = id.split("#").slice(-1);
+      const cls = [`${P}-edge`, `${P}-edge-${seg.edge.style}`];
+      if (seg.edge.cableKind) cls.push(`${P}-cable-${seg.edge.cableKind}`);
+      cls.push(`${ids.edge(seg.edge.id)}-seg`);
+      const pts = [projection.project(seg.a), projection.project(seg.b)];
+      const follows = cableFollows(seg.edge);
+      statics.push({
+        key: `cable_${seg.edge.id}_${i}`,
+        box: segBox(seg.a, seg.b),
+        node: h("path", {
+          id: `${ids.edge(seg.edge.id)}__s${i}`,
+          class: cls.join(" "),
+          d: polylinePath(pts),
+        }),
+        ...(follows.length === 0 ? {} : { follows }),
+      });
+      continue;
+    }
     if (seg) {
       const [i] = id.split("#").slice(-1);
       const pa = projection.project(seg.a);
@@ -370,7 +441,11 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     }
     flushSeg();
     const o = objectById.get(id) as SceneObject;
-    const target = FLOOR_TYPES.has(o.type) ? floorNodes : layers.objects;
+    const target = FLOOR_TYPES.has(o.type)
+      ? floorNodes
+      : shareDepth
+        ? staticTarget(o)
+        : layers.objects;
     const faceNodes: SvgNode[] = [];
     if (o.parts && o.parts.length > 0) {
       for (const part of o.parts) {
@@ -499,25 +574,8 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
 
     // Devices inside a rack (`rack/slot`) stay unlabeled: their labels pile up over the rack.
     const insideRack = o.source === "dc" && o.id.includes("/");
-    if (o.label && !insideRack) {
-      const text = fit(o.label, labelSize, "medium", 150 * fs);
-      const y = bbox.y + bbox.height + labelSize + 3;
-      labelNodes.push(
-        textEl({
-          x: center.x,
-          y,
-          size: labelSize,
-          anchor: "middle",
-          cls: o.source === "dc" ? "t-dc" : "t-primary",
-          medium: true,
-          content: text,
-        }),
-      );
-      const w = measureText(text, labelSize, "medium");
-      const r = { x: center.x - w / 2, y: y - labelSize, width: w, height: labelSize + 4 };
-      extents.push(r);
-      placed.push(r);
-    }
+    if (o.label && !insideRack)
+      objectLabel(o.label, bbox, o.source === "dc" ? "t-dc" : "t-primary");
     if (o.badge) {
       const bs = theme.font.badge * fs;
       const text = fit(o.badge, bs, true, 96 * fs, MONO);
@@ -555,6 +613,22 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   }
 
   flushSeg();
+  // a rack in assembly mode keeps its 1.1 label, under its 1.1 box (the rack itself never moves)
+  for (const id of [...dcAssemblies].sort()) {
+    const label = scene.assemblies?.assemblies.find((a) => a.id === id)?.label;
+    const box = scene.focusTargets[id];
+    if (label === undefined || box === undefined) continue;
+    objectLabel(label, boundsOfPoints(primitiveSilhouette("cube", box, projection).points), "t-dc");
+  }
+  // each static item's node: its object, or a rack's objects in their 1.1 order
+  const staticItems: StaticItem[] = statics.map((st) => {
+    const it = rackItems.get(st.key);
+    if (it === undefined) return st;
+    return {
+      ...st,
+      node: it.nodes.length === 1 ? (it.nodes[0] as SvgNode) : h("g", null, ...it.nodes),
+    };
+  });
 
   // ---- Groups --------------------------------------------------------------------------
   for (const g of orderGroups(scene.groups)) {
@@ -732,8 +806,22 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
 
   // ---- Assemblies (schema 1.2.0) -----------------------------------------------------------
   // Absent for every 1.1 scene (no `assemblies`), so their layers and view box are untouched.
+  // particles on a cable that follows a displaced slot hide with it (§8.1)
+  const edgeById = new Map(scene.edges.map((e) => [e.id, e]));
+  const flowFollows = shareDepth
+    ? scene.flows.flatMap((f) => {
+        const e = edgeById.get(f.edge);
+        // any edge, hidden ones included: the DC pack's own rack flows (`dc_p_*`, `dc_n_*`,
+        // `dc_air_*`) run on hidden edges of kind `edge` between slots (§8.1)
+        const follows = e === undefined ? [] : cableFollows(e);
+        return follows.length === 0 ? [] : [{ flow: f.id, follows }];
+      })
+    : [];
   const asmResult = buildAssemblyRender({
     scene,
+    ...(shareDepth ? { statics: staticItems } : {}),
+    fixedLabels: [...placed],
+    ...(flowFollows.length === 0 ? {} : { flowFollows }),
     spec: inputs.spec,
     images: inputs.images,
     projection,

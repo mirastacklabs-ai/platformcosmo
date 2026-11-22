@@ -89,6 +89,9 @@ import {
   translateOf,
   visibilityTrack,
   windowsTrack,
+  levelsTrack,
+  displacedWindows,
+  complementWindows,
 } from "./tracks.js";
 import type { AssemblyRenderModelX, StaticFadeTrack, StaticItem, StepClock } from "./types.js";
 import { depthItems, worldLeaves, type WorldLeaf } from "./world.js";
@@ -113,8 +116,15 @@ export interface AssemblyRenderContext {
   readonly fs: number;
   readonly text: (o: TextSpec) => SvgElement;
   readonly fit: (text: string, size: number, bold: boolean, maxWidth: number) => string;
+  /** Label boxes of the main scene (rack labels, row pills, object labels): part labels avoid them. */
+  readonly fixedLabels?: readonly Rect[];
   /** Scene objects that share the depth order (default none, see model.ts). */
   readonly statics?: readonly StaticItem[];
+  /**
+   * Flows on cables that follow displaced nodes (§8.1): their particle group is hidden with the
+   * cable (`staticFades` key `flow_<id>`; the animator wraps the group in that fade).
+   */
+  readonly flowFollows?: readonly { readonly flow: string; readonly follows: readonly string[] }[];
   readonly budgets?: Partial<DepthBudgets>;
   /** Focus rect margins, as `RenderModel.focusRects` (default none). */
   readonly focusMargin?: { readonly side: number; readonly bottom: number };
@@ -194,6 +204,8 @@ export interface GroupInput {
   readonly ids: IdScheme & AssemblyIdScheme;
   /** Scene objects sharing the depth order (the main scene only). */
   readonly statics: readonly StaticItem[];
+  /** Flows hidden while the nodes they follow are displaced (the main scene only). */
+  readonly flowFollows?: AssemblyRenderContext["flowFollows"];
   /** The ONE loop clock every group of the scene shares. */
   readonly clock: LoopClock;
   /** Image assets by hash, shared by the groups of a scene so each placeholder is defined once. */
@@ -256,15 +268,41 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
           : presentWindows(pres.get(it.path)?.visibility ?? [], total);
       return w === undefined ? it : { ...it, present: w };
     }),
-    ...statics.map((s) => ({ key: s.key, box: s.box })),
+    ...statics.map((s) => {
+      // a static attached to displaced nodes is hidden then and takes no part (§8.1, §9.2)
+      const away = s.follows === undefined ? [] : displacedWindows(index, s.follows, total);
+      return away.length === 0
+        ? { key: s.key, box: s.box }
+        : { key: s.key, box: s.box, present: complementWindows(away, total) };
+    }),
   ];
+  // diagnostics of an item point at its assembly: the spec assembly (a close-up instance: its
+  // template), or the rack in assembly mode
+  const pointerOfAssembly = new Map<string, string>();
+  for (const a of assemblies) {
+    const list = a.source === "dc" ? (ctx.spec?.racks ?? []) : (ctx.spec?.assemblies ?? []);
+    const id = a.source === "dc" ? a.id : (input.templateOf?.get(a.id) ?? a.id);
+    const i = list.findIndex((x) => x.id === id);
+    pointerOfAssembly.set(a.id, i < 0 ? "" : `/${a.source === "dc" ? "racks" : "assemblies"}/${i}`);
+  }
+  const itemPath = new Map<string, string | undefined>(inputs.map((i) => [i.key, i.path]));
   const result = depthEpochs(inputs, loopBuild.moves, total, {
     projection,
+    pointer: (key) => {
+      // a cable segment (`cable_<edge>_<n>`, model.ts) points at its spec cable
+      const cable = /^cable_(.+)_\d+$/.exec(key)?.[1];
+      if (cable !== undefined) {
+        const i = (ctx.spec?.cables ?? []).findIndex((c) => c.id === cable);
+        return i < 0 ? "" : `/cables/${i}`;
+      }
+      const path = itemPath.get(key);
+      const leaf = path === undefined ? undefined : leafByPath.get(path);
+      return leaf === undefined ? "" : (pointerOfAssembly.get(leaf.assembly) ?? "");
+    },
     ids: { partClip: ids.partClip },
     ...(ctx.budgets === undefined ? {} : { budgets: ctx.budgets }),
   });
   diagnostics.push(...result.diagnostics);
-  const pathOf = new Map<string, string | undefined>(inputs.map((i) => [i.key, i.path]));
   const clipOf = new Map(result.clips.map((c) => [c.item, c]));
   const epochSets = result.epochs.map((e) => new Set(e.order));
 
@@ -305,6 +343,7 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     fs: ctx.fs,
     text: ctx.text,
     fit: ctx.fit,
+    ...(ctx.fixedLabels === undefined ? {} : { fixed: ctx.fixedLabels }),
     assemblies,
     labelMode: (id) => specAsm.get(input.templateOf?.get(id) ?? id)?.labels ?? "exploded",
     leaves,
@@ -378,8 +417,19 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     const { item: key, copy } = parseCopyKey(copyKey);
     const st = staticByKey.get(key);
     if (st !== undefined) {
-      // static items are never copied (§9.4)
-      const opacity = windowsTrack(staticWindows, FADE_OPACITY, total);
+      // static items are never copied (§9.4); one attached to displaced nodes hides meanwhile
+      const away = st.follows === undefined ? [] : displacedWindows(index, st.follows, total);
+      const opacity =
+        away.length === 0
+          ? windowsTrack(staticWindows, FADE_OPACITY, total)
+          : levelsTrack(
+              [
+                ...staticWindows.map((w) => ({ ...w, value: FADE_OPACITY })),
+                ...away.map((w) => ({ ...w, value: 0 })),
+              ],
+              total,
+              0, // gone at once: it leaves the depth order at the same instant
+            );
       if (opacity.length === 0) {
         objects.push(st.node);
         continue;
@@ -390,7 +440,7 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
       objects.push(h("g", { id, ...(o0 < 1 ? { opacity: o0 } : {}) }, st.node));
       continue;
     }
-    const path = pathOf.get(key);
+    const path = itemPath.get(key);
     const leaf = path === undefined ? undefined : leafByPath.get(path);
     if (path === undefined || leaf === undefined) continue;
     let dom = itemDom.get(key);
@@ -411,7 +461,7 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     if (mot === undefined) {
       const chain = index.chain(path);
       if (clip !== undefined) {
-        const solidPath = pathOf.get(clip.solid);
+        const solidPath = itemPath.get(clip.solid);
         const solidChain = solidPath === undefined ? [] : index.chain(solidPath);
         // one static clip path, shared by every clipped copy (defined in the solid's frame)
         domCtx.defs.push(
@@ -700,6 +750,21 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     };
   };
 
+  for (const f of input.flowFollows ?? []) {
+    const away = displacedWindows(index, f.follows, total);
+    if (away.length === 0) continue;
+    const key = `flow_${f.flow}`;
+    staticFades.push({
+      key,
+      id: ids.fadeWrap(key),
+      opacity: levelsTrack(
+        away.map((w) => ({ ...w, value: 0 })),
+        total,
+        0,
+      ),
+    });
+  }
+
   // ---- depth items, model ------------------------------------------------------------------
   const model: AssemblyRenderModelX = {
     ids: asmIds,
@@ -866,6 +931,7 @@ export function buildAssemblyRender(
     assemblies,
     ids,
     statics: ctx.statics ?? [],
+    ...(ctx.flowFollows === undefined ? {} : { flowFollows: ctx.flowFollows }),
     clock,
     assets,
     foreign,
