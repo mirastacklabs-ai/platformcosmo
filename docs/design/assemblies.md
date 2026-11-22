@@ -213,6 +213,7 @@ segment, `?` one character, `**` any number of segments (as a term: every descen
 is a union; `except` subtracts. A selected sub-assembly moves as one unit with its subtree.
 Matching runs over the expanded tree (after `count` and `use`), in depth-first spec order.
 The scene matches roles as resolved (explicit, pack shape, inferred), while validation sees explicit roles only, so a `role:` selector can select more parts in the scene than validation can prove; a part selected by two stages that way is reported as `assembly/moved-twice` (info) and moves once, in the first stage.
+A rack's selectors match over the rack as the DC pack builds it (§8.1: frame parts, device parts, and around a slot template the pack's `tray`, `lid`, `faceplate/…`, `rear/…`); `validate` given the DC pack checks them over that same tree, and without it treats the frame and plain slots as opaque (nothing below them is reported).
 Empty match: warning `assembly/selector-empty` with did-you-mean over candidate paths (the
 existing bounded edit distance; deeper matches are suggested as `**/…`). A node may be moved by
 at most one stage per program (`assembly/moved-twice`); a descendant of a node moved earlier
@@ -454,10 +455,17 @@ over all views above 5000 gives `budget/views` (warning).
 
 ### 8.1 Racks as assemblies (byte-identical by construction)
 
-A rack becomes an assembly **only when a step action targets it or one of its slots**. All
-other racks keep the 1.1 objects (`rackId`, `rackId_front`, `rackId/slot`) and their forced
-depth ranks, so every existing spec and gallery render stays byte-identical. For a targeted
-rack, `DcPack.buildAssembly` returns a `SceneAssembly` (source `dc`):
+A rack becomes an assembly **only when a step action targets it or one of its slots** (a path
+through a close-up, `r2/srv/closeup/…`, targets the close-up instance, not the rack; `programs`,
+slot internals or close-ups alone do not either). All other racks keep the 1.1 objects
+(`rackId`, `rackId_front`, `rackId/slot`) and their forced depth ranks, so every existing spec
+and gallery render stays byte-identical. Validation (`assembly/reserved-id` for a slot `frame`),
+the scene and the DC pack share this rule. For a targeted rack, `DcPack.buildAssembly` returns
+a `SceneAssembly` (source `dc`), which the scene draws instead of the rack's 1.1 objects (their
+boxes still serve routing, overlaps and focus). The scene resolves the racks, the spec
+assemblies and the close-up instances with **one** planner (one work budget, one level machine,
+one step plan): the DC pack registers each rack's synthetic `drawers` and `internals` programs
+with it.
 
 - `<rack>/frame/<part>`: one leaf per rack part (posts, side panels, base, top cap, doors,
   PDUs, rear-door heat exchanger) with roles (`shell`, doors and panels `cover`). No `_front`
@@ -495,6 +503,10 @@ program (1 stage) and a `assembly/size-mismatch` warning. The slot's own
 program is `internals`: lid up, then the template's default program (its `program`, else its
 first explode program), so it has 1 + that many stages; if the template's `program` is a build
 program, `internals` has 1 + its step count. Templates do not carry their own chassis or lid.
+Internals exist only in assembly mode (§8.1): a rack no action targets draws its 1.1 device, so
+its slot `assembly` is never built and gets no size check (validation still checks the reference
+and the path depth); the size check runs, in `validate` and in the scene, once the rack is
+targeted.
 
 ### 8.3 Nested targets and implicit access
 
@@ -573,7 +585,11 @@ inside a level are answered by `levelFocusRect(step, id)` in overlay coordinates
 Physical units are true scale in DC context (1 tile = 600 mm; 19-inch rack interior 450 mm
 wide, 2U = 88.9 mm). A close-up of a physical part with a physical template is reconciled by
 **containment in the part's interior** (a DC slot: the 450 mm interior of the 540 mm device
-box; any other host: its box), per axis in world axes. The template front is turned onto the
+box; any other host: its box), per axis in world axes. A rack slot's `closeup` hosts a level
+whether or not the rack is targeted (`DcPack.slotHosts`): the host box is the slot's 1.1 object
+(a targeted rack: its drawn slot device), the interior is the one slot internals use (450 mm
+wide, inside the walls, under the lid) and the front is the rack's front in world (`-y` in a
+mirrored row, so the template is turned half a turn). The template front is turned onto the
 host front in world axes (the host assembly's `rotate` included); the scene never turns a
 template to fit its footprint. Only a template larger than the interior by more than 10% on an
 axis gives `assembly/size-mismatch` (warning) and is shrunk uniformly (contain); a template
@@ -581,7 +597,10 @@ shorter in z never warns; a template under 50% of the interior in x or y gets an
 drawn at true scale, never enlarged. A footprint that would match better turned a quarter is
 reported (`assembly/closeup-turned`, info) and left alone. Close-ups the scene cannot build
 within the 8-segment path limit (host path plus template height) or the level caps are skipped
-with `assembly/too-deep` or `budget/levels`, at the host's pointer. `pcosmo validate` and `build` report these checks only when the spec has no errors (a gated or invalid spec never reaches the scene). Figures and
+with `assembly/too-deep` or `budget/levels`, at the host's pointer. The host path accumulates
+along a chain of close-ups (`r2/srv/closeup/board/cpu-1/closeup/…`), and validation measures
+each reference along every chain that reaches it, so it reports the same `too-deep` at the same
+pointer before the scene is built. `pcosmo validate` and `build` report these checks only when the spec has no errors (a gated or invalid spec never reaches the scene). Figures and
 storyboards (pixel units) are fitted to the part's zoomed screen rect. The skill takes real
 dimensions from documents (a 13-inch board is 330 mm) and states assumptions when a figure is
 "not drawn to scale" (keep relative layout, scale from the stated board size).
@@ -1192,7 +1211,7 @@ suggestions):
 | `assembly/size-mismatch`                                                                                        | warning (info: much smaller)                      | template or close-up does not fit at true scale (also reported by `pcosmo validate`, `closeupDiagnostics`)                                                            |
 | `assembly/reserved-id`                                                                                          | error                                             | slot id `frame` on a rack in assembly mode; any part id `closeup` (reserved segment)                                                                                  |
 | `semantic/reserved-id`                                                                                          | warning                                           | a 1.1 id `closeup` (still valid; rename before adding close-ups)                                                                                                      |
-| `assembly/too-deep`                                                                                             | error                                             | path longer than 8 segments (also through `use` and `closeup` templates)                                                                                              |
+| `assembly/too-deep`                                                                                             | error                                             | path longer than 8 segments (also through `use` and `closeup` templates, accumulated along close-up chains)                                                           |
 | `assembly/template-cycle`                                                                                       | error                                             | assemblies reference each other through `use` or `closeup` in a cycle                                                                                                 |
 | `assembly/use-ignored`                                                                                          | warning                                           | `use` is ignored because `parts` is set                                                                                                                               |
 | `assembly/diagnostics-capped`                                                                                   | info                                              | a program reported more than 50 warnings, a part's placement check more than 8 diagnostics, or placement checks stopped after 20,000 parts; the rest are omitted      |

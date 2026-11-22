@@ -10,7 +10,7 @@ import type {
   VideoSink,
 } from "@platformcosmo/core";
 import { type Parsed, flag, num, parse, str } from "../args.js";
-import { addCloseupChecks, loadSpec, makeResolver, resolveTheme, specBaseName } from "../common.js";
+import { loadSpec, makeResolver, resolveTheme, specBaseName } from "../common.js";
 import { loadSpecImages } from "../images.js";
 import { type Ctx, EXIT, UsageError } from "../deps.js";
 import { errorDiagnostic, formatDiagnostics, hasErrors, plural } from "../format.js";
@@ -266,7 +266,6 @@ export async function buildOnce(ctx: Ctx, s: BuildSettings): Promise<number> {
 
   const result = await ctx.deps.core.render(spec, options);
   diagnostics.push(...result.diagnostics);
-  addCloseupChecks(ctx, spec, diagnostics, { closeups: false }); // slot internals only (8.2); the scene reports close-ups
   stats.elements = result.stats.elements;
   if (hasErrors(diagnostics)) return finish(EXIT.failed);
 
