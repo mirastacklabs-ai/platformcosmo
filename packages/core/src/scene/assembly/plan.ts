@@ -352,6 +352,67 @@ export class AssemblyPrograms {
     const builds = new Map<string, ResolvedBuildProgram>();
     const unresolved = new Set<string>();
     const indexes = new Map<string, { index: OwnerIndex; sel: OwnerSelectors }>();
+    const tried = new Set<string>();
+    /**
+     * Resolves one build program (once). A step's `subBuild` asks for the build program of a
+     * sub-assembly, which may belong to an owner that sorts later, so programs resolve on demand
+     * (`subOf`); the nesting is strict (a sub-assembly is below its owner), so this ends.
+     */
+    const buildOne = (rel: string, info: ProgInfo): void => {
+      const pk = `${rel}\0${info.id}`;
+      if (tried.has(pk)) return;
+      tried.add(pk);
+      const owner = owners.get(rel) as OwnerInfo;
+      const spec = atPointer(this.spec, info.ptr) as SpecBuildProgram | undefined;
+      if (spec === undefined || !Array.isArray(spec.steps)) {
+        unresolved.add(pk);
+        return;
+      }
+      let ix = indexes.get(rel);
+      if (ix === undefined) {
+        const index = indexOwner(owner.node, this.work);
+        ix = { index, sel: new OwnerSelectors(index, this.work) };
+        indexes.set(rel, ix);
+      }
+      if (!ix.index.complete) {
+        this.budgetWarning();
+        unresolved.add(pk);
+        return;
+      }
+      const r = resolveBuild({
+        asm,
+        owner: owner.node,
+        tnode: owner.tnode,
+        prog: spec,
+        ptr: info.ptr,
+        index: ix.index,
+        sel: ix.sel,
+        work: this.work,
+        subBuild: subOf,
+      });
+      if (r === undefined) {
+        this.budgetWarning();
+        unresolved.add(pk);
+        return;
+      }
+      if (r.capped) this.budgetWarning();
+      this.diagnostics.push(...r.diagnostics);
+      builds.set(pk, r.program);
+    };
+    const subOf = (path: string, program: string | undefined): ResolvedBuildProgram | undefined => {
+      const rel =
+        path === asm.id
+          ? ""
+          : path.startsWith(`${asm.id}/`)
+            ? path.slice(asm.id.length + 1)
+            : undefined;
+      const o = rel === undefined ? undefined : owners.get(rel);
+      if (rel === undefined || o === undefined) return undefined;
+      const info = program === undefined ? o.builds[0] : o.builds.find((b) => b.id === program);
+      if (info === undefined) return undefined;
+      buildOne(rel, info);
+      return builds.get(`${rel}\0${info.id}`);
+    };
     for (const rel of [...owners.keys()].sort(cmp)) {
       const owner = owners.get(rel) as OwnerInfo;
       for (const info of owner.explodes) {
@@ -380,43 +441,7 @@ export class AssemblyPrograms {
           unresolved.add(pk);
         } else programs.set(pk, r);
       }
-      for (const info of owner.builds) {
-        const pk = `${rel}\0${info.id}`;
-        const spec = atPointer(this.spec, info.ptr) as SpecBuildProgram | undefined;
-        if (spec === undefined || !Array.isArray(spec.steps)) {
-          unresolved.add(pk);
-          continue;
-        }
-        let ix = indexes.get(rel);
-        if (ix === undefined) {
-          const index = indexOwner(owner.node, this.work);
-          ix = { index, sel: new OwnerSelectors(index, this.work) };
-          indexes.set(rel, ix);
-        }
-        if (!ix.index.complete) {
-          this.budgetWarning();
-          unresolved.add(pk);
-          continue;
-        }
-        const r = resolveBuild({
-          asm,
-          owner: owner.node,
-          tnode: owner.tnode,
-          prog: spec,
-          ptr: info.ptr,
-          index: ix.index,
-          sel: ix.sel,
-          work: this.work,
-        });
-        if (r === undefined) {
-          this.budgetWarning();
-          unresolved.add(pk);
-          continue;
-        }
-        if (r.capped) this.budgetWarning();
-        this.diagnostics.push(...r.diagnostics);
-        builds.set(pk, r.program);
-      }
+      for (const info of owner.builds) buildOne(rel, info);
     }
     const out: Resolved = { asm, spec: specAsm, owners, programs, builds, nodes, unresolved };
     this.resolved.set(asm.id, out);
@@ -1196,8 +1221,9 @@ export interface AssemblyPlanContext {
 
 /**
  * `assembly/compressed` of the whole step plan (assemblies and figures through one step loop),
- * for `validate`: the scene computes the same plan with the same helpers but does not report it,
- * so a diagnostic never appears twice. Empty without assemblies or steps.
+ * for `validate`: the scene computes the same plan with the same helpers but does not report it.
+ * Also the build-program warnings the scene reports (`build-path-blocked`, `subbuild-not-added`):
+ * `render` merges the two lists by code and path. Empty without assemblies or steps.
  */
 export function assemblyPlanDiagnostics(
   spec: PlatformCosmoSpec,
@@ -1236,8 +1262,14 @@ export function assemblyPlanDiagnostics(
     if (!storyboards.has(sb.id)) storyboards.set(sb.id, resolveStoryboard(sb));
   const views = stepViews(spec, ctx.isFocusTarget);
   const all = [...built.assemblies, ...racks].sort((p, q) => cmp(p.id, q.id));
-  return programs.plan(all, figures, views, {
+  const planned = programs.plan(all, figures, views, {
     ...(ctx.gated ? { gated: ctx.gated } : {}),
     ...(storyboards.size > 0 ? { storyboards } : {}),
-  }).compression;
+  });
+  // the build-program warnings a scene reports too (resolution happens in `plan`), so `validate`
+  // shows them: a blocked drop, a `subBuild` the step does not add whole
+  const build = programs.diagnostics.filter(
+    (d) => d.code === "assembly/build-path-blocked" || d.code === "assembly/subbuild-not-added",
+  );
+  return [...build, ...planned.compression];
 }

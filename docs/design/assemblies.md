@@ -288,13 +288,25 @@ step adds are the **base** (always present). Origins (`from`, default `above`):
 - `outside`: along the horizontal axis with the shortest path out of the current model bounds.
 - `+x`, `-x`, `+y`, `-y`, `[x,y,z]`: that direction, auto distance as §6.3.
 - `callout`: a screen-space flight from the step's callout slot to a hover point above the
-  seat, drawn in the overlay layer (no depth issue there), then a world drop from the hover
-  point (§7.6).
+  seat, drawn above the depth-ordered parts, then a world drop from the hover point (§7.6). The
+  hover point lies wholly above everything present when the part lands (every placed part and
+  the other parts of the step) by `gap`, so the world copy that replaces the flying copy is never
+  covered by a nearer part: a box above all others is nearest. The drop is the `above` move from
+  there (a fixed `distance` is kept as authored).
 
-`subBuild` builds a sub-assembly at a **staging** offset first (beside the current model along
-`+x` by `gap`, or `−y` when `+x` leaves the canvas reach), using its own build program
-(`program`, default its first), then attaches it as one unit along the straight line from
-staging to seat. The parts **callout** groups the step's leaves by (shape, size, color, image)
+`subBuild` builds a sub-assembly (a node the step adds whole) at a **staging** offset first,
+using its own build program (`program`, default its first), then attaches it as one unit along
+two moves: slide over to above its seat, then drop. The staging offset puts the sub-assembly
+beside the parts placed so far along `+x`, `gap` clear of them and lifted until its bottom clears
+the top of every placed part by `gap`, so the slide meets nothing; when that
+would carry it more than three quarters of the owner's width past the owner, along `−y`
+instead (the staging area stays near a long model). The step plays the sub-assembly's program
+at the staging offset (its moves are part of the step, shifted to the step's start), then the
+slide and the drop (`duration` of the step each); the step ends with the drop. A leaf its own
+program does not add is there from the step's start, also in a nested sub-assembly. A step names a sub-assembly its `add` does not select whole (an
+earlier step added part of it): `assembly/subbuild-not-added` (warning), added as a plain part.
+
+The parts **callout** groups the step's leaves by (shape, size, color, image)
 as `count × thumbnail` (thumbnail = the leaf drawn at a fixed callout scale, or its image).
 `view` rotates the view a quarter turn from that step on (§7.7). `unbuild` plays steps in
 reverse (time-reversed, §7.2).
@@ -432,10 +444,29 @@ instead of its start when the step has actions; other steps are unchanged.
 
 ### 7.6 Callout flights
 
-`from: "callout"` moves have `overlayDuration`: a copy of the leaf in the overlay layer flies
-(screen translate, pinned against the camera like captions) from its callout slot to the
-screen point of the hover pose, then the world copy appears at the hover pose (opacity swap at
+`from: "callout"` moves have `overlayDuration`: a copy of the leaf drawn above the depth-ordered
+parts flies (screen translate) from its callout slot to the screen point of the hover pose, then the world copy appears at the hover pose (opacity swap at
 the same instant and position) and drops to its seat.
+
+Render model (A2-7, `render/assembly/flights.ts`). A move's `duration` is the flight plus the
+drop; the flight lasts as long as the drop (the step's `duration`, so a callout move is twice
+as long as an `above` one), `overlayDuration` is its length. The overlay copy of a leaf is a
+deep copy of its part group (ids suffixed `__f`, listed by `copyIds`) in one wrapper
+`<g id=ids.flight(path)>` that carries `transform`, `visibility` and `opacity` tracks
+(`AssemblyRenderModelX.flights`). It is not a depth item: it is drawn after every depth item
+of its group (so it follows the camera and the view cross-fades of its group, and labels stay
+above it). The **callout slot** is a point of the group's screen space: left of the assemblies'
+rest bounds by 36 px plus a tenth of their width, a quarter of their height down; the copy of
+a node (a leaf, or a sub-assembly flying as one unit; the leaves a step adds of a partly added sub-assembly too) is centred on it. Its end is the world
+copy's own screen translation at the swap time (the same sum of moves, projection and rounding),
+so the swap has no jump at any speed. The world copy is hidden until the swap (a build) and
+appears opaque at it, with no fade; the copy fades in over the first 0.2 s of the flight. An
+unbuild is the exact reverse: the world copy lifts to the hover point, vanishes at the swap and
+the copy flies back to the slot, fading out over the last 0.2 s (the curve is mirrored). Reduced
+motion shows each step's end pose, where no copy is shown. The flights' hull (the copy at the
+slot and at the hover point) is part of the reach bounds, so the view box holds them. The
+parts callout itself (the box with `count x thumbnail`) is not drawn yet (follow-up); only the
+flights start from its slot.
 
 ### 7.7 Quarter-turn views
 
@@ -1200,6 +1231,7 @@ suggestions):
 | `assembly/figure-no-build`                                                                                      | error                                             | build or unbuild on a figure (figures explode and implode)                                                                                                            |
 | `assembly/part-not-staged`                                                                                      | info                                              | a figure part that no stage moves (it stays seated)                                                                                                                   |
 | `assembly/build-path-blocked`                                                                                   | warning                                           | `above` origin blocked                                                                                                                                                |
+| `assembly/subbuild-not-added`                                                                                   | warning                                           | a step's `subBuild` names a sub-assembly its `add` does not select whole; it is added as a plain part                                                                 |
 | `assembly/collision`                                                                                            | warning                                           | interpenetrating leaves in a final pose (not emitted yet)                                                                                                             |
 | `assembly/compressed`                                                                                           | info / warning (< 0.5)                            | actions compressed to fit the step (reported by validation, from the plan the scene uses)                                                                             |
 | `assembly/implicit-access`                                                                                      | info                                              | access move prepended (§8.3)                                                                                                                                          |
