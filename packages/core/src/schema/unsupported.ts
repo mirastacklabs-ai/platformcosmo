@@ -21,8 +21,9 @@ export const UNRENDERED: Readonly<Record<GuardGroup, boolean>> = {
   /**
    * Phase 2, server → rack → hall: rack `programs`, slot `assembly`, `closeup` (fields and
    * `…/closeup` paths), actions on racks and slots, build programs and build/unbuild actions.
+   * Lifted by D-4a.
    */
-  phase2: true,
+  phase2: false,
   /** Phase 3, tier A documents: `storyboards` and build/unbuild actions on them. Lifted by R-2. */
   storyboards: false,
   /** Phase 3, callouts and sub-builds of build programs: `from: "callout"` and `subBuild` (A2-7). */

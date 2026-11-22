@@ -1574,13 +1574,11 @@ describe("per-target gating mirrors the merge guard", () => {
     );
     expect(code(d, "assembly/duplicate-part")).toHaveLength(1);
   });
-  test("default wiring: validate reports structure plus the guard, and de-duplicates figure targets", () => {
+  test("default wiring: validate reports structure, no guard, and de-duplicates figure targets", () => {
     const d = val({ ...engine(), steps: [{ assembly: [{ explode: "enigne" }] }] });
-    // phases 1a and 1b are lifted: an unknown root is not gated, so the guard flags only the
-    // engine example's build program (phase 2), and the unknown target is reported once
-    expect(code(d, "assembly/unsupported").map((x) => x.path)).toEqual([
-      "/assemblies/0/programs/1",
-    ]);
+    // every phase is lifted (D-4a): the engine example's build program is not flagged, and the
+    // unknown target is reported once
+    expect(code(d, "assembly/unsupported")).toEqual([]);
     const unknown = code(d, "assembly/unknown-target");
     expect(unknown.map((x) => x.path)).toEqual(["/steps/0/assembly/0/explode"]);
     expect(unknown[0]?.suggestion).toBe('Did you mean "engine"?');
@@ -1653,7 +1651,10 @@ describe("determinism and byte identity", () => {
         .map((f) => `templates/${f}`),
     ];
     expect(files.length).toBeGreaterThanOrEqual(15);
-    for (const f of files) {
+    // the 1.2.0 gallery story (D-4a) is the one example with assembly content
+    const v11 = files.filter((f) => f !== "hall-to-heatsink.cosmo.json");
+    expect(v11.length).toBe(files.length - 1);
+    for (const f of v11) {
       const s = JSON.parse(readFileSync(new URL(f, root), "utf8")) as PlatformCosmoSpec;
       expect(hasAssemblyContent(s), f).toBe(false);
       expect(assemblyDiagnostics(s, LIFT), f).toEqual([]);
