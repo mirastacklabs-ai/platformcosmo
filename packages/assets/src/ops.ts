@@ -3,12 +3,13 @@ import type { ImageLimits } from "@platformcosmo/core";
 import { floodFill } from "./cc.js";
 import { decodeImage } from "./decode.js";
 import { encodePng } from "./png.js";
-import { boxResample } from "./resample.js";
+import { bilinear, boxResample } from "./resample.js";
 import {
   badOption,
   checkRaster,
   createRaster,
   err,
+  MAX_PIXELS,
   warning,
   type OpResult,
   type Raster,
@@ -216,6 +217,39 @@ export function shrink(r: Raster, maxPx: number): OpResult<Raster> {
   const nw = Math.max(1, Math.round((r.width * maxPx) / long));
   const nh = Math.max(1, Math.round((r.height * maxPx) / long));
   return { value: boxResample(r, nw, nh), diagnostics: [] };
+}
+
+/** Smallest and largest `zoom` factor. */
+export const ZOOM_RANGE = { min: 0.25, max: 8 } as const;
+
+/**
+ * Scales by `k` (0.25 to 8): box filter below 1, bilinear above, sizes rounded to whole pixels (at
+ * least 1). `k` of 1 returns the raster as is. A result over `MAX_PIXELS` is `asset/too-large`.
+ */
+export function zoom(r: Raster, k: number): OpResult<Raster> {
+  const bad = checkRaster(r);
+  if (bad) return { diagnostics: [bad] };
+  if (!(k >= ZOOM_RANGE.min && k <= ZOOM_RANGE.max)) {
+    return {
+      diagnostics: [
+        badOption("scale", `scale must be from ${ZOOM_RANGE.min} to ${ZOOM_RANGE.max}`),
+      ],
+    };
+  }
+  if (k === 1) return { value: r, diagnostics: [] };
+  const nw = Math.max(1, Math.round(r.width * k));
+  const nh = Math.max(1, Math.round(r.height * k));
+  if (nw * nh > MAX_PIXELS) {
+    return {
+      diagnostics: [
+        err(
+          "asset/too-large",
+          `the result at scale ${k} would be ${nw}x${nh} (over ${MAX_PIXELS} px)`,
+        ),
+      ],
+    };
+  }
+  return { value: k < 1 ? boxResample(r, nw, nh) : bilinear(r, nw, nh), diagnostics: [] };
 }
 
 export interface ShrunkImage {

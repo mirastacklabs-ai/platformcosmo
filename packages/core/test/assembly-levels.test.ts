@@ -9,7 +9,8 @@ import type {
   ResolvedExplodeProgram,
   SceneAssembly,
 } from "../src/index.js";
-import { buildScene, closeupDiagnostics } from "../src/index.js";
+import { buildScene } from "../src/index.js";
+import { closeupDiagnostics } from "../src/internal.js";
 import type { PlatformCosmoSpec } from "../src/schema/types.gen.js";
 import { frameMap } from "../src/scene/assembly/frame.js";
 import { AssemblyPrograms } from "../src/scene/assembly/plan.js";

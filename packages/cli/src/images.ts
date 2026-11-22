@@ -39,13 +39,13 @@ import { lstat, opendir, open, readlink, realpath } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import {
   DEFAULT_IMAGE_LIMITS,
-  didYouMean,
   prepareImage,
   type Diagnostic,
   type ImageAsset,
   type ImageAssetResolver,
   type ImageLimits,
 } from "@platformcosmo/core";
+import { didYouMean } from "@platformcosmo/core/internal";
 
 export type SafeReadCode = "image/not-found" | "image/unsafe-path" | "image/too-large";
 

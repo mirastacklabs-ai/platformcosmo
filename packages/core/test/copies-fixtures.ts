@@ -119,3 +119,67 @@ export function viewCopySpec(): PlatformCosmoSpec {
   });
   return spec as unknown as PlatformCosmoSpec;
 }
+
+/**
+ * A piston clipped only while it crosses (§9.5, A1-2c): it rises out of the static block through
+ * its top face, then slides sideways once clear. Its motion relative to the block has two axes,
+ * so no single static clip is valid for the loop: copy 0 is clipped and drawn while it crosses,
+ * copy 1 is unclipped and drawn for the slide. With `shape: "cylinder"` the piston does not fill
+ * its box, so it is not split: it keeps the named fallback (`assembly/clip-fallback`).
+ * `exit: "x"` leaves through the block's +x face instead (a face whose cut edges are diagonal on
+ * screen) and then rises. `flush`: the first stage ends with the piston resting on the face it
+ * left (bottom on the deck, or −x face against the +x face), so the copies swap while it is flush
+ * (`assembly/clip-swap-rim`).
+ */
+export function crossingClipSpec(
+  opts: {
+    readonly shape?: "cylinder";
+    readonly exit?: "z" | "x";
+    readonly flush?: boolean;
+  } = {},
+): PlatformCosmoSpec {
+  // piston x 100..300 and z 50..180 inside the block (x 0..400, z 0..200)
+  const out =
+    opts.exit === "x"
+      ? { parts: ["arm"], direction: "+x", distance: opts.flush ? 300 : 400 }
+      : { parts: ["arm"], direction: "up", distance: opts.flush ? 150 : 300 };
+  const then =
+    opts.exit === "x"
+      ? { parts: ["arm/piston"], direction: "up", distance: 300 }
+      : { parts: ["arm/piston"], direction: "+x", distance: 400 };
+  return {
+    meta: { version: "1", title: "Clipped while crossing" },
+    assemblies: [
+      {
+        id: "kit",
+        units: "mm",
+        parts: [
+          { id: "block", size: [400, 400, 200], color: "#64748b" },
+          {
+            id: "arm",
+            at: [100, 100, 50],
+            parts: [
+              {
+                id: "piston",
+                size: [200, 200, 130],
+                color: "#f59e0b",
+                ...(opts.shape ? { shape: opts.shape } : {}),
+              },
+            ],
+          },
+        ],
+        programs: [
+          {
+            id: "p",
+            stages: [out, then],
+          },
+        ],
+      },
+    ],
+    steps: [
+      { caption: "Rest", duration: 2 },
+      { caption: "Out", assembly: [{ explode: "kit" }], duration: 6 },
+      { caption: "Back", assembly: [{ implode: "kit" }], duration: 6 },
+    ],
+  } as unknown as PlatformCosmoSpec;
+}
