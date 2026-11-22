@@ -1093,7 +1093,12 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
         const c = projection.project({ x: gx1, y, z });
         d += `M${fmt(a.x)} ${fmt(a.y)}L${fmt(c.x)} ${fmt(c.y)}`;
       }
-      layers.background.push(h("path", { class: `${P}-grid`, d }));
+      // with close-up levels the grid fades out with the main world (its own id, so the canvas
+      // background never fades: §8.4); without levels the bytes are as before
+      const faded = (scene.assemblies?.levels?.length ?? 0) > 0;
+      layers.background.push(
+        h("path", { ...(faded ? { id: `${P}-ly_grid` } : {}), class: `${P}-grid`, d }),
+      );
     }
   }
 

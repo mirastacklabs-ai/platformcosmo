@@ -12,6 +12,7 @@ import { dcPack } from "@platformcosmo/dc-pack";
 import { themeRegistry } from "@platformcosmo/themes";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { defaultDeps, run } from "../src/index.js";
+import { badLabels } from "../../core/test/label-boxes.js";
 // @ts-expect-error -- plain ESM script without types (the generator of the example's images)
 import { stale } from "../../../scripts/gen-example-figures.mjs";
 
@@ -166,6 +167,90 @@ describe("From the hall to the heat sink (ingestion §7.3) through the CLI", () 
   }, 300000);
 });
 
+/** The top-left pixel (RGB) of every frame of a GIF this CLI wrote (full frames, gifenc). */
+function gifCorners(bytes: Uint8Array): [number, number, number][] {
+  const b = Buffer.from(bytes);
+  let p = 6;
+  const packed = b[p + 4] as number;
+  p += 7;
+  let global: Buffer | undefined;
+  if (packed & 0x80) {
+    const n = 3 * 2 ** ((packed & 7) + 1);
+    global = b.subarray(p, p + n);
+    p += n;
+  }
+  const out: [number, number, number][] = [];
+  while (p < b.length) {
+    const tag = b[p];
+    if (tag === 0x3b) break;
+    if (tag === 0x21) {
+      p += 2;
+      while ((b[p] as number) > 0) p += (b[p] as number) + 1;
+      p += 1;
+      continue;
+    }
+    if (tag !== 0x2c) throw new Error(`unexpected GIF block ${tag}`);
+    const ip = b[p + 9] as number;
+    p += 10;
+    let table = global;
+    if (ip & 0x80) {
+      const n = 3 * 2 ** ((ip & 7) + 1);
+      table = b.subarray(p, p + n);
+      p += n;
+    }
+    const min = b[p] as number;
+    p += 1;
+    const data: Buffer[] = [];
+    while ((b[p] as number) > 0) {
+      data.push(b.subarray(p + 1, p + 1 + (b[p] as number)));
+      p += (b[p] as number) + 1;
+    }
+    p += 1;
+    // the first LZW codes: a clear code, then the first pixel's index
+    const d = Buffer.concat(data);
+    const clear = 1 << min;
+    let bit = 0;
+    const code = (): number => {
+      let v = 0;
+      for (let i = 0; i <= min; i++, bit++) v |= ((d[bit >> 3]! >> (bit & 7)) & 1) << i;
+      return v;
+    };
+    let c = code();
+    while (c === clear) c = code();
+    const t = table as Buffer;
+    out.push([t[3 * c]!, t[3 * c + 1]!, t[3 * c + 2]!]);
+  }
+  return out;
+}
+
+describe("the canvas background never fades behind a close-up (#121 re-check P1)", () => {
+  test("PNG frames in a close-up are opaque, light and dark", async () => {
+    for (const theme of ["light", "dark"]) {
+      const rest = await png(["--time", "0", "--theme", theme], `bg0-${theme}`);
+      const corner = Array.from(rest.data.subarray(0, 4));
+      expect(corner[3]).toBe(255);
+      for (const t of ["12", "20", "7.8", "18.6"]) {
+        const r = await png(["--time", t, "--theme", theme], `bg${t}-${theme}`);
+        let clear = 0;
+        for (let i = 3; i < r.data.length; i += 4) if ((r.data[i] as number) < 255) clear++;
+        expect(clear, `${theme} t=${t}: pixels with alpha < 255`).toBe(0);
+        expect(Array.from(r.data.subarray(0, 4)), `${theme} t=${t} corner`).toEqual(corner);
+      }
+    }
+  }, 300000);
+
+  test("every GIF frame keeps the canvas colour in its corner", async () => {
+    const r = await run(
+      ["build", SPEC.pathname, "-o", dir, "--name", "gif", "--gif", "--fps", "1", "--no-animated"],
+      deps(),
+    );
+    expect(r.code, r.stderr).toBe(0);
+    const corners = gifCorners(await readFile(join(dir, "gif.gif")));
+    expect(corners.length).toBeGreaterThan(30);
+    for (const [i, c] of corners.entries()) expect(c, `frame ${i}`).toEqual(corners[0]);
+  }, 300000);
+});
+
 describe("the story's model (core + DC pack)", () => {
   const images = (spec: core.PlatformCosmoSpec): core.ImageAssetResolver => {
     const map = new Map<string, core.ImageAsset>();
@@ -285,38 +370,13 @@ describe("the story's model (core + DC pack)", () => {
     expect(srv.model!.frameAt(17).opacity[cpu1.id] ?? 1).toBe(1);
     const dimms = top.filter((t) => t.path.startsWith("r2/srv/closeup/board/dimm-bank-"));
     expect(dimms).toHaveLength(1);
-    // every step: each label showing in it lies inside the camera window, off the caption
+    // every step, measured on the drawn labels: none visible is cut by the camera window or
+    // covered by the caption (mid-step and at the settled end, camera still)
     const anim = core.createAnimator();
-    const cap = m.captionRect!;
-    for (let k = 1; k <= m.scene.timeline.length; k++) {
-      const v = anim.animate(m, { speed: 1, mode: "step", step: k }).viewBox ?? m.viewBox;
-      const s = m.viewBox.width / v.width;
-      // the caption seen through the zoom, in world units
-      const c = {
-        x: v.x + (cap.x - m.viewBox.x) / s,
-        y: v.y + (cap.y - m.viewBox.y) / s,
-        w: cap.width / s,
-        h: cap.height / s,
-      };
-      // a label the window would still cut, or that sits under the caption, is hidden then
-      const t = A.clock[k - 1]!.end - 0.01;
-      const opacity = A.frameAt(t).opacity;
-      for (const q of A.stepLabels!(k)) {
-        const out =
-          q.x + q.width <= v.x ||
-          q.x >= v.x + v.width ||
-          q.y + q.height <= v.y ||
-          q.y >= v.y + v.height;
-        if (out) continue;
-        const inside =
-          q.x >= v.x - 0.01 &&
-          q.y >= v.y - 0.01 &&
-          q.x + q.width <= v.x + v.width + 0.01 &&
-          q.y + q.height <= v.y + v.height + 0.01;
-        const under =
-          q.x < c.x + c.w && c.x < q.x + q.width && q.y < c.y + c.h && c.y < q.y + q.height;
-        if (inside && !under) continue;
-        expect(opacity[A.ids.partLabel(q.part!)], `step ${k}: ${q.part} cut or covered`).toBe(0);
+    for (const c of A.clock) {
+      for (const t of [(c.start + c.end) / 2, c.end - 0.01]) {
+        const v = anim.animate(m, { speed: 1, mode: "frame", time: t }).viewBox;
+        expect(badLabels(m, t, v), `step ${c.step} at ${t}`).toEqual([]);
       }
     }
   });

@@ -20,7 +20,8 @@ import {
   stepEndTime,
 } from "../src/render/assembly/tracks.js";
 import { segmentHitsRect } from "../src/render/assembly/anchors.js";
-import { zoomFor } from "../src/anim/timeline.js";
+import { createAnimator } from "../src/anim/index.js";
+import { badLabels } from "./label-boxes.js";
 import { worldLeaves } from "../src/render/assembly/world.js";
 import { themeRegistry } from "../../themes/src/index.js";
 import * as partsAuto from "../../parts-auto/src/index.js";
@@ -358,52 +359,28 @@ describe("unmoved parts under a labelled group are named by it", () => {
     expect(omitted.some((d) => d.message.includes("whose label names it"))).toBe(true);
   });
 
-  test("§19.2: a label a zoom would cut or put under the caption is hidden and reported (OCP NIC 3.0)", () => {
+  test("§19.2: measured on the drawn labels, none is cut or under the caption (OCP NIC 3.0)", () => {
     const { model, diagnostics } = render(example("2U GPU"));
     const A = model.assembly!;
-    const cap = model.captionRect!;
-    let checked = 0;
-    for (const st of model.scene.timeline) {
-      const z = zoomFor(model, st);
-      if (z === undefined) continue;
-      const v = z.viewBox;
-      const c = {
-        x: (cap.x - z.tx) / z.scale,
-        y: (cap.y - z.ty) / z.scale,
-        w: cap.width / z.scale,
-        h: cap.height / z.scale,
-      };
-      const opacity = A.frameAt(A.clock[st.index - 1]!.end - 0.01).opacity;
-      for (const q of A.stepLabels!(st.index)) {
-        const out =
-          q.x + q.width <= v.x ||
-          q.x >= v.x + v.width ||
-          q.y + q.height <= v.y ||
-          q.y >= v.y + v.height;
-        if (out) continue;
-        checked++;
-        const inside =
-          q.x >= v.x - 0.01 &&
-          q.y >= v.y - 0.01 &&
-          q.x + q.width <= v.x + v.width + 0.01 &&
-          q.y + q.height <= v.y + v.height + 0.01;
-        const under =
-          q.x < c.x + c.w && c.x < q.x + q.width && q.y < c.y + c.h && c.y < q.y + q.height;
-        if (inside && !under) continue;
-        expect(opacity[A.ids.partLabel(q.part!)], `step ${st.index}: ${q.part}`).toBe(0);
-        expect(
-          diagnostics.some(
-            (d) =>
-              d.code === "assembly/label-omitted" &&
-              (d.params as { part?: string; step?: number }).part === q.part &&
-              (d.params as { step?: number }).step === st.index &&
-              d.path !== "",
-          ),
-          `step ${st.index}: ${q.part} reported`,
-        ).toBe(true);
+    const anim = createAnimator();
+    let zoomed = 0;
+    for (const c of A.clock) {
+      for (const t of [(c.start + c.end) / 2, c.end - 0.01]) {
+        const v = anim.animate(model, { speed: 1, mode: "frame", time: t }).viewBox;
+        if (v !== undefined) zoomed++;
+        expect(badLabels(model, t, v), `step ${c.step} at ${t}`).toEqual([]);
       }
     }
-    expect(checked).toBeGreaterThan(0);
+    expect(zoomed).toBeGreaterThan(0);
+    // what is hidden for the camera is reported, pointed, and never the focused node's label
+    const hidden = diagnostics.filter(
+      (d) => d.code === "assembly/label-omitted" && /is hidden during step/.test(d.message),
+    );
+    for (const d of hidden) expect(d.path).not.toBe("");
+    for (const d of hidden) {
+      const { part, step } = d.params as { part: string; step: number };
+      expect(part).not.toBe(model.scene.timeline[step - 1]?.focus);
+    }
   });
 
   test("the GPU example has 13 leader labels: one per counted part moved together", () => {

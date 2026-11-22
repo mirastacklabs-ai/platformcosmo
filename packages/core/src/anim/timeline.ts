@@ -58,10 +58,16 @@ export function zoomFor(model: RenderModel, step: SceneStep | undefined): Zoom |
   if (r === undefined) return undefined;
   let z = zoomOnto(model.viewBox, r);
   if (z === undefined || (own === undefined && inLevel === undefined)) return z;
-  // an assembly step: a label showing in it that the window cuts, or that sits under a pinned
-  // overlay (caption, metric tiles), widens the window ONCE to hold it; a label the widened
-  // window still cuts is hidden over that step and reported by the render (§7.4)
-  const labels = asm?.stepLabels?.(step.index) ?? [];
+  // an assembly step: a label of the focused subtree or of a part the step moves that the
+  // window cuts, or that sits under a pinned overlay (caption, metric tiles), widens the window
+  // ONCE to hold it; any other label the window cuts or covers is hidden over the step and
+  // reported by the render (§7.4), so a focus zoom stays a focus zoom
+  const focus = step.focus;
+  const labels = (asm?.stepLabels?.(step.index) ?? []).filter(
+    (q) =>
+      q.moved === true ||
+      (q.part !== undefined && (q.part === focus || q.part.startsWith(`${focus}/`))),
+  );
   if (labels.length === 0) return z;
   const pinned = [
     ...(model.captionRect === undefined ? [] : [model.captionRect]),

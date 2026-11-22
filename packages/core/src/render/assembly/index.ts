@@ -268,8 +268,8 @@ export interface GroupBuild extends AssemblyBuild {
   nodeRect(step: number, id: string): Rect | undefined;
   /** Leader labels showing from the camera's move into a step to its settled end (§7.4). */
   labelsIn(step: number): { id: string; path: string; assembly: string; rects: Rect[] }[];
-  /** Hides leader labels over loop windows (opacity 0 there): labels a camera window would cut. */
-  hideLabels(hide: ReadonlyMap<string, readonly { t0: number; t1: number }[]>): void;
+  /** Hides leader labels over loop windows: labels a camera window would cut (`HideWindow`). */
+  hideLabels(hide: ReadonlyMap<string, readonly HideWindow[]>): void;
   /** JSON pointer of the spec part at `path` of `assembly` (diagnostics). */
   pointerOf(assembly: string, path: string): string;
 }
@@ -1153,9 +1153,12 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
       const c = clock[step - 1];
       return c === undefined
         ? []
-        : labels
-            .labelsShownIn(clock[step - 2]?.end ?? 0, stepEndTime(Math.min(c.end, total)))
-            .flatMap((l) => l.rects.map((q) => ({ ...q, part: l.path })));
+        : ((a: number, b: number) =>
+            labels.labelsShownIn(a, b).flatMap((l) => {
+              // does the step move this part (or a part it carries)?
+              const moved = index.chain(l.path).some((m) => m.t1 > a + EPS && m.t0 < b - EPS);
+              return l.rects.map((q) => ({ ...q, part: l.path, moved }));
+            }))(clock[step - 2]?.end ?? 0, stepEndTime(Math.min(c.end, total)));
     },
     frameAt,
     stepEnd,
@@ -1254,12 +1257,14 @@ const byKey = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 function hideCutLabelsFor(
   env: PlaceEnv,
   n: number,
-  clk: readonly { readonly end: number }[],
+  clk: readonly { readonly start: number; readonly end: number }[],
+  total: number,
+  focusOf: (k: number) => string | undefined,
   pick: (k: number) => { g: GroupBuild; map: (q: Rect) => Rect } | undefined,
   all: readonly GroupBuild[],
 ): Diagnostic[] {
   const out: Diagnostic[] = [];
-  const groupsHide = new Map<GroupBuild, Map<string, { t0: number; t1: number }[]>>();
+  const groupsHide = new Map<GroupBuild, Map<string, HideWindow[]>>();
   const V = env.viewBox;
   const hit = (a: Rect, b: Rect): boolean =>
     a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
@@ -1281,6 +1286,7 @@ function hideCutLabelsFor(
       a.x + a.width <= W.x + W.width + 0.01 &&
       a.y + a.height <= W.y + W.height + 0.01;
     for (const l of p.g.labelsIn(k)) {
+      if (l.path === focusOf(k)) continue; // the focused node's own label is never hidden
       const rects = l.rects.map(p.map).filter((q) => hit(q, W));
       const cut = rects.some((q) => !within(q));
       const under = rects.some((q) => keep.some((r) => hit(q, r)));
@@ -1288,7 +1294,13 @@ function hideCutLabelsFor(
       let hide = groupsHide.get(p.g);
       if (hide === undefined) groupsHide.set(p.g, (hide = new Map()));
       const list = hide.get(l.id) ?? [];
-      list.push({ t0: clk[k - 2]?.end ?? 0, t1: c.end });
+      // out with the camera's move into the step, back in with its move out of it
+      list.push({
+        t0: clk[k - 2]?.end ?? 0,
+        t1: c.start,
+        t2: c.end,
+        t3: clk[k]?.start ?? total,
+      });
       hide.set(l.id, list);
       out.push({
         severity: "info",
@@ -1306,16 +1318,31 @@ function hideCutLabelsFor(
   return out;
 }
 
-/**
- * `keys` with the opacity forced to 0 inside the windows `[t0, t1)` (stepped at their edges) and
- * unchanged elsewhere.
- */
+/** A label hidden over a step: fades out over [t0, t1], stays out to t2, fades in by t3. */
+interface HideWindow {
+  readonly t0: number;
+  readonly t1: number;
+  readonly t2: number;
+  readonly t3: number;
+}
+
+/** `keys` times the hide windows' factor (1 outside, 0 in [t1, t2], linear on the fades). */
 function hiddenIn(
   keys: readonly OpacityKey[],
-  wins: readonly { t0: number; t1: number }[],
+  wins: readonly HideWindow[],
   total: number,
 ): OpacityKey[] {
-  const inside = (t: number): boolean => wins.some((w) => t >= w.t0 - 1e-9 && t < w.t1 - 1e-9);
+  const factor = (t: number): number => {
+    let f = 1;
+    for (const w of wins) {
+      let g = 1;
+      if (t >= w.t1 - 1e-9 && t <= w.t2 + 1e-9) g = 0;
+      else if (t > w.t0 && t < w.t1) g = (w.t1 - t) / (w.t1 - w.t0);
+      else if (t > w.t2 && t < w.t3) g = (t - w.t2) / (w.t3 - w.t2);
+      f = Math.min(f, g);
+    }
+    return f;
+  };
   const easingAt = (t: number): OpacityKey["easing"] => {
     let e: OpacityKey["easing"] = "linear";
     for (const k of keys) if (k.t <= t + 1e-9) e = k.easing;
@@ -1323,23 +1350,21 @@ function hiddenIn(
   };
   const times = [
     ...new Set(
-      [0, total, ...keys.map((k) => k.t), ...wins.flatMap((w) => [w.t0 - 1e-4, w.t0, w.t1])]
+      [0, total, ...keys.map((k) => k.t), ...wins.flatMap((w) => [w.t0, w.t1, w.t2, w.t3])]
         .map((t) => Math.round(t * 10000) / 10000)
         .filter((t) => t >= 0 && t <= total),
     ),
   ].sort((a, b) => a - b);
-  const out: OpacityKey[] = [];
-  for (const t of times) {
-    const hid = inside(t);
-    const next = times.find((x) => x > t);
-    const edge = next !== undefined && inside(next) !== hid;
-    out.push({
+  return times.map((t, i) => {
+    const next = times[i + 1];
+    // a stepped original key stays stepped where the factor does not change after it
+    const flat = next === undefined || Math.abs(factor(t) - factor(next)) < 1e-9;
+    return {
       t,
-      opacity: hid ? 0 : round2(keys.length === 0 ? 1 : evalOpacity(keys, t)),
-      easing: hid || edge ? "step" : easingAt(t),
-    });
-  }
-  return out;
+      opacity: round2((keys.length === 0 ? 1 : evalOpacity(keys, t)) * factor(t)),
+      easing: flat ? easingAt(t) : "linear",
+    };
+  });
 }
 
 /** `seg` is an instance id (`<id>-<n>`, n in 1..count) of the counted part `p`. */
@@ -1453,6 +1478,8 @@ export function buildAssemblyRender(
           env,
           scene.timeline.length,
           main.model.clock,
+          main.model.loop,
+          (k) => scene.timeline[k - 1]?.focus,
           () => ({ g: main, map: (q) => q }),
           [main],
         );
@@ -1585,7 +1612,8 @@ export function buildAssemblyRender(
     mainLayers:
       lv === undefined
         ? []
-        : ["background", "groups", "edges", "flows", "objects", "labels", "dcflows"].map(
+        : // the canvas background never fades (a close-up has the canvas behind it); its grid does
+          ["grid", "groups", "edges", "flows", "objects", "labels", "dcflows"].map(
             (l) => `${ctx.prefix}-ly_${l}`,
           ),
   };
@@ -1615,6 +1643,8 @@ export function buildAssemblyRender(
       env,
       scene.timeline.length,
       clk,
+      total,
+      (k) => scene.timeline[k - 1]?.focus,
       (k) => {
         const lp = levelAtStep(k - 1);
         const rec = lp === undefined ? undefined : lv?.levels.find((l) => l.path === lp);
@@ -1674,6 +1704,7 @@ export function buildAssemblyRender(
         return (rec.model?.stepLabels?.(step) ?? []).map((q) => ({
           ...applyAffine(rec.overview, q),
           ...(q.part === undefined ? {} : { part: q.part }),
+          ...(q.moved === undefined ? {} : { moved: q.moved }),
         }));
       const v = plan[step - 1]?.view ?? 0;
       const inView = v === 0 ? undefined : viewGroups.find((x) => x.turn === v);

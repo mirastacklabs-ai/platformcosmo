@@ -929,12 +929,15 @@ export interface AssemblyRenderModel {
    */
   focusRect(step: number, id: string): Rect | undefined;
   /**
-   * Label boxes (leaders included, each with its part path) showing at some time of a step (from
-   * the camera's move into it to its settled end pose), in the view or level in effect: the
-   * camera widens a zoom once for any it would cut or put under a pinned overlay; the render
-   * hides (and reports) any still cut (§7.4).
+   * Label boxes (leaders included, each with its part path, and `moved` when the step moves that
+   * part) showing at some time of a step (from the camera's move into it to its settled end
+   * pose), in the view or level in effect. The camera widens a zoom once for those of the focused
+   * subtree and of moved parts it would cut or put under a pinned overlay; the render hides (and
+   * reports) every other label still cut or covered, never the focused node's own (§7.4).
    */
-  stepLabels?(step: number): readonly (Rect & { readonly part?: string })[];
+  stepLabels?(
+    step: number,
+  ): readonly (Rect & { readonly part?: string; readonly moved?: boolean })[];
   /**
    * Focus rect of an id inside a close-up level, in OVERLAY (viewport) coordinates: the level's
    * own rect placed by its overview, with the focus margins. Level paths are not in
