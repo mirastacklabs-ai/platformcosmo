@@ -11,6 +11,7 @@ import {
 import type { AssemblyRenderModel, LoopFade, SceneAssembly } from "../../src/contracts/index.js";
 import { assemblyAnim, assemblyFrame, assemblyLoop } from "../../src/anim/assembly.js";
 import { Keyframes } from "../../src/anim/css.js";
+import { stepTimes } from "../../src/render/boards/timeline.js";
 import { zoomFor } from "../../src/anim/timeline.js";
 import { applyAffine } from "../../src/render/assembly/levels.js";
 import { VIEW_FADE } from "../../src/render/assembly/views.js";
@@ -615,7 +616,8 @@ describe("quarter-turn views", () => {
     // build 1, 2, 3, then the unbuild reverses steps 3 and 2, then step 2 is built again
     expect(switches.map((s) => s.view)).toEqual([90, 180, 270, 180, 90, 180]);
     expect(switches.map((s) => s.t)).toEqual([...switches.map((s) => s.t)].sort((a, b) => a - b));
-    expect(switches[0]!.t).toBe(0);
+    // step 1 opens after the loop-start fades (0.4 s), the others at their step start
+    expect(switches[0]!.t).toBeCloseTo(0.4, 4);
     expect(switches[1]!.t).toBe(4);
   });
 
@@ -631,7 +633,6 @@ describe("quarter-turn views", () => {
   test("views swap exactly at the planned times, over VIEW_FADE", () => {
     const op = (t: number, turn: number) => frameOf(m, t)[group(turn)]!.opacity as number;
     for (const [i, s] of switches.entries()) {
-      if (s.t === 0) continue;
       const prev = i === 0 ? 0 : switches[i - 1]!.view;
       expect(op(s.t - 0.01, s.view), `before ${s.t}`).toBe(0);
       expect(op(s.t - 0.01, prev), `before ${s.t}`).toBe(1);
@@ -643,6 +644,50 @@ describe("quarter-turn views", () => {
     // time 0 is the rest frame: view 0 shown
     expect(frameOf(m, 0)[group(0)]!.opacity).toBe(1);
     expect(frameOf(m, 0)[group(90)]!.opacity).toBe(0);
+  });
+
+  test("P2-2: the loop closes the view: the last view cross-fades back to 0, no jump at the wrap", () => {
+    // the rig ends in view 180 (put back, step 5): the closing window returns to view 0
+    expect(scene.plan[scene.plan.length - 1]!.view).toBe(180);
+    const end = am.clock[am.clock.length - 1]!.end;
+    expect(am.loop).toBeGreaterThan(end + 0.1);
+    for (const speed of [0.5, 1, 2]) {
+      const c = splitReduced(loopCss(m, speed)).live;
+      const dur = am.loop / speed;
+      for (const v of views) {
+        const css0 = cssGroup(c, v.group, 0).opacity!;
+        const cssEnd = cssGroup(c, v.group, dur - 1e-4).opacity!;
+        const f0 = frameOf(m, 0, speed)[v.group]!.opacity as number;
+        const fEnd = frameOf(m, dur - 1e-4, speed)[v.group]!.opacity as number;
+        expect(Math.abs(cssEnd - css0), `css view ${v.turn} x${speed}`).toBeLessThan(0.02);
+        expect(Math.abs(fEnd - f0), `frame view ${v.turn} x${speed}`).toBeLessThan(0.02);
+      }
+      // view 180 stays until the closing window opens, then view 0 returns
+      if (speed === 1) {
+        expect(frameOf(m, end - 0.02)[group(180)]!.opacity).toBe(1);
+        expect(frameOf(m, am.loop - 0.01)[group(180)]!.opacity).toBe(0);
+        expect(frameOf(m, am.loop - 0.01)[group(0)]!.opacity).toBe(1);
+      }
+    }
+  });
+
+  test("P2-2: a 0.2 s last step still closes the view without a jump at the wrap", () => {
+    const steps = rig().steps!.map((x, i, l) => (i === l.length - 1 ? { ...x, duration: 0.2 } : x));
+    const sm = build(rig(steps as unknown as Obj[]));
+    const sam = A(sm);
+    const vs = sam.views!;
+    for (const speed of [0.5, 1, 2]) {
+      const c = splitReduced(loopCss(sm, speed)).live;
+      const dur = sam.loop / speed;
+      for (const v of vs) {
+        const a = cssGroup(c, v.group, 0).opacity!;
+        const b = cssGroup(c, v.group, dur - 1e-4).opacity!;
+        expect(Math.abs(b - a), `css view ${v.turn} x${speed}`).toBeLessThan(0.02);
+        const f0 = frameOf(sm, 0, speed)[v.group]!.opacity as number;
+        const f1 = frameOf(sm, dur - 1e-4, speed)[v.group]!.opacity as number;
+        expect(Math.abs(f1 - f0), `frame view ${v.turn} x${speed}`).toBeLessThan(0.02);
+      }
+    }
   });
 
   test("exactly one view is fully shown between swaps; fades sum to one", () => {
@@ -760,9 +805,45 @@ describe("builds: appearance along the planned path", () => {
     }
   });
 
-  test.todo(
-    "(c) loop-start overlap: l/tower is hidden at 0.0011 s although its fade runs 0-0.4 s (the plan should open step 1's motion at max(lead_1, fade end))",
-  );
+  test("(c) loop-start overlap: step 1 opens its motion after the loop-start fades", () => {
+    const fadeEnd = Math.max(...fades.map((x) => x.t1));
+    expect(fadeEnd).toBeCloseTo(0.4, 5);
+    // the plan opens step 1 at max(lead_1, fade end); no zoom here, so the fade end
+    expect(am.clock[0]!.open).toBeCloseTo(fadeEnd, 4);
+    for (const leaf of ["tower", "side"]) {
+      // a fading base part stays visible (and drawn in depth order) until its fade ends
+      for (const t of [0.0011, 0.1, 0.3, 0.39]) {
+        expect(hiddenOf(leaf, t), `${leaf} @${t}`).toBe(false);
+      }
+    }
+    // the build of step 1 starts only after the fades: the base is not drawn before
+    expect(opacityOf("base", fadeEnd + 0.01)).toBeLessThan(0.5);
+    expect(hiddenOf("tower", fadeEnd + 0.05)).toBe(true);
+  });
+
+  test("(c) the plan clock and the render clock open step 1 together at every speed (§7.3)", () => {
+    // output seconds: hold = max(lead_out, 0.4) with fades, lead_out = min(0.8, 0.25 d / speed)
+    for (const zoom of [false, true]) {
+      const steps = rig().steps!.map((x, i) => (i === 0 && zoom ? { ...x, focus: "l/base" } : x));
+      const zm = build(rig(steps as unknown as Obj[]));
+      const zam = A(zm);
+      for (const speed of [0.5, 1, 2]) {
+        const lead = zoom ? Math.min(0.8, (0.25 * 4) / speed) : 0;
+        const want = Math.max(lead, 0.4);
+        const boards = stepTimes(zm.scene, speed, true).times[0]!.open / speed;
+        const asm = assemblyAnim(zam, speed).warp(zam.clock[0]!.open) / speed;
+        expect(boards, `boards zoom=${zoom} x${speed}`).toBeCloseTo(want, 3);
+        expect(asm, `assembly zoom=${zoom} x${speed}`).toBeCloseTo(want, 3);
+      }
+    }
+  });
+
+  test("(c) the fades and the motion window agree at three speeds", () => {
+    for (const speed of [0.5, 1, 2]) {
+      const mid = frameOf(m, 0.0011 / speed, speed);
+      expect(mid[ids.partVisible("l/tower")]?.visibility, `x${speed}`).not.toBe("hidden");
+    }
+  });
 
   test("a built part appears when its move starts and moves to its seat", () => {
     // step 2 (4..8) builds the tower: hidden before, visible at its move start

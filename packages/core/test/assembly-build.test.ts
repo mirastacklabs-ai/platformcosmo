@@ -710,11 +710,12 @@ describe("loop-start fade", () => {
     const fl = (x: number): number => Math.floor(x * 10000) / 10000;
     // four 0.6 s steps of one part each: levels 1..3 need 0.6 s per step
     const away = two(undefined, [{ duration: 1, assembly: [{ build: "a", to: 3 }] }]);
-    // ends at level 3 of 4: closing transition min(0.8, 0.25 * 1) = 0.25 and the 0.2 s hold
-    expect(away.assemblies!.plan[0]!.actions[0]!.scale).toBe(fl((1 - 0.25 - 0.2) / 1.8));
+    // ends at level 3 of 4: closing transition min(0.8, 0.25 * 1) = 0.25 and the 0.2 s hold;
+    // it starts at level 0, so step 1 also opens after the 0.4 s loop-start fades
+    expect(away.assemblies!.plan[0]!.actions[0]!.scale).toBe(fl((1 - 0.4 - 0.25 - 0.2) / 1.8));
     const home = two(undefined, [{ duration: 1, assembly: [{ build: "a", to: 4 }] }]);
-    // ends finished = base: only the hold
-    expect(home.assemblies!.plan[0]!.actions[0]!.scale).toBe(fl((1 - 0.2) / 2.4));
+    // ends finished = base: the fades' 0.4 s and the hold, no closing transition
+    expect(home.assemblies!.plan[0]!.actions[0]!.scale).toBe(fl((1 - 0.4 - 0.2) / 2.4));
     // an unbuild back to 0 from finished ends away from the base too
     const down = two(undefined, [{ duration: 1, assembly: [{ unbuild: "a", to: 0 }] }]);
     expect(down.assemblies!.plan[0]!.actions[0]!.scale).toBe(fl((1 - 0.25 - 0.2) / 2.4));
@@ -760,10 +761,11 @@ describe("compression", () => {
 
   test("a build and a figure action in one step share the cursor, window and scale", () => {
     // the figure plays 1 s, then the build 2 s: 3 s of motion. The figure ends exploded, so the
-    // last step reserves its closing transition: window = 3 - 0.75 - 0.2 = 2.05 s
+    // last step reserves its closing transition and the build's loop-start fades (0.4 s) hold
+    // step 1: window = 3 - 0.4 - 0.75 - 0.2 = 1.65 s
     const g = mixed(3);
     const [f, b] = g.assemblies!.plan[0]!.actions;
-    const scale = Math.floor((2.05 / 3) * 10000) / 10000;
+    const scale = Math.floor((1.65 / 3) * 10000) / 10000;
     expect([f!.target, f!.start, f!.scale]).toEqual(["f", 0, scale]);
     expect(f!.length).toBe(Math.floor(1 * scale * 10000) / 10000);
     expect([b!.target, b!.kind, b!.scale]).toEqual(["a", "build", scale]);
@@ -775,7 +777,9 @@ describe("compression", () => {
       "assembly/compressed",
     );
     expect(d).toHaveLength(1);
-    expect(d[0]!.suggestion).toBe(`Set "duration": ${fitDuration(3, false, true)} on this step`);
+    expect(d[0]!.suggestion).toBe(
+      `Set "duration": ${fitDuration(3, false, true, 0.4)} on this step`,
+    );
     expect(codes(g.diagnostics, "assembly/compressed")).toEqual([]);
   });
 
