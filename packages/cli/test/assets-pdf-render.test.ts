@@ -16,6 +16,7 @@ import {
   minimalEnv,
   renderSize,
   toolArgv,
+  createUnshareProbe,
   unshareAvailable,
   type RenderSeam,
 } from "../src/pdftool.js";
@@ -710,6 +711,41 @@ describe("render: signals and escapes", () => {
     expect(survived).toBe(ns === undefined);
     if (survived) process.kill(pid, "SIGKILL"); // do not leak the test's sleeper
   }, 30_000);
+});
+
+describe("unshare probe", () => {
+  const fake = async (body: string): Promise<string> => {
+    const dir = await tmp();
+    await writeFile(join(dir, "unshare"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    return dir;
+  };
+  const probe = (dir: string, timeoutMs = 300) =>
+    createUnshareProbe({ dirs: [dir], timeoutMs, platform: "linux" });
+
+  test("a probe that times out is not remembered: the next call probes again", async () => {
+    const dir = await fake("exec sleep 5");
+    const p = probe(dir);
+    expect(await p()).toBeUndefined();
+    await writeFile(join(dir, "unshare"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    expect(await p()).toBe(join(dir, "unshare"));
+  });
+  test("a probe that fails outright is remembered", async () => {
+    const dir = await fake("exit 1");
+    const p = probe(dir);
+    expect(await p()).toBeUndefined();
+    await writeFile(join(dir, "unshare"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    expect(await p()).toBeUndefined();
+  });
+  test("a success is remembered, and other platforms never probe", async () => {
+    const dir = await fake("exit 0");
+    const p = probe(dir);
+    expect(await p()).toBe(join(dir, "unshare"));
+    await writeFile(join(dir, "unshare"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    expect(await p()).toBe(join(dir, "unshare"));
+    expect(await createUnshareProbe({ dirs: [dir], timeoutMs: 300, platform: "darwin" })()).toBe(
+      undefined,
+    );
+  });
 });
 
 // Real poppler / MuPDF: run in a throwaway container image that has them (not part of the normal run).

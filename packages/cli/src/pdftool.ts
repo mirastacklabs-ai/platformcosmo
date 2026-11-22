@@ -219,45 +219,70 @@ export function minimalEnv(dirs: readonly string[], home: string): Record<string
   };
 }
 
-let unsharePath: Promise<string | undefined> | undefined;
+export interface UnshareProbeOptions {
+  /** Directories searched for `unshare`, in order. */
+  readonly dirs: readonly string[];
+  /** How long one probe may take before it counts as timed out. */
+  readonly timeoutMs: number;
+  /** Only `linux` probes at all. */
+  readonly platform: string;
+}
+
+/**
+ * A probe for a working unprivileged `unshare`, remembered after the first answer. A probe that
+ * timed out (load) says nothing about `unshare`, so that answer is not remembered and the next call
+ * probes again; a probe that failed outright is remembered.
+ */
+export function createUnshareProbe(o: UnshareProbeOptions): () => Promise<string | undefined> {
+  let cached: Promise<string | undefined> | undefined;
+  return () => {
+    cached ??= (async () => {
+      let timedOut = false;
+      if (o.platform !== "linux") return undefined;
+      for (const dir of o.dirs) {
+        const p = join(dir, "unshare");
+        try {
+          await access(p, constants.X_OK);
+        } catch {
+          continue;
+        }
+        const ok = await new Promise<boolean | "timeout">((done) => {
+          try {
+            const c = spawn(p, [...UNSHARE_FLAGS, "/bin/true"], {
+              shell: false,
+              stdio: "ignore",
+              env: { PATH: DEFAULT_TOOL_DIRS.join(":") },
+            });
+            const t = setTimeout(() => (c.kill("SIGKILL"), done("timeout")), o.timeoutMs);
+            c.on("error", () => (clearTimeout(t), done(false)));
+            c.on("close", (code) => (clearTimeout(t), done(code === 0)));
+          } catch {
+            done(false);
+          }
+        });
+        if (ok === "timeout") {
+          timedOut = true;
+          continue;
+        }
+        if (ok) return p;
+      }
+      // a probe that timed out (load) says nothing about unshare: do not cache it as a failure
+      if (timedOut) cached = undefined;
+      return undefined;
+    })();
+    return cached;
+  };
+}
+
+const defaultProbe = createUnshareProbe({
+  dirs: ["/usr/bin", "/bin", "/usr/local/bin"],
+  timeoutMs: 10_000,
+  platform: process.platform,
+});
 
 /** Path of a working unprivileged `unshare` (Linux only; probed once), or undefined. */
 export function unshareAvailable(): Promise<string | undefined> {
-  unsharePath ??= (async () => {
-    let timedOut = false;
-    if (process.platform !== "linux") return undefined;
-    for (const dir of ["/usr/bin", "/bin", "/usr/local/bin"]) {
-      const p = join(dir, "unshare");
-      try {
-        await access(p, constants.X_OK);
-      } catch {
-        continue;
-      }
-      const ok = await new Promise<boolean | "timeout">((done) => {
-        try {
-          const c = spawn(p, [...UNSHARE_FLAGS, "/bin/true"], {
-            shell: false,
-            stdio: "ignore",
-            env: { PATH: DEFAULT_TOOL_DIRS.join(":") },
-          });
-          const t = setTimeout(() => (c.kill("SIGKILL"), done("timeout")), 10_000);
-          c.on("error", () => (clearTimeout(t), done(false)));
-          c.on("close", (code) => (clearTimeout(t), done(code === 0)));
-        } catch {
-          done(false);
-        }
-      });
-      if (ok === "timeout") {
-        timedOut = true;
-        continue;
-      }
-      if (ok) return p;
-    }
-    // a probe that timed out (load) says nothing about unshare: do not cache it as a failure
-    if (timedOut) unsharePath = undefined;
-    return undefined;
-  })();
-  return unsharePath;
+  return defaultProbe();
 }
 
 export type RenderFailure =
