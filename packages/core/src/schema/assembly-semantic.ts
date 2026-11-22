@@ -1478,7 +1478,12 @@ function checkSteps(c: Check): void {
       }
       const rootNode = model.root(root);
       if (rootNode === undefined) return;
-      const w = walkOf(c, rootNode, segs);
+      // `<rack>/<slot>/closeup/...`: the slot's close-up instance, checked as a spec host's
+      // (an assembly template; a figure close-up, or one nested below it, is the figure rules')
+      const w =
+        rk === "rack" && segs[2] === "closeup"
+          ? slotCloseupWalk(c, rootNode, segs)
+          : walkOf(c, rootNode, segs);
       if (w === undefined) return;
       if (!w.ok) {
         c.out.push(unresolved(c, `${at}/${kind}`, `${kind} target`, target, w, segs));
@@ -1505,6 +1510,25 @@ function checkSteps(c: Check): void {
       assemblyAction(c, a, kind, target, w.node, asm, segs.length === 1, at, machine);
     });
   });
+}
+
+/**
+ * The walk of `<rack>/<slot>/closeup/...` inside the slot's close-up instance; undefined when the
+ * slot has no close-up, the path enters a figure's, or the work cap is spent (nothing to check).
+ */
+function slotCloseupWalk(c: Check, rack: TNode, segs: readonly string[]): Walk | undefined {
+  const slot = walkOf(c, rack, segs.slice(0, 2));
+  if (slot === undefined || !slot.ok || slot.node.closeup === undefined) return undefined;
+  if (c.kinds.get(slot.node.closeup) !== "assembly") return undefined;
+  const instance = c.model.closeupNode(slot.node.closeup);
+  if (instance === undefined || !charge(c, 16 * segs.length)) return undefined;
+  const w = c.model.walk(instance, ["closeup", ...segs.slice(3)]);
+  // entering a figure or storyboard close-up (the slot's, or one nested in the template) ends
+  // this rule: whatever is named below it is the figure rules' (A2-F)
+  const leaf = w.ok ? w.node : w.parent;
+  if (leaf.kind === "figure" || leaf.kind === "board") return undefined;
+  // the walk's segments start at the instance: `at` is relative to `segs[2]`
+  return w.ok ? w : { ...w, at: w.at + 2 };
 }
 
 const templateTarget = (path: string, what: string, id: string): Diagnostic =>

@@ -467,7 +467,11 @@ The access move is ONLY the target's own move in the parent's default program (a
 A target needs a program of its own: in a rack, only the rack (`drawers` or its `programs`) and a
 slot with `assembly` (`internals`) have one. An action on a slot without `assembly`, a part of
 it or the frame is `assembly/unknown-program` (validation; the suggestion names the rack, whose
-`drawers` slides the slot out). A path through a close-up names the close-up instance instead.
+`drawers` slides the slot out). A path through a close-up names the close-up instance instead:
+`r1/srv/closeup/...` is checked as a spec host's `host/part/closeup/...` is (`to`, `program`,
+part paths, build vs explode programs: the same codes), through the instance tree of the slot's
+`closeup` template. A `closeup` that names a figure or storyboard, the slot's own or one nested in
+the template, ends that check; what is named below it is the figure rules'.
 
 ### 8.4 Close-ups (levels of detail)
 

@@ -111,6 +111,57 @@ describe("a plain rack slot has no program of its own (c, §8.3)", () => {
   });
 });
 
+describe("actions below a plain rack slot's close-up are validated as a spec host's (P1-gap)", () => {
+  const tpl = {
+    id: "tpl",
+    template: true,
+    units: "mm",
+    parts: [{ id: "x", size: [10, 10, 10] }],
+    programs: [{ id: "p", stages: [{ parts: ["x"], direction: "up" }] }],
+  };
+  const hostSpec = (action: Obj, target: string): Diagnostic[] =>
+    assemblyDiagnostics(
+      spec({
+        assemblies: [
+          tpl,
+          { id: "host", units: "mm", parts: [{ id: "h", size: [10, 10, 10], closeup: "tpl" }] },
+        ],
+        steps: [{ assembly: [{ ...action, [Object.keys(action)[0]!]: target }] }],
+      }),
+      LIFT,
+    );
+  const slotSpec = (action: Obj, target: string, closeup = "tpl"): Diagnostic[] =>
+    assemblyDiagnostics(
+      spec({
+        racks: [{ id: "r1", slots: [{ id: "srv", at: 1, type: "server-2u", closeup }] }],
+        assemblies: [tpl],
+        figures: [{ id: "fig", parts: [{ id: "a", image: "none" }] }],
+        steps: [{ assembly: [{ ...action, [Object.keys(action)[0]!]: target }] }],
+      }),
+      LIFT,
+    ).filter((d) => d.code.startsWith("assembly/"));
+  const cases: [string, Obj, string][] = [
+    ["to out of range", { explode: "", to: 5 }, "assembly/stage-out-of-range"],
+    ["unknown program", { explode: "", program: "nope" }, "assembly/unknown-program"],
+    ["unknown part path", { explode: "" }, "assembly/unknown-target"],
+    ["build with an explode program", { build: "", program: "p" }, "assembly/unknown-program"],
+  ];
+  test.each(cases)("%s: the codes a spec host gives", (_n, action, code) => {
+    const part = _n === "unknown part path" ? "/nope" : "";
+    const host = hostSpec(action, `host/h/closeup${part}`);
+    const slot = slotSpec(action, `r1/srv/closeup${part}`);
+    expect(host.map((d) => d.code)).toContain(code);
+    expect(slot.map((d) => d.code)).toEqual(host.map((d) => d.code));
+    expect(slot[0]!.path).toBe(host[0]!.path);
+  });
+
+  test("a valid program, and a close-up that names a figure, report nothing", () => {
+    expect(slotSpec({ explode: "" }, "r1/srv/closeup")).toEqual([]);
+    expect(slotSpec({ explode: "" }, "r1/srv/closeup", "fig")).toEqual([]);
+    expect(slotSpec({ explode: "", to: 9 }, "r1/srv/closeup/anything", "fig")).toEqual([]);
+  });
+});
+
 describe("depth diagnostics point at their assembly (N2)", () => {
   test("a part sliding through another: /assemblies/<i>, not an empty pointer", () => {
     // a slides +x straight through b
