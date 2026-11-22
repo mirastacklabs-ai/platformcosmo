@@ -1,5 +1,6 @@
 // Renders the example specs into examples/gallery/ with the built CLI (packages/cli/dist/bin.js):
-//   <name>.svg (animated), <name>.static.svg, <name>.png, and <name>.steps/step-NN.svg for specs with steps.
+//   <name>.svg (animated), <name>.static.svg, <name>.png, and <name>.steps/step-NN.svg for specs with steps
+// (except NO_STEPS: the inline-image stories, whose per-step SVGs would each repeat the images).
 // Output is deterministic (same spec, same bytes), so re-running changes nothing unless an engine changed.
 //
 //   scripts/pc run build                       (the CLI must be built first)
@@ -33,6 +34,9 @@ import { fileURLToPath, URL } from "node:url";
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const bin = `${root}packages/cli/dist/bin.js`;
 const outDir = `${root}examples/gallery`;
+
+/** Examples that ship no per-step SVGs (each would embed all of the story's images again). */
+const NO_STEPS = new Set(["rover-booklet", "brick-rover"]);
 
 /** Providers whose icon terms need human confirmation before anything is rendered or committed. */
 const TERMS_UNCONFIRMED = { azure: "Azure", gcp: "Google Cloud" };
@@ -88,7 +92,7 @@ function listFiles(dir, prefix = "") {
 
 function renderTo(name, spec, packs, dest) {
   const flags = ["--static", "--png"];
-  if ((spec.steps?.length ?? 0) > 0) flags.push("--steps");
+  if ((spec.steps?.length ?? 0) > 0 && !NO_STEPS.has(name)) flags.push("--steps");
   const r = spawnSync(
     process.execPath,
     [bin, "build", `${root}examples/${name}.cosmo.json`, "-o", dest, "--name", name, ...flags],
