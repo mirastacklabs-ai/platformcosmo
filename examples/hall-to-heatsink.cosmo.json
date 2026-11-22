@@ -1,0 +1,331 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "From the hall to the heat sink",
+    "description": "A data hall down to one CPU's heat sinks and back: rack close-up, a server built from its board plan, and a synthetic heat-sink installation figure as the deepest close-up."
+  },
+  "images": [
+    {
+      "id": "hs-base",
+      "src": "data:image/png;base64,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",
+      "source": {
+        "document": "Synthetic installation figure (scripts/gen-example-figures.mjs)",
+        "figure": "Board"
+      }
+    },
+    {
+      "id": "hs-sprite",
+      "src": "data:image/png;base64,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",
+      "source": {
+        "document": "Synthetic installation figure (scripts/gen-example-figures.mjs)",
+        "figure": "Heat sink"
+      }
+    }
+  ],
+  "figures": [
+    {
+      "id": "hs-install",
+      "base": "hs-base",
+      "pose": "exploded",
+      "parts": [
+        {
+          "id": "hs-1",
+          "image": "hs-sprite",
+          "seat": [180, 360],
+          "exploded": [180, 120]
+        },
+        {
+          "id": "hs-2",
+          "image": "hs-sprite",
+          "seat": [370, 372],
+          "exploded": [370, 132]
+        }
+      ]
+    }
+  ],
+  "assemblies": [
+    {
+      "id": "board-plan",
+      "template": true,
+      "units": "in",
+      "labels": "always",
+      "parts": [
+        {
+          "id": "pcb",
+          "shape": "plate",
+          "size": [13, 12, 0.06],
+          "color": "green"
+        },
+        {
+          "id": "cpu-1",
+          "type": "socket",
+          "at": [2, 6, 0.06],
+          "size": [2.2, 2.2, 0.3],
+          "label": "CPU 1",
+          "closeup": "hs-install"
+        },
+        {
+          "id": "cpu-2",
+          "type": "socket",
+          "at": [6, 6, 0.06],
+          "size": [2.2, 2.2, 0.3],
+          "label": "CPU 2",
+          "closeup": "hs-install"
+        },
+        {
+          "id": "dimm-bank",
+          "type": "dimm-slot",
+          "count": 4,
+          "at": [9.5, 5, 0.06],
+          "pitch": [0.4, 0, 0],
+          "size": [0.25, 5.2, 0.4],
+          "label": "DIMM"
+        },
+        {
+          "id": "pci",
+          "type": "pci-slot",
+          "count": 5,
+          "at": [1, 1, 0.06],
+          "pitch": [0, 0.8, 0],
+          "size": [3.5, 0.3, 0.45],
+          "label": "PCI"
+        },
+        {
+          "id": "bridge",
+          "type": "chip",
+          "at": [5, 3, 0.06],
+          "size": [1.2, 1.2, 0.12],
+          "label": "Chipset"
+        },
+        {
+          "id": "battery",
+          "type": "battery",
+          "shape": "cylinder",
+          "at": [11, 1, 0.06],
+          "size": [0.8, 0.8, 0.12],
+          "label": "Battery"
+        }
+      ]
+    },
+    {
+      "id": "srv-2u",
+      "template": true,
+      "units": "mm",
+      "parts": [
+        {
+          "id": "chassis",
+          "shape": "hw:chassis-2u",
+          "size": [430, 700, 85],
+          "role": "shell"
+        },
+        {
+          "id": "board",
+          "use": "board-plan",
+          "at": [40, 300, 4],
+          "size": [330, 305, 12]
+        },
+        {
+          "id": "fan",
+          "type": "fan",
+          "shape": "hw:fan",
+          "count": 4,
+          "at": [30, 230, 4],
+          "pitch": [95, 0, 0],
+          "size": [80, 38, 76],
+          "label": "System fan"
+        },
+        {
+          "id": "psu",
+          "type": "psu",
+          "shape": "hw:psu",
+          "at": [315, 4, 4],
+          "size": [95, 200, 76],
+          "label": "Power supply"
+        },
+        {
+          "id": "sled",
+          "type": "drive",
+          "count": 2,
+          "at": [20, 620, 4],
+          "pitch": [0, 0, 40],
+          "size": [150, 75, 38],
+          "label": "Drive sled"
+        },
+        {
+          "id": "lid",
+          "shape": "hw:lid",
+          "at": [0, 0, 85],
+          "size": [430, 700, 3],
+          "role": "cover",
+          "label": "Top cover"
+        }
+      ],
+      "programs": [
+        {
+          "id": "assemble",
+          "kind": "build",
+          "steps": [
+            {
+              "caption": "Board",
+              "add": ["board/pcb", "board/cpu-*", "board/bridge", "board/battery"]
+            },
+            {
+              "caption": "Memory and PCI",
+              "add": ["board/dimm-bank-*", "board/pci-*"]
+            },
+            {
+              "caption": "Fans, PSU, drives",
+              "add": ["fan-*", "psu", "sled-*"]
+            },
+            {
+              "caption": "Cover",
+              "add": ["lid"]
+            }
+          ]
+        },
+        {
+          "id": "open",
+          "stages": [
+            {
+              "label": "Cover",
+              "parts": ["lid"],
+              "direction": "up"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "racks": [
+    {
+      "id": "r1",
+      "slots": [
+        {
+          "at": 20,
+          "type": "server-2u"
+        }
+      ]
+    },
+    {
+      "id": "r2",
+      "slots": [
+        {
+          "id": "srv",
+          "at": 20,
+          "type": "server-2u",
+          "label": "App server",
+          "closeup": "srv-2u"
+        }
+      ]
+    },
+    {
+      "id": "r3",
+      "slots": [
+        {
+          "at": 20,
+          "type": "server-2u"
+        }
+      ]
+    },
+    {
+      "id": "r4",
+      "slots": [
+        {
+          "at": 20,
+          "type": "server-2u"
+        }
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "id": "row-a",
+      "members": ["r1", "r2"]
+    },
+    {
+      "id": "row-b",
+      "members": ["r3", "r4"]
+    }
+  ],
+  "aisles": [
+    {
+      "id": "cold",
+      "kind": "cold",
+      "rows": ["row-a", "row-b"]
+    }
+  ],
+  "steps": [
+    {
+      "caption": "The hall",
+      "duration": 2
+    },
+    {
+      "caption": "Row A",
+      "focus": "row-a",
+      "duration": 2
+    },
+    {
+      "caption": "Rack R2: the app server slides out",
+      "assembly": [
+        {
+          "explode": "r2"
+        }
+      ],
+      "focus": "r2",
+      "duration": 4
+    },
+    {
+      "caption": "Building the server",
+      "assembly": [
+        {
+          "build": "r2/srv/closeup",
+          "program": "assemble",
+          "to": 3
+        }
+      ],
+      "focus": "r2/srv/closeup",
+      "duration": 8
+    },
+    {
+      "caption": "The board: two CPU sockets",
+      "focus": "r2/srv/closeup/board",
+      "duration": 3
+    },
+    {
+      "caption": "CPU 1: seating the heat sinks",
+      "assembly": [
+        {
+          "implode": "r2/srv/closeup/board/cpu-1/closeup"
+        }
+      ],
+      "focus": "r2/srv/closeup/board/cpu-1/closeup",
+      "duration": 5
+    },
+    {
+      "caption": "Cover on",
+      "assembly": [
+        {
+          "build": "r2/srv/closeup",
+          "program": "assemble"
+        }
+      ],
+      "focus": "r2/srv/closeup",
+      "duration": 3
+    },
+    {
+      "caption": "Back into the rack",
+      "assembly": [
+        {
+          "implode": "r2"
+        }
+      ],
+      "focus": "r2",
+      "duration": 4
+    },
+    {
+      "caption": "The hall",
+      "duration": 2
+    }
+  ]
+}
