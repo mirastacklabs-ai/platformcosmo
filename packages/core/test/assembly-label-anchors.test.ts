@@ -20,6 +20,8 @@ import {
   stepEndTime,
 } from "../src/render/assembly/tracks.js";
 import { segmentHitsRect } from "../src/render/assembly/anchors.js";
+import { createAnimator } from "../src/anim/index.js";
+import { badLabels } from "./label-boxes.js";
 import { worldLeaves } from "../src/render/assembly/world.js";
 import { themeRegistry } from "../../themes/src/index.js";
 import * as partsAuto from "../../parts-auto/src/index.js";
@@ -345,9 +347,10 @@ describe("unmoved parts under a labelled group are named by it", () => {
     return { ...r, a: r.model.assembly as AssemblyRenderModelX };
   };
 
-  test("the engine example has 14 leader labels; its valves and piston parts are reported", () => {
+  test("the engine example has 11 leader labels; its valves and piston parts are reported", () => {
     const { a, diagnostics } = render(example("Inline-4"));
-    expect(tracksOf(a).filter((t) => t.kind === "leader")).toHaveLength(14);
+    // instances of one counted part moved together share one label (D-4a): 14 before
+    expect(tracksOf(a).filter((t) => t.kind === "leader")).toHaveLength(11);
     const omitted = diagnostics.filter((d) => d.code === "assembly/label-omitted");
     expect(omitted.length).toBeGreaterThanOrEqual(16);
     expect(omitted.map((d) => (d.params as { part: string }).part)).toContain(
@@ -356,9 +359,45 @@ describe("unmoved parts under a labelled group are named by it", () => {
     expect(omitted.some((d) => d.message.includes("whose label names it"))).toBe(true);
   });
 
-  test("the GPU example keeps its 39 leader labels", () => {
-    const { a } = render(example("2U GPU"));
-    expect(tracksOf(a).filter((t) => t.kind === "leader")).toHaveLength(39);
+  test("§19.2: measured on the drawn labels, none is cut or under the caption (OCP NIC 3.0)", () => {
+    const { model, diagnostics } = render(example("2U GPU"));
+    const A = model.assembly!;
+    const anim = createAnimator();
+    let zoomed = 0;
+    for (const c of A.clock) {
+      // late in the camera's move into the step a label may be fading out (it is hidden for the
+      // step), but none that is still shown is cut
+      const late = c.start - 0.1 * (c.start - (A.clock[c.step - 2]?.end ?? 0));
+      for (const [t, min] of [
+        [late, 0.25],
+        [(c.start + c.end) / 2, 0.01],
+        [c.end - 0.01, 0.01],
+      ] as const) {
+        const v = anim.animate(model, { speed: 1, mode: "frame", time: t }).viewBox;
+        if (v !== undefined) zoomed++;
+        expect(badLabels(model, t, v, min), `step ${c.step} at ${t}`).toEqual([]);
+      }
+    }
+    expect(zoomed).toBeGreaterThan(0);
+    // what is hidden for the camera is reported, pointed, and never the focused node's label
+    const hidden = diagnostics.filter(
+      (d) => d.code === "assembly/label-omitted" && /is hidden during step/.test(d.message),
+    );
+    for (const d of hidden) expect(d.path).not.toBe("");
+    for (const d of hidden) {
+      const { part, step } = d.params as { part: string; step: number };
+      expect(part).not.toBe(model.scene.timeline[step - 1]?.focus);
+    }
+  });
+
+  test("the GPU example has 13 leader labels: one per counted part moved together", () => {
+    const { a, diagnostics } = render(example("2U GPU"));
+    // 39 before D-4a: every DIMM, fan and drive had its own pill
+    expect(tracksOf(a).filter((t) => t.kind === "leader")).toHaveLength(13);
+    const carried = diagnostics.filter(
+      (d) => d.code === "assembly/label-omitted" && d.message.includes("every instance"),
+    );
+    expect(carried.length).toBe(39 - 13);
   });
 });
 

@@ -20,7 +20,13 @@ import type {
   PartShapeDef,
   PartShapeRegistry,
 } from "../contracts/index.js";
-import { planFigureSteps, resolveFigure, stepViews, type ResolvedFigure } from "../scene/boards.js";
+import {
+  closeupRefs,
+  planFigureSteps,
+  resolveFigure,
+  stepViews,
+  type ResolvedFigure,
+} from "../scene/boards.js";
 import { resolveStoryboard, type ResolvedStoryboard } from "../scene/storyboards.js";
 import { planScene } from "../scene/assembly/plan-scene.js";
 import { rackTargeted, targetedRacks } from "../scene/assembly/racks.js";
@@ -109,16 +115,89 @@ export function figureDiagnostics(
   });
 
   // ---- actions ------------------------------------------------------------------------
+  // Figures a `closeup` names are drawn only in their levels (§8.4): their bare id is no target;
+  // an action on a close-up instance (`<host>/closeup`) plays that instance's own copy.
+  const closeupOnly = closeupRefs(spec);
+  const planned = new Map<string, ResolvedFigure>();
+  for (const [id, f] of figures) if (!closeupOnly.has(id)) planned.set(id, f);
+  const instances = figureInstanceTargets(spec);
+  for (const [path, ref] of instances) {
+    const f = figures.get(ref);
+    if (f !== undefined) planned.set(path, { ...f, id: path });
+  }
+  // a figure close-up has no parts of its own to focus or set (it moves as a whole)
+  (spec.steps ?? []).forEach((step, si) => {
+    const below = (path: string, at: string, what: string): void => {
+      for (const inst of instances.keys()) {
+        if (!path.startsWith(`${inst}/`)) continue;
+        out.push({
+          severity: "error",
+          code: "assembly/unknown-target",
+          path: at,
+          message: `${upper(what)} ${q(path)} is inside the figure close-up ${q(inst)}, which has no parts to address`,
+          suggestion: `Use "${inst}"`,
+          params: { id: path },
+        });
+        return;
+      }
+    };
+    if (step.focus !== undefined) below(step.focus, `/steps/${si}/focus`, "focus target");
+    for (const key of Object.keys(step.set ?? {}))
+      below(key, `/steps/${si}/set/${ptrKey(key)}`, "step target");
+  });
   const views = stepViews(spec, isFocusTarget);
   const storyboards = new Map<string, ResolvedStoryboard>();
   for (const sb of spec.storyboards ?? [])
-    if (!storyboards.has(sb.id)) storyboards.set(sb.id, resolveStoryboard(sb));
+    if (!storyboards.has(sb.id) && !closeupOnly.has(sb.id))
+      storyboards.set(sb.id, resolveStoryboard(sb));
   out.push(
-    ...planFigureSteps(spec, figures, views, {
+    ...planFigureSteps(spec, planned, views, {
       gated: groups,
       ...(storyboards.size > 0 ? { storyboards } : {}),
+      ...(closeupOnly.size > 0 ? { closeupOnly } : {}),
     }).diagnostics,
   );
+  return out;
+}
+
+/**
+ * Figure close-up instances that step actions name (§8.4): the longest `…/closeup` prefix of an
+ * action target that resolves, over the expanded tree, to a close-up drawing a figure, by path,
+ * with the figure's id. Only built when some target passes through a `closeup` segment.
+ */
+function figureInstanceTargets(spec: PlatformCosmoSpec): Map<string, string> {
+  const out = new Map<string, string>();
+  const targets = (spec.steps ?? []).flatMap((s) => [
+    ...(s.assembly ?? []).map(actionTarget),
+    ...(s.focus === undefined ? [] : [s.focus]),
+    ...Object.keys(s.set ?? {}),
+  ]);
+  if (!hasAssemblyContent(spec) || !targets.some((t) => t.includes("/closeup"))) return out;
+  const model = new AssemblyModel(spec);
+  const racks = new Set((spec.racks ?? []).map((r) => r.id));
+  // a plain rack slot is opaque: its close-up is entered through the slot's `closeup` (as
+  // `slotCloseupWalk` does), anything else walks the expanded tree
+  const walkTo = (segs: readonly string[]): Walk | undefined => {
+    const from = model.root(segs[0] as string);
+    if (from === undefined) return undefined;
+    if (segs[2] !== "closeup" || !racks.has(segs[0] as string)) return model.walk(from, segs);
+    const slot = model.walk(from, segs.slice(0, 2));
+    if (!slot.ok || slot.node.closeup === undefined) return undefined;
+    const instance = model.closeupNode(slot.node.closeup);
+    return instance === undefined ? undefined : model.walk(instance, ["closeup", ...segs.slice(3)]);
+  };
+  for (const target of targets) {
+    const segs = target.split("/");
+    for (let i = segs.length; i > 1; i--) {
+      if (segs[i - 1] !== "closeup") continue;
+      const path = segs.slice(0, i);
+      const w = walkTo(path);
+      if (w?.ok === true && w.node.kind === "figure" && w.node.ref !== undefined) {
+        out.set(path.join("/"), w.node.ref);
+        break;
+      }
+    }
+  }
   return out;
 }
 

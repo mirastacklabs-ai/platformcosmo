@@ -152,6 +152,13 @@ export interface GroupInput {
   readonly levelAtStep: (k: number) => string | undefined;
   /** Ids of the main world's layer groups, faded against the levels (only with levels). */
   readonly mainLayers: readonly string[];
+  /**
+   * The half of transition `k` (into step `k`; `k = n` the loop's closing window) in which the
+   * camera moves when that transition also changes the level in effect (`cameraHalf`): the
+   * levels and the main layers then cross-fade in the OTHER half, so a level never grows while
+   * the camera zooms the other way (§8.4). Absent: the whole window.
+   */
+  readonly cameraHalf?: (k: number) => "first" | "second" | undefined;
 }
 
 /** Tracks of every view and level group, sorted by id. */
@@ -188,15 +195,23 @@ export function groupTracks(input: GroupInput): GroupTrack[] {
     const tStart = (k: number): number => (k <= 0 ? 0 : (clock[k - 1]?.end ?? 0));
     const tEnd = (k: number): number =>
       k >= n ? total : k <= 0 ? (clock[0]?.open ?? 0) : (clock[k]?.start ?? 0);
-    const bps = Array.from({ length: segs }, (_, k) => [tStart(k), tEnd(k)]).flat();
+    // the cross-fade's own part of segment k: the half the camera does not move in
+    const span = (k: number): readonly [number, number] => {
+      const a = tStart(k);
+      const b = tEnd(k);
+      const h = input.cameraHalf?.(k);
+      const m = r4((a + b) / 2);
+      return h === "first" ? [m, b] : h === "second" ? [a, m] : [a, b];
+    };
+    const bps = Array.from({ length: segs }, (_, k) => [tStart(k), tEnd(k), ...span(k)]).flat();
     const stepAt = (t: number): number => {
       let k = 0;
       for (let i = 0; i < segs; i++) if (tStart(i) <= t + EPS) k = i;
       return k;
     };
     const fAt = (k: number, t: number): number => {
-      const span = tEnd(k) - tStart(k);
-      return span > EPS ? clamp01((t - tStart(k)) / span) : 1;
+      const [a, b] = span(k);
+      return b - a > EPS ? clamp01((t - a) / (b - a)) : t >= b ? 1 : 0;
     };
 
     // the main world cross-fades against the levels (occluders, §8.4)
@@ -242,7 +257,12 @@ export function groupTracks(input: GroupInput): GroupTrack[] {
           ty: e.ty + (l.overview.ty - e.ty) * g,
         });
         let a = l.overview;
-        if (cur && !prev) {
+        // a parent level holds its pose while a child level grows out of it (and while the child
+        // shrinks back): it only fades, it never flies toward its own host (§8.4)
+        const child = (j: number): boolean => lvl(j)?.startsWith(`${l.path}/`) === true;
+        if ((cur && !prev && child(k - 1)) || (prev && !cur && child(k))) {
+          a = l.overview;
+        } else if (cur && !prev) {
           // entry: from the host's drawn rect to the overview
           a = mix(l.fromHost(l.hostAt(k)), f);
         } else if (prev && !cur) {

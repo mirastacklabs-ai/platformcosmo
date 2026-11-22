@@ -624,8 +624,11 @@ describe("reduced motion", () => {
   });
 
   test("a focus on one part zooms the live camera; reduced motion drops it", () => {
-    const spec = engine() as unknown as { steps: Obj[] };
+    const spec = engine() as unknown as { steps: Obj[]; assemblies: Obj[] };
     for (const st of spec.steps) if (st.focus !== undefined) st.focus = "engine/oil-pan";
+    // without part labels: a label the step brings in that the oil-pan window would cut widens
+    // the zoom to the whole engine (§7.4), which is not what this test is about
+    spec.assemblies[0]!.labels = "never";
     const model = build(spec as unknown as PlatformCosmoSpec);
     const focused = model.scene.timeline.filter((s) => s.focus !== undefined);
     expect(focused.length).toBeGreaterThan(0);
