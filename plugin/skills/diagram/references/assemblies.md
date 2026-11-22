@@ -34,11 +34,11 @@ Drawn: assemblies with nested parts, primitives and the `hw:`, `auto:`, `brick:`
 **explode and implode** programs and the `explode` / `implode` step actions, `labels: "always"`, part paths in
 `steps[].focus` and `steps[].set`.
 
-Not drawn yet: `kind: "build"` programs and the `build` / `unbuild` actions, `closeup`, `storyboards`, rack `programs`,
+Not drawn yet: `kind: "build"` programs and the `build` / `unbuild` actions on an assembly, `closeup`, rack `programs`,
 `slots[].assembly`, build steps with `from: "callout"` or `subBuild`. `pcosmo validate` rejects every one of them
 with `assembly/unsupported`. Do not try another spelling and do not drop the content silently: do the explode version
 (a "how it goes together" request becomes an exploded view played in reverse: explode, then implode), say what you left
-out and why, and offer it for a later release. A booklet "build in N steps" request is outside this reference: say so.
+out and why, and offer it for a later release. A booklet "build in N steps" request: see [from instructions](from-instructions.md) (storyboards are drawn).
 
 Other things you will see and that are fine: `assembly/depth-approx` (info: an epoch of the motion has an approximate
 draw order because depth copies are not drawn yet), `assembly/compressed` (info: set the `duration` it suggests),
