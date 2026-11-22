@@ -42,6 +42,7 @@ import {
   pointsToPath,
 } from "../../geometry/index.js";
 import { copySuffix } from "../../emit/ids.js";
+import { WINDOW_CLIP_PAD } from "../../depth/epochs.js";
 import { imageDef } from "../boards/images.js";
 import type { WorldLeaf } from "./world.js";
 
@@ -347,11 +348,8 @@ function halfOf2(leaf: WorldLeaf, primId: string): "back" | "front" | undefined 
   return undefined;
 }
 
-/**
- * Half the widest part outline stroke (the `overlay` path's 1.5; faces use 1), user units: how far
- * a window clip's sides reach past the prism so the clipped copy keeps the whole outline (A1-2c).
- */
-export const CLIP_STROKE_PAD = 0.75;
+/** How far a window clip reaches past the prism (A1-2c; `WINDOW_CLIP_PAD`, assemblies §9.5). */
+export const CLIP_STROKE_PAD = WINDOW_CLIP_PAD;
 
 /**
  * `clipPath` of a face-exit or insert clip: the hull of the projected prism, solid's rest frame.

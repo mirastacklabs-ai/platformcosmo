@@ -869,10 +869,15 @@ it is ordered by separation or bisection only (approximate where those cannot de
   members and its part beyond the plane at its highest meets none. Outside W the leaf meets no
   member, so the unclipped copy is ordered exactly by separation. W's ends are phase boundaries,
   and at each the leaf is clear of the face (its part below the plane is inside the block, and it
-  meets no member), so it lies inside the clip prism. The window clip's polygon reaches half the
-  widest outline stroke (0.75 user units) past every hull edge except those on the clipped face,
-  so the clipped copy keeps the whole outline on the leaf's sides and both copies draw the same
-  pixels: the swap is invisible (tested pixel for pixel at scale 2). Copy 0 is the clipped one; the unclipped one takes the next copy numbers,
+  meets no member), so it lies inside the clip prism. The window clip's polygon reaches 2 user
+  units past every hull edge except those on the clipped face (`WINDOW_CLIP_PAD`: past the outline
+  stroke, anti-aliasing included), so the clipped copy keeps the whole outline on the leaf's sides.
+  When the leaf is at least that far (on screen) from the face at the swap, both copies draw the
+  same pixels: tested at scale 2 in resvg (exit through a `+z` and a `+x` face, 0 px) and in the
+  browser harness (forced copies at each swap). When it rests closer than that to the face at a
+  swap (flush on the deck, then sliding), the face edges must still cut, so the outline stroke along
+  the face appears or disappears by about a pixel: named by `assembly/clip-swap-rim` (info, the
+  part and the swap time), never silent. Copy 0 is the clipped one; the unclipped one takes the next copy numbers,
   has no `partHost` and no clip wrapper, and both count toward the copy budget (copies ≤ 0.5 ×
   items; beyond it the remaining such leaves keep the hidden-until-clear fallback, with a
   `budget/depth-copies` warning). No second copy is made when the block's members never pass a
@@ -1303,6 +1308,7 @@ suggestions):
 | `assembly/implicit-access`                                                                                      | info                                              | access move prepended (§8.3)                                                                                                                                                                                                 |
 | `assembly/depth-approx`                                                                                         | info                                              | an epoch could not be certified                                                                                                                                                                                              |
 | `assembly/clip-fallback`                                                                                        | info                                              | enclosed part hidden until clear                                                                                                                                                                                             |
+| `assembly/clip-swap-rim`                                                                                        | info                                              | a part clipped only while it crosses (two copies, §9.5) swaps copies while resting on the clipped face: the outline stroke along that face changes by about a pixel                                                          |
 | `assembly/depth-input`                                                                                          | error                                             | internal: invalid depth-order input (non-finite box, move or loop); that input is ignored                                                                                                                                    |
 | `assembly/bounds-growth`                                                                                        | info                                              | reach bounds > 4× rest                                                                                                                                                                                                       |
 | `assembly/closeup-turned`                                                                                       | info                                              | a close-up's footprint would match its host better turned a quarter; not turned (fronts stay aligned) (also by `validate`)                                                                                                   |

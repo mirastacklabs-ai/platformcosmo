@@ -126,8 +126,27 @@ export function viewCopySpec(): PlatformCosmoSpec {
  * so no single static clip is valid for the loop: copy 0 is clipped and drawn while it crosses,
  * copy 1 is unclipped and drawn for the slide. With `shape: "cylinder"` the piston does not fill
  * its box, so it is not split: it keeps the named fallback (`assembly/clip-fallback`).
+ * `exit: "x"` leaves through the block's +x face instead (a face whose cut edges are diagonal on
+ * screen) and then rises. `flush`: the first stage ends with the piston resting on the face it
+ * left (bottom on the deck, or −x face against the +x face), so the copies swap while it is flush
+ * (`assembly/clip-swap-rim`).
  */
-export function crossingClipSpec(opts: { readonly shape?: "cylinder" } = {}): PlatformCosmoSpec {
+export function crossingClipSpec(
+  opts: {
+    readonly shape?: "cylinder";
+    readonly exit?: "z" | "x";
+    readonly flush?: boolean;
+  } = {},
+): PlatformCosmoSpec {
+  // piston x 100..300 and z 50..180 inside the block (x 0..400, z 0..200)
+  const out =
+    opts.exit === "x"
+      ? { parts: ["arm"], direction: "+x", distance: opts.flush ? 300 : 400 }
+      : { parts: ["arm"], direction: "up", distance: opts.flush ? 150 : 300 };
+  const then =
+    opts.exit === "x"
+      ? { parts: ["arm/piston"], direction: "up", distance: 300 }
+      : { parts: ["arm/piston"], direction: "+x", distance: 400 };
   return {
     meta: { version: "1", title: "Clipped while crossing" },
     assemblies: [
@@ -152,10 +171,7 @@ export function crossingClipSpec(opts: { readonly shape?: "cylinder" } = {}): Pl
         programs: [
           {
             id: "p",
-            stages: [
-              { parts: ["arm"], direction: "up", distance: 300 },
-              { parts: ["arm/piston"], direction: "+x", distance: 400 },
-            ],
+            stages: [out, then],
           },
         ],
       },

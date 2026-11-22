@@ -128,6 +128,13 @@ import type { CopyPlanResult } from "./copies.js";
 
 export const TIME_EPS = 1e-9;
 
+/**
+ * How far (user units) a window clip reaches past the prism on every side but the clipped face
+ * (A1-2c): past the outline stroke in resvg and in browsers (anti-aliasing included), so a copy
+ * swap draws the same pixels unless the leaf rests within this of the face (`clip-swap-rim`).
+ */
+export const WINDOW_CLIP_PAD = 2;
+
 /** How often each phase is built (two clip passes, clip events, solving); see `spans`. */
 const PHASE_PASSES = 4;
 
@@ -1039,6 +1046,7 @@ class EpochSolver {
       this.it[p] = { ...item, present: cut(all, win) };
       const outside = cut(all, rest);
       if (outside.length === 0) continue;
+      this.swapRim(p, win, all);
       this.it.push({ ...item, present: outside });
       this.chain.push(this.chain[p]!);
       this.base.push(p);
@@ -1070,6 +1078,55 @@ class EpochSolver {
     for (const x of this.it) windows += x.present?.length ?? 0;
     this.phaseCost =
       m + this.chain.reduce((sum, c) => sum + c.length, 0) + this.mv.length + windows;
+  }
+
+  /**
+   * A window clip's copies swap at the ends of the crossing window `win`, where the leaf is clear of
+   * the clipped face. The clip keeps the outline stroke on the leaf's sides (`WINDOW_CLIP_PAD`) but
+   * must cut at the face, so when the leaf rests closer to the face than that at a swap (flush on
+   * the deck, then sliding), the stroke along the face appears or disappears by about a pixel:
+   * `assembly/clip-swap-rim` (info) names it. Swaps at the loop wrap count when only one end of
+   * the loop is in the window; a swap while the leaf is absent is not drawn.
+   */
+  private swapRim(
+    p: number,
+    win: readonly (readonly [number, number])[],
+    present: readonly (readonly [number, number])[],
+  ): void {
+    const L = this.loop;
+    const M = this.clipSolid[p]!;
+    const u = this.clipAxis[p]!;
+    if (M < 0 || u < 0 || win.length === 0) return;
+    const times: number[] = [];
+    const in0 = win[0]![0] <= TIME_EPS;
+    const inL = win[win.length - 1]![1] >= L - TIME_EPS;
+    if (in0 !== inL) times.push(0);
+    for (const w of win) {
+      if (w[0] > TIME_EPS) times.push(w[0]);
+      if (w[1] < L - TIME_EPS) times.push(w[1]);
+    }
+    const unit = u === 2 ? this.zs : Math.hypot(this.hw, this.hh);
+    for (const t of times) {
+      if (!present.some((x) => t >= x[0] - TIME_EPS && t <= x[1] + TIME_EPS)) continue;
+      const gap =
+        this.it[p]!.bbox[u]! +
+        this.dispAtTime(p, t)[u]! -
+        (this.it[M]!.bbox[u + 3]! + this.dispAtTime(M, t)[u]!);
+      if (gap * unit >= WINDOW_CLIP_PAD) continue;
+      const key = this.it[p]!.key;
+      const solid = this.it[M]!.key;
+      this.diags.add(
+        {
+          severity: "info",
+          code: "assembly/clip-swap-rim",
+          path: this.pointer(key),
+          message: `"${key}" swaps between its clipped and unclipped copy at t = ${fmtT(t)} s while it rests on the clipped face of "${solid}"; the outline stroke along that face changes by about one pixel there.`,
+          params: { item: key, solid, t },
+        },
+        `${p}`,
+      );
+      return;
+    }
   }
 
   private normalize(): void {

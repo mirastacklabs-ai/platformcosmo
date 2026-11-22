@@ -930,6 +930,7 @@ describe("diagnostics, never throws", () => {
     const used = [...new Set([...src.matchAll(/code: "([a-z0-9/-]+)"/g)].map((m) => m[1]!))].sort();
     expect(used).toEqual([
       "assembly/clip-fallback",
+      "assembly/clip-swap-rim",
       "assembly/depth-approx",
       "assembly/depth-cycle",
       "assembly/depth-input",

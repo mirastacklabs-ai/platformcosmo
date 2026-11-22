@@ -352,82 +352,84 @@ describe("clipped only while crossing: a clipped and an unclipped copy (§9.5, A
   });
 });
 
-describe("window clip swaps are pixel-invisible (A1-2c, §9.5)", () => {
-  // the light theme's outline strokes (the fixture theme's faces draw none)
-  const spec = crossingClipSpec();
-  const model = buildModelWithDiagnostics({
-    scene: buildScene(spec, {}),
-    theme: themeRegistry.get("light")!,
-    font: "system",
-    prefix: "pc-t",
-    spec,
-  }).model;
-  const am = A(model);
+describe("window clip swaps: same pixels, or named when flush (A1-2c, §9.5)", () => {
   const P = "kit/arm/piston";
-  /** RGBA of the frame at t, at scale 2; `show` forces one copy visible and the other hidden. */
-  async function frame(t: number, show?: 0 | 1): Promise<Uint8Array> {
-    const layer = animator.animate(model, { speed: 1, mode: "frame", time: t });
-    if (show !== undefined) {
+  /** The crossing fixture in the light theme (its outline strokes; the fixture theme draws none). */
+  function setup(spec: PlatformCosmoSpec) {
+    const { model, diagnostics } = buildModelWithDiagnostics({
+      scene: buildScene(spec, {}),
+      theme: themeRegistry.get("light")!,
+      font: "system",
+      prefix: "pc-t",
+      spec,
+    });
+    const am = A(model);
+    /** RGBA of the frame at t, at scale 2; `show` forces one copy visible and the other hidden. */
+    const frame = async (t: number, show?: 0 | 1): Promise<Uint8Array> => {
+      const layer = animator.animate(model, { speed: 1, mode: "frame", time: t });
       const attrs = { ...(layer.attrs ?? {}) };
-      for (const c of [0, 1] as const) {
-        const id = am.ids.partVisible(P, c);
-        attrs[id] = { ...(attrs[id] ?? {}), visibility: c === show ? "visible" : "hidden" };
+      if (show !== undefined) {
+        for (const c of [0, 1] as const) {
+          const id = am.ids.partVisible(P, c);
+          attrs[id] = { ...(attrs[id] ?? {}), visibility: c === show ? "visible" : "hidden" };
+        }
       }
-      return decodePng(
-        await rasterize(emit(model, { ...layer, attrs }, { font: "system", target: "raster" }), {
-          scale: 2,
-          fonts: [],
-        }),
-      ).data;
-    }
-    return decodePng(
-      await rasterize(emit(model, layer, { font: "system", target: "raster" }), {
-        scale: 2,
-        fonts: [],
-      }),
-    ).data;
+      const svg = emit(model, { ...layer, attrs }, { font: "system", target: "raster" });
+      return decodePng(await rasterize(svg, { scale: 2, fonts: [] })).data;
+    };
+    const copyAt = (o: readonly string[]): number | undefined => {
+      const x = o.find((y) => parseCopyKey(y).item === P);
+      return x === undefined ? undefined : parseCopyKey(x).copy;
+    };
+    const swaps = am.epochs
+      .slice(1)
+      .filter((e, k) => {
+        const before = copyAt(am.epochs[k]!.order);
+        const after = copyAt(e.order);
+        return before !== undefined && after !== undefined && before !== after;
+      })
+      .map((e) => e.t0);
+    const rims = diagnostics.filter((d) => d.code === "assembly/clip-swap-rim");
+    return { frame, swaps, rims };
   }
   const diff = (a: Uint8Array, b: Uint8Array): number => {
     let n = 0;
     for (let q = 0; q < a.length; q += 4) {
-      if (
-        Math.abs(a[q]! - b[q]!) +
-          Math.abs(a[q + 1]! - b[q + 1]!) +
-          Math.abs(a[q + 2]! - b[q + 2]!) >
-        6
-      )
-        n++;
+      const d =
+        Math.abs(a[q]! - b[q]!) + Math.abs(a[q + 1]! - b[q + 1]!) + Math.abs(a[q + 2]! - b[q + 2]!);
+      if (d > 6) n++;
     }
     return n;
   };
-  const swaps = am.epochs
-    .slice(1)
-    .filter((e, k) => {
-      const copy = (o: readonly string[]): number | undefined => {
-        const x = o.find((y) => parseCopyKey(y).item === P);
-        return x === undefined ? undefined : parseCopyKey(x).copy;
-      };
-      const a = copy(am.epochs[k]!.order);
-      const b = copy(e.order);
-      return a !== undefined && b !== undefined && a !== b;
-    })
-    .map((e) => e.t0);
 
-  test("at each swap the clipped and the unclipped copy draw the same pixels", async () => {
-    expect(swaps).toHaveLength(2);
-    for (const t of swaps) {
-      expect(diff(await frame(t, 0), await frame(t, 1)), `t=${t}`).toBe(0);
-    }
-  }, 120_000);
+  for (const exit of ["z", "x"] as const) {
+    test(`exit through the +${exit} face: both copies draw the same pixels at every swap`, async () => {
+      const { frame, swaps, rims } = setup(crossingClipSpec({ exit }));
+      expect(swaps).toHaveLength(2);
+      expect(rims).toEqual([]);
+      for (const t of swaps) {
+        expect(diff(await frame(t, 0), await frame(t, 1)), `t=${t}`).toBe(0);
+      }
+    }, 120_000);
+
+    test(`flush on the +${exit} face at the swap: named (assembly/clip-swap-rim)`, async () => {
+      const { frame, swaps, rims } = setup(crossingClipSpec({ exit, flush: true }));
+      expect(swaps).toHaveLength(2);
+      expect(rims).toHaveLength(1);
+      expect(rims[0]!.severity).toBe("info");
+      expect(rims[0]!.params).toMatchObject({ item: P, solid: "kit/block", t: swaps[0] });
+      // the named exception is real: the stroke along the face differs between the copies
+      expect(diff(await frame(swaps[0]!, 0), await frame(swaps[0]!, 1))).toBeGreaterThan(0);
+    }, 120_000);
+  }
 
   test("frames 1 ms either side of a swap differ by motion only (no outline pop)", async () => {
+    const { frame, swaps } = setup(crossingClipSpec());
     for (const t of swaps) {
       const across = diff(await frame(t - 0.001), await frame(t + 0.001));
       // the same 2 ms of motion without a swap, on one copy
-      const same = diff(
-        await frame(t - 0.001, t < 5 ? 0 : 1),
-        await frame(t + 0.001, t < 5 ? 0 : 1),
-      );
+      const c = t < 5 ? 0 : 1;
+      const same = diff(await frame(t - 0.001, c), await frame(t + 0.001, c));
       expect(across, `t=${t}`).toBeLessThanOrEqual(same + 8);
     }
   }, 120_000);

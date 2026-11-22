@@ -31,9 +31,13 @@ so the check is not "static" but "frames inside a step are equal, different step
 ### Depth copy fixtures (A1-2b)
 
 `asm-copies.svg` (one copy swapped twice, with a top-face label inside the copy) and
-`asm-copies-clip.svg` (a clipped piston with a copy) and `asm-copies-window.svg` (A1-2c: a piston
-clipped only while it crosses, swapped with an unclipped copy for the slide) come from
-`packages/core/test/copies-fixtures.ts`.
+`asm-copies-clip.svg` (a clipped piston with a copy) and, for A1-2c, `asm-copies-window.svg` and
+`asm-copies-window-x.svg` (a piston clipped only while it crosses the `+z` or `+x` face, swapped
+with an unclipped copy afterwards) and `asm-copies-window-flush.svg` (the same, resting flush on the
+deck at the swap: the named `assembly/clip-swap-rim` exception) come from
+`packages/core/test/copies-fixtures.ts`. Fixtures marked `exact` in `fixture.json` also get a
+pixel check: at each swap, the frame with only one copy forced visible must equal the frame with
+only the other, at device scale 1 and 2.
 `fixture.json` lists their copy swaps (`copies[file].swaps`: time and the `partVisible` ids of the
 swapping item's copies). At each swap, in inline and `<object>`, exactly one copy must be visible
 at `t - 1/60`, `t` and `t + 1/60` s, the frames across the swap must differ by less than 0.5% of the
