@@ -1046,6 +1046,41 @@ and explains it:
    consecutive stages in spec order. Each sub-assembly's own parts get their own nested
    program, so a class never has to be split across sub-assemblies. Nested owners are
    imploded before the root.
+   - **Nested programs must move something.** A sub-assembly whose own program would move fewer
+     than two leaves in total, or whose only stage is the "moving as one" stage (a piston with its
+     rod), gets no nested program and no focused story steps, and is listed as skipped ("one
+     stage: the root moves it as a unit"); the root program already moves it as a unit. A
+     sub-assembly that moves two or more leaves keeps its program and steps, also with a single
+     stage (a sub-board whose one "Components" stage lifts 8 chips).
+   - **Covers move aside.** A cover that lies on the body's top face, is one part (counted rows
+     and groups are excluded), has z as its thin axis (z extent at most 20% of its largest) and
+     carries no other cover, with parts under it (sub-assemblies, internals, components, loose
+     parts) that leave in later stages, does not lift `+z`: stacked above the exploded parts it
+     would hide them in the isometric view. It slides off along a visible horizontal axis at its
+     own height, `distance` `auto`, which is its extent on that axis plus the gap (10% of the
+     owner's largest extent, §6.3; the suggestion sets no `gap`). The axes are tried shorter
+     side first (`+x` on a tie), then the longer side, else the cover keeps `+z`. An axis is
+     taken only when (a) the path is free: no other part (a fastener or a group on top of the
+     cover included) rises above the cover's underside between its rest and end positions, and
+     (b) the end position lies beyond the body (`cover.min + D >= body.max` on that axis) and
+     over none of the parts that leave later, so the parts lifting afterwards do not pass
+     through it (core stacking compares only movers that share a direction). A cover with
+     nothing below it that leaves later, a thick cover (a cylinder head), one that carries
+     another cover (that one leaves first, `+z`) and a cover not on the body's top face keep
+     `+z`. `+x` and `+y` are the owner's local axes; a `rotate` of the owner is not considered
+     yet.
+   - **Exits.** A sub-assembly or internal enclosed by the body (inside its box, give or take 1%
+     of the body's extent on each axis) leaves through the first face of the body it is flush with
+     (`+z`, `+x`, `+y`, then `-z`, `-x`, `-y`), where flush also takes 1% of the body's extent
+     on that axis, both ways (a piston slightly below or proud of the deck): pistons at a
+     block's open top go `+z`, a crank as long as the block goes `+x`, never `out` or `away`
+     through the block. A face is skipped when a part that leaves at the same time or later
+     (sub-assemblies, internals, components, loose parts) reaches beyond it over the part's
+     footprint (a pulley past the crank's end), and the next flush face is tried; with no clear
+     face the part falls back to `away` (`out` for a sub-assembly). With several internals a
+     stage still uses `lift` (or `+z`, see Mounting depth). A part that exits through a hidden
+     face passes through the cover on that side, so that cover leaves first (a stage before the
+     sub-assemblies) instead of last.
    - **Mounting depth.** A part carried by another (its bottom touches the carrier's top,
      over its footprint, the carrier having height: a heat sink on a CPU on a board; a card on
      a board in a case; a sensor on a lid) leaves before its carrier, top-most first, so the
