@@ -44,8 +44,11 @@ async function init(): Promise<void> {
   return ready;
 }
 
-export const rasterize: RasterizeFn = async (svg, { scale, fonts }) => {
-  await init();
+function renderPng(
+  svg: string,
+  scale: number,
+  fonts: Parameters<RasterizeFn>[1]["fonts"],
+): Uint8Array {
   const family = fonts[0]?.family;
   const resvg = new Resvg(svg, {
     fitTo: { mode: "zoom", value: scale },
@@ -57,14 +60,109 @@ export const rasterize: RasterizeFn = async (svg, { scale, fonts }) => {
         : {}),
     },
   });
+  let png: Uint8Array;
   try {
     const image = resvg.render();
     try {
-      return image.asPng();
+      png = image.asPng();
     } finally {
       image.free();
     }
-  } finally {
-    resvg.free();
+  } catch (e) {
+    // After a render panic the object is still borrowed and `free` throws "recursive use of an
+    // object": that must not replace the real error.
+    try {
+      resvg.free();
+    } catch {
+      /* the render error is the one to report */
+    }
+    throw e;
+  }
+  resvg.free();
+  return png;
+}
+
+const NUM = "[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?";
+const attr = (tag: string, name: string): string | undefined =>
+  new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
+const num = (v: string | undefined): number | undefined =>
+  v !== undefined && new RegExp(`^${NUM}$`).test(v.trim()) ? Number(v) : undefined;
+
+/**
+ * resvg-wasm 2.6.2 panics ("unreachable") when a layer (a clipped symbol `<use>`, or opacity,
+ * mask or filter) lies entirely beyond roughly one canvas size outside the canvas, which is what
+ * a zoomed camera does to the icons of every node it leaves out. Returns the SVG without the
+ * symbol `<use>` elements that are wholly outside the root viewBox (invisible, so removing them
+ * changes no pixel), or undefined when none can be removed. A `<use>` under a transform, or with
+ * one of its own, is kept: its box is not in viewBox coordinates.
+ */
+export function cullOffscreenSymbolUses(svg: string): string | undefined {
+  const tokens = svg.match(/<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|<[^>]*>|[^<]+/g) ?? [];
+  const root = tokens.find((t) => /^<svg[\s>]/.test(t));
+  const vb = (root ? attr(root, "viewBox") : undefined)
+    ?.trim()
+    .split(/[\s,]+/)
+    .map(Number);
+  if (!vb || vb.length !== 4 || vb.some((n) => !Number.isFinite(n))) return undefined;
+  const [vx, vy, vw, vh] = vb as [number, number, number, number];
+  const symbols = new Set<string>();
+  for (const t of tokens) {
+    if (t.startsWith("<symbol")) {
+      const id = attr(t, "id");
+      if (id) symbols.add(id);
+    }
+  }
+  if (symbols.size === 0) return undefined;
+  const open: boolean[] = []; // per open element: has a transform
+  let transformed = 0;
+  let removed = 0;
+  const out: string[] = [];
+  for (const t of tokens) {
+    if (!t.startsWith("<") || t.startsWith("<!") || t.startsWith("<?")) {
+      out.push(t);
+    } else if (t.startsWith("</")) {
+      if (open.pop()) transformed--;
+      out.push(t);
+    } else {
+      const selfClosing = t.endsWith("/>");
+      const hasTransform = attr(t, "transform") !== undefined;
+      if (t.startsWith("<use") && selfClosing && !hasTransform && transformed === 0) {
+        const ref = (attr(t, "href") ?? attr(t, "xlink:href"))?.replace(/^#/, "");
+        const [x, y, w, h] = ["x", "y", "width", "height"].map((n) => num(attr(t, n)));
+        if (
+          ref !== undefined &&
+          symbols.has(ref) &&
+          x !== undefined &&
+          y !== undefined &&
+          w !== undefined &&
+          h !== undefined &&
+          (x + w <= vx || x >= vx + vw || y + h <= vy || y >= vy + vh)
+        ) {
+          removed++;
+          continue;
+        }
+      }
+      if (!selfClosing) {
+        open.push(hasTransform);
+        if (hasTransform) transformed++;
+      }
+      out.push(t);
+    }
+  }
+  return removed > 0 ? out.join("") : undefined;
+}
+
+export const rasterize: RasterizeFn = async (svg, { scale, fonts }) => {
+  await init();
+  try {
+    return renderPng(svg, scale, fonts);
+  } catch (e) {
+    const culled = cullOffscreenSymbolUses(svg);
+    if (culled === undefined) throw e;
+    try {
+      return renderPng(culled, scale, fonts);
+    } catch {
+      throw e;
+    }
   }
 };
