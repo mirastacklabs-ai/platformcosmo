@@ -898,8 +898,9 @@ level per frame: level `k` shows the model after document step `k`, level 0 an e
 `build` moves `from → to` (default: one frame; `advance` steps by frames), `unbuild` moves back
 (default: to 0). The timeline starts where the first action starts (`build`: level 0, `unbuild`:
 the last frame). The rest frame (static output, PNG default, reduced-motion start) shows the
-finished model, level `n`; the loop opens by easing from it to the start level (at most 0.4 s,
-none of it when the first action starts at once), and a story that ends before level `n`
+finished model, level `n`; the loop opens by easing each element from its rest value to its start
+value until its own first traversal, at most 0.4 s (so elements the first action moves at once
+still change within ~1 ms, and the finished frame's elements fade out gently), and a story that ends before level `n`
 reserves the closing window and returns to the rest frame (§7.4). Invalid actions (explode,
 a path below the board, `program`, range, direction) are `validate`'s; the planner leaves them out.
 
