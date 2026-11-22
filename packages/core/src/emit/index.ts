@@ -423,11 +423,12 @@ export const emit: EmitFn = (
     "flows",
     (layers.get("flows") ?? []).map((node) => {
       if (typeof node === "string" || "raw" in node || !node.children) return node;
-      const isDc = (c: SvgNode) =>
+      // a DC flow's group, or the fade wrapper (`withFlowFade`) around exactly such a group
+      const isDc = (c: SvgNode): boolean =>
         typeof c !== "string" &&
         !("raw" in c) &&
-        typeof c.attrs?.id === "string" &&
-        c.attrs.id.startsWith(dcFlowPrefix);
+        ((typeof c.attrs?.id === "string" && c.attrs.id.startsWith(dcFlowPrefix)) ||
+          (c.children?.length === 1 && isDc(c.children[0] as SvgNode)));
       const dc = node.children.filter(isDc);
       if (dc.length === 0 || typeof node.attrs?.id !== "string") return node;
       if (dcGroupId) throw new Error("expected a single particles wrapper with DC flows");

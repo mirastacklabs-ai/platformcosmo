@@ -10,7 +10,7 @@ import type { PlatformCosmoSpec, SpecFlow } from "./types.gen.js";
 import { closest, didYouMean, q } from "./suggest.js";
 import { assemblyDiagnostics, figureDiagnostics, isAssemblyPath } from "./assembly-semantic.js";
 import { UNRENDERED, unsupportedDiagnostics } from "./unsupported.js";
-import { assemblyPlanDiagnostics } from "../scene/assembly/plan.js";
+import { assemblyPlanDiagnostics } from "../scene/assembly/plan-scene.js";
 
 /** Σ over every flow of ceil(rate × 2); shared formula with Track B (no path lengths needed). */
 export const PARTICLE_LIMIT = 2000;
