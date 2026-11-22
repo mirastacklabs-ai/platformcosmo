@@ -21,6 +21,7 @@ import type {
   PartShapeRegistry,
 } from "../contracts/index.js";
 import { planFigureSteps, resolveFigure, stepViews, type ResolvedFigure } from "../scene/boards.js";
+import { resolveStoryboard, type ResolvedStoryboard } from "../scene/storyboards.js";
 import { UNRENDERED, type GuardGroup } from "./unsupported.js";
 import { globMatch } from "./glob.js";
 import { LevelMachine, checkLevel, type LevelAction, type LevelFail } from "./assembly-levels.js";
@@ -106,7 +107,15 @@ export function figureDiagnostics(
 
   // ---- actions ------------------------------------------------------------------------
   const views = stepViews(spec, isFocusTarget);
-  out.push(...planFigureSteps(spec, figures, views, { gated: groups }).diagnostics);
+  const storyboards = new Map<string, ResolvedStoryboard>();
+  for (const sb of spec.storyboards ?? [])
+    if (!storyboards.has(sb.id)) storyboards.set(sb.id, resolveStoryboard(sb));
+  out.push(
+    ...planFigureSteps(spec, figures, views, {
+      gated: groups,
+      ...(storyboards.size > 0 ? { storyboards } : {}),
+    }).diagnostics,
+  );
   return out;
 }
 
@@ -219,7 +228,7 @@ type RootKind = "assembly" | "rack" | "storyboard" | "figure" | "other";
 const ROOT_PHASE: Record<Exclude<RootKind, "other">, GuardGroup> = {
   assembly: "phase1b",
   rack: "phase2",
-  storyboard: "phase3",
+  storyboard: "storyboards",
   figure: "phase1a",
 };
 
@@ -1391,7 +1400,7 @@ function actionGated(
   const pathGate =
     (groups.phase2 && closeupSeg) || (phase === undefined ? groups.phase1a : groups[phase]);
   if (kind === "build" || kind === "unbuild") {
-    return rk === "storyboard" ? groups.phase3 : groups.phase2 || pathGate;
+    return rk === "storyboard" ? groups.storyboards : groups.phase2 || pathGate;
   }
   return pathGate;
 }

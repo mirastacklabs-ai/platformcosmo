@@ -114,7 +114,14 @@ function stateCss(model: RenderModel, id: string, state: ObjectState, hasLed: bo
   return rules.join("\n");
 }
 
-/** Objects whose state differs from the initial one in at least one step. */
+/**
+ * Objects whose state differs from the initial one in at least one step.
+ *
+ * Assembly parts are not scene objects: their state is the static class on the part group. When
+ * `steps[].set` part states (`"engine/head": "highlighted"`) get animated, every per-id rule
+ * (object, overlay, LED) must be emitted for each id of `model.assembly.ids.copyIds(id)`: a part
+ * with depth copies (§9.4) has one part group per copy, suffixed `__c<k>`.
+ */
 function overriddenObjects(model: RenderModel): SceneObject[] {
   const tl = model.scene.timeline;
   return model.scene.objects.filter((o) => tl.some((s) => stateAt(s, o.id, o.state) !== o.state));

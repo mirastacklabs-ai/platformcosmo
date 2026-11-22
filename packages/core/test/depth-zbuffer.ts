@@ -1,8 +1,8 @@
 /**
  * Z-buffer reference for depth-epoch tests.
  *
- * Painter side: a real SVG of the epoch at time t (items in the DOM order, hidden items
- * omitted, every box as its projected silhouette in a unique flat id colour), rendered by core's
+ * Painter side: a real SVG of the epoch at time t (item copies in the DOM order, copies not visible
+ * in the epoch omitted, every box as its projected silhouette in a unique flat id colour), rendered by core's
  * resvg `rasterize` with `shape-rendering="crispEdges"`, so the id map comes from actual SVG
  * paint order, transforms and `clip-path` semantics (a clip inside a translated group moves with
  * it). Clipped items use the §9.4 wrapper chain: `<g transform=host>` (the clipping solid's
@@ -23,6 +23,7 @@ import { decodePng } from "../src/export/png.js";
 import { rasterize } from "../src/export/rasterize.js";
 import type { DepthEpochResult, DepthItemInput, LoopMove } from "../src/depth/epochs.js";
 import { displacementAt } from "../src/depth/epochs.js";
+import { parseCopyKey } from "../src/depth/copies.js";
 
 export interface Scene {
   readonly items: readonly DepthItemInput[];
@@ -184,7 +185,8 @@ export function paintSvg(
   const index = new Map(keys.map((k, i) => [k, i]));
   const byKey = new Map(scene.items.map((i) => [i.key, i]));
   const clips = new Map(result.clips.map((c) => [c.item, c]));
-  const visible = new Set([...epochAt(result, t).order, ...(opts.forceVisible ?? [])]);
+  const visible = new Set(epochAt(result, t).order);
+  const forced = new Set(opts.forceVisible ?? []);
   const round = new Set(scene.zcyl ?? []);
   const defs: string[] = [];
   const body: string[] = [];
@@ -192,8 +194,10 @@ export function paintSvg(
     const q = proj(v);
     return `translate(${q.x.toFixed(4)} ${q.y.toFixed(4)})`;
   };
-  for (const key of result.order) {
-    if (!visible.has(key)) continue;
+  // The DOM order holds copy keys (§9.4): each copy draws its item; one copy is visible per epoch.
+  for (const copyKey of result.order) {
+    const { item: key, copy } = parseCopyKey(copyKey);
+    if (!visible.has(copyKey) && !(copy === 0 && forced.has(key))) continue;
     const it = byKey.get(key)!;
     const fill = hex(colorOf(index.get(key)!));
     const polys = (it.boxes ?? [it.box])
@@ -205,7 +209,7 @@ export function paintSvg(
       body.push(`<g transform="${tr(d)}">${polys}</g>`);
       continue;
     }
-    const cid = `c${index.get(key)!}`;
+    const cid = `c${index.get(key)!}-${copy}`;
     const prism = opts.prism ? opts.prism(key, clip.prism) : clip.prism;
     defs.push(`<clipPath id="${cid}"><polygon points="${silhouette(prism)}"/></clipPath>`);
     const solid = byKey.get(clip.solid)!;

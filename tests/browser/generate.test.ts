@@ -12,7 +12,10 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "vitest";
-import { render } from "../../packages/core/src/index.js";
+import { buildModel, buildScene, render } from "../../packages/core/src/index.js";
+import type { AssemblyRenderModel, PlatformCosmoSpec } from "../../packages/core/src/index.js";
+import { parseCopyKey } from "../../packages/core/src/depth/copies.js";
+import { clippedCopySpec, copySwapSpec } from "../../packages/core/test/copies-fixtures.js";
 import { registry as hwRegistry } from "../../packages/parts-base/src/index.js";
 import { decodePng } from "../../packages/core/src/export/png.js";
 import { fixtureTheme } from "../../packages/core/test/fixtures/theme.js";
@@ -51,6 +54,39 @@ const ASSEMBLY_EXAMPLES = [
   },
 ] as const;
 
+/**
+ * A1-2b: crafted specs that need depth copies (packages/core/test/copies-fixtures.ts). Their ids
+ * use a fixed prefix so the check can find each copy's visibility wrapper.
+ */
+const COPY_EXAMPLES = [
+  { file: "asm-copies.svg", prefix: "pc-cp", spec: () => copySwapSpec({ label: true }) },
+  { file: "asm-copies-clip.svg", prefix: "pc-cc", spec: clippedCopySpec },
+] as const;
+
+/**
+ * Copy swaps of a model: epoch starts where an item visible on both sides changes its copy, with
+ * the `partVisible` ids of that item's copies (exactly one of them must be visible at any time).
+ */
+function copySwaps(spec: PlatformCosmoSpec, prefix: string): { t: number; ids: string[] }[] {
+  const scene = buildScene(spec, {});
+  const model = buildModel({ scene, theme: fixtureTheme(), font: "system", prefix, spec });
+  const am = model.assembly as AssemblyRenderModel;
+  const copies = new Map(am.items.map((i) => [i.item, i.copies]));
+  const used = (e: number): Map<string, number> =>
+    new Map(am.epochs[e]!.order.map((c) => [parseCopyKey(c).item, parseCopyKey(c).copy]));
+  const out: { t: number; ids: string[] }[] = [];
+  for (let k = 1; k < am.epochs.length; k++) {
+    const [a, b] = [used(k - 1), used(k)];
+    const items = [...b].filter(([i, c]) => a.has(i) && a.get(i) !== c).map(([i]) => i);
+    if (items.length === 0) continue;
+    const ids = items.flatMap((i) =>
+      Array.from({ length: copies.get(i) ?? 1 }, (_, c) => am.ids.partVisible(i, c)),
+    );
+    out.push({ t: Math.round(am.epochs[k]!.t0 * 1e4) / 1e4, ids });
+  }
+  return out;
+}
+
 const design = (doc: string, title: string): Record<string, unknown> => {
   const md = readFileSync(new URL(`../../docs/design/${doc}`, import.meta.url), "utf8");
   const found = [...md.matchAll(/```json\n([\s\S]*?)```/g)]
@@ -60,7 +96,10 @@ const design = (doc: string, title: string): Record<string, unknown> => {
   return found;
 };
 
-async function generateAssemblies(): Promise<Record<string, unknown>> {
+async function generateAssemblies(): Promise<{
+  assemblies: Record<string, unknown>;
+  copies: Record<string, unknown>;
+}> {
   const images = resolverOf({
     "gpu-photo": realPng(640, 240, (x, y) => [x % 256, y, 120, 255]),
     "hs-base": realPng(600, 480, (_x, y) => [230 - (y >> 3), 235, 240, 255]),
@@ -75,16 +114,36 @@ async function generateAssemblies(): Promise<Record<string, unknown>> {
     parts: hwRegistry,
   };
   const info: Record<string, { animate: [number, number]; mids: number[] }> = {};
-  for (const ex of ASSEMBLY_EXAMPLES) {
-    const spec = design(ex.doc, ex.title);
+  const copies: Record<string, { swaps: { t: number; ids: string[] }[] }> = {};
+  const all = [
+    ...ASSEMBLY_EXAMPLES.map((ex) => ({
+      file: ex.file,
+      spec: design(ex.doc, ex.title),
+      idPrefix: undefined,
+    })),
+    ...COPY_EXAMPLES.map((ex) => {
+      const spec = ex.spec();
+      copies[ex.file] = { swaps: copySwaps(spec, ex.prefix) };
+      if (copies[ex.file]!.swaps.length === 0) throw new Error(`${ex.file}: no copy swap`);
+      return {
+        file: ex.file,
+        spec: spec as unknown as Record<string, unknown>,
+        idPrefix: ex.prefix,
+      };
+    }),
+  ];
+  for (const ex of all) {
+    const spec = ex.spec;
+    const title = (spec.meta as { title: string }).title;
     const name = ex.file.replace(/\.svg$/, "");
-    const r = await render(spec, { ...base, outputs: ["animated"], name });
+    const opts = { ...base, name, ...(ex.idPrefix === undefined ? {} : { idPrefix: ex.idPrefix }) };
+    const r = await render(spec, { ...opts, outputs: ["animated"] });
     const svg = r.outputs.find((o) => o.kind === "animated")?.data;
-    if (typeof svg !== "string") throw new Error(`${ex.title}: ${JSON.stringify(r.diagnostics)}`);
+    if (typeof svg !== "string") throw new Error(`${title}: ${JSON.stringify(r.diagnostics)}`);
     writeFileSync(join(out, ex.file), svg);
     // frames of the exporter at candidate times: the first one that differs from the rest frame
     const png = async (time: number): Promise<Uint8Array> => {
-      const f = await render(spec, { ...base, outputs: ["png"], png: { scale: 0.25, time } });
+      const f = await render(spec, { ...opts, outputs: ["png"], png: { scale: 0.25, time } });
       const d = f.outputs[0]?.data;
       if (!d || typeof d === "string") throw new Error("no frame");
       return decodePng(d).data;
@@ -108,7 +167,7 @@ async function generateAssemblies(): Promise<Record<string, unknown>> {
         moving = t;
       }
     }
-    if (moving < 0) throw new Error(`${ex.title}: no motion within 40 s`);
+    if (moving < 0) throw new Error(`${title}: no motion within 40 s`);
     let t0 = 0;
     const mids = (r.scene?.timeline ?? []).map((s) => {
       const mid = t0 + s.duration / 2;
@@ -116,6 +175,57 @@ async function generateAssemblies(): Promise<Record<string, unknown>> {
       return Math.round(mid * 100) / 100;
     });
     info[ex.file] = { animate: [0.05, Math.round(moving * 100) / 100], mids };
+  }
+  return { assemblies: info, copies };
+}
+
+/**
+ * R-2: one storyboard per transition (wipe, fade) rendered through the real pipeline. The two
+ * model images have a transparent window, so a wipe that left the old image under the sweep
+ * would show in the pixels. Times: rest (the finished model) and the middle of the second
+ * frame's change (frame 2 starts at 0.5 s, its change lasts 0.5 s), where fade and wipe are
+ * half way; reduced motion shows each step's end state.
+ */
+async function generateStoryboards(): Promise<
+  Record<string, { animate: [number, number]; mids: number[] }>
+> {
+  const images = resolverOf({
+    m1: realPng(320, 240, (x, y) =>
+      x > 100 && x < 220 && y > 60 && y < 180 ? [0, 0, 0, 0] : [200, 80, 80, 255],
+    ),
+    m2: realPng(320, 240, (x, y) =>
+      x > 100 && x < 220 && y > 60 && y < 180 ? [0, 0, 0, 0] : [60, 90, 200, 255],
+    ),
+  });
+  const info: Record<string, { animate: [number, number]; mids: number[] }> = {};
+  for (const transition of ["wipe", "fade"] as const) {
+    const spec = {
+      meta: { version: "1", title: `Storyboard ${transition}` },
+      images: [
+        { id: "m1", src: "m1.png" },
+        { id: "m2", src: "m2.png" },
+      ],
+      storyboards: [
+        { id: "book", transition, frames: [{ model: "m1" }, { model: "m2", caption: "Step 2" }] },
+      ],
+      steps: [
+        { caption: "Build", duration: 4, assembly: [{ build: "book", to: 2 }] },
+        { caption: "Hold", duration: 4 },
+      ],
+    };
+    const file = `sb-${transition}.svg`;
+    const r = await render(spec, {
+      theme: fixtureTheme(),
+      darkTheme: fixtureTheme("dark", true),
+      font: "system",
+      images,
+      outputs: ["animated"],
+      name: `sb-${transition}`,
+    });
+    const svg = r.outputs.find((o) => o.kind === "animated")?.data;
+    if (typeof svg !== "string") throw new Error(`${file}: ${JSON.stringify(r.diagnostics)}`);
+    writeFileSync(join(out, file), svg);
+    info[file] = { animate: [0, 0.75], mids: [2, 6] };
   }
   return info;
 }
@@ -149,7 +259,10 @@ test("generate browser fixtures", async () => {
         bg: ".pc-test-bg",
         light: "rgb(255, 255, 255)",
         dark: "rgb(15, 23, 42)",
-        assemblies: await generateAssemblies(),
+        ...(await generateAssemblies().then(async (a) => ({
+          ...a,
+          assemblies: { ...a.assemblies, ...(await generateStoryboards()) },
+        }))),
         stepButton: "#pc-x_btn_step",
         playButton: "#pc-x_btn_play",
         icaption1: "#pc-x-cap-1",

@@ -3,8 +3,8 @@
  * Browser check (PLAN M2 exit): loads each SVG of the input directory in <img>, inline and
  * <object> in chromium, firefox and webkit (over http://127.0.0.1) and checks that it animates,
  * that reduced motion is static, that dark mode applies, and that nothing leaves localhost.
- * Fixture-specific checks (object state over time, expected first frame, interactive controls)
- * run when the input directory has a fixture.json.
+ * Fixture-specific checks (object state over time, expected first frame, interactive controls,
+ * depth copy swaps) run when the input directory has a fixture.json.
  *
  * Runs inside the Playwright container (see run.sh). Env: INPUT_DIR (default /in), OUT_DIR
  * (default /out), PW_VERSION, PW_IMAGE, GIT_SHA. Writes results.json and RESULTS.md.
@@ -493,6 +493,87 @@ async function checkDark(name, browser, blocked, file, mode) {
   }
 }
 
+/** Half-width (s) of the window around a copy swap whose frames must agree (A1-2b). */
+const SWAP_DELTA = 1 / 60;
+/** Share of pixels that may change across a swap window (the parts barely move there). */
+const SWAP_MAX_DIFF = 0.005;
+
+/**
+ * Depth copies (assemblies 9.4, A1-2b): at each copy swap of the fixture, exactly one copy of the
+ * swapping item is visible just before, at and just after the swap (computed `visibility` of its
+ * `partVisible` wrappers), and the frames on both sides differ by less than SWAP_MAX_DIFF of the
+ * pixels: no frame shows neither copy (a gap) or both (a doubled or wrong occlusion). Control:
+ * the same frame with the visible copy removed (`display: none`) must differ by more than that,
+ * so a gap would be caught.
+ */
+async function checkCopySwaps(name, browser, blocked, file, mode) {
+  const swaps = info?.copies?.[file]?.swaps;
+  if (!swaps || mode === "img") return;
+  await withPage(browser, blocked, { reducedMotion: "no-preference" }, async (page) => {
+    const box = await open(page, mode, file);
+    const scratch = await scratchOf(page);
+    const visibleCopies = (ids) =>
+      page.evaluate(
+        ([m, list]) => {
+          const doc = m === "object" ? document.getElementById("el").contentDocument : document;
+          const win = doc.defaultView;
+          return list.filter(
+            (id) => win.getComputedStyle(doc.getElementById(id)).visibility === "visible",
+          );
+        },
+        [mode, ids],
+      );
+    const display = (id, value) =>
+      page.evaluate(
+        ([m, el, v]) => {
+          const doc = m === "object" ? document.getElementById("el").contentDocument : document;
+          doc.getElementById(el).style.display = v;
+        },
+        [mode, id, value],
+      );
+    const bad = [];
+    let worst = 0;
+    let control = 1;
+    for (const { t, ids } of swaps) {
+      const frames = [];
+      for (const at of [t - SWAP_DELTA, t, t + SWAP_DELTA]) {
+        await seek(page, mode, at);
+        const shown = await visibleCopies(ids);
+        if (shown.length !== 1) bad.push(`t=${at.toFixed(4)}: ${shown.length} copies visible`);
+        frames.push(await shot(page, box));
+        if (at === t && shown.length === 1) {
+          await display(shown[0], "none");
+          await seek(page, mode, at);
+          const gap = await shot(page, box);
+          await display(shown[0], "");
+          const d = gap === frames[1] ? 0 : (await pixels(scratch, frames[1], gap)).diff;
+          control = Math.min(control, d);
+          if (d <= SWAP_MAX_DIFF)
+            bad.push(`t=${t}: control (copy removed) changes only ${(d * 100).toFixed(3)}%`);
+        }
+      }
+      for (const [a, b] of [
+        [0, 1],
+        [1, 2],
+      ]) {
+        const d = frames[a] === frames[b] ? 0 : (await pixels(scratch, frames[a], frames[b])).diff;
+        worst = Math.max(worst, d);
+        if (d >= SWAP_MAX_DIFF) bad.push(`t=${t}: ${(d * 100).toFixed(3)}% of pixels change`);
+      }
+    }
+    rec(
+      name,
+      file,
+      mode,
+      `depth copies: one copy visible and no flicker at ${swaps.length} swap(s)`,
+      bad.length === 0 ? "pass" : "fail",
+      bad.length
+        ? bad.join("; ")
+        : `largest change across a swap: ${(worst * 100).toFixed(3)}% of pixels; a missing copy changes ≥ ${(control * 100).toFixed(2)}%`,
+    );
+  });
+}
+
 async function checkFixtureInline(name, browser, blocked) {
   await withPage(browser, blocked, { reducedMotion: "no-preference" }, async (page) => {
     await open(page, "inline", info.loop);
@@ -609,6 +690,7 @@ for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
         await checkAnimates(name, browser, blocked, file, mode, probes[name]);
         await checkReduced(name, browser, blocked, file, mode, expected);
         await checkDark(name, browser, blocked, file, mode);
+        await checkCopySwaps(name, browser, blocked, file, mode);
       }
     }
     if (info) {

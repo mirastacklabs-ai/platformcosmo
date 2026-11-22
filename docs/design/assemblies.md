@@ -165,6 +165,36 @@ excludes studs, so stacked bricks do not interpenetrate (§9.6). Colors: spec `c
 and axles at angles, curved slopes; the skill says so and approximates or skips with an
 assumption note.
 
+### 5.2 Engine anchors (`@platformcosmo/parts-auto`, Track E-2b)
+
+At default sizes the `auto:` engine shapes compose without interpenetration when placed as
+below (`engineLayout(cylinders)` in `@platformcosmo/parts-auto` returns every `at`). Millimetres,
+block min corner = origin, x along the crankshaft, +y the intake side, z up. For `n` cylinders:
+bore pitch `105 = 420 / n`, bore `i` (0-based) centred at `x = (i + 0.5) * pitch`, `y = 115`.
+
+| Part (`auto:`)        | `at` (n = 4)                         | Notes                                                                                                          |
+| --------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `block-i4`            | `[0, 0, 0]`                          | 420 x 230 x 260; deck (top face) at z 260; bores 82 mm at pitch 105, y 115                                     |
+| `crankshaft`          | `[-40, 55, 13]`                      | 500 x 120 x 120 (40 mm nose and stub outside the block); axis y 115, z 73; throw i centred on bore i           |
+| `rod` (cylinder i)    | `[boreX - 12, 90, pinZ - 25]`        | 24 x 50 x 156; big-end centre = pin centre; small-end centre 117 above it; big end and lower beam are not core |
+| `piston` (cylinder i) | `[boreX - 41, 74, pinZ + 90]`        | 82 x 82 x 66; gudgeon 27 above its base, so up-throw pistons end just under the bore plugs (z 259)             |
+| `oil-pan`             | `[0, 0, -90]`                        | open-top tray, top edge at the block's bottom face                                                             |
+| head gasket (`plate`) | `[0, 12, 260]`, size `[420, 206, 4]` | the block core's footprint (y 12..218)                                                                         |
+| `head`                | `[0, 0, 264]`                        | 420 x 230 x 100; ports centred on the bores                                                                    |
+| `valve-cover`         | `[0, 15, 364]`                       | 420 x 200 x 70                                                                                                 |
+| `intake` / `exhaust`  | `[0, 230, 269]` / `[0, -90, 274]`    | 420 long, runners / primaries centred on the bores and on the head ports                                       |
+| `camshaft` (x 2)      | `[0, 60, 314]` / `[0, 130, 314]`     | 420 x 40 x 40, inside the head                                                                                 |
+
+Crank pin heights: axis z 73 +/- 30, in flat-plane order down, up, up, down: `pinZ` = 43, 103, 103, 43
+(`+ 30` for up throws). Pass `params.cylinders = n` to the block, crankshaft, head, valve cover, intake, exhaust and camshafts.
+Pistons and rods cannot use `count`/`pitch` (their pin heights alternate); place each one. From five
+cylinders, size each piston `[bore, bore, 66]` with `bore = floor(0.8 * pitch)`; from six, each rod
+`[floor(0.3 * pitch), 50, 156]` (or always pass the `size` that `engineLayout` returns).
+The crankshaft, including its nose and stub, is hidden while enclosed in the block and shows once it drops.
+The `timing-belt` is not anchored (decorative). The `oil-pan` is an open tray (never solid, like
+`hw:chassis-2u`): a crank lowered into it stays visible. Pistons, rods, crank and camshafts are
+`internal` and sit inside the block or head core (enclosed, so hidden at rest).
+
 ## 6. Programs
 
 ### 6.1 Selectors
@@ -227,7 +257,7 @@ footprint-overlapping movers along `u`, the outer one ends at least `gap` beyond
 and every mover clears its seat.
 
 - **Collisions.** A final pose with interpenetrating leaves (not explained by `inserts` or
-  enclosure) is a warning `assembly/collision`. Leaves whose boxes interpenetrate at any
+  enclosure) is a warning `assembly/collision` (defined here, not emitted yet). Leaves whose boxes interpenetrate at any
   sampled time of a transition (the bisection samples of §9.3) are a warning
   `assembly/transit-collision` naming both paths and the time: moves are straight lines and
   the engine does not plan paths around obstacles.
@@ -267,6 +297,15 @@ staging to seat. The parts **callout** groups the step's leaves by (shape, size,
 as `count × thumbnail` (thumbnail = the leaf drawn at a fixed callout scale, or its image).
 `view` rotates the view a quarter turn from that step on (§7.7). `unbuild` plays steps in
 reverse (time-reversed, §7.2).
+
+Animation (B-3, `render/assembly/builds.ts`): a built leaf is hidden until its move starts, then
+fades in over 0.2 s while it travels from its origin to its seat; an unbuilt leaf fades out over
+the last 0.2 s of its reversed move and vanishes when it ends (the exact mirror, easing mirrored
+like an implode's). The depth order sees the same windows (`DepthItemInput.present`), so an absent
+part takes no part. The loop-start fades are the contract's (`SceneAssembly.loopStart`); a part
+whose own build starts before its fade-out ends is cut at its build start (never shorter than
+1e-4 s, so time 0 still shows the base pose). The loop closure fades parts present at rest but
+not at the end in, and the others out, over the last step's closing window.
 
 Within a step the added nodes move **bottom-up**: ordered by their lowest face, ties by spec
 order, then path; each starts `stagger` after the previous. Distances stack as in §6.3 against
@@ -419,7 +458,8 @@ rack, `DcPack.buildAssembly` returns a `SceneAssembly` (source `dc`):
 `racks[].slots[].assembly: "<template>"` makes the device a sub-assembly with internals: the DC
 pack builds the device as `tray` + `lid` (role `cover`) + faceplate, and the template's parts
 are placed inside at true scale (template units must be physical; a template larger than the
-interior is a warning `assembly/size-mismatch` and is scaled down uniformly). The interior is
+interior by more than 10% is a warning `assembly/size-mismatch`; it is always scaled down
+uniformly to fit, as in §8.5). The interior is
 the 19-inch one, 450 mm wide and centred in the chassis (§8.5); devices are front-mounted, so
 the template's front (its maximum `y`) meets the interior's front and its minimum `x` and `z`
 meet the interior's side and floor. A template with no parts keeps a lid-only `internals`
@@ -465,8 +505,8 @@ node's zoomed screen rect and easing to its own overview; leaving reverses it. L
 Element and byte budgets count every level.
 
 **Render model (A1-4).** `AssemblyRenderModel.levels` has one entry per level, sorted by path.
-The level group (`ids.level(path)`) sits in the overlay layer, pinned against the camera like
-the captions, with `transform = overview` and `opacity 0` at rest. All rects are screen rects;
+The level group (`ids.level(path)`) sits in the overlay layer inside the camera group, with
+`transform = overview` and `opacity 0` at rest. All rects are screen rects;
 a level has its own coordinates (its world projected), `overview` places them in the main
 viewport (its reach contained in the main overview area), `hostRect` is the host box seen
 through the parent's overview and `hostFocus` the camera rect that frames it. The cross-fade
@@ -478,10 +518,19 @@ storyboard levels carry the geometry and an empty group; their fit is a placehol
 `frameAt`/`stepEnd` merge the states of the main scene, every view and every level, including
 the opacity of each view group (linear over 0.3 s at the build step's start) and of each level
 group (linear over the camera transition into its step), and the level groups' placement
-(zoom 1); B-3 still animates them in CSS. Entry rule: a focus transition into step k starts the
-level at `fromHost(camera(hostAt(k - 1)))`; `enter` is that start for a host that never moved.
-Occluders: B-3 cross-fades the main world against the level (at least the host's depth
-neighbours), so nothing of the main scene slides under the level while it zooms in. The
+(zoom 1). **Animation (B-3).** The cross-fades are keys on the loop clock
+(`AssemblyRenderModelX.groups`, `render/assembly/groups.ts`): opacity per view and level group,
+placement per level group. `frameAt` and `stepEnd` evaluate them and the animator writes them as CSS
+(`opacity` and `matrix(s,0,0,s,tx,ty)` keyframes on the group, retimed by the camera windows like
+every other track), so a frame equals the CSS pose at the same time; a group whose keys never change
+(a level that is never shown) gets no animation. Reduced motion snaps each group to its step-end
+state. The models of every view and level are animated under their own ids (`views[].model`,
+`levels[].model`), on the same loop clock. The level group sits inside the camera group, so the parent camera composes the zoom: its
+placement keys are the zoom-1 ones (entry from `fromHost(hostAt(k - 1))` to `overview`, leaving
+reverses it, and the closing window of the last step leaves the level too, so the loop restarts
+without a pop; while invisible it waits at the next entry pose). The main world's layer groups
+(objects, labels, flows) cross-fade against the level over the same windows, emitted only when
+levels exist. The
 top-level `focusRect` answers world ids in the view in effect (`plan[step - 1].view`); ids
 inside a level are answered by `levelFocusRect(step, id)` in overlay coordinates and are not in
 `RenderModel.focusRects`. Close-ups and views do not combine (`assembly/view-needs-assembly-only`).
@@ -499,7 +548,7 @@ shorter in z never warns; a template under 50% of the interior in x or y gets an
 drawn at true scale, never enlarged. A footprint that would match better turned a quarter is
 reported (`assembly/closeup-turned`, info) and left alone. Close-ups the scene cannot build
 within the 8-segment path limit (host path plus template height) or the level caps are skipped
-with `assembly/too-deep` or `budget/levels`, at the host's pointer. Figures and
+with `assembly/too-deep` or `budget/levels`, at the host's pointer. `pcosmo validate` and `build` report these checks only when the spec has no errors (a gated or invalid spec never reaches the scene). Figures and
 storyboards (pixel units) are fitted to the part's zoomed screen rect. The skill takes real
 dimensions from documents (a 13-inch board is 330 mm) and states assumptions when a figure is
 "not drawn to scale" (keep relative layout, scale from the stated board size).
@@ -602,8 +651,18 @@ The DOM itself carries the rest frame (`frameAt(0)`) as attributes (hidden, tran
 wrappers), so a bare emit shows the rest pose; frame and step overrides write the FULL state of
 every registered wrapper (`AssemblyFrameState` lists every id, `translate(0 0)` and opacity 1
 included). CSS animations override presentation attributes, so loop mode is unaffected.
-Phase 1b ships without copies (epochs that would need one are merged and marked approximate);
-copies land in Phase 3 ([tracks](./assemblies-tracks.md)).
+Implementation (A1-2b, [tracks](./assemblies-tracks.md)): a pair whose certified or forced
+direction changes in the loop is what needs a copy (a heuristic direction yields, as before). The
+final intervals are grouped greedily into maximal runs in which no such pair changes direction;
+each group is ordered by the static algorithm over the loop-wide edges, its own directions and a
+chain that keeps the static items in one fixed order (taken from the loop-wide edges alone; the
+chain is never dropped by the cycle rule), so static items never need a copy. Epochs then break
+at group boundaries too, and the construction above embeds every epoch. A clipped item's copies
+all carry its clip (one shared `clipPath`). A spec without such a pair takes the one-order path
+unchanged (byte-identical to Phase 1b). Beyond the copy budget, or when the orders would exceed
+the work budget (`budget/time`), the epochs are merged into one order as in Phase 1b: the
+direction held shorter (then later) is dropped and its intervals are approximate
+(`assembly/depth-approx` with `copy: true`).
 
 ### 9.5 Enclosure, insertion and face-exit clipping
 
@@ -668,16 +727,18 @@ it is ordered by separation or bisection only (approximate where those cannot de
   itself may move (its total track rides on `partHost`). If the relative motion has a ⊥ `u`
   component anywhere in the loop (the piston later slides sideways once clear, or an insert is
   pulled out obliquely): Phase 1b falls back to hiding the leaf until clear for the crossing
-  epochs (`assembly/clip-fallback`, info); Phase 3 uses two copies instead, a clipped copy
+  epochs (`assembly/clip-fallback`, info); Phase 3 is to use two copies instead, a clipped copy
   visible only during the crossing epochs and an unclipped copy for the rest of the loop,
-  swapped by visibility like any other copy (§9.4).
+  swapped by visibility like any other copy (§9.4). A1-2b does not do this yet: such leaves keep
+  the hidden-until-clear fallback (follow-up track A1-2c).
 - Regression fixture: the engine example (§19.3) exercises all three: valves inserted in the
   casting and enclosed by casting ∪ cover at rest, camshafts flush in the cover, pistons
   crossing the block deck.
 - **Note for A1-3 (Phase 1b):** a drawer that moves inside the loop (the built-in `drawers`
-  program, §19.4) is approximate until copies (A1-2b): an open device at rest is behind the
-  device above it, and its internals lifted on the pulled drawer are in front of it, which no
-  single DOM order satisfies (reported as `assembly/depth-approx` with `copy: true`).
+  program, §19.4) needs copies (A1-2b): an open device at rest is behind the device above it,
+  and its internals lifted on the pulled drawer are in front of it, which no single DOM order
+  satisfies. The internals get depth copies; beyond the copy budget the epochs are merged and
+  approximate (`assembly/depth-approx` with `copy: true`).
 
 ### 9.6 Split items
 
@@ -829,17 +890,17 @@ keyframe names are derived from sorted inputs only.
 
 ## 13. Budgets
 
-| Limit                                        | Value                                            | Diagnostic                      |
-| -------------------------------------------- | ------------------------------------------------ | ------------------------------- |
-| leaf parts per spec (after `count`, `use`)   | ≤ 2000 (warn > 500)                              | `budget/assembly-parts`         |
-| nesting                                      | ≤ 8 path segments                                | `assembly/too-deep`             |
-| stages per program / build steps per program | ≤ 32 / ≤ 500                                     | schema                          |
-| depth copies                                 | ≤ 0.5 × items                                    | `budget/depth-copies`           |
-| epochs per transition                        | ≤ 64                                             | `assembly/depth-approx`         |
-| views / levels                               | ≤ 4 / ≤ 4 deep, ≤ 8 total                        | `budget/views`, `budget/levels` |
-| elements                                     | existing warn > 5000 (all levels, views, copies) | `budget/elements`               |
-| images                                       | §11.4                                            | `budget/images`                 |
-| build time                                   | 2 s at 300 leaves, 10 s at 2000                  | `budget/time`                   |
+| Limit                                        | Value                                                                                                                                                    | Diagnostic                      |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| leaf parts per spec (after `count`, `use`)   | ≤ 2000 (warn > 500)                                                                                                                                      | `budget/assembly-parts`         |
+| nesting                                      | ≤ 8 path segments                                                                                                                                        | `assembly/too-deep`             |
+| stages per program / build steps per program | ≤ 32 / ≤ 500                                                                                                                                             | schema                          |
+| depth copies                                 | ≤ 0.5 × items                                                                                                                                            | `budget/depth-copies`           |
+| epochs per transition                        | ≤ 64                                                                                                                                                     | `assembly/depth-approx`         |
+| views / levels                               | ≤ 4 / ≤ 4 deep, ≤ 8 total                                                                                                                                | `budget/views`, `budget/levels` |
+| elements                                     | existing warn > 5000 (all levels, views, copies); storyboards: ≤ 12000 animated (28 per frame at most: 2 + 2 + 1 + 2 + 20 + 1), else a static rest frame | `budget/elements`               |
+| images                                       | §11.4                                                                                                                                                    | `budget/images`                 |
+| build time                                   | 2 s at 300 leaves, 10 s at 2000                                                                                                                          | `budget/time`                   |
 
 **Size classes.** `typical` (PLAN §6, under 150 KB); `assembly` (no images, ≤ 300 leaves:
 about 2–4 KB per leaf incl. keyframes, target under 600 KB); `document` (embedded images:
@@ -861,6 +922,52 @@ model image changes (`transition`: fade, wipe via an animated clip rect, or cut)
 plays backward. Explode is not available (`assembly/storyboard-no-explode`). All motion is
 2D inside the panel, so no depth questions arise. Details and the skill flow:
 [document ingestion](./document-ingestion.md).
+
+**Levels.** A storyboard has one program, its frames (`ProgramLevel.program` = `frames`), and one
+level per frame: level `k` shows the model after document step `k`, level 0 an empty panel.
+`build` moves `from → to` (default: one frame; `advance` steps by frames), `unbuild` moves back
+(default: to 0). The timeline starts where the first action starts (`build`: level 0, `unbuild`:
+the last frame). The rest frame (static output, PNG default, reduced-motion start) shows the
+finished model, level `n`; the loop opens by easing from it to the start level (at most 0.4 s,
+none of it when the first action starts at once), and a story that ends before level `n`
+reserves the closing window and returns to the rest frame (§7.4). Invalid actions (explode,
+a path below the board, `program`, range, direction) are `validate`'s; the planner leaves them out.
+
+**Frame timing** (seconds at speed 1, before the step's compression; one `ResolvedAction.length`
+is the sum over its frames): callout fade-in 0.3 (frames with `parts` or `sub`), one beat of 0.35
+per mini step (0.1 cross-fade), flight 0.6 (ease-in-out; the copies fade over the last 0.12), model
+change 0.5. A frame without a callout is the change alone (0.5). `cut` swaps in 0.02 s (so every
+value stays a function of time and reverses exactly).
+
+**Panel.** From the top: callout strip (22% of the panel width; thumbnails with `<count>x`
+beneath them on the left, the sub-build box on the right), the model area (the aspect of the first
+frame's model image, clamped to 1:4 .. 2:1; every model is fitted into it, centred), the caption
+bar (step number, then the caption). The callout of frame `k` shows from its fade-in until frame
+`k + 1` starts (it fades out then, also when frame `k + 1` has none); the last frame's callout stays
+on the finished panel. Thumbnails fly as copies of the callout's, one group per frame; the last
+mini step flies on its own and docks at `attach` (percent of the fitted model image) before the
+model changes; copies and the docked image are gone when the model image has changed. Captions
+change in two halves (old out, new in) so two never overlap.
+
+**Draw order.** Figures and storyboards are ordered together by one key, the depth of their anchor
+(`pos`: nearer = larger x + y, then id), after the 3D content.
+
+**Transitions.** `fade` cross-fades the two model images; `cut` swaps them; `wipe` reveals the new
+image from the left: each image sits still in a group clipped by its own `clipPath`, whose rect
+slides in over the panel (a plain translate track on the rect). The old image's rect slides out to
+the right in the same time (the complementary reveal), so a transparent new image never shows the
+old one under the sweep. Only the rect's transform animates, never a clip-path on an animated
+element (Chromium does not re-resolve that after a seek), and the CSS loop, the attribute frames
+of PNG, GIF and MP4 and reduced motion read the same keys (resvg has
+no animated clip). `unbuild` plays every frame's keys backward with mirrored easing: an exact
+time reverse, not a second animation (a test compares them).
+
+**Images.** Every frame image goes through the image pipeline of §11 (`imageUses` lists model,
+parts and sub-build images; `image/not-found`, `image/too-large`, `image/too-many`, `budget/images`
+apply unchanged; a `label` is the thumbnail's `<title>`), `source` of the storyboard and of its images feed the credits line, and a
+storyboard whose first model image is missing draws no panel. Focus on a storyboard frames the
+panel; a manual `pos` that lands on other content warns (`layout/overlap` at `/storyboards/<i>/pos`).
+The merge-guard group is `storyboards` (`from: "callout"` and `subBuild` stay in `phase3`).
 
 ## 15. Figures (figure mode)
 
@@ -1040,15 +1147,15 @@ suggestions):
 | `assembly/figure-no-build`                                                                                      | error                                             | build or unbuild on a figure (figures explode and implode)                                                                                                            |
 | `assembly/part-not-staged`                                                                                      | info                                              | a figure part that no stage moves (it stays seated)                                                                                                                   |
 | `assembly/build-path-blocked`                                                                                   | warning                                           | `above` origin blocked                                                                                                                                                |
-| `assembly/collision`                                                                                            | warning                                           | interpenetrating leaves in a final pose                                                                                                                               |
+| `assembly/collision`                                                                                            | warning                                           | interpenetrating leaves in a final pose (not emitted yet)                                                                                                             |
 | `assembly/compressed`                                                                                           | info / warning (< 0.5)                            | actions compressed to fit the step (reported by validation, from the plan the scene uses)                                                                             |
 | `assembly/implicit-access`                                                                                      | info                                              | access move prepended (§8.3)                                                                                                                                          |
 | `assembly/depth-approx`                                                                                         | info                                              | an epoch could not be certified                                                                                                                                       |
 | `assembly/clip-fallback`                                                                                        | info                                              | enclosed part hidden until clear                                                                                                                                      |
 | `assembly/depth-input`                                                                                          | error                                             | internal: invalid depth-order input (non-finite box, move or loop); that input is ignored                                                                             |
 | `assembly/bounds-growth`                                                                                        | info                                              | reach bounds > 4× rest                                                                                                                                                |
-| `assembly/closeup-turned`                                                                                       | info                                              | a close-up's footprint would match its host better turned a quarter; not turned (fronts stay aligned)                                                                 |
-| `assembly/size-mismatch`                                                                                        | warning (info: much smaller)                      | template or close-up does not fit at true scale                                                                                                                       |
+| `assembly/closeup-turned`                                                                                       | info                                              | a close-up's footprint would match its host better turned a quarter; not turned (fronts stay aligned) (also by `validate`)                                            |
+| `assembly/size-mismatch`                                                                                        | warning (info: much smaller)                      | template or close-up does not fit at true scale (also reported by `pcosmo validate`, `closeupDiagnostics`)                                                            |
 | `assembly/reserved-id`                                                                                          | error                                             | slot id `frame` on a rack in assembly mode; any part id `closeup` (reserved segment)                                                                                  |
 | `semantic/reserved-id`                                                                                          | warning                                           | a 1.1 id `closeup` (still valid; rename before adding close-ups)                                                                                                      |
 | `assembly/too-deep`                                                                                             | error                                             | path longer than 8 segments (also through `use` and `closeup` templates)                                                                                              |
@@ -1075,6 +1182,7 @@ suggestions):
 | `asset/annotation-erased`                                                                                       | info                                              | figure end moved onto its drawn stroke, or ink inside a mask erased (ingestion §6.4)                                                                                  |
 | `asset/rim-stroke`                                                                                              | info / warning (undecided)                        | figure template rim pixels a board stroke touches: peeled, or undecided (ingestion §6.4)                                                                              |
 | `budget/assembly-parts`, `budget/depth-copies`, `budget/views`, `budget/levels`, `budget/images`, `budget/time` | warning / error                                   | §13                                                                                                                                                                   |
+| `layout/callout-count-hidden`                                                                                   | info                                              | a storyboard callout too narrow or low for a part's `<count>x`: the thumbnail is drawn, the count is not                                                              |
 | `options/invalid-png-step`                                                                                      | error                                             | `png.step` is not a positive integer, is given with `png.time`, or is beyond the timeline                                                                             |
 
 ## 19. Examples

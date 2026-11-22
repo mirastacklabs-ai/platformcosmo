@@ -106,8 +106,8 @@ function check(s: PartShapeDef, g: PartGeometry, size: Vec3): void {
       1,
     );
   }
-  expect(g.solid).toBe(true);
-  expect(g.split).toBeUndefined();
+  expect(g.solid).toBe(s.id !== "oil-pan");
+  expect(g.split === undefined).toBe(s.id !== "oil-pan");
   // A1-1 invariant: each face name at most once per primitive
   for (const pf of partGeometryFaces(g, proj)) {
     const names = pf.faces.map((f) => `${f.half ?? ""}:${f.face}`);
@@ -128,7 +128,7 @@ function bodyBox(g: PartGeometry): PartGeometry["primitives"][number] | undefine
   );
 }
 const fills = (g: PartGeometry): boolean => g.solid && bodyBox(g) !== undefined;
-const HOUSINGS = ["block-i4", "head", "valve-cover", "oil-pan"];
+const HOUSINGS = ["block-i4", "head", "valve-cover"];
 
 const ODD = [
   [1, 1, 1],
@@ -159,7 +159,7 @@ describe("pack", () => {
     const size = (id: string) => shape(id).defaultSize;
     expect(size("block-i4")).toEqual({ x: 420, y: 230, z: 260 });
     expect(size("piston")).toEqual({ x: 82, y: 82, z: 66 });
-    expect(size("rod")).toEqual({ x: 24, y: 50, z: 150 });
+    expect(size("rod")).toEqual({ x: 24, y: 50, z: 156 });
     expect(size("timing-belt")).toEqual({ x: 20, y: 200, z: 300 });
     for (const s of autoShapes) expect(s.defaultUnits).toBe("mm");
   });
@@ -228,13 +228,13 @@ describe.each(autoShapes.map((s) => [s.id, s] as const))("auto:%s", (_id, s) => 
     }
   });
 
-  test("huge sizes are clamped; the maximum params stay within 40 primitives (cap 64)", () => {
+  test("huge sizes are clamped; the maximum params stay within 42 primitives (cap 64)", () => {
     const huge = s.build(s.defaults, ctx({ x: 1e30, y: 1e30, z: 1e30 }));
     expect(huge.bounds.size.x).toBeLessThanOrEqual(MAX_EXTENT_MM);
     for (const p of paramSets(s)) {
       expect(
         s.build(s.readParams(p).params, ctx(s.defaultSize)).primitives.length,
-      ).toBeLessThanOrEqual(40);
+      ).toBeLessThanOrEqual(42);
     }
   });
 
@@ -258,7 +258,7 @@ describe("depthBox is the solid core (section 9.6), separate from bounds", () =>
     shape(id).build(shape(id).readParams(p).params, ctx(shape(id).defaultSize));
   const near = (a: number, b: number): void => expect(Math.abs(a - b)).toBeLessThan(EPS);
 
-  test.each(ORDER.filter((id) => !["piston", "rod", "valve"].includes(id)))(
+  test.each(ORDER.filter((id) => !["piston", "valve", "oil-pan"].includes(id)))(
     "auto:%s depthBox is strictly smaller than bounds",
     (id) => {
       const g = def(id);
@@ -321,10 +321,13 @@ describe("depthBox is the solid core (section 9.6), separate from bounds", () =>
     expect(b.bounds.origin.z + b.bounds.size.z).toBeCloseTo(260, 2);
   });
 
-  test.each(["piston", "rod", "valve"])("%s: nothing protrudes, depthBox equals bounds", (id) => {
-    const g = def(id);
-    expect(g.depthBox).toEqual(g.bounds);
-  });
+  test.each(["piston", "valve", "oil-pan"])(
+    "%s: nothing protrudes, depthBox equals bounds",
+    (id) => {
+      const g = def(id);
+      expect(g.depthBox).toEqual(g.bounds);
+    },
+  );
 });
 
 describe("fills (A1-3): a housing occludes through one body box equal to its depthBox", () => {
@@ -361,14 +364,35 @@ describe("fills (A1-3): a housing occludes through one body box equal to its dep
     }
   });
 
-  test("at most 40 primitives anywhere, reached by crankshaft and camshaft at 8 cylinders", () => {
+  test("the oil pan is an open-top tray: five core boxes in two halves, never solid, no lid", () => {
+    for (const detail of [true, false]) {
+      const g = shape("oil-pan").build({ detail }, ctx(shape("oil-pan").defaultSize));
+      expect(g.solid).toBe(false);
+      expect(fills(g)).toBe(false);
+      expect(g.split?.back).toEqual(["floor", "wall-nx", "wall-ny"]);
+      expect(g.split?.front).toEqual(["wall-py", "wall-px"]);
+      const top = g.bounds.origin.z + g.bounds.size.z;
+      // Nothing closes the top: every primitive at the top is a wall, and the walls leave the
+      // interior (x 10..410, y 10..220) free above the floor.
+      const interior: Box3 = {
+        origin: { x: 10, y: 10, z: 12 },
+        size: { x: 400, y: 210, z: top - 12 },
+      };
+      for (const q of g.primitives.filter((x) => x.id !== "drain")) {
+        expect(overlaps(q.box, interior), `${q.id} (detail=${detail})`).toBe(false);
+      }
+      expect(g.primitives.some((q) => q.id === "drain")).toBe(detail);
+    }
+  });
+
+  test("at most 42 primitives anywhere, reached by the crankshaft at 8 cylinders (camshaft: 40)", () => {
     let max = 0;
     for (const s of autoShapes) {
       for (const p of paramSets(s)) {
         max = Math.max(max, s.build(s.readParams(p).params, ctx(s.defaultSize)).primitives.length);
       }
     }
-    expect(max).toBe(40);
+    expect(max).toBe(42);
   });
 
   test("roles: housing body, covers, internals; bolt-on manifolds and the head have none", () => {
