@@ -415,6 +415,7 @@ export function semanticDiagnostics(
     assembly.push(
       ...assemblyPlanDiagnostics(spec, {
         ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
+        ...(ctx.dc === undefined ? {} : { dc: ctx.dc }),
         isFocusTarget: (id) => isObject(id) || isAreaRef(id) || isAssemblyPath(spec, id),
       }),
     );

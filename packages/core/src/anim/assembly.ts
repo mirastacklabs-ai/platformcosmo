@@ -106,7 +106,11 @@ function warpFor(am: AssemblyRenderModel, speed: number): (t: number) => number 
     baked > 0 ? r4(Math.min(0.8 * speed, 0.25 * d)) : 0;
   am.clock.forEach((c, i) => {
     const end = c.start + c.duration;
-    const lead = camera(r4(c.open - c.start), c.duration);
+    // camera lead and loop-start hold are separate (§7.3): the hold is `max(lead_out, 0.4)`
+    // output seconds, so in loop seconds `max(camera lead, 0.4 · speed)`
+    const baked = c.lead ?? (c.hold === undefined ? r4(c.open - c.start) : 0);
+    const cam = camera(baked, c.duration);
+    const lead = c.hold === undefined ? cam : Math.max(cam, r4(c.hold * speed));
     const tr = camera(r4(end - c.end), c.duration);
     const open2 = c.start + lead;
     const end2 = end - tr;

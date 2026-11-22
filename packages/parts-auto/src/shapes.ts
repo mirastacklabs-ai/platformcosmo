@@ -1,5 +1,6 @@
 import type { Axis, PartPrimitiveKind, PartShapeDef, PartTone } from "@platformcosmo/core";
 import { round2 } from "@platformcosmo/core";
+import { CRANK, throwUp } from "./anchors.js";
 import { defineShape, type Draft, type ParamSpec } from "./define.js";
 
 /**
@@ -12,11 +13,17 @@ import { defineShape, type Draft, type ParamSpec } from "./define.js";
  * `depthBox` is the solid core (see `finishGeometry`): crank throws, cam lobes, manifold flanges, port
  * bosses, mounting lugs, pulleys, the belt's sprockets and the bore plugs are drawn but excluded.
  *
- * Occlusion: the housings (`block-i4`, `head`, `valve-cover`, `oil-pan`) occlude through their
- * BODY box. Each has exactly one core `box` primitive equal to its `depthBox` (`detail: true` and
- * `detail: false` alike); everything else on a housing is decorative and non-core. The scene's
+ * Placement: the shapes compose at their default sizes when placed per `engineLayout`
+ * (`anchors.ts`, assemblies §5.2): bore pitch 105 mm (block length / cylinders), deck at z 260,
+ * crank axis 60 mm above the crank's min corner (z 13), rod centres 117 mm apart.
+ *
+ * Occlusion: the housings (`block-i4`, `head`, `valve-cover`) occlude through their BODY box.
+ * Each has exactly one core `box` primitive equal to its `depthBox` (`detail: true` and
+ * `detail: false` alike); everything else on a housing is decorative and non-core. The `oil-pan`
+ * is the exception: an open-top tray (back and front halves, never solid, like
+ * `hw:chassis-2u`) so what sits over it stays visible. The scene's
  * fill rule (a solid fills its depthBox when any single box/plate/card equals it) therefore holds
- * for housings only. Every other shape is multi-primitive or round and never fills.
+ * for those three only. Every other shape is multi-primitive or round and never fills.
  *
  * Bores (`block-i4`) are flush plugs: 1 mm dark discs on the deck, outside the core, one per
  * cylinder, centred in each of `cylinders` equal cells along the block's x extent (so their
@@ -30,8 +37,9 @@ import { defineShape, type Draft, type ParamSpec } from "./define.js";
  * sprockets and tensioner (x 0..20) are excluded, and the box is not claimed as a solid fill.
  *
  * Bounds are smaller than `size` only for: an exhaust `valve` (its head is narrower than the
- * default) and a `crankshaft` with `flange: false` (the flange gives the full y/z extent).
- * Maximum primitive count: 40 (crankshaft or camshaft at 8 cylinders).
+ * default) and a `crankshaft` with `flange: false` (the flange gives the full y/z extent). The
+ * crankshaft's 40 mm nose and output stub lie outside the block's x range and outside its core.
+ * Maximum primitive count: 42 (crankshaft at 8 cylinders; the camshaft reaches 40).
  * Nothing here copies a manufacturer's industrial design; the shapes are generic.
  */
 
@@ -206,10 +214,10 @@ const valveCover = defineShape({
   label: "Valve cover",
   type: "valve-cover",
   role: "cover",
-  size: [400, 200, 70],
+  size: [420, 200, 70],
   params: { cylinders: cyl, detail: bool(true) },
   draw(g, p, tone) {
-    const [L, W, H] = [400, 200, 70];
+    const [L, W, H] = [420, 200, 70];
     if (!p.detail) return void plain(g, [L, W, H], tone);
     const n = p.cylinders as number;
     const pitch = L / n;
@@ -243,17 +251,34 @@ const crankshaft = defineShape({
   label: "Crankshaft",
   type: "crankshaft",
   role: "internal",
-  size: [420, 120, 120],
+  size: [CRANK.length, 120, 120],
   params: { cylinders: cyl, flange: bool(true) },
   draw(g, p) {
-    const [L, C] = [420, 60];
+    // The main body is 420 mm (the block's length) between a 40 mm nose and a 40 mm output
+    // stub, both outside the block and outside the core. Throw i is centred on bore i.
+    const [X0, L, C] = [CRANK.nose, 420, CRANK.axis];
     const n = p.cylinders as number;
     const pitch = L / n;
+    round(g, "nose", "shaft", "x", [0, C - 20, C - 20], [X0, C + 20, C + 20], "metal", {
+      core: false,
+    });
+    round(
+      g,
+      "stub",
+      "shaft",
+      "x",
+      [X0 + L, C - 20, C - 20],
+      [L + 2 * X0, C + 20, C + 20],
+      "metal",
+      {
+        core: false,
+      },
+    );
     for (let i = 0; i < n; i++) {
-      const down = ((i + 1) >> 1) % 2 === 0; // flat-plane throw order: down, up, up, down...
+      const down = !throwUp(i); // flat-plane throw order: down, up, up, down...
       const [wz0, wz1] = down ? [10, 90] : [30, 110];
       const [pz0, pz1] = down ? [10, 50] : [70, 110];
-      const f = (a: number): number => (i + a) * pitch;
+      const f = (a: number): number => X0 + (i + a) * pitch;
       round(
         g,
         `journal-${i}a`,
@@ -357,17 +382,25 @@ const rod = defineShape({
   label: "Connecting rod",
   type: "rod",
   role: "internal",
-  size: [24, 50, 150],
+  size: [24, 50, 156],
   params: { section: enumOf(["i-beam", "plain"], "i-beam") },
   draw(g, p, tone) {
-    round(g, "big-end", "cylinder", "x", [0, 0, 0], [24, 50, 50], tone, { paint: true });
-    round(g, "small-end", "cylinder", "x", [0, 11, 122], [24, 39, 150], tone, { paint: true });
+    // The big end and the lower beam (z < 80) hook the crank pin: drawn, but outside the core, so
+    // the rod's depth item stays above the crank's journal envelope (z 48..98 at the documented
+    // anchors) and the crank and the rods do not "interpenetrate" when the rods lift out.
+    const lo = { core: false, paint: true };
+    round(g, "big-end", "cylinder", "x", [0, 0, 0], [24, 50, 50], tone, lo);
+    round(g, "small-end", "cylinder", "x", [0, 11, 128], [24, 39, 156], tone, { paint: true });
     if (p.section === "plain") {
-      put(g, "beam", "box", [6, 14, 50], [18, 36, 122], tone, { paint: true });
+      put(g, "neck", "box", [6, 14, 50], [18, 36, 80], tone, lo);
+      put(g, "beam", "box", [6, 14, 80], [18, 36, 128], tone, { paint: true });
     } else {
-      put(g, "beam-l", "box", [0, 14, 50], [6, 36, 122], tone, { paint: true });
-      put(g, "web", "box", [6, 18, 50], [18, 32, 122], tone);
-      put(g, "beam-r", "box", [18, 14, 50], [24, 36, 122], tone, { paint: true });
+      put(g, "neck-l", "box", [0, 14, 50], [6, 36, 80], tone, lo);
+      put(g, "neck-web", "box", [6, 18, 50], [18, 32, 80], tone, { core: false });
+      put(g, "neck-r", "box", [18, 14, 50], [24, 36, 80], tone, lo);
+      put(g, "beam-l", "box", [0, 14, 80], [6, 36, 128], tone, { paint: true });
+      put(g, "web", "box", [6, 18, 80], [18, 32, 128], tone);
+      put(g, "beam-r", "box", [18, 14, 80], [24, 36, 128], tone, { paint: true });
     }
     return undefined;
   },
@@ -399,15 +432,21 @@ const oilPan = defineShape({
   size: [420, 230, 90],
   params: { detail: bool(true) },
   draw(g, p, tone) {
-    const [L, W, H] = [420, 230, 90];
-    if (!p.detail) return void plain(g, [L, W, H], tone);
-    // The tub is the core (one box); the mounting rim and the drain plug are outside it.
-    put(g, "body", "box", [10, 10, 0], [L - 10, W - 10, H - 6], tone, { paint: true });
-    put(g, "rim", "plate", [0, 0, H - 6], [L, W, H], "metal", { core: false });
-    round(g, "drain", "cylinder", "x", [0, W / 2 - 8, 8], [10, W / 2 + 8, 20], "muted", {
-      core: false,
-    });
-    return undefined;
+    // Open-top tray (floor + four walls), so a crank sitting over it is not covered by a lid.
+    // Back half first (floor, -x and -y walls), then the front half (+y and +x walls).
+    const [L, W, H, f, t] = [420, 230, 90, 12, 10];
+    put(g, "floor", "box", [0, 0, 0], [L, W, f], tone, { paint: true });
+    put(g, "wall-nx", "box", [0, 0, f], [t, W, H], tone, { paint: true });
+    put(g, "wall-ny", "box", [t, 0, f], [L - t, t, H], tone, { paint: true });
+    put(g, "wall-py", "box", [t, W - t, f], [L - t, W, H], tone, { paint: true });
+    put(g, "wall-px", "box", [L - t, 0, f], [L, W, H], tone, { paint: true });
+    if (p.detail) {
+      // The drain plug sits in the sump, inside the tray, outside the core.
+      round(g, "drain", "cylinder", "z", [40, W / 2 - 10, f], [60, W / 2 + 10, f + 10], "muted", {
+        core: false,
+      });
+    }
+    return { back: ["floor", "wall-nx", "wall-ny"], front: ["wall-py", "wall-px"] };
   },
 });
 
@@ -415,10 +454,10 @@ const intake = defineShape({
   id: "intake",
   label: "Intake manifold",
   type: "intake",
-  size: [380, 110, 90],
+  size: [420, 110, 90],
   params: { cylinders: cyl, throttle: bool(true) },
   draw(g, p, tone) {
-    const L = 380;
+    const L = 420;
     const n = p.cylinders as number;
     const pitch = L / n;
     const x0 = p.throttle ? 24 : 0;
@@ -440,10 +479,10 @@ const exhaust = defineShape({
   id: "exhaust",
   label: "Exhaust manifold",
   type: "exhaust",
-  size: [380, 90, 80],
+  size: [420, 90, 80],
   params: { cylinders: cyl, shield: bool(false) },
   draw(g, p, tone) {
-    const L = 380;
+    const L = 420;
     const n = p.cylinders as number;
     const pitch = L / n;
     put(g, "flange", "plate", [0, 82, 0], [L, 90, 80], "metal", { core: false });

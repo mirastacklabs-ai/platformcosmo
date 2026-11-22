@@ -493,6 +493,7 @@ describe("validate --suggest (assemblies section 17)", () => {
               parts: [
                 { id: "shell", role: "body" },
                 { id: "chip", role: "internal" },
+                { id: "plate", role: "cover" },
               ],
             },
           ],
@@ -729,7 +730,7 @@ describe("validate --suggest with errors, and owner limits", () => {
   test("the root owner counts toward the limit", () => {
     const groups = Array.from({ length: 100 }, (_, i) => ({
       id: `g${i}`,
-      parts: [{ id: "a", role: "body" }, { id: "b" }],
+      parts: [{ id: "a", role: "body" }, { id: "b" }, { id: "c", role: "internal" }],
     }));
     const rep = suggest({
       assemblies: [{ id: "root", parts: [{ id: "body", role: "body" }, ...groups] }],

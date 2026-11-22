@@ -462,7 +462,9 @@ export interface StepWindow {
   readonly lead: number;
   /** Closing camera transition (0 when the next view is the same). */
   readonly tr: number;
-  /** Length of the motion window: `duration − lead − tr − 0.2` (floored at 0.05). */
+  /** Loop-start hold of step 1 (§7.4): its motion opens no earlier than the loop-start fades end. */
+  readonly hold: number;
+  /** Length of the motion window: `duration − max(lead, hold) − tr − 0.2` (floored at 0.05). */
   readonly window: number;
 }
 
@@ -484,10 +486,10 @@ export function stepViews(
  * Smallest whole-second step duration `D` whose motion window holds `need` seconds:
  * `D − lead(D) − tr(D) − 0.2 ≥ need`, with `lead`/`tr` = `min(0.8, 0.25·D)` where they apply.
  */
-export function fitDuration(need: number, lead: boolean, tr: boolean): number {
+export function fitDuration(need: number, lead: boolean, tr: boolean, hold = 0): number {
   for (let d = Math.max(1, Math.ceil(need + HOLD)); d < 600; d++) {
     const t = transitionOf(d);
-    if (r4(d - (lead ? t : 0) - (tr ? t : 0) - HOLD) >= need) return d;
+    if (r4(d - Math.max(lead ? t : 0, hold) - (tr ? t : 0) - HOLD) >= need) return d;
   }
   return 600;
 }
@@ -502,13 +504,17 @@ export function stepWindows(
   /** The last step's end pose differs from the base pose: it reserves a closing window even
    * when no camera transition follows (§7.3, §7.4). */
   closeLast = false,
+  /** Seconds the loop-start fades last (§7.4): step 1 opens its motion after them. */
+  loopHold = 0,
 ): StepWindow[] {
   return durations.map((d, i) => {
     const lead = i === 0 && views[0] !== undefined ? transitionOf(d) : 0;
     const next = i + 1 < durations.length ? views[i + 1] : undefined;
     const last = i === durations.length - 1;
     const tr = views[i] !== next || (last && closeLast) ? transitionOf(d) : 0;
-    return { lead, tr, window: Math.max(MIN_WINDOW, r4(d - lead - tr - HOLD)) };
+    const hold = i === 0 ? loopHold : 0;
+    const delay = Math.max(lead, hold);
+    return { lead, tr, hold, window: Math.max(MIN_WINDOW, r4(d - delay - tr - HOLD)) };
   });
 }
 
@@ -539,6 +545,8 @@ export interface PlanOptions {
    * program, a range) are `validate`'s (assembly checks) and are left out of the plan.
    */
   readonly storyboards?: ReadonlyMap<string, ResolvedStoryboard>;
+  /** Seconds step 1 holds its motion for the loop-start fades (§7.4); 0 when there are none. */
+  readonly loopHold?: number;
 }
 
 /** One action planned by another track: `start` and `length` are filled in by the step. */
@@ -655,6 +663,7 @@ function planPass(
     steps.map((s) => s.duration ?? 3),
     views,
     closeLast,
+    opts.loopHold ?? 0,
   );
   // Every declared non-figure root: its gating phase ("none": never an action target) and name.
   const phaseOf = new Map<string, RootPhase | "none">();
@@ -871,7 +880,7 @@ function planPass(
     let scale = 1;
     if (need > w.window) {
       scale = Math.floor((w.window / need) * 10000) / 10000; // floor: never overrun the window
-      const fit = fitDuration(need, w.lead > 0, w.tr > 0);
+      const fit = fitDuration(need, w.lead > 0, w.tr > 0, w.hold);
       diagnostics.push(
         mk(
           scale < 0.5 ? "warning" : "info",

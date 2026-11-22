@@ -1152,6 +1152,8 @@ describe("closeupDiagnostics sections", () => {
         },
       ],
       racks: [{ id: "r", slots: [{ id: "s", at: 1, type: "server-2u", assembly: "tpl" }] }],
+      // slot internals exist only for a rack a step action targets (§8.1)
+      steps: [{ assembly: [{ explode: "r" }] }],
     });
   const crashing = {
     shapes: undefined,
@@ -1168,10 +1170,6 @@ describe("closeupDiagnostics sections", () => {
       "render/internal-error",
     ]);
     expect(d.find((x) => x.code === "render/internal-error")!.message).toContain("boom");
-  });
-
-  test("closeups: false skips the close-up section", () => {
-    expect(closeupDiagnostics(withCloseup(), { closeups: false })).toEqual([]);
   });
 
   test("the size mismatch points at the part's closeup field", () => {

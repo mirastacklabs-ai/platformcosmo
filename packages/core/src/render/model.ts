@@ -753,7 +753,6 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
         content: o.content,
       }),
     fit: (text, size, bold, maxWidth) => fit(text, size, bold, maxWidth),
-    nudge: (box, placedBoxes) => nudgeLabel(box, placedBoxes),
     focusMargin: { side: MARGIN_FOCUS, bottom: labelSize + 6 },
   });
   if (asmResult) diagnostics.push(...asmResult.diagnostics);

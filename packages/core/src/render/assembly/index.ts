@@ -52,6 +52,7 @@ import { endsAwayFromBase } from "../../scene/assembly/timing.js";
 import { resolveStoryboard } from "../../scene/storyboards.js";
 import { closesLoop, resolveFigure } from "../../scene/boards.js";
 import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
+import { LOOP_START_MIN } from "../../scene/assembly/build.js";
 import { stepTimes } from "../boards/timeline.js";
 import { parseCopyKey } from "../../depth/copies.js";
 import { copySuffix } from "../../emit/ids.js";
@@ -111,7 +112,6 @@ export interface AssemblyRenderContext {
   readonly fs: number;
   readonly text: (o: TextSpec) => SvgElement;
   readonly fit: (text: string, size: number, bold: boolean, maxWidth: number) => string;
-  readonly nudge: (box: Rect, placed: readonly Rect[]) => { dy: number };
   /** Scene objects that share the depth order (default none, see model.ts). */
   readonly statics?: readonly StaticItem[];
   readonly budgets?: Partial<DepthBudgets>;
@@ -248,6 +248,8 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     start: t.start,
     duration: t.duration,
     open: t.open,
+    ...(t.window.lead > 0 ? { lead: t.window.lead } : {}),
+    ...(t.window.hold > 0 ? { hold: LOOP_START_MIN } : {}),
     end: t.end,
   }));
   const loopBuild = buildLoop(assemblies, plan, times, total, closeLast, input.foreign);
@@ -317,7 +319,6 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     fs: ctx.fs,
     text: ctx.text,
     fit: ctx.fit,
-    nudge: ctx.nudge,
     assemblies,
     labelMode: (id) => specAsm.get(input.templateOf?.get(id) ?? id)?.labels ?? "exploded",
     leaves,
@@ -1095,7 +1096,11 @@ export function buildAssemblyRender(
   const basePoses: Record<string, readonly { program: string; level: number }[]> = {};
   for (const a of assemblies) basePoses[a.id] = a.basePose;
   for (const l of levels) if (l.assembly !== undefined) basePoses[l.path] = l.assembly.basePose;
-  let closeLast = endsAwayFromBase(plan[plan.length - 1]?.poses, basePoses);
+  let closeLast = endsAwayFromBase(
+    plan[plan.length - 1]?.poses,
+    basePoses,
+    plan[plan.length - 1]?.view ?? 0,
+  );
   if (!closeLast && (ctx.spec?.figures !== undefined || ctx.spec?.storyboards !== undefined)) {
     closeLast = closesLoop(
       (ctx.spec.figures ?? []).map((f, i) => resolveFigure(f, i).figure),

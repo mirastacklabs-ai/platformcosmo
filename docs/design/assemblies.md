@@ -165,6 +165,36 @@ excludes studs, so stacked bricks do not interpenetrate (§9.6). Colors: spec `c
 and axles at angles, curved slopes; the skill says so and approximates or skips with an
 assumption note.
 
+### 5.2 Engine anchors (`@platformcosmo/parts-auto`, Track E-2b)
+
+At default sizes the `auto:` engine shapes compose without interpenetration when placed as
+below (`engineLayout(cylinders)` in `@platformcosmo/parts-auto` returns every `at`). Millimetres,
+block min corner = origin, x along the crankshaft, +y the intake side, z up. For `n` cylinders:
+bore pitch `105 = 420 / n`, bore `i` (0-based) centred at `x = (i + 0.5) * pitch`, `y = 115`.
+
+| Part (`auto:`)        | `at` (n = 4)                         | Notes                                                                                                          |
+| --------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `block-i4`            | `[0, 0, 0]`                          | 420 x 230 x 260; deck (top face) at z 260; bores 82 mm at pitch 105, y 115                                     |
+| `crankshaft`          | `[-40, 55, 13]`                      | 500 x 120 x 120 (40 mm nose and stub outside the block); axis y 115, z 73; throw i centred on bore i           |
+| `rod` (cylinder i)    | `[boreX - 12, 90, pinZ - 25]`        | 24 x 50 x 156; big-end centre = pin centre; small-end centre 117 above it; big end and lower beam are not core |
+| `piston` (cylinder i) | `[boreX - 41, 74, pinZ + 90]`        | 82 x 82 x 66; gudgeon 27 above its base, so up-throw pistons end just under the bore plugs (z 259)             |
+| `oil-pan`             | `[0, 0, -90]`                        | open-top tray, top edge at the block's bottom face                                                             |
+| head gasket (`plate`) | `[0, 12, 260]`, size `[420, 206, 4]` | the block core's footprint (y 12..218)                                                                         |
+| `head`                | `[0, 0, 264]`                        | 420 x 230 x 100; ports centred on the bores                                                                    |
+| `valve-cover`         | `[0, 15, 364]`                       | 420 x 200 x 70                                                                                                 |
+| `intake` / `exhaust`  | `[0, 230, 269]` / `[0, -90, 274]`    | 420 long, runners / primaries centred on the bores and on the head ports                                       |
+| `camshaft` (x 2)      | `[0, 60, 314]` / `[0, 130, 314]`     | 420 x 40 x 40, inside the head                                                                                 |
+
+Crank pin heights: axis z 73 +/- 30, in flat-plane order down, up, up, down: `pinZ` = 43, 103, 103, 43
+(`+ 30` for up throws). Pass `params.cylinders = n` to the block, crankshaft, head, valve cover, intake, exhaust and camshafts.
+Pistons and rods cannot use `count`/`pitch` (their pin heights alternate); place each one. From five
+cylinders, size each piston `[bore, bore, 66]` with `bore = floor(0.8 * pitch)`; from six, each rod
+`[floor(0.3 * pitch), 50, 156]` (or always pass the `size` that `engineLayout` returns).
+The crankshaft, including its nose and stub, is hidden while enclosed in the block and shows once it drops.
+The `timing-belt` is not anchored (decorative). The `oil-pan` is an open tray (never solid, like
+`hw:chassis-2u`): a crank lowered into it stays visible. Pistons, rods, crank and camshafts are
+`internal` and sit inside the block or head core (enclosed, so hidden at rest).
+
 ## 6. Programs
 
 ### 6.1 Selectors
@@ -183,6 +213,7 @@ segment, `?` one character, `**` any number of segments (as a term: every descen
 is a union; `except` subtracts. A selected sub-assembly moves as one unit with its subtree.
 Matching runs over the expanded tree (after `count` and `use`), in depth-first spec order.
 The scene matches roles as resolved (explicit, pack shape, inferred), while validation sees explicit roles only, so a `role:` selector can select more parts in the scene than validation can prove; a part selected by two stages that way is reported as `assembly/moved-twice` (info) and moves once, in the first stage.
+A rack's selectors match over the rack as the DC pack builds it (§8.1: frame parts, device parts, and around a slot template the pack's `tray`, `lid`, `faceplate/…`, `rear/…`); `validate` given the DC pack checks them over that same tree, and without it treats the frame and plain slots as opaque (nothing below them is reported).
 Empty match: warning `assembly/selector-empty` with did-you-mean over candidate paths (the
 existing bounded edit distance; deeper matches are suggested as `**/…`). A node may be moved by
 at most one stage per program (`assembly/moved-twice`); a descendant of a node moved earlier
@@ -311,13 +342,38 @@ reported although a clear column exists (a false positive; use a side origin).
 
 When a stage has `labels: "show"`, each moved leaf (or moved sub-assembly) shows its `label`
 (and `detail` lines when `details`) once it arrives (fade in over the last 20% of its move),
-and hides at the start of the reverse move. Placement is computed once per final pose: eight
-candidate boxes around the part's screen bounding box at 18 px, preferring the side of the
-part's screen motion vector, then clockwise from it; the first box not overlapping placed
-labels or other parts' final boxes wins, else the first candidate nudged by the existing
-`nudgeLabel`. Leader: a 1 px line from the nearest point of the part's silhouette box to the
-label box, `leaders: false` removes it. Labels move with copy 0 of their part (same track) and
-sit in the `labels` layer. `assemblies[].labels: "always"` also prints every leaf's label
+and hides at the start of the reverse move. A labelled node that no stage moves (the chassis, an engine block) shows its label with the
+first `labels: "show"` stage of its assembly and hides with the implode or the loop closure; it
+is placed after the moved ones. A node that moves only as part of a labelled ancestor
+(sub-assembly) is named by that ancestor's label and gets none of its own, and so does a leaf
+of a `labels: "always"` assembly (it has its top-face label). Without a `labels: "show"` stage
+in its assembly, or under a labelled ancestor, the label is reported as `assembly/label-omitted`.
+
+Placement is computed once per node, at the pose it first shows in: eight candidate boxes
+around the node's visible screen extent at 18 px (then at 36 and 54 px), preferring the side of
+the node's screen motion vector, then clockwise from it. The first box that covers no other
+showing label (at its pose then), no showing label's leader end, and no other part's projected
+hull (a part whose hull holds the node's own, a carrier such as a board, is skipped), whose
+leader crosses no showing label and is crossed by no showing label's leader, with a leader of
+at most 54 px, wins; this is checked at the pose the label shows in and at the end of
+each later stage while it is up (at most 6 of them). When no candidate is free, the one covering
+the least wins (leader ends, then leader crossings, then labels, then parts, then leader length).
+
+Leader: a 1 px line from an anchor on the part to the label box, `leaders: false` removes it.
+The anchor is the nearest of the part's surface samples (a grid of points on each of the three
+viewer-facing faces of every solid primitive, thinned per primitive for large nodes) that are in
+view, i.e. not behind another part along the view ray, at the pose the label shows in and,
+among those, at the end of the most later stages while the label is up (poses between stage
+ends are not sampled); samples whose face neighbours are in view too are preferred, so the
+leader does not end on the edge of what covers it. The leader therefore ends on the part's own
+geometry, also for thin plates (whose screen box is mostly empty) and for parts lifted under a
+plate. A part partly hidden is placed around its visible samples; one covered everywhere is
+searched on a finer grid, and if nothing shows at all the anchor is on its hidden surface
+nearest the label. Hollow `tray` and `ring` primitives do not occlude. The work is bounded:
+occluder boxes are built once per time, culled to those overlapping the node, and a build stops
+testing occlusion after 2 million sample tests (later nodes are placed as if fully in view).
+Labels move with copy 0 of their part (same track) and sit in the `labels` layer.
+`assemblies[].labels: "always"` also prints every leaf's label
 upright on its projected top face at rest (truncated to fit, never skewed, like icons; for plans
 and board layouts), switching to leader labels while exploded; `never` disables part labels.
 `fade: "unselected"` dims (opacity 0.25) the owner's leaves not
@@ -360,7 +416,7 @@ Step `i` spans `[T_i, T_i + d_i]`. Its **motion window** opens at `m_i = T_i + l
 transitions sit at the end of the previous step, D27) and closes at
 `c_i = T_i + d_i − tr_i − 0.2` where `tr_i = min(0.8, 0.25·d_i)` is the closing camera
 transition (0 when the next view is the same) and 0.2 s is a hold so the settled pose is seen.
-For the last step `tr_n` also applies when the end pose of any program differs from its base pose and no camera transition follows (the loop closure of §7.4 needs that window). All times use the output clock: `tr` and `lead` are `min(0.8, 0.25·d/speed)` seconds of output, i.e. that many times `speed` loop seconds.
+For the last step `tr_n` also applies when the end pose of any program differs from its base pose, or the view in effect after it is not view 0 (§7.7), and no camera transition follows (the loop closure of §7.4 needs that window). Step 1 opens its motion window at `max(lead_1, f)` where `f` is the end of the loop-start fades of §7.4 (`f = max(lead_1, 0.4)` when any assembly has them, else 0), so the build never overlaps the fades; `lead(D)` in the suggestion below is then `max(min(0.8, 0.25·D), f)` for step 1. All times use the output clock: `tr` and `lead` are `min(0.8, 0.25·d/speed)` seconds of output, i.e. that many times `speed` loop seconds.
 If the step's actions need `L_i > c_i − m_i`, all of them are compressed uniformly by
 `scale = (c_i − m_i)/L_i` (`ResolvedAction.scale`), with `assembly/compressed` (info; warning
 below 0.5) whose suggestion gives the duration that fits: `"duration": D`, the smallest whole
@@ -376,11 +432,14 @@ number of seconds with `D − lead(D) − tr(D) − 0.2 ≥ L_i`, where `lead(D)
   the parts not present at that level fade out during `[0, max(lead_1, 0.4)]`, and the parts
   present at that level but not in the base pose (`pose: "empty"` with a build starting at 3)
   fade in over the same window. The scene lists these as `SceneAssembly.loopStart`, computed
-  with the plan's own `lead_1`.
+  with the plan's own `lead_1`. Step 1's motion window opens only when they end (§7.3), so a
+  build in step 1 never hides or reorders a part that is still fading out.
 - **Loop closure**: during the last step's closing transition `tr_n` (with the camera's ease
   back to the overview) every program returns to its base level: explode levels by a fast
   implode (all moves reversed together, no stagger, compressed into `tr_n`); build levels by
-  fades (parts present at rest but not at the end fade in, others out). Ending with an
+  fades (parts present at rest but not at the end fade in, others out). When the last step ends in a view other than 0
+  (§7.7), the view groups cross-fade back to view 0 in the same window (over `VIEW_FADE`, ending
+  at the loop end), so the restart shows no snap. Ending with an
   explicit implode step avoids the fast return; the skill does that. When the last step is not zoomed the window `tr_n = min(0.8, 0.25·d_n)` is still reserved at its end for the fast return, so the loop restart never snaps.
 - **Focus on assemblies**: `focus` on an assembly, sub-assembly or part frames its box at the
   END pose of the step (`AssemblyRenderModel.focusRect(step, id)`), so an exploded unit fits
@@ -445,10 +504,17 @@ over all views above 5000 gives `budget/views` (warning).
 
 ### 8.1 Racks as assemblies (byte-identical by construction)
 
-A rack becomes an assembly **only when a step action targets it or one of its slots**. All
-other racks keep the 1.1 objects (`rackId`, `rackId_front`, `rackId/slot`) and their forced
-depth ranks, so every existing spec and gallery render stays byte-identical. For a targeted
-rack, `DcPack.buildAssembly` returns a `SceneAssembly` (source `dc`):
+A rack becomes an assembly **only when a step action targets it or one of its slots** (a path
+through a close-up, `r2/srv/closeup/…`, targets the close-up instance, not the rack; `programs`,
+slot internals or close-ups alone do not either). All other racks keep the 1.1 objects
+(`rackId`, `rackId_front`, `rackId/slot`) and their forced depth ranks, so every existing spec
+and gallery render stays byte-identical. Validation (`assembly/reserved-id` for a slot `frame`),
+the scene and the DC pack share this rule. For a targeted rack, `DcPack.buildAssembly` returns
+a `SceneAssembly` (source `dc`), which the scene draws instead of the rack's 1.1 objects (their
+boxes still serve routing, overlaps and focus). The scene resolves the racks, the spec
+assemblies and the close-up instances with **one** planner (one work budget, one level machine,
+one step plan): the DC pack registers each rack's synthetic `drawers` and `internals` programs
+with it.
 
 - `<rack>/frame/<part>`: one leaf per rack part (posts, side panels, base, top cap, doors,
   PDUs, rear-door heat exchanger) with roles (`shell`, doors and panels `cover`). No `_front`
@@ -486,6 +552,10 @@ program (1 stage) and a `assembly/size-mismatch` warning. The slot's own
 program is `internals`: lid up, then the template's default program (its `program`, else its
 first explode program), so it has 1 + that many stages; if the template's `program` is a build
 program, `internals` has 1 + its step count. Templates do not carry their own chassis or lid.
+Internals exist only in assembly mode (§8.1): a rack no action targets draws its 1.1 device, so
+its slot `assembly` is never built and gets no size check (validation still checks the reference
+and the path depth); the size check runs, in `validate` and in the scene, once the rack is
+targeted.
 
 ### 8.3 Nested targets and implicit access
 
@@ -516,10 +586,15 @@ spec `closeup` stays an ordinary id (a node `closeup`, a slot `r1/closeup`) with
 using the same figure as close-up get two independent instances. A close-up's pose persists
 while it is not shown.
 
-Each level is a sibling group of the main camera (`ids.level(id)`) with its own camera and
-overview transform. Entering runs during the focus transition: the parent camera zooms toward
-the node (≤ 3×) while the level cross-fades in, starting with its rest bounds mapped onto the
-node's zoomed screen rect and easing to its own overview; leaving reverses it. Levels nest
+Each level is a group inside the camera group (`ids.level(id)`) with its own camera and
+overview transform. Entering runs during the focus transition: the level cross-fades in, starting with its rest
+bounds mapped onto the node's screen rect and easing to its own overview; leaving reverses it. The
+parent camera does **not** zoom toward the node during entry (`zoomFor` ignores level ids): the
+level group sits inside the camera group, so a zoomed parent camera would also scale and shift
+the level's overview placement, and every level placement track (and the host rects it eases
+from) would need the inverse camera as well. The level instead starts on the node's rect at
+the unzoomed overview and grows to its overview, which keeps the swap jump-free and the
+camera tracks of the main world unchanged. Levels nest
 (≤ 4 deep, ≤ 8 instances per spec). Per-step outputs and frames render the level in effect.
 Element and byte budgets count every level.
 
@@ -559,7 +634,11 @@ inside a level are answered by `levelFocusRect(step, id)` in overlay coordinates
 Physical units are true scale in DC context (1 tile = 600 mm; 19-inch rack interior 450 mm
 wide, 2U = 88.9 mm). A close-up of a physical part with a physical template is reconciled by
 **containment in the part's interior** (a DC slot: the 450 mm interior of the 540 mm device
-box; any other host: its box), per axis in world axes. The template front is turned onto the
+box; any other host: its box), per axis in world axes. A rack slot's `closeup` hosts a level
+whether or not the rack is targeted (`DcPack.slotHosts`): the host box is the slot's 1.1 object
+(a targeted rack: its drawn slot device), the interior is the one slot internals use (450 mm
+wide, inside the walls, under the lid) and the front is the rack's front in world (`-y` in a
+mirrored row, so the template is turned half a turn). The template front is turned onto the
 host front in world axes (the host assembly's `rotate` included); the scene never turns a
 template to fit its footprint. Only a template larger than the interior by more than 10% on an
 axis gives `assembly/size-mismatch` (warning) and is shrunk uniformly (contain); a template
@@ -567,7 +646,10 @@ shorter in z never warns; a template under 50% of the interior in x or y gets an
 drawn at true scale, never enlarged. A footprint that would match better turned a quarter is
 reported (`assembly/closeup-turned`, info) and left alone. Close-ups the scene cannot build
 within the 8-segment path limit (host path plus template height) or the level caps are skipped
-with `assembly/too-deep` or `budget/levels`, at the host's pointer. `pcosmo validate` and `build` report these checks only when the spec has no errors (a gated or invalid spec never reaches the scene). Figures and
+with `assembly/too-deep` or `budget/levels`, at the host's pointer. The host path accumulates
+along a chain of close-ups (`r2/srv/closeup/board/cpu-1/closeup/…`), and validation measures
+each reference along every chain that reaches it, so it reports the same `too-deep` at the same
+pointer before the scene is built. `pcosmo validate` and `build` report these checks only when the spec has no errors (a gated or invalid spec never reaches the scene). Figures and
 storyboards (pixel units) are fitted to the part's zoomed screen rect. The skill takes real
 dimensions from documents (a 13-inch board is 330 mm) and states assumptions when a figure is
 "not drawn to scale" (keep relative layout, scale from the stated board size).
@@ -947,8 +1029,9 @@ level per frame: level `k` shows the model after document step `k`, level 0 an e
 `build` moves `from → to` (default: one frame; `advance` steps by frames), `unbuild` moves back
 (default: to 0). The timeline starts where the first action starts (`build`: level 0, `unbuild`:
 the last frame). The rest frame (static output, PNG default, reduced-motion start) shows the
-finished model, level `n`; the loop opens by easing from it to the start level (at most 0.4 s,
-none of it when the first action starts at once), and a story that ends before level `n`
+finished model, level `n`; the loop opens by easing each element from its rest value to its start
+value until its own first traversal, at most 0.4 s (so elements the first action moves at once
+still change within ~1 ms, and the finished frame's elements fade out gently), and a story that ends before level `n`
 reserves the closing window and returns to the rest frame (§7.4). Invalid actions (explode,
 a path below the board, `program`, range, direction) are `validate`'s; the planner leaves them out.
 
@@ -1051,7 +1134,7 @@ and explains it:
      that face of the body and spans at least half of it. A flat part on a board (a DIMM, a
      chip, a row of them) is thin but covers nothing, and a thin sheet floating above the body
      is not a cover;
-   - fasteners (small, repeated, `type` screw, bolt, clip, pin);
+   - fasteners (small, repeated, `type` screw, bolt, clip, pin, nut, washer, rivet, fastener);
    - shells (open containers), sub-assemblies;
    - internals: enclosed or seated inside a shell, or inside the body on another part;
    - components: parts sitting on the body's top face (a board's chips, DIMMs, connectors),
@@ -1064,6 +1147,41 @@ and explains it:
    consecutive stages in spec order. Each sub-assembly's own parts get their own nested
    program, so a class never has to be split across sub-assemblies. Nested owners are
    imploded before the root.
+   - **Nested programs must move something.** A sub-assembly whose own program would move fewer
+     than two leaves in total, or whose only stage is the "moving as one" stage (a piston with its
+     rod), gets no nested program and no focused story steps, and is listed as skipped ("one
+     stage: the root moves it as a unit"); the root program already moves it as a unit. A
+     sub-assembly that moves two or more leaves keeps its program and steps, also with a single
+     stage (a sub-board whose one "Components" stage lifts 8 chips).
+   - **Covers move aside.** A cover that lies on the body's top face, is one part (counted rows
+     and groups are excluded), has z as its thin axis (z extent at most 20% of its largest) and
+     carries no other cover, with parts under it (sub-assemblies, internals, components, loose
+     parts) that leave in later stages, does not lift `+z`: stacked above the exploded parts it
+     would hide them in the isometric view. It slides off along a visible horizontal axis at its
+     own height, `distance` `auto`, which is its extent on that axis plus the gap (10% of the
+     owner's largest extent, §6.3; the suggestion sets no `gap`). The axes are tried shorter
+     side first (`+x` on a tie), then the longer side, else the cover keeps `+z`. An axis is
+     taken only when (a) the path is free: no other part (a fastener or a group on top of the
+     cover included) rises above the cover's underside between its rest and end positions, and
+     (b) the end position lies beyond the body (`cover.min + D >= body.max` on that axis) and
+     over none of the parts that leave later, so the parts lifting afterwards do not pass
+     through it (core stacking compares only movers that share a direction). A cover with
+     nothing below it that leaves later, a thick cover (a cylinder head), one that carries
+     another cover (that one leaves first, `+z`) and a cover not on the body's top face keep
+     `+z`. `+x` and `+y` are the owner's local axes; a `rotate` of the owner is not considered
+     yet.
+   - **Exits.** A sub-assembly or internal enclosed by the body (inside its box, give or take 1%
+     of the body's extent on each axis) leaves through the first face of the body it is flush with
+     (`+z`, `+x`, `+y`, then `-z`, `-x`, `-y`), where flush also takes 1% of the body's extent
+     on that axis, both ways (a piston slightly below or proud of the deck): pistons at a
+     block's open top go `+z`, a crank as long as the block goes `+x`, never `out` or `away`
+     through the block. A face is skipped when a part that leaves at the same time or later
+     (sub-assemblies, internals, components, loose parts) reaches beyond it over the part's
+     footprint (a pulley past the crank's end), and the next flush face is tried; with no clear
+     face the part falls back to `away` (`out` for a sub-assembly). With several internals a
+     stage still uses `lift` (or `+z`, see Mounting depth). A part that exits through a hidden
+     face passes through the cover on that side, so that cover leaves first (a stage before the
+     sub-assemblies) instead of last.
    - **Mounting depth.** A part carried by another (its bottom touches the carrier's top,
      over its footprint, the carrier having height: a heat sink on a CPU on a board; a card on
      a board in a case; a sensor on a lid) leaves before its carrier, top-most first, so the
@@ -1111,65 +1229,65 @@ and explains it:
 New codes (namespaced like existing ones; unknown ids and refs carry did-you-mean
 suggestions):
 
-| Code                                                                                                            | Severity                                          | When                                                                                                                                                                  |
-| --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `assembly/unsupported`                                                                                          | error                                             | 1.2.0 field not rendered by this build yet (merge guard, until its phase lands)                                                                                       |
-| `assembly/no-op-action`                                                                                         | info                                              | action that does not change the level                                                                                                                                 |
-| `assembly/transit-collision`                                                                                    | warning                                           | leaves interpenetrate during a transition                                                                                                                             |
-| `assembly/below-ground`                                                                                         | error                                             | rack or slot move below the floor                                                                                                                                     |
-| `assembly/depth-cycle`                                                                                          | info                                              | a certified (or, in an all-forced cycle, forced) depth edge was dropped to break a cycle                                                                              |
-| `image/exif-ignored`                                                                                            | info                                              | malformed EXIF block; orientation 1 assumed                                                                                                                           |
-| `assembly/unknown-target`                                                                                       | error                                             | action, focus, `set`, `overrides`, `mates`, `inserts`, `use`, `closeup` matches nothing                                                                               |
-| `assembly/unknown-program`                                                                                      | error                                             | program id not found on the target (action, `program`, `subBuild`) or of the wrong kind                                                                               |
-| `assembly/selector-empty`                                                                                       | warning                                           | selector matches no part                                                                                                                                              |
-| `assembly/moved-twice`                                                                                          | error (info in the scene, through inferred roles) | a node moved by two stages of one program, or added by two build steps (also by ancestor or descendant)                                                               |
-| `assembly/stage-out-of-range`                                                                                   | error                                             | `to` beyond the program's stages or steps                                                                                                                             |
-| `assembly/build-backwards`                                                                                      | error                                             | `build` to a lower level                                                                                                                                              |
-| `assembly/unbuild-forwards`                                                                                     | error                                             | `unbuild` to a higher level (use `build`)                                                                                                                             |
-| `assembly/explode-backwards`                                                                                    | error                                             | `explode` of a figure, assembly, rack or slot to a lower stage (use `implode`)                                                                                        |
-| `assembly/implode-forwards`                                                                                     | error                                             | `implode` of a figure, assembly, rack or slot to a higher stage (use `explode`)                                                                                       |
-| `assembly/figure-no-build`                                                                                      | error                                             | build or unbuild on a figure (figures explode and implode)                                                                                                            |
-| `assembly/part-not-staged`                                                                                      | info                                              | a figure part that no stage moves (it stays seated)                                                                                                                   |
-| `assembly/build-path-blocked`                                                                                   | warning                                           | `above` origin blocked                                                                                                                                                |
-| `assembly/subbuild-not-added`                                                                                   | warning                                           | a step's `subBuild` names a sub-assembly its `add` does not select whole; it is added as a plain part                                                                 |
-| `assembly/collision`                                                                                            | warning                                           | interpenetrating leaves in a final pose (not emitted yet)                                                                                                             |
-| `assembly/compressed`                                                                                           | info / warning (< 0.5)                            | actions compressed to fit the step (reported by validation, from the plan the scene uses)                                                                             |
-| `assembly/implicit-access`                                                                                      | info                                              | access move prepended (§8.3)                                                                                                                                          |
-| `assembly/depth-approx`                                                                                         | info                                              | an epoch could not be certified                                                                                                                                       |
-| `assembly/clip-fallback`                                                                                        | info                                              | enclosed part hidden until clear                                                                                                                                      |
-| `assembly/depth-input`                                                                                          | error                                             | internal: invalid depth-order input (non-finite box, move or loop); that input is ignored                                                                             |
-| `assembly/bounds-growth`                                                                                        | info                                              | reach bounds > 4× rest                                                                                                                                                |
-| `assembly/closeup-turned`                                                                                       | info                                              | a close-up's footprint would match its host better turned a quarter; not turned (fronts stay aligned) (also by `validate`)                                            |
-| `assembly/size-mismatch`                                                                                        | warning (info: much smaller)                      | template or close-up does not fit at true scale (also reported by `pcosmo validate`, `closeupDiagnostics`)                                                            |
-| `assembly/reserved-id`                                                                                          | error                                             | slot id `frame` on a rack in assembly mode; any part id `closeup` (reserved segment)                                                                                  |
-| `semantic/reserved-id`                                                                                          | warning                                           | a 1.1 id `closeup` (still valid; rename before adding close-ups)                                                                                                      |
-| `assembly/too-deep`                                                                                             | error                                             | path longer than 8 segments (also through `use` and `closeup` templates)                                                                                              |
-| `assembly/template-cycle`                                                                                       | error                                             | assemblies reference each other through `use` or `closeup` in a cycle                                                                                                 |
-| `assembly/use-ignored`                                                                                          | warning                                           | `use` is ignored because `parts` is set                                                                                                                               |
-| `assembly/diagnostics-capped`                                                                                   | info                                              | a program reported more than 50 warnings, a part's placement check more than 8 diagnostics, or placement checks stopped after 20,000 parts; the rest are omitted      |
-| `assembly/view-conflict`                                                                                        | info                                              | two actions of one step set different views; the last wins                                                                                                            |
-| `assembly/view-needs-assembly-only`                                                                             | error                                             | `view` with nodes or DC content                                                                                                                                       |
-| `assembly/storyboard-no-explode`                                                                                | error                                             | explode on a storyboard                                                                                                                                               |
-| `assembly/edge-to-part`                                                                                         | error                                             | edge, flow or cable endpoint is a part path                                                                                                                           |
-| `assembly/unknown-shape`                                                                                        | error                                             | `pack:id` shape not installed or in the DC pack (validate: only with a registry; `render()` always refuses)                                                           |
-| `assembly/shape-params`                                                                                         | error                                             | unknown or invalid `params` for a shape                                                                                                                               |
-| `assembly/duplicate-part`                                                                                       | error                                             | sibling ids collide (also after `count` expansion)                                                                                                                    |
-| `brick/off-grid`                                                                                                | warning                                           | non-integer stud or plate position                                                                                                                                    |
-| `assembly/image-unresolved`                                                                                     | info                                              | a pack shape's decal (`left`/`right`) faces away from the viewer after the part's turn and is not drawn; reported once per spec part, not per copy or `use` instance  |
-| `assembly/label-omitted`                                                                                        | info                                              | a `labels: always` top-face label whose text does not fit the part's top face is not drawn                                                                            |
-| `image/not-found`, `image/unsafe-path`                                                                          | error                                             | CLI path resolution (did-you-mean over files in the directory); also a part image whose asset the renderer was not given (with or without `crop`; once per spec part) |
-| `image/format`, `image/format-mismatch`                                                                         | error                                             | not PNG, JPEG or SVG by magic bytes (WebP: convert to PNG or JPEG) / differ from extension                                                                            |
-| `image/too-large`, `image/too-many`                                                                             | error                                             | §11.4 caps                                                                                                                                                            |
-| `image/animated`                                                                                                | error                                             | APNG                                                                                                                                                                  |
-| `image/sanitized`                                                                                               | info / warning (active content removed)           | SVG elements removed by the sanitizer                                                                                                                                 |
-| `image/icc-ignored`, `image/cmyk`                                                                               | info / warning                                    | colour handling                                                                                                                                                       |
-| `image/unknown`                                                                                                 | error                                             | part references an image id not in `images`                                                                                                                           |
-| `asset/annotation-erased`                                                                                       | info                                              | figure end moved onto its drawn stroke, or ink inside a mask erased (ingestion §6.4)                                                                                  |
-| `asset/rim-stroke`                                                                                              | info / warning (undecided)                        | figure template rim pixels a board stroke touches: peeled, or undecided (ingestion §6.4)                                                                              |
-| `budget/assembly-parts`, `budget/depth-copies`, `budget/views`, `budget/levels`, `budget/images`, `budget/time` | warning / error                                   | §13                                                                                                                                                                   |
-| `layout/callout-count-hidden`                                                                                   | info                                              | a storyboard callout too narrow or low for a part's `<count>x`: the thumbnail is drawn, the count is not                                                              |
-| `layout/callout-truncated`                                                                                      | info                                              | a timeline step whose callout has more than 12 part kinds: the box shows the first 12 (once per step)                                                                 |
-| `options/invalid-png-step`                                                                                      | error                                             | `png.step` is not a positive integer, is given with `png.time`, or is beyond the timeline                                                                             |
+| Code                                                                                                            | Severity                                          | When                                                                                                                                                                                                                         |
+| --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `assembly/unsupported`                                                                                          | error                                             | 1.2.0 field not rendered by this build yet (merge guard, until its phase lands)                                                                                                                                              |
+| `assembly/no-op-action`                                                                                         | info                                              | action that does not change the level                                                                                                                                                                                        |
+| `assembly/transit-collision`                                                                                    | warning                                           | leaves interpenetrate during a transition                                                                                                                                                                                    |
+| `assembly/below-ground`                                                                                         | error                                             | rack or slot move below the floor                                                                                                                                                                                            |
+| `assembly/depth-cycle`                                                                                          | info                                              | a certified (or, in an all-forced cycle, forced) depth edge was dropped to break a cycle                                                                                                                                     |
+| `image/exif-ignored`                                                                                            | info                                              | malformed EXIF block; orientation 1 assumed                                                                                                                                                                                  |
+| `assembly/unknown-target`                                                                                       | error                                             | action, focus, `set`, `overrides`, `mates`, `inserts`, `use`, `closeup` matches nothing                                                                                                                                      |
+| `assembly/unknown-program`                                                                                      | error                                             | program id not found on the target (action, `program`, `subBuild`) or of the wrong kind                                                                                                                                      |
+| `assembly/selector-empty`                                                                                       | warning                                           | selector matches no part                                                                                                                                                                                                     |
+| `assembly/moved-twice`                                                                                          | error (info in the scene, through inferred roles) | a node moved by two stages of one program, or added by two build steps (also by ancestor or descendant)                                                                                                                      |
+| `assembly/stage-out-of-range`                                                                                   | error                                             | `to` beyond the program's stages or steps                                                                                                                                                                                    |
+| `assembly/build-backwards`                                                                                      | error                                             | `build` to a lower level                                                                                                                                                                                                     |
+| `assembly/unbuild-forwards`                                                                                     | error                                             | `unbuild` to a higher level (use `build`)                                                                                                                                                                                    |
+| `assembly/explode-backwards`                                                                                    | error                                             | `explode` of a figure, assembly, rack or slot to a lower stage (use `implode`)                                                                                                                                               |
+| `assembly/implode-forwards`                                                                                     | error                                             | `implode` of a figure, assembly, rack or slot to a higher stage (use `explode`)                                                                                                                                              |
+| `assembly/figure-no-build`                                                                                      | error                                             | build or unbuild on a figure (figures explode and implode)                                                                                                                                                                   |
+| `assembly/part-not-staged`                                                                                      | info                                              | a figure part that no stage moves (it stays seated)                                                                                                                                                                          |
+| `assembly/build-path-blocked`                                                                                   | warning                                           | `above` origin blocked                                                                                                                                                                                                       |
+| `assembly/subbuild-not-added`                                                                                   | warning                                           | a step's `subBuild` names a sub-assembly its `add` does not select whole; it is added as a plain part                                                                                                                        |
+| `assembly/collision`                                                                                            | warning                                           | interpenetrating leaves in a final pose (not emitted yet)                                                                                                                                                                    |
+| `assembly/compressed`                                                                                           | info / warning (< 0.5)                            | actions compressed to fit the step (reported by validation, from the plan the scene uses)                                                                                                                                    |
+| `assembly/implicit-access`                                                                                      | info                                              | access move prepended (§8.3)                                                                                                                                                                                                 |
+| `assembly/depth-approx`                                                                                         | info                                              | an epoch could not be certified                                                                                                                                                                                              |
+| `assembly/clip-fallback`                                                                                        | info                                              | enclosed part hidden until clear                                                                                                                                                                                             |
+| `assembly/depth-input`                                                                                          | error                                             | internal: invalid depth-order input (non-finite box, move or loop); that input is ignored                                                                                                                                    |
+| `assembly/bounds-growth`                                                                                        | info                                              | reach bounds > 4× rest                                                                                                                                                                                                       |
+| `assembly/closeup-turned`                                                                                       | info                                              | a close-up's footprint would match its host better turned a quarter; not turned (fronts stay aligned) (also by `validate`)                                                                                                   |
+| `assembly/size-mismatch`                                                                                        | warning (info: much smaller)                      | template or close-up does not fit at true scale (also reported by `pcosmo validate`, `closeupDiagnostics`)                                                                                                                   |
+| `assembly/reserved-id`                                                                                          | error                                             | slot id `frame` on a rack in assembly mode; any part id `closeup` (reserved segment)                                                                                                                                         |
+| `semantic/reserved-id`                                                                                          | warning                                           | a 1.1 id `closeup` (still valid; rename before adding close-ups)                                                                                                                                                             |
+| `assembly/too-deep`                                                                                             | error                                             | path longer than 8 segments (also through `use` and `closeup` templates, accumulated along close-up chains)                                                                                                                  |
+| `assembly/template-cycle`                                                                                       | error                                             | assemblies reference each other through `use` or `closeup` in a cycle                                                                                                                                                        |
+| `assembly/use-ignored`                                                                                          | warning                                           | `use` is ignored because `parts` is set                                                                                                                                                                                      |
+| `assembly/diagnostics-capped`                                                                                   | info                                              | a program reported more than 50 warnings, a part's placement check more than 8 diagnostics, or placement checks stopped after 20,000 parts; the rest are omitted                                                             |
+| `assembly/view-conflict`                                                                                        | info                                              | two actions of one step set different views; the last wins                                                                                                                                                                   |
+| `assembly/view-needs-assembly-only`                                                                             | error                                             | `view` with nodes or DC content                                                                                                                                                                                              |
+| `assembly/storyboard-no-explode`                                                                                | error                                             | explode on a storyboard                                                                                                                                                                                                      |
+| `assembly/edge-to-part`                                                                                         | error                                             | edge, flow or cable endpoint is a part path                                                                                                                                                                                  |
+| `assembly/unknown-shape`                                                                                        | error                                             | `pack:id` shape not installed or in the DC pack (validate: only with a registry; `render()` always refuses)                                                                                                                  |
+| `assembly/shape-params`                                                                                         | error                                             | unknown or invalid `params` for a shape                                                                                                                                                                                      |
+| `assembly/duplicate-part`                                                                                       | error                                             | sibling ids collide (also after `count` expansion)                                                                                                                                                                           |
+| `brick/off-grid`                                                                                                | warning                                           | non-integer stud or plate position                                                                                                                                                                                           |
+| `assembly/image-unresolved`                                                                                     | info                                              | a pack shape's decal (`left`/`right`) faces away from the viewer after the part's turn and is not drawn; reported once per spec part, not per copy or `use` instance                                                         |
+| `assembly/label-omitted`                                                                                        | info                                              | a `labels: always` top-face label whose text does not fit the part's top face is not drawn, or a labelled part no stage moves has no leader label: its assembly has no `labels: show` stage, or a labelled ancestor names it |
+| `image/not-found`, `image/unsafe-path`                                                                          | error                                             | CLI path resolution (did-you-mean over files in the directory); also a part image whose asset the renderer was not given (with or without `crop`; once per spec part)                                                        |
+| `image/format`, `image/format-mismatch`                                                                         | error                                             | not PNG, JPEG or SVG by magic bytes (WebP: convert to PNG or JPEG) / differ from extension                                                                                                                                   |
+| `image/too-large`, `image/too-many`                                                                             | error                                             | §11.4 caps                                                                                                                                                                                                                   |
+| `image/animated`                                                                                                | error                                             | APNG                                                                                                                                                                                                                         |
+| `image/sanitized`                                                                                               | info / warning (active content removed)           | SVG elements removed by the sanitizer                                                                                                                                                                                        |
+| `image/icc-ignored`, `image/cmyk`                                                                               | info / warning                                    | colour handling                                                                                                                                                                                                              |
+| `image/unknown`                                                                                                 | error                                             | part references an image id not in `images`                                                                                                                                                                                  |
+| `asset/annotation-erased`                                                                                       | info                                              | figure end moved onto its drawn stroke, or ink inside a mask erased (ingestion §6.4)                                                                                                                                         |
+| `asset/rim-stroke`                                                                                              | info / warning (undecided)                        | figure template rim pixels a board stroke touches: peeled, or undecided (ingestion §6.4)                                                                                                                                     |
+| `budget/assembly-parts`, `budget/depth-copies`, `budget/views`, `budget/levels`, `budget/images`, `budget/time` | warning / error                                   | §13                                                                                                                                                                                                                          |
+| `layout/callout-count-hidden`                                                                                   | info                                              | a storyboard callout too narrow or low for a part's `<count>x`: the thumbnail is drawn, the count is not                                                                                                                     |
+| `layout/callout-truncated`                                                                                      | info                                              | a timeline step whose callout has more than 12 part kinds: the box shows the first 12 (once per step)                                                                                                                        |
+| `options/invalid-png-step`                                                                                      | error                                             | `png.step` is not a positive integer, is given with `png.time`, or is beyond the timeline                                                                                                                                    |
 
 ## 19. Examples
 

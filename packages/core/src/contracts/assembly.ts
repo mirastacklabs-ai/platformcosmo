@@ -642,6 +642,28 @@ export interface SceneLevel {
   readonly mismatch?: Vec3;
 }
 
+/**
+ * A coarse node outside the spec assemblies that carries a close-up (§8.4): a DC rack slot with
+ * `slots[].closeup` (`DcPack.slotHosts`).
+ */
+export interface CloseupHost {
+  /** Scene path, e.g. `r2/srv`. */
+  readonly path: string;
+  /** Spec `closeup`: assembly, figure or storyboard id. */
+  readonly closeup: string;
+  /** World box of the host in the main scene. */
+  readonly box: Box3;
+  /**
+   * Interior the template must fit, in millimetres along the WORLD axes (a DC slot: the 450 mm
+   * interior of the 540 mm device box, §8.5). Absent: not reconciled.
+   */
+  readonly interiorMm?: Vec3;
+  /** World side of the host's front (default `+y`). */
+  readonly front?: FrontSide;
+  /** JSON pointer of the spec field, for diagnostics. */
+  readonly pointer?: string;
+}
+
 /** The main scene turned by -`turn` about the centre of the assemblies' rest bounds (§7.7). */
 export interface SceneView {
   readonly turn: QuarterTurn;
@@ -776,6 +798,10 @@ export interface AssemblyStepClock {
   readonly duration: number;
   /** Motion window opens. */
   readonly open: number;
+  /** Opening camera transition of the step at speed 1 (step 1 when it zooms); absent = `open - start`. */
+  readonly lead?: number;
+  /** Loop-start fade floor in output seconds (0.4) when step 1 holds for the fades (§7.4), else absent. */
+  readonly hold?: number;
   /** Closing hold ends: the END pose of the step is shown here. */
   readonly end: number;
 }

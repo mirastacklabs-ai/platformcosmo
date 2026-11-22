@@ -1014,7 +1014,8 @@ describe("wipe: complementary reveal, no bleed-through", () => {
     )!.tracks(1);
     const w = back.poses.find((p) => /__mw\.2$/.test(p.id))!;
     const L = 4;
-    for (let x = 0.1; x < L; x += 0.2) {
+    // sample from 0.5: the opening ramp from the rest frame occupies [0, 0.4] and is not mirrored
+    for (let x = 0.5; x < L; x += 0.2) {
       expect(poseAt(w.keys, 0.0 + x).x).toBeCloseTo(poseAt(w.keys, 8 + (L - x)).x, 0);
     }
   });
@@ -1126,5 +1127,21 @@ describe("budget, narrow panels, labels, order, opening ease", () => {
     expect(m3.keys[0]!.easing).toEqual([0.42, 0, 0.58, 1]);
     expect(m3.keys[0]!.v).toBe(1);
     expect(m3.keys[1]!.v).toBe(0);
+  });
+});
+
+describe("opening ramp is gentle (Chromium seek to 0 landed a millisecond late)", () => {
+  test("in a multi-frame story nothing visible changes by more than 5% in the first 50 ms", () => {
+    for (const transition of ["fade", "wipe", "cut"] as const) {
+      const { model } = pipeline(board({ transition }, STEPS));
+      const t = boardsOf(model)!.tracks(1);
+      // the finished frame's own elements ramp to the empty start: they change gently
+      for (const f of t.fades.filter((x) => /__(m|cap)\.3$/.test(x.id))) {
+        expect(
+          Math.abs(fadeAt(f.keys, 0.05) - fadeAt(f.keys, 0)),
+          `${f.id} ${transition}`,
+        ).toBeLessThan(0.05);
+      }
+    }
   });
 });

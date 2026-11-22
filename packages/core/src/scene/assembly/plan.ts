@@ -18,7 +18,8 @@
  * compression computation for figures and assemblies.
  *
  * Build programs (A2-6, `build.ts`) resolve beside the explode programs and play through the
- * same machine and step loop; racks are Phase 2 (E-1).
+ * same machine and step loop. DC racks in assembly mode (E-1, `source: "dc"`) resolve through the
+ * same planner as the spec assemblies (W-1): the DC pack registers their synthetic programs.
  *
  * Qualified program names: a `ProgramLevel.program` of a program owned by a sub-assembly is
  * `<owner path relative to the assembly>/<program id>` (`head/service`); a root program is its
@@ -30,6 +31,7 @@
 import type {
   AssemblyStepPlan,
   Box3,
+  DcPack,
   Diagnostic,
   PartMove,
   ProgramLevel,
@@ -87,6 +89,7 @@ import {
   viewAt,
   viewSwitches,
 } from "./build.js";
+import { buildRackAssemblies, targetedRacks } from "./racks.js";
 import { buildAssemblies } from "./tree.js";
 import {
   OwnerSelectors,
@@ -135,6 +138,8 @@ const actionKey = (a: SpecAssemblyAction): (typeof KEYS)[number] =>
 const usesRole = (sels: readonly unknown[]): boolean =>
   sels.some((x) => typeof x === "string" && parseSelector(x).kind === "role");
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+/** A plain object (the DC pack plans raw specs: steps, actions and overrides may be anything). */
+const isRec = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
 /** `ProgramLevel.program` of a program owned by `ownerRel` (empty: the assembly root). */
 export const qualifiedProgram = (ownerRel: string, id: string): string =>
@@ -231,6 +236,11 @@ export class AssemblyPrograms {
   /** Close-up instances (A2-5): instance path -> id of the template it instances. */
   private readonly templates = new Map<string, string>();
   private readonly synthetic: AssemblyProgramsOptions["synthetic"];
+  /** Synthetic program bodies registered per assembly id (`registerSynthetic`). */
+  private readonly registered = new Map<
+    string,
+    (owner: string, id: string) => SpecExplodeProgram | undefined
+  >();
 
   constructor(
     readonly spec: PlatformCosmoSpec,
@@ -249,6 +259,19 @@ export class AssemblyPrograms {
    */
   registerInstance(path: string, templateId: string): void {
     this.templates.set(path, templateId);
+  }
+
+  /**
+   * Program bodies the spec does not carry for the assembly `id` (a DC rack: `drawers`, slot
+   * `internals`), by (owner path below it, program id), so one planner resolves every rack of a
+   * spec beside the spec assemblies (`DcAssemblyPlanner`). Call before the assembly is resolved;
+   * `opts.synthetic` is the fallback.
+   */
+  registerSynthetic(
+    id: string,
+    programs: (owner: string, program: string) => SpecExplodeProgram | undefined,
+  ): void {
+    this.registered.set(id, programs);
   }
 
   /** Index of the spec assembly an assembly (or close-up instance) is built from. */
@@ -394,8 +417,9 @@ export class AssemblyPrograms {
       const owner = owners.get(rel) as OwnerInfo;
       for (const info of owner.explodes) {
         const pk = `${rel}\0${info.id}`;
-        const spec = (this.synthetic?.(asm.id, rel, info.id) ?? atPointer(this.spec, info.ptr)) as
-          SpecExplodeProgram | undefined;
+        const spec = (this.registered.get(asm.id)?.(rel, info.id) ??
+          this.synthetic?.(asm.id, rel, info.id) ??
+          atPointer(this.spec, info.ptr)) as SpecExplodeProgram | undefined;
         if (spec === undefined || !Array.isArray(spec.stages)) {
           unresolved.add(pk);
           continue;
@@ -492,7 +516,7 @@ export class AssemblyPrograms {
       const movers: Mover[] = [];
       for (const it of fresh) {
         const ov =
-          st.overrides !== undefined && Object.hasOwn(st.overrides, it.rel)
+          isRec(st.overrides) && Object.hasOwn(st.overrides, it.rel)
             ? st.overrides[it.rel]
             : undefined;
         const dir = ov?.direction ?? st.direction;
@@ -567,7 +591,7 @@ export class AssemblyPrograms {
       };
       const ovr = (m: Mover): number | undefined => {
         const o =
-          st.overrides !== undefined && Object.hasOwn(st.overrides, m.rel)
+          isRec(st.overrides) && Object.hasOwn(st.overrides, m.rel)
             ? st.overrides[m.rel]
             : undefined;
         return typeof o?.order === "number" ? o.order : undefined;
@@ -575,7 +599,7 @@ export class AssemblyPrograms {
       const ranked = rankMovers(s.movers, keys, st.order ?? "spec", ovr);
       const moves: PartMove[] = ranked.map((m, r) => {
         const o =
-          st.overrides !== undefined && Object.hasOwn(st.overrides, m.rel)
+          isRec(st.overrides) && Object.hasOwn(st.overrides, m.rel)
             ? st.overrides[m.rel]
             : undefined;
         const d = dist.distance.get(m.rel) ?? 0;
@@ -725,7 +749,9 @@ export class AssemblyPrograms {
     };
 
     (this.spec.steps ?? []).forEach((step, si) => {
-      (step.assembly ?? []).forEach((a, ai) => {
+      const list: unknown = isRec(step) ? step.assembly : undefined;
+      (Array.isArray(list) ? (list as SpecAssemblyAction[]) : []).forEach((a, ai) => {
+        if (!isRec(a)) return; // a schema-invalid action: validation reports it
         const kind = actionKey(a);
         const target = (a as unknown as Record<string, string>)[kind] as string;
         if (typeof target !== "string") return;
@@ -1002,7 +1028,12 @@ export class AssemblyPrograms {
           mk(
             "info",
             "assembly/bounds-growth",
-            `/assemblies/${this.specIndex(probe.id) ?? 0}`,
+            probe.source === "dc"
+              ? `/racks/${Math.max(
+                  0,
+                  (this.spec.racks ?? []).findIndex((r) => r?.id === probe.id),
+                )}`
+              : `/assemblies/${this.specIndex(probe.id) ?? 0}`,
             `Assembly ${JSON.stringify(probe.id)} needs more than ${GROWTH}x its assembled area to explode`,
             "Use smaller distances, or fade the other parts",
             { assembly: probe.id },
@@ -1070,13 +1101,42 @@ export class AssemblyPrograms {
       basePose[id] = s.base;
       if (last !== undefined) lastPose[id] = s.poses[last] as readonly ProgramLevel[];
     }
-    const planned = planFigureSteps(this.spec, figures, views, {
-      ...opts,
-      foreign: (si, ai) => table.get(`${si}:${ai}`),
-      closeLoop:
-        opts.closeLoop === true ||
-        endsAwayFromBase(last === undefined ? undefined : lastPose, basePose),
-    });
+    // View in effect after the last step (§7.7): a loop that ends in a turned view closes (§7.3)
+    let endView: QuarterTurn = 0;
+    for (let si = 0; si < steps; si++) {
+      let at = -1;
+      for (const id of ids) {
+        const v = (sims.get(id) as Simulated).views.get(si);
+        if (v !== undefined && v.at > at) {
+          at = v.at;
+          endView = v.view;
+        }
+      }
+    }
+    const planOnce = (loopHold: number): ReturnType<typeof planFigureSteps> =>
+      planFigureSteps(this.spec, figures, views, {
+        ...opts,
+        foreign: (si, ai) => table.get(`${si}:${ai}`),
+        closeLoop:
+          opts.closeLoop === true ||
+          endsAwayFromBase(last === undefined ? undefined : lastPose, basePose, endView),
+        loopHold,
+      });
+    // loop start (§7.4): the opening transition of step 1 is the plan's own `lead_1`
+    const d1 = (this.spec.steps ?? [])[0]?.duration ?? 3;
+    const lead = views[0] === undefined ? 0 : transitionOf(d1);
+    const fadeEnd = (p: AssemblyStepPlan[]): number => {
+      let end = 0;
+      for (const a of assemblies)
+        for (const f of loopStartOf(a, p, lead)?.fades ?? []) end = Math.max(end, f.t1);
+      return end;
+    };
+    // Levels do not depend on the windows, so a first pass tells whether the loop-start fades
+    // exist; if so step 1 opens its motion window at max(lead_1, fade end) and the plan is made
+    // again with it (compression and suggestions agree).
+    let planned = planOnce(0);
+    const hold = fadeEnd(planned.plan);
+    if (hold > 0) planned = planOnce(hold);
     // View in effect at the end of each step (§7.7): the build/unbuild action that comes last
     // in the step (across assemblies) and whose program sets views decides; else it carries over
     let view: QuarterTurn = 0;
@@ -1113,9 +1173,6 @@ export class AssemblyPrograms {
     });
     // Compression is reported by validation (`assemblyPlanDiagnostics`), never twice.
     const compression = planned.diagnostics.filter((d) => d.code === "assembly/compressed");
-    // loop start (§7.4): the opening transition of step 1 is the plan's own `lead_1`
-    const d1 = (this.spec.steps ?? [])[0]?.duration ?? 3;
-    const lead = views[0] === undefined ? 0 : transitionOf(d1);
     const loopStart = new Map<string, LoopStart>();
     for (const a of assemblies) {
       const ls = loopStartOf(a, plan, lead);
@@ -1155,6 +1212,8 @@ function worldCentre(b: Box3): [number, number, number] {
 export interface AssemblyPlanContext {
   readonly parts?: PartShapeRegistry;
   readonly dcShapes?: PartShapePack;
+  /** DC pack: racks a step action targets plan beside the assemblies, as in the scene. */
+  readonly dc?: DcPack;
   /** Which `steps[].focus` ids zoom the camera (the scene's rule). */
   readonly isFocusTarget: (id: string) => boolean;
   readonly gated?: PlanOptions["gated"];
@@ -1170,15 +1229,29 @@ export function assemblyPlanDiagnostics(
   spec: PlatformCosmoSpec,
   ctx: AssemblyPlanContext,
 ): Diagnostic[] {
-  if ((spec.assemblies?.length ?? 0) === 0 || (spec.steps?.length ?? 0) === 0) return [];
+  const dc = ctx.dc;
+  const targeted = dc?.buildAssembly === undefined ? [] : targetedRacks(spec);
+  if ((spec.steps?.length ?? 0) === 0) return [];
+  if ((spec.assemblies?.length ?? 0) === 0 && targeted.length === 0) return [];
+  // the scene's single planner and order: targeted racks, then the spec assemblies
   const programs = new AssemblyPrograms(spec);
-  const built = programs.attach(
-    buildAssemblies(spec, {
-      reach: programs.reach,
-      ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
-      ...(ctx.dcShapes === undefined ? {} : { dcShapes: ctx.dcShapes }),
-    }),
-  );
+  const dcShapes = ctx.dcShapes ?? dc?.shapes;
+  const shared = {
+    ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
+    ...(dcShapes === undefined ? {} : { dcShapes }),
+  };
+  let racks: readonly SceneAssembly[] = [];
+  if (dc !== undefined && targeted.length > 0) {
+    try {
+      racks = buildRackAssemblies(spec, dc, dc.buildScene(spec), {
+        planner: programs,
+        ...shared,
+      }).assemblies;
+    } catch {
+      racks = []; // the DC pack failed: `closeupDiagnostics` (validate) and the render report it
+    }
+  }
+  const built = programs.attach(buildAssemblies(spec, { reach: programs.reach, ...shared }));
   const figures = new Map<string, ResolvedFigure>();
   (spec.figures ?? []).forEach((f, i) => {
     const { figure } = resolveFigure(f, i);
@@ -1188,7 +1261,8 @@ export function assemblyPlanDiagnostics(
   for (const sb of spec.storyboards ?? [])
     if (!storyboards.has(sb.id)) storyboards.set(sb.id, resolveStoryboard(sb));
   const views = stepViews(spec, ctx.isFocusTarget);
-  const planned = programs.plan(built.assemblies, figures, views, {
+  const all = [...built.assemblies, ...racks].sort((p, q) => cmp(p.id, q.id));
+  const planned = programs.plan(all, figures, views, {
     ...(ctx.gated ? { gated: ctx.gated } : {}),
     ...(storyboards.size > 0 ? { storyboards } : {}),
   });
