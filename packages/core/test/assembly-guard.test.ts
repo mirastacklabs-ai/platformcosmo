@@ -377,6 +377,37 @@ describe("schema 1.2.0 guard", () => {
     expect(r.diagnostics.filter((d) => d.path.startsWith("/steps/0/assembly/1"))).toEqual([]);
   });
 
+  test("a closeup that names a storyboard is refused at its field (not drawn yet)", () => {
+    const spec = {
+      meta: { version: "1" },
+      images: [{ id: "i", src: "a.png" }],
+      storyboards: [{ id: "sb", frames: [{ model: "i" }, { model: "i" }] }],
+      assemblies: [
+        { id: "a", closeup: "sb", parts: [{ id: "x", size: [1, 1, 1], closeup: "sb" }] },
+      ],
+      racks: [{ id: "r1", slots: [{ id: "s", at: 1, type: "server-1u", closeup: "sb" }] }],
+      steps: [{ focus: "a/x/closeup" }],
+    };
+    const r = validate(spec);
+    expect(r.valid).toBe(false);
+    const d = r.diagnostics.filter((x) => x.code === "assembly/unsupported");
+    expect(d.map((x) => x.path)).toEqual([
+      "/assemblies/0/closeup",
+      "/assemblies/0/parts/0/closeup",
+      "/racks/0/slots/0/closeup",
+    ]);
+    expect(d[0]?.message).toMatch(/names a storyboard; storyboard close-ups are not drawn yet/);
+    // a figure close-up is fine
+    const fig = structuredClone(spec) as unknown as Record<string, unknown>;
+    fig.figures = [{ id: "f", base: "i", parts: [{ id: "p", image: "i", seat: [0, 0] }] }];
+    for (const a of fig.assemblies as Record<string, unknown>[]) {
+      a.closeup = "f";
+      (a.parts as Record<string, unknown>[])[0]!.closeup = "f";
+    }
+    (fig.racks as { slots: Record<string, unknown>[] }[])[0]!.slots[0]!.closeup = "f";
+    expect(validate(fig).diagnostics.filter((x) => x.code === "assembly/unsupported")).toEqual([]);
+  });
+
   test("R-2 Q06: an unknown storyboard id reads as its real diagnostic, not the guard's", () => {
     const spec = {
       meta: { version: "1" },

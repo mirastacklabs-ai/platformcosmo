@@ -1104,6 +1104,14 @@ describe("figure close-ups (D-4a, §8.4): instances are checked as figures, the 
     expect(errs([{ implode: "hs-install" }])[0]![2]).toMatch(/"hs-install" is a close-up/);
   });
 
+  test("a focus or set below the instance is refused, as build would ignore it", () => {
+    // build reports `semantic/unknown-focus` (no geometry) for it: validate now refuses it first
+    expect(errs(undefined, `${T}/hs-1`).map(([c, p]) => [c, p])).toEqual([
+      ["assembly/unknown-target", "/focus"],
+    ]);
+    expect(errs(undefined, `${T}/hs-1`)[0]![2]).toMatch(/inside the figure close-up/);
+  });
+
   test("a focus on the bare id is refused; on the instance it is fine", () => {
     expect(errs(undefined, "hs-install").map(([c, p]) => [c, p])).toEqual([
       ["assembly/unknown-target", "/focus"],

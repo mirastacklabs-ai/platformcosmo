@@ -120,10 +120,31 @@ export function figureDiagnostics(
   const closeupOnly = closeupRefs(spec);
   const planned = new Map<string, ResolvedFigure>();
   for (const [id, f] of figures) if (!closeupOnly.has(id)) planned.set(id, f);
-  for (const [path, ref] of figureInstanceTargets(spec)) {
+  const instances = figureInstanceTargets(spec);
+  for (const [path, ref] of instances) {
     const f = figures.get(ref);
     if (f !== undefined) planned.set(path, { ...f, id: path });
   }
+  // a figure close-up has no parts of its own to focus or set (it moves as a whole)
+  (spec.steps ?? []).forEach((step, si) => {
+    const below = (path: string, at: string, what: string): void => {
+      for (const inst of instances.keys()) {
+        if (!path.startsWith(`${inst}/`)) continue;
+        out.push({
+          severity: "error",
+          code: "assembly/unknown-target",
+          path: at,
+          message: `${upper(what)} ${q(path)} is inside the figure close-up ${q(inst)}, which has no parts to address`,
+          suggestion: `Use "${inst}"`,
+          params: { id: path },
+        });
+        return;
+      }
+    };
+    if (step.focus !== undefined) below(step.focus, `/steps/${si}/focus`, "focus target");
+    for (const key of Object.keys(step.set ?? {}))
+      below(key, `/steps/${si}/set/${ptrKey(key)}`, "step target");
+  });
   const views = stepViews(spec, isFocusTarget);
   const storyboards = new Map<string, ResolvedStoryboard>();
   for (const sb of spec.storyboards ?? [])
@@ -146,7 +167,11 @@ export function figureDiagnostics(
  */
 function figureInstanceTargets(spec: PlatformCosmoSpec): Map<string, string> {
   const out = new Map<string, string>();
-  const targets = (spec.steps ?? []).flatMap((s) => (s.assembly ?? []).map(actionTarget));
+  const targets = (spec.steps ?? []).flatMap((s) => [
+    ...(s.assembly ?? []).map(actionTarget),
+    ...(s.focus === undefined ? [] : [s.focus]),
+    ...Object.keys(s.set ?? {}),
+  ]);
   if (!hasAssemblyContent(spec) || !targets.some((t) => t.includes("/closeup"))) return out;
   const model = new AssemblyModel(spec);
   const racks = new Set((spec.racks ?? []).map((r) => r.id));
