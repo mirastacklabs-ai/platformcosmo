@@ -7,8 +7,11 @@ import {
   validate,
   type PlatformCosmoSpec,
   type RenderOptions,
+  type Rect,
   type RenderResult,
 } from "../../src/index.js";
+import { projectBoxBounds } from "../../src/geometry/index.js";
+import { worldLeaves } from "../../src/render/assembly/world.js";
 import { assemblyAnim } from "../../src/anim/assembly.js";
 import type { AssemblyRenderModelX } from "../../src/render/assembly/types.js";
 import { decodePng } from "../../src/export/png.js";
@@ -222,16 +225,38 @@ describe("callouts and sub-builds in every output", () => {
 // ---------------------------------------------------------------------------------------------
 
 /** Pixels that differ between two frames (any channel). */
-const diff = (a: Uint8Array, b: Uint8Array): number => {
+const diff = (
+  a: Uint8Array,
+  b: Uint8Array,
+  width = 0,
+  box?: { x0: number; y0: number; x1: number; y1: number },
+): number => {
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {
+    if (box !== undefined) {
+      const x = (i / 4) % width;
+      const y = Math.floor(i / 4 / width);
+      if (x < box.x0 || x >= box.x1 || y < box.y0 || y >= box.y1) continue;
+    }
     if (a[i] !== b[i] || a[i + 1] !== b[i + 1] || a[i + 2] !== b[i + 2]) n++;
   }
   return n;
 };
+/** Pixels of the swap region: a clean swap differs by up to 1.3k; the old low hover by 4.5-4.8k. */
+const LIMIT = 2500;
+const viewBoxOf = (spec: Obj): Rect => {
+  const s = spec as unknown as PlatformCosmoSpec;
+  return buildModel({
+    scene: buildScene(s, {}),
+    theme: THEME,
+    font: "system",
+    prefix: "pc-t",
+    spec: s,
+  }).viewBox;
+};
 
 describe("the swap shows no pop", () => {
-  const swaps = (spec: Obj): { path: string; t: number }[] => {
+  const swaps = (spec: Obj): { path: string; t: number; rect: Rect }[] => {
     const s = spec as unknown as PlatformCosmoSpec;
     const m = buildModel({
       scene: buildScene(s, {}),
@@ -241,7 +266,12 @@ describe("the swap shows no pop", () => {
       spec: s,
     });
     const am = m.assembly as AssemblyRenderModelX;
-    const out: { path: string; t: number }[] = [];
+    const out: { path: string; t: number; rect: Rect }[] = [];
+    const rests = new Map(
+      worldLeaves(m.scene.assemblies!.assemblies).map(
+        (l) => [l.path, projectBoxBounds(m.projection, l.geometry.bounds)] as const,
+      ),
+    );
     for (const f of am.flights ?? []) {
       // a swap is where the copy and the world part change visibility at the same instant
       const world = new Set(
@@ -250,7 +280,16 @@ describe("the swap shows no pop", () => {
           .flatMap((t) => t.visibility.map((k) => k.t)),
       );
       for (const k of f.visibility)
-        if (k.t > 0 && k.t < am.loop - 1e-9 && world.has(k.t)) out.push({ path: f.path, t: k.t });
+        if (k.t > 0 && k.t < am.loop - 1e-9 && world.has(k.t)) {
+          // where the swap happens: the part at its hover point (the copy's offset at that instant)
+          const o = f.motion.find((q) => q.t === k.t)!.offset;
+          const r = rests.get(f.path)!;
+          out.push({
+            path: f.path,
+            t: k.t,
+            rect: { x: r.x + o.x, y: r.y + o.y, width: r.width, height: r.height },
+          });
+        }
     }
     return out;
   };
@@ -275,19 +314,37 @@ describe("the swap shows no pop", () => {
       // visible-window ends (build) and starts (unbuild)
       const m = swaps(spec);
       expect(m.length).toBeGreaterThan(0);
-      // scale 2, threshold 4000: a clean swap differs by 1.4-2.9k pixels (the part's own motion);
-      // with the old low hover (the part hidden behind the wall for a frame) it was 4.6-6.3k, so
-      // this fails without the hover fix at every speed (scale 1 could not tell the two apart)
-      const at = async (t: number) =>
-        pixels(await run(spec, { outputs: ["png"], speed, png: { scale: 2, time: t } }));
+      // scale 2, measured only where the swap happens (LIMIT above): fails without the hover fix
+      // at every speed, since the part hid behind the wall for a frame (4.5-4.8k pixels)
+      const vb = viewBoxOf(spec);
+      const at = async (t: number) => {
+        const png = decodePng(
+          (await run(spec, { outputs: ["png"], speed, png: { scale: 2, time: t } })).outputs.find(
+            (o) => o.kind === "png",
+          )!.data as Uint8Array,
+        );
+        return { data: png.data, width: png.width };
+      };
       let checked = 0;
-      for (const { t } of m) {
+      for (const { t, rect } of m) {
         const out = w(t) / speed;
         const before = await at(out - 0.0003);
         const after = await at(out + 0.0003);
+        // only the pixels where the swap happens: the part at its hover point (the rest of the
+        // picture moves too, and counts as noise)
+        const k = before.width / vb.width;
+        const box = {
+          x0: Math.floor((rect.x - vb.x) * k) - 4,
+          y0: Math.floor((rect.y - vb.y) * k) - 4,
+          x1: Math.ceil((rect.x + rect.width - vb.x) * k) + 4,
+          y1: Math.ceil((rect.y + rect.height - vb.y) * k) + 4,
+        };
         // the two frames are 2 x 0.002 s of motion apart (the drop has hardly started, the copy
         // has hardly moved) and one copy swapped for the other: a pop is thousands of pixels
-        expect(diff(before, after), `swap at ${t} (${speed}x)`).toBeLessThan(4000);
+        expect(
+          diff(before.data, after.data, before.width, box),
+          `swap at ${t} (${speed}x)`,
+        ).toBeLessThan(LIMIT);
         checked++;
       }
       expect(checked).toBe(m.length);

@@ -93,6 +93,14 @@ function unresolvedShapes(
 }
 
 /** RFC 8785 (JCS) canonical JSON. Numbers use ECMAScript serialization, which JCS mandates. */
+/** Identity of a diagnostic for de-duplication: the same finding at another severity is another one. */
+export const diagnosticKey = (d: {
+  readonly severity: string;
+  readonly code: string;
+  readonly path: string;
+  readonly message: string;
+}): string => `${d.severity}\0${d.code}\0${d.path}\0${d.message}`;
+
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value === "boolean" || typeof value === "string") {
     return JSON.stringify(value);
@@ -289,14 +297,8 @@ export function createRender(deps: RenderDeps): RenderFn {
         ...(options.parts ? { parts: options.parts } : {}),
       });
       // validation reports the build-program warnings too: once each
-      const known = new Set(
-        diagnostics.map((d) => `${d.severity}\0${d.code}\0${d.path}\0${d.message}`),
-      );
-      diagnostics.push(
-        ...scene.diagnostics.filter(
-          (d) => !known.has(`${d.severity}\0${d.code}\0${d.path}\0${d.message}`),
-        ),
-      );
+      const known = new Set(diagnostics.map(diagnosticKey));
+      diagnostics.push(...scene.diagnostics.filter((d) => !known.has(diagnosticKey(d))));
       if (diagnostics.some((d) => d.severity === "error")) return fail(diagnostics, scene);
 
       const font = options.font ?? "embed";

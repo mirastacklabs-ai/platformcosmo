@@ -47,6 +47,15 @@ export interface Flights {
   readonly rects: readonly Rect[];
 }
 
+/**
+ * The provisional callout slot (§7.6): left of the rest bounds of the assemblies by 36 px plus a
+ * tenth of their width, a quarter of their height down. It sizes the view box (the same one the
+ * flights always reserved); callout.ts then places the real slot inside each step's camera window.
+ */
+export function slotOf(rest: Rect): Vec2 {
+  return { x: rest.x - 36 - 0.1 * rest.width, y: rest.y + 0.25 * rest.height };
+}
+
 const center = (r: Rect): Vec2 => ({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
 
 /** The leaves that fly together with `run`'s node: its own, or its unit's (one rigid unit). */
@@ -87,6 +96,29 @@ export function flightSizes(
       width: Math.max(o.width, r.width),
       height: Math.max(o.height, r.height),
     });
+  }
+  return out;
+}
+
+/** Screen centre of the copy of each flight at its hover point (the swap), by play of a callout. */
+export function flightEnds(
+  runs: readonly FlightRun[],
+  leaves: readonly WorldLeaf[],
+  index: MoveIndex,
+  projection: Projection,
+): Map<number, Vec2[]> {
+  const groupOf = flightGroups(runs, leaves);
+  const out = new Map<number, Vec2[]>();
+  for (const run of runs) {
+    const group = groupOf(run);
+    const first = group[0];
+    if (first === undefined) continue;
+    const swapT = run.kind === "build" ? run.t1 : run.t0;
+    const c = center(unionRects(group.map((l) => projectBoxBounds(projection, l.geometry.bounds))));
+    const d = screenOf(projection, index.displacement(first.path, swapT));
+    const list = out.get(run.callout) ?? [];
+    list.push({ x: c.x + d.x, y: c.y + d.y });
+    out.set(run.callout, list);
   }
   return out;
 }

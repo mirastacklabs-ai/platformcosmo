@@ -23,6 +23,7 @@ import { levelOf } from "../scene/assembly/levels.js";
 import { buildAssemblyRender } from "./assembly/index.js";
 import { buildBoards } from "./boards/index.js";
 import { createIds, iconDef } from "../emit/index.js";
+import { zoomFor } from "../anim/timeline.js";
 import { h } from "../emit/xml.js";
 import {
   boundsOfPoints,
@@ -1027,6 +1028,19 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   // A figure's focus rect covers its panel, moving sprites and labels, not just the world box.
   if (boardsBuild) {
     for (const [id, r] of Object.entries(boardsBuild.focus)) focusRects[id] = r;
+  }
+  // The parts callouts and callout slots go inside each step's camera window (assembly §7.6),
+  // which needs the final view box and focus rects.
+  if (asmBuild?.place !== undefined) {
+    const partial = { viewBox: vb, focusRects, assembly: asmBuild.model } as unknown as RenderModel;
+    asmBuild.place({
+      viewBox: vb,
+      pinned: [...(captionRect ? [captionRect] : []), ...Object.values(metricRects)],
+      window: (step) => {
+        const st = scene.timeline.find((s) => s.index === step);
+        return st === undefined ? undefined : zoomFor(partial, st)?.viewBox;
+      },
+    });
   }
   const missing = [
     ...new Set([
