@@ -22,8 +22,8 @@ import type {
 } from "../contracts/index.js";
 import { planFigureSteps, resolveFigure, stepViews, type ResolvedFigure } from "../scene/boards.js";
 import { resolveStoryboard, type ResolvedStoryboard } from "../scene/storyboards.js";
-import { AssemblyPrograms } from "../scene/assembly/plan.js";
-import { buildRackAssemblies, rackTargeted, targetedRacks } from "../scene/assembly/racks.js";
+import { planScene } from "../scene/assembly/plan-scene.js";
+import { rackTargeted, targetedRacks } from "../scene/assembly/racks.js";
 import { MAX_LEVEL_DEPTH } from "../scene/assembly/levels.js";
 import { UNRENDERED, type GuardGroup } from "./unsupported.js";
 import { globMatch } from "./glob.js";
@@ -373,20 +373,20 @@ function builtRackTrees(
     racks.some((r) => r.id === id && r.programs !== undefined),
   );
   if (wanted.length === 0) return out;
-  try {
-    const built = buildRackAssemblies(spec, dc, dc.buildScene(spec), {
-      planner: new AssemblyPrograms(spec),
-      ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
-      ...(dc.shapes === undefined ? {} : { dcShapes: dc.shapes }),
-    });
-    for (const a of built.assemblies) {
-      const ri = racks.findIndex((r) => r.id === a.id);
-      if (ri < 0 || !wanted.includes(a.id)) continue;
-      const t = model.builtRackTree(ri, a.root);
-      if (t !== undefined) out.set(ri, t);
-    }
-  } catch {
-    out.clear(); // the DC pack failed: `closeupDiagnostics` (validate) and the render report it
+  // the racks only, built as the scene builds them (`planScene`); a failing pack leaves the
+  // opaque tree (`closeupDiagnostics`, in validate, and the render report the failure)
+  const planned = planScene(spec, {
+    dc,
+    ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
+    assemblies: false,
+    closeups: false,
+    guard: true,
+  });
+  for (const a of planned.racks?.assemblies ?? []) {
+    const ri = racks.findIndex((r) => r.id === a.id);
+    if (ri < 0 || !wanted.includes(a.id)) continue;
+    const t = model.builtRackTree(ri, a.root);
+    if (t !== undefined) out.set(ri, t);
   }
   return out;
 }
@@ -1487,17 +1487,74 @@ function checkSteps(c: Check): void {
       }
       const rootNode = model.root(root);
       if (rootNode === undefined) return;
-      const w = walkOf(c, rootNode, segs);
+      // `<rack>/<slot>/closeup/...`: the slot's close-up instance, checked as a spec host's
+      // (an assembly template; a figure close-up, or one nested below it, is the figure rules')
+      const slotWalk = rk === "rack" ? slotCloseupWalk(c, rootNode, segs) : null;
+      const w = slotWalk === null ? walkOf(c, rootNode, segs) : slotWalk;
       if (w === undefined) return;
+      // a close-up that names a figure or storyboard (or anything below it) is the figure rules'
+      if (atFigure(w)) return;
       if (!w.ok) {
         c.out.push(unresolved(c, `${at}/${kind}`, `${kind} target`, target, w, segs));
         return;
       }
-      if (w.opaque && w.node.progs.length === 0) return; // parts come from the DC pack
+      if (w.opaque && w.node.progs.length === 0) {
+        // a slot without `assembly`, a part of it or of the frame: the DC pack gives it no program
+        // of its own, so the scene would make the rack an assembly and then do nothing (§8.3)
+        // (a path through a close-up names the close-up instance: not this case)
+        if (rk === "rack" && !segs.includes("closeup", 1)) {
+          c.out.push(
+            mk(
+              "error",
+              "assembly/unknown-program",
+              `${at}/${kind}`,
+              `Cannot ${kind} ${q(target)}: it has no program (only a slot with "assembly" has one, "internals"; a plain slot moves with its rack's programs)`,
+              `${upper(kind)} ${q(root)} (its "drawers" program slides the slots out), or give the slot internals with "assembly"`,
+              { id: target },
+            ),
+          );
+        }
+        return;
+      }
       assemblyAction(c, a, kind, target, w.node, asm, segs.length === 1, at, machine);
     });
   });
 }
+
+/**
+ * The walk of `<rack>/<slot>/closeup/...` inside the slot's close-up instance. `null`: not a
+ * close-up path (the ordinary walk applies); `undefined`: nothing to check here (the slot's
+ * close-up is a figure, the path enters a figure's, or the work cap is spent). An unknown slot,
+ * a slot without `closeup` and a typo of the reserved segment fail like a spec host's.
+ */
+function slotCloseupWalk(c: Check, rack: TNode, segs: readonly string[]): Walk | undefined | null {
+  if (segs.length < 3) return null;
+  const slot = walkOf(c, rack, segs.slice(0, 2));
+  if (slot === undefined) return undefined;
+  const isCloseup = segs[2] === "closeup";
+  if (!slot.ok) return isCloseup ? slot : null;
+  const typo =
+    !isCloseup &&
+    slot.node.closeup !== undefined &&
+    near(c, segs[2] as string, ["closeup"]) !== undefined;
+  if (!isCloseup && !typo) return null;
+  if (typo) return { ok: false, at: 2, parent: slot.node, reason: "missing" };
+  if (slot.node.closeup === undefined) {
+    return { ok: false, at: 2, parent: slot.node, reason: "no-closeup" };
+  }
+  if (c.kinds.get(slot.node.closeup) !== "assembly") return undefined;
+  const instance = c.model.closeupNode(slot.node.closeup);
+  if (instance === undefined || !charge(c, 16 * segs.length)) return undefined;
+  const w = c.model.walk(instance, ["closeup", ...segs.slice(3)]);
+  // the walk's segments start at the instance: `at` is relative to `segs[2]`
+  return w.ok ? w : { ...w, at: w.at + 2 };
+}
+
+/** Does the walk end at, or fail directly below, a figure or storyboard close-up? */
+const atFigure = (w: Walk): boolean => {
+  const leaf = w.ok ? w.node : w.parent;
+  return leaf.kind === "figure" || leaf.kind === "board";
+};
 
 const templateTarget = (path: string, what: string, id: string): Diagnostic =>
   mk(

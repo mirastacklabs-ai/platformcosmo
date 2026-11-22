@@ -181,6 +181,15 @@ function wrap(model: RenderModel, flowGroups: SvgElement[]): AnimationLayer["lay
     : { flows: [el("g", { id: particlesId(model.ids.prefix) }, flowGroups)] };
 }
 
+/**
+ * A flow's particle group, wrapped in the fade of its cable when the cable hides while a slot it
+ * touches is displaced (§8.1; the assembly model's `staticFades` key `flow_<id>`).
+ */
+function withFlowFade(model: RenderModel, flowId: string, g: SvgElement): SvgElement {
+  const f = model.assembly?.staticFades.find((x) => x.key === `flow_${flowId}`);
+  return f === undefined ? g : el("g", { id: f.id }, [g]);
+}
+
 function compact<T>(items: readonly (T | undefined)[]): T[] {
   return items.filter((x): x is T => x !== undefined);
 }
@@ -210,7 +219,12 @@ function frameLayer(
 ): AnimationLayer {
   const t = Number.isFinite(time) ? time : 0;
   const k = stepIndexAt(win, t);
-  const groups = compact(flowsOfStep(model, k).map((f) => frozenFlow(model, f, speed, t, colors)));
+  const groups = compact(
+    flowsOfStep(model, k).map((f) => {
+      const g = frozenFlow(model, f, speed, t, colors);
+      return g === undefined ? undefined : withFlowFade(model, f.id, g);
+    }),
+  );
   // Same camera curve as the loop's keyframes, so GIF/MP4 frames ease between steps.
   const viewBox = frameViewBox(
     model,
@@ -250,10 +264,10 @@ function stepLayer(
   const flowCss: string[] = [];
   const groups = compact(
     flows.map((f) => {
-      if (!css) return smilFlow(model, f, speed, colors);
-      const c = cssFlow(model, f, speed, colors, kf);
+      const c = css ? cssFlow(model, f, speed, colors, kf) : undefined;
       if (c) flowCss.push(c.css);
-      return c?.node;
+      const g = css ? c?.node : smilFlow(model, f, speed, colors);
+      return g === undefined ? undefined : withFlowFade(model, f.id, g);
     }),
   );
   const zoom = zoomFor(model, model.scene.timeline[k]);
@@ -345,7 +359,7 @@ function loopLayer(
       g = smilFlow(model, flow, speed, colors);
     }
     if (!g) continue;
-    flowGroups.push(g);
+    flowGroups.push(withFlowFade(model, flow.id, g));
     if (n > 0 && steps.length < n) {
       const values = tl.map((_, i) => `visibility:${steps.includes(i) ? "visible" : "hidden"}`);
       const name = kf.add(stopsFor(values, win.starts, total));

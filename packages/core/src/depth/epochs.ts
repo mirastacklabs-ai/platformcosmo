@@ -808,6 +808,15 @@ class EpochSolver {
   // Setup
   // -------------------------------------------------------------------------------------------
 
+  /** The pointer of the first of `keys` that has one (a pair: either item names its assembly). */
+  private pointerOf(...keys: string[]): string {
+    for (const k of keys) {
+      const p = this.pointer(k);
+      if (p !== "") return p;
+    }
+    return "";
+  }
+
   private bad(message: string, key?: string): void {
     this.diags.add({
       severity: "error",
@@ -2443,7 +2452,7 @@ class EpochSolver {
       {
         severity: "info",
         code: "assembly/clip-fallback",
-        path: this.pointer(this.it[i]!.key),
+        path: this.pointerOf(this.it[i]!.key, this.it[s]!.key),
         message: `"${this.it[i]!.key}" crosses a visible face of "${this.it[s]!.key}"${this.clipMembers[i]!.length > 0 ? " (outside its clip block)" : ""} without a valid static clip; it is hidden until clear.`,
         params: { item: this.it[i]!.key, solid: this.it[s]!.key },
       },
@@ -2492,7 +2501,7 @@ class EpochSolver {
         {
           severity: "info",
           code: "assembly/depth-approx",
-          path: this.pointer(this.it[i]!.key),
+          path: this.pointerOf(this.it[i]!.key, this.it[j]!.key),
           message: `Depth order of "${this.it[i]!.key}" and "${this.it[j]!.key}" could not be certified in [${fmtT(ta)}, ${fmtT(tb)}] s; the static rule at the midpoint decides.`,
           params: { items: [this.it[i]!.key, this.it[j]!.key], t0: ta, t1: tb },
         },
@@ -2533,7 +2542,7 @@ class EpochSolver {
           this.diags.add({
             severity: "warning",
             code: "assembly/transit-collision",
-            path: this.pointer(I.key),
+            path: this.pointerOf(I.key, J.key),
             message: `"${I.key}" and "${J.key}" interpenetrate at t = ${fmtT(t)} s during a transition.`,
             params: { items: [I.key, J.key], t },
           });
@@ -2599,7 +2608,7 @@ class EpochSolver {
             {
               severity: "info",
               code: "assembly/depth-approx",
-              path: this.pointer(this.it[x]!.key),
+              path: this.pointerOf(this.it[x]!.key, this.it[y]!.key),
               message: `"${this.it[x]!.key}" must be drawn before "${this.it[y]!.key}" in some epochs and after it in others; no depth copy is made for it (${this.noCopy}), so those epochs are approximate.`,
               params: { items: [this.it[x]!.key, this.it[y]!.key], copy: true },
             },
@@ -2643,7 +2652,7 @@ class EpochSolver {
     const d: Diagnostic = {
       severity: "info",
       code: "assembly/depth-cycle",
-      path: this.pointer(from),
+      path: this.pointerOf(from, to),
       message: `The ${STRENGTH_NAME[s]} depth edge "${from}" before "${to}" was dropped to break a cycle; the affected epochs are approximate.`,
       params: { from, to, strength: STRENGTH_NAME[s] },
     };
@@ -2921,7 +2930,7 @@ class EpochSolver {
               {
                 severity: "info",
                 code: "assembly/depth-approx",
-                path: this.pointer(a),
+                path: this.pointerOf(a, b),
                 message: `"${a}" and "${b}" need both orders inside [${fmtT(F_[k]!.ta)}, ${fmtT(F_[k]!.tb)}] s (a tolerance-wide overlap); "${a}" is drawn first there, approximate.`,
                 params: { items: [a, b], t0: F_[k]!.ta, t1: F_[k]!.tb },
               },

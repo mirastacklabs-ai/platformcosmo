@@ -113,6 +113,8 @@ export interface LabelContext {
   readonly fs: number;
   readonly text: (o: TextSpec) => SvgElement;
   readonly fit: (text: string, size: number, bold: boolean, maxWidth: number) => string;
+  /** Label boxes already placed by the main scene: they never move, every part label avoids them. */
+  readonly fixed?: readonly Rect[];
   readonly assemblies: readonly SceneAssembly[];
   readonly labelMode: (assembly: string) => "exploded" | "always" | "never";
   readonly leaves: readonly WorldLeaf[];
@@ -644,6 +646,7 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
         }
         crosses += q.now.leaders.filter(([a, b]) => segmentHitsRect(a, b, cc)).length;
         labels += q.now.boxes.reduce((sum, b) => sum + rectArea(b, cc), 0);
+        labels += (ctx.fixed ?? []).reduce((sum, b) => sum + rectArea(b, cc), 0);
         for (const hu of q.hulls) if (rectsOverlap(hu.rect, cc)) parts += clipArea(hu.hull, cc);
         covers += q.now.anchors.filter((a) => containsPoint(cc, a)).length;
       }

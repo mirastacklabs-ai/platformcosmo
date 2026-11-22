@@ -1,6 +1,4 @@
 import type {
-  AssemblyBuild,
-  AssemblyBuildOptions,
   CreateIconResolverFn,
   DcPack,
   FetchIconPackFn,
@@ -16,14 +14,15 @@ import type {
   ValidateThemeFn,
   VideoEncoder,
 } from "@platformcosmo/core";
+import type { AssemblyBuild, AssemblyBuildOptions } from "@platformcosmo/core/internal";
 
-/** Engine entry points the CLI calls (all from `@platformcosmo/core`). */
+/** Engine entry points the CLI calls (from `@platformcosmo/core`, and `/internal` for the first-party helpers). */
 export interface CoreApi {
   parseSpec: ParseSpecFn;
   validate: ValidateFn;
   render: RenderFn;
   /** Size and depth checks of close-ups and slot internals; `validate` and `build` both call it (internal). */
-  closeupDiagnostics?: (typeof import("@platformcosmo/core"))["closeupDiagnostics"];
+  closeupDiagnostics?: (typeof import("@platformcosmo/core/internal"))["closeupDiagnostics"];
   createIconResolver: CreateIconResolverFn;
   sanitizeSvg: SvgSanitizer;
   fetchIconPack: FetchIconPackFn;

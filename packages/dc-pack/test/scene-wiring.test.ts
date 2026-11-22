@@ -6,17 +6,17 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  AssemblyPrograms,
   buildScene,
-  closeupDiagnostics,
   validate,
   type DcAssemblyPlanner,
   type Diagnostic,
   type PlatformCosmoSpec,
+  type ResolvedExplodeProgram,
   type SceneAssembly,
   type SceneAssemblyNode,
   type SceneGraph,
 } from "@platformcosmo/core";
+import { AssemblyPrograms, closeupDiagnostics } from "@platformcosmo/core/internal";
 import { dcPack, assemblyPlanner } from "../src/index.js";
 
 type Json = Record<string, unknown>;
@@ -378,5 +378,80 @@ describe("validate plans the racks with the assemblies (7.3 compression)", () =>
     const v = codes(validate(s, { dc: dcPack }).diagnostics, "assembly/compressed");
     expect(v.map((d) => d.path)).toEqual(["/steps/0/assembly"]);
     expect(codes(scene(s).diagnostics, "assembly/compressed")).toEqual([]);
+  });
+});
+
+describe("W-2 follow-ups", () => {
+  it("(f) a close-up inside a targeted rack's slot internals points at the template part", () => {
+    const s = spec({
+      assemblies: [
+        { id: "sink", template: true, units: "mm", parts: [{ id: "f", size: [900, 900, 9] }] },
+        {
+          id: "board",
+          template: true,
+          units: "mm",
+          parts: [
+            { id: "pcb", size: [400, 500, 2] },
+            { id: "cpu", at: [50, 50, 2], size: [60, 60, 20], closeup: "sink" },
+          ],
+        },
+      ],
+      racks: [{ id: "r1", slots: [{ id: "srv", at: 1, type: "server-2u", assembly: "board" }] }],
+      steps: [{ assembly: [{ explode: "r1" }] }],
+    });
+    const d = codes(scene(s).diagnostics, "assembly/size-mismatch").filter(
+      (x) => x.params?.["host"] === "r1/srv/cpu",
+    );
+    expect(d.map((x) => x.path)).toEqual(["/assemblies/1/parts/1/closeup"]);
+    expect(codes(closeupDiagnostics(s, { dc: dcPack }), "assembly/size-mismatch")).toContainEqual(
+      d[0],
+    );
+  });
+
+  it("(d) a slot close-up's action compressed into its step is reported by validate", () => {
+    const s = spec({
+      assemblies: [
+        {
+          ...board(),
+          programs: [
+            {
+              id: "lift",
+              stages: [
+                { parts: ["cpu"], direction: "up", distance: 40, duration: 2 },
+                { parts: ["pcb"], direction: "+x", distance: 40, duration: 2 },
+              ],
+            },
+          ],
+        },
+      ],
+      racks: [{ id: "r1", slots: [{ id: "srv", at: 1, type: "server-2u", closeup: "board" }] }],
+      steps: [{ duration: 1, assembly: [{ explode: "r1/srv/closeup" }] }],
+    });
+    const v = codes(validate(s, { dc: dcPack }).diagnostics, "assembly/compressed");
+    expect(v.map((d) => d.path)).toEqual(["/steps/0/assembly"]);
+  });
+
+  it("(P3) the pack reads a spec changed between two calls afresh", () => {
+    const s = spec({
+      racks: [
+        {
+          id: "r1",
+          programs: [{ id: "up", stages: [{ parts: ["s"], direction: "up", distance: 100 }] }],
+          slots: [{ id: "s", at: 1, type: "server-1u" }],
+        },
+      ],
+      steps: [{ assembly: [{ explode: "r1" }] }],
+    });
+    const frag = dcPack.buildScene(s);
+    const dz = (): number => {
+      const a = dcPack.buildAssembly!(s, "r1", frag, {}).assembly!;
+      const p = a.programs.find((x) => x.id === "up") as ResolvedExplodeProgram;
+      return p.stages[0]!.moves[0]!.offset.z;
+    };
+    const first = dz();
+    (s.racks![0] as { programs: unknown }).programs = [
+      { id: "up", stages: [{ parts: ["s"], direction: "up", distance: 300 }] },
+    ];
+    expect(dz()).toBeCloseTo(first * 3, 6);
   });
 });

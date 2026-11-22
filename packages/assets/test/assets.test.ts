@@ -12,6 +12,7 @@ import {
   shrink,
   shrinkImage,
   trim,
+  zoom,
   type Raster,
 } from "../src/index.js";
 import { makeJpeg, makeRaster, noise, paste, px, shifted, type Px } from "./fixtures.js";
@@ -201,6 +202,31 @@ describe("removeBackground (edge-connected)", () => {
       "asset/no-background",
     ]);
     expect(codes(removeBackground(ring, { tolerance: 300 }))).toEqual(["asset/bad-option"]);
+  });
+});
+
+describe("zoom", () => {
+  const r = makeRaster(8, 4, (x, y) => [x * 30, y * 60, 100, 255]);
+  it("scales by the factor: box filter below 1, bilinear above, identity at 1", () => {
+    expect(zoom(r, 1).value).toBe(r);
+    const up = zoom(r, 2.5).value!;
+    expect([up.width, up.height]).toEqual([20, 10]);
+    const down = zoom(r, 0.25).value!;
+    expect([down.width, down.height]).toEqual([2, 1]);
+    expect(zoom(r, 8).value).toMatchObject({ width: 64, height: 32 });
+    expect(zoom(r, 0.25).value).toBeDefined();
+  });
+  it("is deterministic", () => {
+    expect(Array.from(zoom(r, 3.3).value!.data)).toEqual(Array.from(zoom(r, 3.3).value!.data));
+  });
+  it("rejects a factor out of range or not finite with asset/bad-option", () => {
+    for (const k of [0, 0.24, 8.01, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(codes(zoom(r, k))).toEqual(["asset/bad-option"]);
+    }
+  });
+  it("refuses a result over the pixel limit with asset/too-large", () => {
+    const big = makeRaster(4000, 1000, () => [0, 0, 0, 255]);
+    expect(codes(zoom(big, 8))).toEqual(["asset/too-large"]);
   });
 });
 

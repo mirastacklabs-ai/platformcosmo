@@ -36,7 +36,7 @@ import { U_MM } from "./units.js";
 /** Oversize above which a slot template warns (assemblies 8.5; the template is shrunk either way). */
 const SIZE_TOLERANCE = 0.1;
 import { partKind, tileToMm, unitMm } from "./shapes.js";
-import { AssemblyPrograms, rackTargeted, reassignSplit } from "@platformcosmo/core";
+import { AssemblyPrograms, rackTargeted, reassignSplit } from "@platformcosmo/core/internal";
 import type {
   AssemblyFrame,
   Box3,
@@ -720,9 +720,21 @@ export function buildRackAssembly(
   let leafCount = 0;
   const frameKids: SceneAssemblyNode[] = [];
   const doorKids: SceneAssemblyNode[] = [];
+  // The 1.1 rack draws the rear-door heat exchanger as a full-width frame over the rear posts
+  // (one solid object, so the overlap never shows). Here the door is a cover of its own that slides
+  // out rear, so it hangs BETWEEN the rear posts: its bars stop at the posts and its stiles sit
+  // inside them, and the slide passes no post (no transit collision).
+  const postBox = built.parts.find((p) => p.id === "post-bl");
+  const postW = postBox === undefined ? 0 : tileToMm(postBox.box.size.x);
+  const between = (b: Box3): Box3 => {
+    const room = W - 2 * postW;
+    const sx = Math.min(b.size.x, room);
+    const x = Math.min(Math.max(b.origin.x, postW), postW + room - sx);
+    return box(x, b.origin.y, b.origin.z, sx, b.size.y, b.size.z);
+  };
   for (const p of built.parts) {
-    const b = partBox(p, 0, 0, 0);
     const doorId = DOOR_NAMES[p.id];
+    const b = doorId === undefined ? partBox(p, 0, 0, 0) : between(partBox(p, 0, 0, 0));
     const init: NodeInit = {
       role: doorId !== undefined ? "cover" : (FRAME_ROLE[p.id] ?? "body"),
       state,
@@ -1035,17 +1047,13 @@ const lookupOf =
   (owner: string, id: string): SpecExplodeProgram | undefined =>
     synthetic.get(`${owner}\0${id}`);
 
-/** The spec as core's model reads it, once per spec (`makePlanner`). */
-const PLAN_SPEC = new WeakMap<PlatformCosmoSpec, PlatformCosmoSpec>();
-
-/** A core planner over the spec; racks register their synthetic bodies with it. */
+/**
+ * A core planner over the spec; racks register their synthetic bodies with it. The spec is read
+ * afresh on every call (no cache by object identity: a caller may change the spec between
+ * calls); the scene and validation pass one shared planner, so this runs only for direct calls.
+ */
 function makePlanner(spec: PlatformCosmoSpec): AssemblyPrograms {
-  let planSpec = PLAN_SPEC.get(spec);
-  if (planSpec === undefined) {
-    planSpec = sanitize(spec);
-    PLAN_SPEC.set(spec, planSpec);
-  }
-  return new AssemblyPrograms(planSpec);
+  return new AssemblyPrograms(sanitize(spec));
 }
 
 /**
