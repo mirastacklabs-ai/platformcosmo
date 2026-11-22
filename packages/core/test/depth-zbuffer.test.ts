@@ -52,6 +52,8 @@ async function expectExact(
 /** Per-item cap on wrong pixels (share of that item's reference pixels). */
 const ITEM_CAP = 0.01;
 
+const solidBox = { solid: true, fills: true } as const;
+
 // Piston rising out of a STATIC block through its top face (§9.5), and back.
 const piston: Scene = {
   items: [
@@ -257,7 +259,7 @@ describe("clip frames (§9.4, §9.5)", () => {
     });
   });
 
-  it("clip validity: a piston that slides sideways after clearing is not clipped; hidden until clear", async () => {
+  describe("clip validity: a piston that slides sideways once clear (two copies, §9.5, A1-2c)", () => {
     const scene: Scene = {
       items: piston.items,
       moves: [
@@ -269,16 +271,117 @@ describe("clip frames (§9.4, §9.5)", () => {
       loop: 4,
     };
     const r = solve(scene);
-    expect(r.clips).toEqual([]);
-    expect(r.diagnostics.map((d) => d.code)).toContain("assembly/clip-fallback");
     const view = viewOf(scene, [0, 1, 2], 2);
     const p = indexOf(scene, "e/piston");
-    // Crossing (top above the deck at t = 0.3, bottom still inside): hidden, though visible in truth.
-    const crossing = await check(scene, r, 0.3, view);
-    expect(count(crossing.ref, p)).toBeGreaterThan(100);
-    expect(count(crossing.got, p)).toBe(0);
-    // Clear of the deck: drawn, unclipped, and exact.
-    await expectExact(scene, r, [0.8, 1.5, 2.5, 3.2], view);
+
+    it("a clipped copy while it crosses, an unclipped one for the slide; no fallback", () => {
+      // one clip for the crossing window [0, 1] ∪ [3, 4] (z only, one footprint): copy 0
+      expect(r.clips).toEqual([
+        expect.objectContaining({ item: "e/piston", solid: "e/block", axis: "z" }),
+      ]);
+      expect(r.items.find((x) => x.item === "e/piston")).toEqual({
+        item: "e/piston",
+        path: "e/piston",
+        copies: 2,
+        clips: { 0: { clip: r.clips[0]!.clip, solid: "e/block" } },
+      });
+      expect(r.stats.copies).toBe(1);
+      expect(r.diagnostics.map((d) => d.code)).toEqual([]);
+      expect(r.approximate).toEqual([]);
+      // the copies swap at the window's ends (t = 1, 3), where the piston is clear of the deck;
+      // inside the block (its top below the deck) it is hidden
+      const at = (t: number): readonly string[] => epochAt(r, t).order;
+      expect(at(0.03)).toEqual(["e/block"]);
+      for (const t of [0.5, 0.999, 3.001, 3.5]) expect(at(t)).toEqual(["e/block", "e/piston"]);
+      for (const t of [1.001, 2, 2.999]) expect(at(t)).toEqual(["e/block", "e/piston__c1"]);
+      expect(at(3.97)).toEqual(["e/block"]);
+      expect(r.order).toEqual(["e/block", "e/piston", "e/piston__c1"]);
+    });
+
+    it("exact at every sample, while crossing and on both sides of each swap", async () => {
+      // t = 0.3: top above the deck, bottom still inside (Phase 1b hid it until clear)
+      const crossing = await check(scene, r, 0.3, view);
+      expect(count(crossing.ref, p)).toBeGreaterThan(100);
+      expect(Math.abs(count(crossing.got, p) - count(crossing.ref, p))).toBeLessThanOrEqual(
+        0.02 * count(crossing.ref, p) + 40,
+      );
+      await expectExact(
+        scene,
+        r,
+        [0.3, 0.8, 0.999, 1.001, 1.5, 2.5, 2.999, 3.001, 3.2, 3.7, ...samples(4, 8)],
+        view,
+      );
+    });
+
+    it("controls: the clip on every copy cuts the slide; no clip shows it through the block", async () => {
+      const all = await check(scene, r, 1.5, view, { clipEveryCopy: true });
+      expect(all.fraction).toBeGreaterThan(0.01);
+      const none = await check(scene, r, 0.3, view, { clipMode: "none" });
+      expect(none.fraction).toBeGreaterThan(0.01);
+    });
+
+    it("over the pair budget: no two-copy candidates (budget/time), hidden while it crosses", () => {
+      const b = depthEpochs(scene.items, scene.moves, scene.loop, {
+        budgets: { maxPairChecks: 1 },
+      });
+      expect(b.clips).toEqual([]);
+      expect(b.stats.copies).toBe(0);
+      const w = b.diagnostics.find(
+        (d) => d.code === "budget/time" && d.message.includes("two-copy clip candidates"),
+      )!;
+      expect(w.severity).toBe("warning");
+      // piston in block and block in piston: both directions are candidates
+      expect(w.params).toMatchObject({ candidates: 2 });
+    });
+
+    it("a cylinder (does not fill its box) is not split: hidden while it crosses, named", async () => {
+      const cyl: Scene = {
+        ...scene,
+        items: [scene.items[0]!, { ...scene.items[1]!, fills: false }],
+        zcyl: ["e/piston"],
+      };
+      const c = solve(cyl);
+      expect(c.clips).toEqual([]);
+      expect(c.stats.copies).toBe(0);
+      expect(c.diagnostics.map((d) => d.code)).toContain("assembly/clip-fallback");
+      const v = viewOf(cyl, [0, 1, 2], 2);
+      expect(count((await check(cyl, c, 0.3, v)).got, p)).toBe(0);
+      await expectExact(cyl, c, [0.8, 1.5, 2.5, 3.2], v);
+    });
+
+    it("no second copy when the block is weak-behind the piston (flush corner, §9.5)", async () => {
+      // the piston sits in the block's +x+y corner (flush) and already crosses the deck at rest,
+      // so the block never passes a hidden face of the piston in the crossing window:
+      // block < piston is exact without a clip, and no copy is made
+      const corner: Scene = {
+        items: [
+          scene.items[0]!,
+          { key: "e/piston", path: "e/piston", box: box(2, 2, 1, 2, 2, 1.5), ...solidBox },
+        ],
+        moves: scene.moves,
+        loop: 4,
+      };
+      const c = solve(corner);
+      expect(c.clips).toEqual([]);
+      expect(c.stats.copies).toBe(0);
+      expect(c.diagnostics).toEqual([]);
+      await expectExact(corner, c, [0.3, 0.6, 1.5, 2.5, 3.4], viewOf(corner, [0, 1, 2], 2));
+    });
+
+    it("beyond the copy budget: hidden while it crosses (fallback), budget/depth-copies", async () => {
+      const b = depthEpochs(scene.items, scene.moves, scene.loop, {
+        budgets: { maxCopyRatio: 0 },
+      });
+      expect(b.clips).toEqual([]);
+      expect(b.stats.copies).toBe(0);
+      const w = b.diagnostics.find((d) => d.code === "budget/depth-copies")!;
+      expect(w.severity).toBe("warning");
+      expect(w.params).toEqual({ limit: 0, items: 2, hidden: 1 });
+      expect(b.diagnostics.map((d) => d.code)).toContain("assembly/clip-fallback");
+      const c = await check(scene, b, 0.3, view);
+      expect(count(c.got, p)).toBe(0);
+      await expectExact(scene, b, [0.8, 1.5, 2.5, 3.2], view);
+    });
   });
 });
 
@@ -1007,9 +1110,81 @@ describe("randomized property: painter's order of sampled frames vs z-buffer", (
         }
       }
       expect(clipped).toBeGreaterThan(20);
-      expect(fallbacks).toBeGreaterThan(0);
-      expect(skippedCrossing).toBeGreaterThan(0);
+      // sliding pistons get a clipped and an unclipped copy (A1-2c): nothing falls back
+      expect(fallbacks).toBe(0);
+      expect(skippedCrossing).toBe(0);
       expect(frames).toBeGreaterThan(60);
     },
   );
+});
+
+describe("copies for cycles across intervals and the group-derived static chain (A1-2c)", () => {
+  const instant = (path: string, t: number, d: Vec3): LoopMove => ({
+    path,
+    t0: t,
+    t1: t,
+    from: v(0, 0, 0),
+    to: d,
+    easing: "linear",
+  });
+  const solid = { solid: true, fills: true } as const;
+
+  it("a forced cycle that closes only across intervals: copies, exact; one order is not", async () => {
+    // a in b's bottom face [0, 1), b in c's [1, 2), c in a's [2, 3): no pair flips
+    const scene: Scene = {
+      items: [
+        { key: "a", path: "a", box: box(0, 0, -0.5, 1, 1, 1), ...solid },
+        { key: "b", path: "b", box: box(0, 0, 0, 1, 1, 1), ...solid },
+        { key: "c", path: "c", box: box(20, 20, 0, 1, 1, 1), ...solid },
+      ],
+      moves: [
+        instant("a", 1, v(10, 10, 0)),
+        instant("c", 1, v(-20, -20, 0.5)),
+        instant("b", 2, v(20, 0, 0)),
+        instant("a", 2, v(-10, -10, 1.5)),
+      ],
+      loop: 3,
+    };
+    const r = solve(scene);
+    expect(r.stats.copyConflicts).toBe(0);
+    expect(r.stats.copies).toBe(1);
+    expect(r.diagnostics).toEqual([]);
+    const times = [0.5, 1.5, 2.5];
+    const view = viewOf(scene, times, 2);
+    await expectExact(scene, r, times, view);
+    const one = depthEpochs(scene.items, scene.moves, scene.loop, {
+      budgets: { maxCopyRatio: 0 },
+    });
+    let worst = 0;
+    for (const t of times) worst = Math.max(worst, (await check(scene, one, t, view)).fraction);
+    expect(worst).toBeGreaterThan(0.01);
+  });
+
+  it("the static chain follows the groups: no chain-induced cycle", async () => {
+    // s1 (a tall post, deepest centre) is behind a on x, a behind s2 on x; then a jumps behind
+    // s1 and back. s1 and s2 never overlap on screen, so the loop-wide edges alone (a < s2)
+    // release s2 before s1 (lower centre depth): with that chain, a's group order s1 < a < s2
+    // closes a cycle through s2 < s1 and drops a certified edge. Derived from the groups, the
+    // chain is s1 < s2 and every group is exact.
+    const scene: Scene = {
+      items: [
+        { key: "a", path: "a", box: box(2, 0, 0, 1, 1, 1) },
+        { key: "s1", box: box(1, 0, 0, 1, 1, 7) },
+        { key: "s2", box: box(3, 0, 0, 1, 1, 1) },
+      ],
+      moves: [instant("a", 1, v(-2, 0, 0)), instant("a", 2, v(2, 0, 0))],
+      loop: 3,
+    };
+    const r = solve(scene);
+    expect(r.diagnostics).toEqual([]);
+    expect(r.approximate).toEqual([]);
+    expect(r.stats.cycleDrops).toBe(0);
+    expect(r.epochs.map((e) => e.order)).toEqual([
+      ["s1", "a", "s2"],
+      ["a__c1", "s1", "s2"],
+      ["s1", "a", "s2"],
+    ]);
+    const times = [0.5, 1.5, 2.5];
+    await expectExact(scene, r, times, viewOf(scene, times, 2));
+  });
 });

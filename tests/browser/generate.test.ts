@@ -15,7 +15,11 @@ import { test } from "vitest";
 import { buildModel, buildScene, render } from "../../packages/core/src/index.js";
 import type { AssemblyRenderModel, PlatformCosmoSpec } from "../../packages/core/src/index.js";
 import { parseCopyKey } from "../../packages/core/src/depth/copies.js";
-import { clippedCopySpec, copySwapSpec } from "../../packages/core/test/copies-fixtures.js";
+import {
+  clippedCopySpec,
+  copySwapSpec,
+  crossingClipSpec,
+} from "../../packages/core/test/copies-fixtures.js";
 import { registry as hwRegistry } from "../../packages/parts-base/src/index.js";
 import { decodePng } from "../../packages/core/src/export/png.js";
 import { fixtureTheme } from "../../packages/core/test/fixtures/theme.js";
@@ -61,6 +65,21 @@ const ASSEMBLY_EXAMPLES = [
 const COPY_EXAMPLES = [
   { file: "asm-copies.svg", prefix: "pc-cp", spec: () => copySwapSpec({ label: true }) },
   { file: "asm-copies-clip.svg", prefix: "pc-cc", spec: clippedCopySpec },
+  // A1-2c: clipped only while it crosses, an unclipped copy for the slide (§9.5); `exact`: the
+  // two copies must draw the same pixels at each swap (the flush fixture is the named exception,
+  // `assembly/clip-swap-rim`, so it only gets the A1-2b swap check)
+  { file: "asm-copies-window.svg", prefix: "pc-cw", spec: () => crossingClipSpec(), exact: true },
+  {
+    file: "asm-copies-window-x.svg",
+    prefix: "pc-cx",
+    spec: () => crossingClipSpec({ exit: "x" }),
+    exact: true,
+  },
+  {
+    file: "asm-copies-window-flush.svg",
+    prefix: "pc-cf",
+    spec: () => crossingClipSpec({ flush: true }),
+  },
 ] as const;
 
 /**
@@ -114,7 +133,7 @@ async function generateAssemblies(): Promise<{
     parts: hwRegistry,
   };
   const info: Record<string, { animate: [number, number]; mids: number[] }> = {};
-  const copies: Record<string, { swaps: { t: number; ids: string[] }[] }> = {};
+  const copies: Record<string, { swaps: { t: number; ids: string[] }[]; exact?: true }> = {};
   const all = [
     ...ASSEMBLY_EXAMPLES.map((ex) => ({
       file: ex.file,
@@ -123,7 +142,10 @@ async function generateAssemblies(): Promise<{
     })),
     ...COPY_EXAMPLES.map((ex) => {
       const spec = ex.spec();
-      copies[ex.file] = { swaps: copySwaps(spec, ex.prefix) };
+      copies[ex.file] = {
+        swaps: copySwaps(spec, ex.prefix),
+        ...("exact" in ex && ex.exact ? { exact: true as const } : {}),
+      };
       if (copies[ex.file]!.swaps.length === 0) throw new Error(`${ex.file}: no copy swap`);
       return {
         file: ex.file,

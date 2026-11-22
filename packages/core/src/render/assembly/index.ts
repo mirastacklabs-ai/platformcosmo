@@ -62,7 +62,15 @@ import { levelOf } from "../../scene/assembly/levels.js";
 import { buildLevelGroups, levelFocusRect, roundRect } from "./levels.js";
 import { groupTracks, placementAttr } from "./groups.js";
 import { scopeIds, viewNode, viewRender } from "./views.js";
-import { clipDef, partGroup, withIdSuffix, wrap, type DomContext, type Wrappers } from "./dom.js";
+import {
+  CLIP_STROKE_PAD,
+  clipDef,
+  partGroup,
+  withIdSuffix,
+  wrap,
+  type DomContext,
+  type Wrappers,
+} from "./dom.js";
 import { buildLabels, type LabelTrack, type TextSpec } from "./labels.js";
 import {
   BUILD_FADE,
@@ -391,22 +399,30 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
   const staticByKey = new Map(statics.map((s) => [s.key, s]));
   const staticFades: StaticFadeTrack[] = [];
 
-  // Per item (shared by its copies): the copy-0 part group, the motion tracks, the fade track.
+  // Per item (shared by its copies): the copy-0 part group and the fade track; the motion tracks
+  // per clip state (a clipped copy rides on its solid's track, §9.4; an item clipped only while
+  // it crosses has unclipped copies too, §9.5).
   interface ItemDom {
     readonly inner: SvgElement;
+    readonly opacity: OpacityKey[];
+  }
+  interface ItemMotion {
     readonly host: readonly TrackKey[];
     readonly motion: readonly TrackKey[];
-    readonly opacity: OpacityKey[];
     readonly clip: string | undefined;
   }
   const itemDom = new Map<string, ItemDom>();
+  const itemMotion = new Map<string, ItemMotion>();
   const copiesOf = new Map(result.items.map((i) => [i.item, i.copies]));
+  const copyClips = new Map(result.items.map((i) => [i.item, i.clips]));
   /**
    * Copy-0 element id → the ids of that element in every copy (copy 0 first), for items with more
    * than one copy (`copyIds`). Recorded as emitted: wrapper ids come from the (possibly
    * view-scoped) scheme, part-group ids from `withIdSuffix`.
    */
   const copyList = new Map<string, string[]>();
+  /** Copy-0 wrapper id → [copy, id] of every copy that has that wrapper (DOM order). */
+  const wrapperCopies = new Map<string, [number, string][]>();
   const collectIds = (node: SvgNode, n: number): void => {
     if (typeof node !== "object" || !("tag" in node)) return;
     const id = node.attrs?.["id"];
@@ -453,29 +469,46 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     if (dom === undefined) {
       const half =
         key === `${path}__back` ? "back" : key === `${path}__front` ? "front" : undefined;
-      const clip = clipOf.get(key);
-      const chain = index.chain(path);
-      let host: readonly TrackKey[] = [];
-      let motion: readonly TrackKey[];
-      if (clip !== undefined) {
-        const solidPath = itemPath.get(clip.solid);
-        const solidChain = solidPath === undefined ? [] : index.chain(solidPath);
-        host = offsetTrack(plain(solidChain), total, projection, extraTimes);
-        motion = offsetTrack(relativeMoves(chain, solidChain), total, projection, extraTimes);
-        // one static clip path, shared by every copy (defined in the solid's frame)
-        domCtx.defs.push(clipDef(domCtx, clip.clip, clip.prism));
-      } else {
-        motion = offsetTrack(plain(chain), total, projection, extraTimes);
-      }
       const top = labels.top.get(path);
       const inner = partGroup(domCtx, leaf, half, top === undefined ? {} : { extra: [top] });
       const opacity = windowsTrack(fadeWindows.get(path) ?? [], FADE_OPACITY, total);
-      dom = { inner, host, motion, opacity, clip: clip?.clip };
+      dom = { inner, opacity };
       itemDom.set(key, dom);
       const n = copiesOf.get(key) ?? 1;
       if (n > 1) collectIds(inner, n);
     }
-    const { host, motion } = dom;
+    const clip = copyClips.get(key)?.[copy] === undefined ? undefined : clipOf.get(key);
+    const mkey = `${key}\u0000${clip === undefined ? 0 : 1}`;
+    let mot = itemMotion.get(mkey);
+    if (mot === undefined) {
+      const chain = index.chain(path);
+      if (clip !== undefined) {
+        const solidPath = itemPath.get(clip.solid);
+        const solidChain = solidPath === undefined ? [] : index.chain(solidPath);
+        // one static clip path, shared by every clipped copy (defined in the solid's frame)
+        domCtx.defs.push(
+          clipDef(
+            domCtx,
+            clip.clip,
+            clip.prism,
+            clip.window ? { axis: clip.axis, width: CLIP_STROKE_PAD } : undefined,
+          ),
+        );
+        mot = {
+          host: offsetTrack(plain(solidChain), total, projection, extraTimes),
+          motion: offsetTrack(relativeMoves(chain, solidChain), total, projection, extraTimes),
+          clip: clip.clip,
+        };
+      } else {
+        mot = {
+          host: [],
+          motion: offsetTrack(plain(chain), total, projection, extraTimes),
+          clip: undefined,
+        };
+      }
+      itemMotion.set(mkey, mot);
+    }
+    const { host, motion } = mot;
     // this copy's epochs (§9.4) AND the leaf's presence (B-3: built parts exist from their move's
     // start): a copy never shows while its leaf is absent. Fades are per item: every copy shares
     // them, presence fades included.
@@ -496,14 +529,14 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     tracks.push(track);
     const w: { -readonly [K in keyof Wrappers]: Wrappers[K] } = {};
     const reg: { -readonly [K in keyof Registered]: Registered[K] } = { key: copyKey, track };
-    if (dom.clip !== undefined) {
+    if (mot.clip !== undefined) {
       if (host.length > 0) {
         const hid = ids.partHost(key, copy);
         const tf = translateOf(evalOffset(host, 0));
         w.host = { id: hid, ...(tf === undefined ? {} : { transform: tf }) };
         reg.host = hid;
       }
-      w.clip = dom.clip;
+      w.clip = mot.clip;
     }
     if (motion.length > 0) {
       const mid = ids.partMotion(key, copy);
@@ -522,26 +555,31 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
       reg.fade = fid;
     }
     registered.push(reg);
-    if (copy === 0) {
-      const n = copiesOf.get(key) ?? 1;
-      if (n > 1) {
-        const wrappers: [unknown, (item: string, copy?: number) => string][] = [
-          [w.host, ids.partHost],
-          [w.motion, ids.partMotion],
-          [w.visible, ids.partVisible],
-          [w.fade, ids.partFade],
-        ];
-        for (const [has, idOf] of wrappers) {
-          if (has === undefined) continue;
-          copyList.set(
-            idOf(key, 0),
-            Array.from({ length: n }, (_, k) => idOf(key, k)),
-          );
-        }
+    if ((copiesOf.get(key) ?? 1) > 1) {
+      // wrapper ids across copies, keyed by the copy-0 id; only the copies that have the wrapper
+      // (an unclipped copy of an item clipped while it crosses has no `partHost`, §9.5)
+      const wrappers: [unknown, (item: string, copy?: number) => string][] = [
+        [w.host, ids.partHost],
+        [w.motion, ids.partMotion],
+        [w.visible, ids.partVisible],
+        [w.fade, ids.partFade],
+      ];
+      for (const [has, idOf] of wrappers) {
+        if (has === undefined) continue;
+        const k0 = idOf(key, 0);
+        const list = wrapperCopies.get(k0);
+        if (list === undefined) wrapperCopies.set(k0, [[copy, idOf(key, copy)]]);
+        else list.push([copy, idOf(key, copy)]);
       }
     }
     const inner = copy === 0 ? dom.inner : withIdSuffix(dom.inner, copySuffix(copy), domCtx);
     objects.push(wrap(inner, w, domCtx));
+  }
+  for (const [k0, list] of wrapperCopies) {
+    copyList.set(
+      k0,
+      list.sort((a, b) => a[0] - b[0]).map((x) => x[1]),
+    );
   }
   // ---- focus rects at the END pose (§7.4) -------------------------------------------------
   const nodeLeaves = new Map<string, WorldLeaf[]>();
