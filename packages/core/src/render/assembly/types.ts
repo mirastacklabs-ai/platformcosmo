@@ -32,4 +32,6 @@ export interface AssemblyRenderModelX extends AssemblyRenderModel {
   readonly moves: readonly import("./tracks.js").BezierMove[];
   /** Opacity (views, levels) and placement (levels) tracks of the view and level groups (B-3). */
   readonly groups?: readonly import("./groups.js").GroupTrack[];
+  /** Overlay copies of leaves that fly in from a callout (A2-7, §7.6), sorted by leaf path. */
+  readonly flights?: readonly import("./flights.js").FlightTrack[];
 }

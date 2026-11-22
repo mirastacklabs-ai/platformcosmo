@@ -106,7 +106,11 @@ function warpFor(am: AssemblyRenderModel, speed: number): (t: number) => number 
     baked > 0 ? r4(Math.min(0.8 * speed, 0.25 * d)) : 0;
   am.clock.forEach((c, i) => {
     const end = c.start + c.duration;
-    const lead = camera(r4(c.open - c.start), c.duration);
+    // camera lead and loop-start hold are separate (§7.3): the hold is `max(lead_out, 0.4)`
+    // output seconds, so in loop seconds `max(camera lead, 0.4 · speed)`
+    const baked = c.lead ?? (c.hold === undefined ? r4(c.open - c.start) : 0);
+    const cam = camera(baked, c.duration);
+    const lead = c.hold === undefined ? cam : Math.max(cam, r4(c.hold * speed));
     const tr = camera(r4(end - c.end), c.duration);
     const open2 = c.start + lead;
     const end2 = end - tr;
@@ -179,6 +183,12 @@ function protectedTimes(am: AssemblyRenderModel): Set<number> {
     add(m.closure?.t0);
     add(m.closure?.t1);
     for (const t of m.tracks) for (const k of t.visibility) add(k.t);
+    // the swap of a callout flight: the overlay copy and the world copy meet exactly there
+    for (const f of (m as AssemblyRenderModelX).flights ?? []) {
+      for (const k of f.visibility) add(k.t);
+      for (const k of f.motion) add(k.t);
+      for (const k of f.opacity) add(k.t);
+    }
     // move boundaries (the render-side model keeps its moves)
     const moves = (m as unknown as { moves?: readonly { t0: number; t1: number }[] }).moves;
     for (const mv of moves ?? []) {
@@ -375,6 +385,14 @@ export function assemblyAnim(
         move(id, l.motion);
         fade(id, l.opacity);
       }
+    }
+    // overlay copies of callout flights (A2-7): one wrapper, three properties
+    for (const f of (m as AssemblyRenderModelX).flights ?? []) {
+      group = `f:${f.id}`;
+      move(f.id, f.motion);
+      props.push({ kind: "visibility", id: f.id, keys: retime(f.visibility, warp) });
+      groups.push(group);
+      fade(f.id, f.opacity);
     }
   });
   // view and level groups: cross-fades and the level placements (B-3)

@@ -47,6 +47,7 @@ export function scopeIds(
     partLabel: (path) => `${ids.partLabel(path)}${sfx}`,
     partClip: (item, copy) => `${ids.partClip(item, copy)}${sfx}`,
     callout: (owner, program, step) => `${ids.callout(owner, program, step)}${sfx}`,
+    flight: (path) => `${ids.flight(path)}${sfx}`,
     fadeWrap: (id) => `${ids.fadeWrap(id)}${sfx}`,
     object: (id) => `${ids.object(id)}${sfx}`,
     face: (id, face, part) => `${ids.face(id, face, part)}${sfx}`,

@@ -21,7 +21,7 @@ const spec = (o: Obj): PlatformCosmoSpec =>
   ({ meta: { version: "1" }, ...o }) as unknown as PlatformCosmoSpec;
 const codes = (ds: readonly Diagnostic[], c: string): Diagnostic[] =>
   ds.filter((d) => d.code === c);
-const LIFT = { phase1a: false, phase1b: false, phase2: false, phase3: false };
+const LIFT = { phase1a: false, phase1b: false, phase2: false, storyboards: false, phase3: false };
 
 describe("close-up actions are planned in validate (d, e)", () => {
   /** A close-up instance with a long explode program, exploded in a 1 s step. */

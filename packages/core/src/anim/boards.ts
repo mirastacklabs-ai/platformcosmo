@@ -6,6 +6,7 @@
  * Pose motion is CSS in both `smil` and `css` motion modes (D32): no SMIL element is made here.
  */
 import type { IdScheme } from "../contracts/index.js";
+import { stepEndTime } from "../render/assembly/tracks.js";
 import { bezierProgress } from "../render/boards/timeline.js";
 import type { BoardsTracks, FadeKey, KeyEasing, PoseKey } from "../render/boards/types.js";
 import { Keyframes, r2, t4 } from "./css.js";
@@ -76,7 +77,7 @@ export function boardsFrame(bm: BoardsTracks, seconds: number, speed: number): A
 export function boardsStepEnd(bm: BoardsTracks, step: number): Attrs | undefined {
   if (bm.poses.length === 0 && bm.fades.length === 0) return undefined;
   const end = bm.stepEnds[step - 1];
-  return boardsAt(bm, end ?? 0);
+  return boardsAt(bm, end === undefined ? 0 : stepEndTime(end));
 }
 
 export interface BoardRules {
@@ -114,7 +115,12 @@ export function boardsLoop(
     rules.push(rule(p.id, kf.add(stops), "linear"));
   }
   for (const f of bm.fades) {
-    const stops = f.keys.map((k): [number, string] => [k.t / loop, `opacity:${t4(k.v)}`]);
+    // a non-linear easing (the opening ramp of a storyboard) must reach the CSS too, or the loop
+    // and the frames (which ease) would disagree; linear keys stay as they were (byte identity)
+    const stops = f.keys.map((k, i): [number, string] => [
+      k.t / loop,
+      `opacity:${t4(k.v)}${i < f.keys.length - 1 && timing(k.easing) !== "linear" ? `;animation-timing-function:${timing(k.easing)}` : ""}`,
+    ]);
     rules.push(rule(f.id, kf.add(stops), "linear"));
   }
 

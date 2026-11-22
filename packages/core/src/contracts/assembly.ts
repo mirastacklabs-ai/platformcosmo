@@ -386,6 +386,11 @@ export interface PartMove {
    * from the callout slot to the hover point in the overlay layer (§7.6), the rest is `offset`.
    */
   readonly overlayDuration?: number;
+  /**
+   * Moves of the leaves a step adds of a sub-assembly that earlier steps had partly added: the
+   * path of that sub-assembly. Their callout flights fly as one rigid unit (§7.6).
+   */
+  readonly unit?: string;
 }
 
 export interface ResolvedStage {
@@ -437,6 +442,14 @@ export interface ResolvedBuildStep {
     readonly path: string;
     readonly program: string;
     readonly staging: Vec3;
+    /**
+     * Per leaf the step adds below `path`: when the world copy appears (`at`) and when its move
+     * starts (`start`, = `at` unless it flies from a callout), program time, speed 1. Leaves its
+     * program does not add appear at the step's start.
+     */
+    readonly appear?: Readonly<
+      Record<string, { readonly at: number; readonly start: number; readonly swap?: true }>
+    >;
   };
   readonly start: number;
   readonly end: number;
@@ -785,6 +798,10 @@ export interface AssemblyStepClock {
   readonly duration: number;
   /** Motion window opens. */
   readonly open: number;
+  /** Opening camera transition of the step at speed 1 (step 1 when it zooms); absent = `open - start`. */
+  readonly lead?: number;
+  /** Loop-start fade floor in output seconds (0.4) when step 1 holds for the fades (§7.4), else absent. */
+  readonly hold?: number;
   /** Closing hold ends: the END pose of the step is shown here. */
   readonly end: number;
 }
@@ -958,6 +975,11 @@ export interface AssemblyIdScheme {
   image(hash: string): string;
   /** Parts callout of one build step. */
   callout(owner: string, program: string, step: number): string;
+  /**
+   * Overlay copy of a leaf that flies in from a callout (§7.6): one wrapper carrying its
+   * `transform`, `visibility` and `opacity`; ids inside it get the suffix `__f`.
+   */
+  flight(path: string): string;
   /** Storyboard or figure panel. */
   board(id: string): string;
   /** One storyboard frame / figure sprite. */

@@ -344,6 +344,67 @@ export class AssemblyPrograms {
     const builds = new Map<string, ResolvedBuildProgram>();
     const unresolved = new Set<string>();
     const indexes = new Map<string, { index: OwnerIndex; sel: OwnerSelectors }>();
+    const tried = new Set<string>();
+    /**
+     * Resolves one build program (once). A step's `subBuild` asks for the build program of a
+     * sub-assembly, which may belong to an owner that sorts later, so programs resolve on demand
+     * (`subOf`); the nesting is strict (a sub-assembly is below its owner), so this ends.
+     */
+    const buildOne = (rel: string, info: ProgInfo): void => {
+      const pk = `${rel}\0${info.id}`;
+      if (tried.has(pk)) return;
+      tried.add(pk);
+      const owner = owners.get(rel) as OwnerInfo;
+      const spec = atPointer(this.spec, info.ptr) as SpecBuildProgram | undefined;
+      if (spec === undefined || !Array.isArray(spec.steps)) {
+        unresolved.add(pk);
+        return;
+      }
+      let ix = indexes.get(rel);
+      if (ix === undefined) {
+        const index = indexOwner(owner.node, this.work);
+        ix = { index, sel: new OwnerSelectors(index, this.work) };
+        indexes.set(rel, ix);
+      }
+      if (!ix.index.complete) {
+        this.budgetWarning();
+        unresolved.add(pk);
+        return;
+      }
+      const r = resolveBuild({
+        asm,
+        owner: owner.node,
+        tnode: owner.tnode,
+        prog: spec,
+        ptr: info.ptr,
+        index: ix.index,
+        sel: ix.sel,
+        work: this.work,
+        subBuild: subOf,
+      });
+      if (r === undefined) {
+        this.budgetWarning();
+        unresolved.add(pk);
+        return;
+      }
+      if (r.capped) this.budgetWarning();
+      this.diagnostics.push(...r.diagnostics);
+      builds.set(pk, r.program);
+    };
+    const subOf = (path: string, program: string | undefined): ResolvedBuildProgram | undefined => {
+      const rel =
+        path === asm.id
+          ? ""
+          : path.startsWith(`${asm.id}/`)
+            ? path.slice(asm.id.length + 1)
+            : undefined;
+      const o = rel === undefined ? undefined : owners.get(rel);
+      if (rel === undefined || o === undefined) return undefined;
+      const info = program === undefined ? o.builds[0] : o.builds.find((b) => b.id === program);
+      if (info === undefined) return undefined;
+      buildOne(rel, info);
+      return builds.get(`${rel}\0${info.id}`);
+    };
     for (const rel of [...owners.keys()].sort(cmp)) {
       const owner = owners.get(rel) as OwnerInfo;
       for (const info of owner.explodes) {
@@ -372,43 +433,7 @@ export class AssemblyPrograms {
           unresolved.add(pk);
         } else programs.set(pk, r);
       }
-      for (const info of owner.builds) {
-        const pk = `${rel}\0${info.id}`;
-        const spec = atPointer(this.spec, info.ptr) as SpecBuildProgram | undefined;
-        if (spec === undefined || !Array.isArray(spec.steps)) {
-          unresolved.add(pk);
-          continue;
-        }
-        let ix = indexes.get(rel);
-        if (ix === undefined) {
-          const index = indexOwner(owner.node, this.work);
-          ix = { index, sel: new OwnerSelectors(index, this.work) };
-          indexes.set(rel, ix);
-        }
-        if (!ix.index.complete) {
-          this.budgetWarning();
-          unresolved.add(pk);
-          continue;
-        }
-        const r = resolveBuild({
-          asm,
-          owner: owner.node,
-          tnode: owner.tnode,
-          prog: spec,
-          ptr: info.ptr,
-          index: ix.index,
-          sel: ix.sel,
-          work: this.work,
-        });
-        if (r === undefined) {
-          this.budgetWarning();
-          unresolved.add(pk);
-          continue;
-        }
-        if (r.capped) this.budgetWarning();
-        this.diagnostics.push(...r.diagnostics);
-        builds.set(pk, r.program);
-      }
+      for (const info of owner.builds) buildOne(rel, info);
     }
     const out: Resolved = { asm, spec: specAsm, owners, programs, builds, nodes, unresolved };
     this.resolved.set(asm.id, out);
@@ -1068,13 +1093,42 @@ export class AssemblyPrograms {
       basePose[id] = s.base;
       if (last !== undefined) lastPose[id] = s.poses[last] as readonly ProgramLevel[];
     }
-    const planned = planFigureSteps(this.spec, figures, views, {
-      ...opts,
-      foreign: (si, ai) => table.get(`${si}:${ai}`),
-      closeLoop:
-        opts.closeLoop === true ||
-        endsAwayFromBase(last === undefined ? undefined : lastPose, basePose),
-    });
+    // View in effect after the last step (§7.7): a loop that ends in a turned view closes (§7.3)
+    let endView: QuarterTurn = 0;
+    for (let si = 0; si < steps; si++) {
+      let at = -1;
+      for (const id of ids) {
+        const v = (sims.get(id) as Simulated).views.get(si);
+        if (v !== undefined && v.at > at) {
+          at = v.at;
+          endView = v.view;
+        }
+      }
+    }
+    const planOnce = (loopHold: number): ReturnType<typeof planFigureSteps> =>
+      planFigureSteps(this.spec, figures, views, {
+        ...opts,
+        foreign: (si, ai) => table.get(`${si}:${ai}`),
+        closeLoop:
+          opts.closeLoop === true ||
+          endsAwayFromBase(last === undefined ? undefined : lastPose, basePose, endView),
+        loopHold,
+      });
+    // loop start (§7.4): the opening transition of step 1 is the plan's own `lead_1`
+    const d1 = (this.spec.steps ?? [])[0]?.duration ?? 3;
+    const lead = views[0] === undefined ? 0 : transitionOf(d1);
+    const fadeEnd = (p: AssemblyStepPlan[]): number => {
+      let end = 0;
+      for (const a of assemblies)
+        for (const f of loopStartOf(a, p, lead)?.fades ?? []) end = Math.max(end, f.t1);
+      return end;
+    };
+    // Levels do not depend on the windows, so a first pass tells whether the loop-start fades
+    // exist; if so step 1 opens its motion window at max(lead_1, fade end) and the plan is made
+    // again with it (compression and suggestions agree).
+    let planned = planOnce(0);
+    const hold = fadeEnd(planned.plan);
+    if (hold > 0) planned = planOnce(hold);
     // View in effect at the end of each step (§7.7): the build/unbuild action that comes last
     // in the step (across assemblies) and whose program sets views decides; else it carries over
     let view: QuarterTurn = 0;
@@ -1111,9 +1165,6 @@ export class AssemblyPrograms {
     });
     // Compression is reported by validation (`assemblyPlanDiagnostics`), never twice.
     const compression = planned.diagnostics.filter((d) => d.code === "assembly/compressed");
-    // loop start (§7.4): the opening transition of step 1 is the plan's own `lead_1`
-    const d1 = (this.spec.steps ?? [])[0]?.duration ?? 3;
-    const lead = views[0] === undefined ? 0 : transitionOf(d1);
     const loopStart = new Map<string, LoopStart>();
     for (const a of assemblies) {
       const ls = loopStartOf(a, plan, lead);

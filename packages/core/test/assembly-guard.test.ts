@@ -49,13 +49,20 @@ const paths = (groups: Record<string, boolean>) =>
     phase1a: false,
     phase1b: false,
     phase2: false,
+    storyboards: false,
     phase3: false,
     ...groups,
   }).map((d) => d.path);
 
 describe("schema 1.2.0 guard", () => {
-  test("phases 1a (R-1) and 1b (B-1 + B-2) are lifted; phases 2 and 3 are still unrendered", () => {
-    expect(UNRENDERED).toEqual({ phase1a: false, phase1b: false, phase2: true, phase3: true });
+  test("phases 1a (R-1), 1b (B-1 + B-2) and 3 (A2-7) are lifted; phase 2 is not", () => {
+    expect(UNRENDERED).toEqual({
+      phase1a: false,
+      phase1b: false,
+      phase2: true,
+      storyboards: false,
+      phase3: false,
+    });
   });
 
   test("an assemblies-only spec is valid after the phase 1b lift", () => {
@@ -78,6 +85,7 @@ describe("schema 1.2.0 guard", () => {
       phase1a: false,
       phase1b: true,
       phase2: true,
+      storyboards: true,
       phase3: true,
     });
     expect(d.map((x) => x.path)).toEqual(["/assemblies"]);
@@ -88,7 +96,7 @@ describe("schema 1.2.0 guard", () => {
     expect(validate(everything).diagnostics.filter((d) => d.code.startsWith("schema/"))).toEqual(
       [],
     );
-    const on = { phase1a: true, phase1b: true, phase2: true, phase3: true };
+    const on = { phase1a: true, phase1b: true, phase2: true, storyboards: true, phase3: true };
     expect(
       unsupportedDiagnostics(everything as unknown as PlatformCosmoSpec, on)
         .map((d) => d.path)
@@ -115,7 +123,6 @@ describe("schema 1.2.0 guard", () => {
       "/racks/0/slots/0/assembly",
       "/racks/0/slots/0/closeup",
       "/steps/1/assembly/1",
-      "/storyboards",
     ]);
   });
 
@@ -144,7 +151,13 @@ describe("schema 1.2.0 guard", () => {
         },
       ],
     } as unknown as PlatformCosmoSpec;
-    const lifted = { phase1a: false, phase1b: false, phase2: true, phase3: true };
+    const lifted = {
+      phase1a: false,
+      phase1b: false,
+      phase2: true,
+      storyboards: true,
+      phase3: true,
+    };
     const steps = unsupportedDiagnostics(spec, lifted)
       .map((d) => d.path)
       .filter((p) => p.startsWith("/steps"));
@@ -178,7 +191,7 @@ describe("schema 1.2.0 guard", () => {
   });
 
   test("lifting phases 1a and 1b leaves the phase 2 and 3 fields flagged", () => {
-    expect(paths({ phase2: true, phase3: true })).toEqual([
+    expect(paths({ phase2: true, storyboards: true, phase3: true })).toEqual([
       "/assemblies/0/closeup",
       "/assemblies/0/programs/1",
       "/assemblies/0/parts/0/closeup",
@@ -190,12 +203,12 @@ describe("schema 1.2.0 guard", () => {
     ]);
   });
 
-  test("lifting phase 2 leaves only the phase 3 build-step features and storyboards", () => {
+  test("lifting phase 2 and storyboards leaves only the phase 3 build-step features", () => {
     expect(paths({ phase3: true })).toEqual([
       "/assemblies/0/programs/1/steps/0/from",
       "/assemblies/0/programs/1/steps/0/subBuild",
-      "/storyboards",
     ]);
+    expect(paths({ storyboards: true })).toEqual(["/storyboards"]);
     expect(paths({})).toEqual([]);
   });
 
@@ -225,10 +238,11 @@ describe("schema 1.2.0 guard", () => {
     expect(at(spec)).toEqual([]);
   });
 
-  // tracks §0: an example renders when all its 1.2 fields are phase 1a or 1b (images, figures,
-  // assemblies with explode programs, explode/implode on figures and assemblies); everything
-  // else (racks programs, slot assemblies, build programs, close-ups, storyboards, rack/slot
-  // actions) still hits the guard. The predicate does not use the guard.
+  // tracks §0: an example renders when all its 1.2 fields are phase 1a, 1b or storyboards (images,
+  // figures, assemblies with explode programs, explode/implode on figures and assemblies,
+  // storyboards and their build/unbuild); everything else (racks programs, slot assemblies,
+  // build programs, close-ups, rack/slot actions) still hits the guard. The predicate does not
+  // use the guard.
   const phase1Only = (spec: Record<string, unknown>): boolean => {
     const racks = (spec.racks ?? []) as { programs?: unknown; slots?: Record<string, unknown>[] }[];
     const ok = new Set(
@@ -237,20 +251,19 @@ describe("schema 1.2.0 guard", () => {
         ...((spec.assemblies ?? []) as { id: string }[]),
       ].map((f) => f.id),
     );
+    const boards = new Set(((spec.storyboards ?? []) as { id: string }[]).map((b) => b.id));
     const actions = ((spec.steps ?? []) as { assembly?: Record<string, string>[] }[]).flatMap(
       (s) => s.assembly ?? [],
     );
     const text = JSON.stringify(spec);
     return (
-      spec.storyboards === undefined &&
       !racks.some(
         (r) => r.programs !== undefined || r.slots?.some((s) => s.assembly || s.closeup),
       ) &&
-      actions.every(
-        (a) =>
-          !("build" in a) &&
-          !("unbuild" in a) &&
-          ok.has(String(Object.values(a)[0]).split("/")[0] as string),
+      actions.every((a) =>
+        "build" in a || "unbuild" in a
+          ? boards.has(String(Object.values(a)[0]))
+          : ok.has(String(Object.values(a)[0]).split("/")[0] as string),
       ) &&
       !text.includes('"closeup"') &&
       !text.includes('"kind":"build"')
@@ -319,10 +332,11 @@ describe("schema 1.2.0 guard", () => {
     });
   });
 
-  test("the examples that render are the heat-sink figure and the three Phase 1b plans", () => {
+  test("the examples that render: the heat-sink figure, the booklet storyboard and the Phase 1b plans", () => {
     const title = (s: Record<string, unknown>) => (s.meta as { title: string }).title;
     expect(designExamples("document-ingestion.md").filter(phase1Only).map(title)).toEqual([
       "Heat-sink installation figure",
+      "Booklet storyboard",
     ]);
     expect(designExamples("assemblies.md").filter(phase1Only).map(title)).toEqual([
       "Two-part box",
@@ -369,10 +383,12 @@ describe("schema 1.2.0 guard", () => {
       "/steps/0/assembly/2",
       "/steps/0/assembly/3",
       "/steps/0/assembly/4",
-      "/steps/0/assembly/5",
       "/steps/1/focus",
-      "/storyboards",
     ]);
+    // the storyboard is lifted (R-2): an explode on it is validate's, not the guard's
+    expect(r.diagnostics.find((d) => d.path === "/steps/0/assembly/5/explode")?.code).toBe(
+      "assembly/storyboard-no-explode",
+    );
     // the phase 1b explode on the assembly is not flagged and not unknown
     expect(r.diagnostics.filter((d) => d.path === "/steps/0/assembly/0/explode")).toEqual([]);
     // post-lift unknown-target: rack/slot/storyboard explode is not an assembly or figure

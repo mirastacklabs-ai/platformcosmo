@@ -126,7 +126,7 @@ function makeFace(
   return half ? { face, points: pts, half } : { face, points: pts };
 }
 
-function viewDir(projection: Projection): Vec3 {
+export function viewDir(projection: Projection): Vec3 {
   return { x: 1, y: 1, z: projection.tileWidth / 2 / projection.zScale };
 }
 

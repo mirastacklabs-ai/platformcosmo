@@ -19,6 +19,7 @@ import type {
 import { sortDiagnostics } from "../../schema/diagnose.js";
 import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
 import { resolveFigure, stepViews, type PlanOptions, type ResolvedFigure } from "../boards.js";
+import { resolveStoryboard, type ResolvedStoryboard } from "../storyboards.js";
 import { buildCloseups, type CloseupBuild } from "./closeup.js";
 import { AssemblyPrograms } from "./plan.js";
 import { buildRackAssemblies, hasSlotCloseups, targetedRacks, type RackBuild } from "./racks.js";
@@ -192,14 +193,20 @@ export function assemblyPlanDiagnostics(
     ...(p.closeups?.levels.flatMap((l) => (l.assembly === undefined ? [] : [l.assembly])) ?? []),
   ];
   const views = stepViews(spec, ctx.isFocusTarget);
-  const { compression } = p.programs.plan(
-    all,
-    figures,
-    views,
-    ctx.gated ? { gated: ctx.gated } : {},
+  const storyboards = new Map<string, ResolvedStoryboard>();
+  for (const sb of spec.storyboards ?? [])
+    if (!storyboards.has(sb.id)) storyboards.set(sb.id, resolveStoryboard(sb));
+  const { compression } = p.programs.plan(all, figures, views, {
+    ...(ctx.gated ? { gated: ctx.gated } : {}),
+    ...(storyboards.size > 0 ? { storyboards } : {}),
+  });
+  // the build-program warnings a scene reports too (resolution happens in `plan`), so `validate`
+  // shows them: a blocked drop, a `subBuild` the step does not add whole
+  const build = p.programs.diagnostics.filter(
+    (d) => d.code === "assembly/build-path-blocked" || d.code === "assembly/subbuild-not-added",
   );
   // a section that threw is reported here too (`validate` drops the copy `closeupDiagnostics` adds)
-  return [...p.errors, ...compression];
+  return [...p.errors, ...build, ...compression];
 }
 
 /** The codes `closeupDiagnostics` reports (the size and depth checks of §8.5). */
