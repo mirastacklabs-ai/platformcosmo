@@ -269,7 +269,7 @@ describe("callout flights: tracks", () => {
     const [t0, ts] = [a.visibility[1]!.t, a.visibility[2]!.t];
     const f0 = a.motion.find((k) => k.t === t0)!;
     const f1 = a.motion.find((k) => k.t === ts)!;
-    expect(f0.offset.x).toBeLessThan(-100); // slot: left of the rest bounds
+    expect(f0.offset.x).toBeLessThan(-50); // slot: left of its seat, inside the view box (callout.ts)
     expect(f1.offset.x).toBe(0); // above its seat: straight up on the screen
     expect(f1.offset.y).toBeLessThan(0);
     // the flight uses the move's curve; between flights it holds (hidden)

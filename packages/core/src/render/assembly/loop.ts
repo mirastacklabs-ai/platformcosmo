@@ -14,6 +14,7 @@
  */
 import type {
   AssemblyStepPlan,
+  CalloutEntry,
   LoopFade,
   ProgramLevel,
   ResolvedAction,
@@ -70,12 +71,32 @@ export interface FlightRun {
   readonly easing: SpecEasing;
   /** Set when the move is one leaf of a partly added sub-assembly: its flight is one rigid unit. */
   readonly unit?: string;
+  /** Index into `LoopBuild.callouts` of the build step this flight belongs to. */
+  readonly callout: number;
+}
+
+/**
+ * One play of a build step's parts callout (§6.5, §7.6): the box shows during `[t0, t1]` (loop
+ * seconds, speed 1) and the step's flights start from its slot. A step played again (a loop that
+ * builds, unbuilds and builds) has one run per play.
+ */
+export interface CalloutRun {
+  /** Owner path and program id of the build program, and the 1-based step. */
+  readonly owner: string;
+  readonly program: string;
+  readonly step: number;
+  /** The step's callout groups (empty when the step has `callout: false`). */
+  readonly entries: readonly CalloutEntry[];
+  readonly t0: number;
+  readonly t1: number;
 }
 
 export interface LoopBuild {
   readonly moves: BezierMove[];
   /** Callout flights, sorted by (t0, path). */
   readonly flights: FlightRun[];
+  /** Every play of a build step, in play order (`FlightRun.callout` indexes it). */
+  readonly callouts: CalloutRun[];
   readonly runs: StageRun[];
   /** Closing window of the last step, when some program returns to its base level. */
   readonly closure?: { readonly t0: number; readonly t1: number };
@@ -186,6 +207,7 @@ export function buildLoop(
   const seen = new Set<string>();
   const buildMoves: { readonly mv: BezierMove; readonly seg: number }[] = [];
   const flights: FlightRun[] = [];
+  const callouts: CalloutRun[] = [];
   const playBuild = (
     prog: ResolvedBuildProgram,
     a: ResolvedAction,
@@ -220,29 +242,63 @@ export function buildLoop(
       if (!carried.has(m.path)) carried.set(m.path, net.get(m.path) ?? zero);
       legs.set(m.path, (legs.get(m.path) ?? 0) + 1);
     }
+    // each step of the segment is one play of its callout, over the window of its own moves
+    // (an unbuild plays the steps and their windows reversed)
+    const lo = Math.min(a.from, a.to);
+    const hi = Math.max(a.from, a.to);
+    const steps = prog.steps.slice(lo, hi);
+    const offset = steps[0]?.start ?? 0;
+    const playOf = new Map<number, number>();
+    for (const st of steps) {
+      const s0 = st.start - offset;
+      const s1 = st.end - offset;
+      const [w0, w1] = seg.kind === "build" ? [s0, s1] : [seg.length - s1, seg.length - s0];
+      const t0 = r4(segStart + w0 * a.scale);
+      const t1 = r4(segStart + w1 * a.scale);
+      if (!(t1 - t0 > 1e-4)) continue;
+      playOf.set(st.index, callouts.length);
+      callouts.push({
+        owner: prog.owner,
+        program: prog.id,
+        step: st.index,
+        entries: st.callout,
+        t0,
+        t1,
+      });
+    }
     const swapOf = new Map<string, number>();
     for (const sm of seg.moves) {
       const ov = sm.overlayDuration ?? 0;
       if (!(ov > 0)) continue;
+      const owner = steps.find((st) => st.moves.some((m) => m.path === sm.path));
+      const found = owner === undefined ? undefined : playOf.get(owner.index);
+      // a flight of no listed step (not expected) still gets a slot, with no box
+      const calloutOf = (t0: number, t1: number): number =>
+        found ??
+        callouts.push({ owner: prog.owner, program: prog.id, step: 0, entries: [], t0, t1 }) - 1;
       if (sm.reversed) {
         const ts = r4(segStart + r4(sm.start + sm.duration - ov) * a.scale);
         swapOf.set(sm.path, ts);
+        const t1 = r4(segStart + (sm.start + sm.duration) * a.scale);
         flights.push({
           path: sm.path,
           kind: "unbuild",
           t0: ts,
-          t1: r4(segStart + (sm.start + sm.duration) * a.scale),
+          t1,
+          callout: calloutOf(ts, t1),
           easing: sm.easing,
           ...(sm.unit === undefined ? {} : { unit: sm.unit }),
         });
       } else {
         const ts = r4(segStart + r4(sm.start + ov) * a.scale);
         swapOf.set(sm.path, ts);
+        const t0 = r4(segStart + sm.start * a.scale);
         flights.push({
           path: sm.path,
           kind: "build",
-          t0: r4(segStart + sm.start * a.scale),
+          t0,
           t1: ts,
+          callout: calloutOf(t0, ts),
           easing: sm.easing,
           ...(sm.unit === undefined ? {} : { unit: sm.unit }),
         });
@@ -480,6 +536,7 @@ export function buildLoop(
   return {
     moves,
     runs,
+    callouts,
     flights: flights.sort(
       (x, y) => x.t0 - y.t0 || (x.path < y.path ? -1 : x.path > y.path ? 1 : 0),
     ),

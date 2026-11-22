@@ -23,6 +23,7 @@ import { levelOf } from "../scene/assembly/levels.js";
 import { buildAssemblyRender, type StaticItem } from "./assembly/index.js";
 import { buildBoards } from "./boards/index.js";
 import { createIds, iconDef } from "../emit/index.js";
+import { zoomFor } from "../anim/timeline.js";
 import { h } from "../emit/xml.js";
 import {
   boundsOfPoints,
@@ -1115,6 +1116,21 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   if (boardsBuild) {
     for (const [id, r] of Object.entries(boardsBuild.focus)) focusRects[id] = r;
   }
+  // The parts callouts and callout slots go inside each step's camera window (assembly §7.6),
+  // which needs the final view box and focus rects.
+  const runPlace = (): void => {
+    if (asmBuild?.place === undefined) return;
+    const partial = { viewBox: vb, focusRects, assembly: asmBuild.model } as unknown as RenderModel;
+    asmBuild.place({
+      viewBox: vb,
+      pinned: [...(captionRect ? [captionRect] : []), ...Object.values(metricRects)],
+      window: (step) => {
+        const st = scene.timeline.find((s) => s.index === step);
+        return st === undefined ? undefined : zoomFor(partial, st)?.viewBox;
+      },
+    });
+  };
+  runPlace();
   const missing = [
     ...new Set([
       ...missingGlyphs(displayText.join(""), "display"),
@@ -1150,8 +1166,13 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
     ...(asmBuild ? { assembly: asmBuild.model } : {}),
   };
   registry.set(model, inputs);
+  if (asmBuild?.place !== undefined) placers.set(model, runPlace);
   return { model, diagnostics };
 }
+
+/** Re-runs the callout placement of a built model (it is idempotent; for tests). */
+export const placeAgain = (m: RenderModel): void => placers.get(m)?.();
+const placers = new WeakMap<RenderModel, () => void>();
 
 export function buildModel(inputs: ModelInputs): RenderModel {
   return buildModelWithDiagnostics(inputs).model;

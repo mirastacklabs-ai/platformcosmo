@@ -10,7 +10,7 @@
  * The hover end is the world copy's own screen translation at the swap time (the same sum of
  * moves, the same projection, the same rounding), so the two coincide exactly. The slot is a point
  * of the group's screen space (left of the assemblies' rest bounds), so a flight follows the camera
- * like the world does; see `slotOf`. Pure and deterministic.
+ * like the world does; see callout.ts. Pure and deterministic.
  */
 import type {
   OpacityKey,
@@ -48,8 +48,9 @@ export interface Flights {
 }
 
 /**
- * The callout slot (§6.5): where a step's callout sits, in screen space, left of the rest bounds
- * of the assemblies and a quarter of their height down. A flight's copy is centred on it.
+ * The provisional callout slot (§7.6): left of the rest bounds of the assemblies by 36 px plus a
+ * tenth of their width, a quarter of their height down. It sizes the view box (the same one the
+ * flights always reserved); callout.ts then places the real slot inside each step's camera window.
  */
 export function slotOf(rest: Rect): Vec2 {
   return { x: rest.x - 36 - 0.1 * rest.width, y: rest.y + 0.25 * rest.height };
@@ -57,8 +58,73 @@ export function slotOf(rest: Rect): Vec2 {
 
 const center = (r: Rect): Vec2 => ({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
 
+/** The leaves that fly together with `run`'s node: its own, or its unit's (one rigid unit). */
+function flightGroups(
+  runs: readonly FlightRun[],
+  leaves: readonly WorldLeaf[],
+): (run: FlightRun) => WorldLeaf[] {
+  const under = (run: FlightRun): WorldLeaf[] =>
+    leaves.filter((l) => l.path === run.path || l.path.startsWith(`${run.path}/`));
+  // the leaves a step adds of a partly added sub-assembly (one run each, the same window) fly as
+  // one rigid unit centred on the slot
+  const unitOf = new Map<string, WorldLeaf[]>();
+  const keyOf = (run: FlightRun): string => `${run.unit ?? ""}\0${run.kind}\0${run.t0}\0${run.t1}`;
+  for (const run of runs) {
+    if (run.unit !== undefined)
+      unitOf.set(keyOf(run), [...(unitOf.get(keyOf(run)) ?? []), ...under(run)]);
+  }
+  return (run) => (run.unit === undefined ? under(run) : (unitOf.get(keyOf(run)) ?? under(run)));
+}
+
+/**
+ * Screen size of the largest copy of each play of a callout (`FlightRun.callout`): the slot of a
+ * step is placed clear of it (callout.ts).
+ */
+export function flightSizes(
+  runs: readonly FlightRun[],
+  leaves: readonly WorldLeaf[],
+  projection: Projection,
+): Map<number, { readonly width: number; readonly height: number }> {
+  const groupOf = flightGroups(runs, leaves);
+  const out = new Map<number, { width: number; height: number }>();
+  for (const run of runs) {
+    const mine = groupOf(run);
+    if (mine.length === 0) continue;
+    const r = unionRects(mine.map((l) => projectBoxBounds(projection, l.geometry.bounds)));
+    const o = out.get(run.callout) ?? { width: 0, height: 0 };
+    out.set(run.callout, {
+      width: Math.max(o.width, r.width),
+      height: Math.max(o.height, r.height),
+    });
+  }
+  return out;
+}
+
+/** Screen centre of the copy of each flight at its hover point (the swap), by play of a callout. */
+export function flightEnds(
+  runs: readonly FlightRun[],
+  leaves: readonly WorldLeaf[],
+  index: MoveIndex,
+  projection: Projection,
+): Map<number, Vec2[]> {
+  const groupOf = flightGroups(runs, leaves);
+  const out = new Map<number, Vec2[]>();
+  for (const run of runs) {
+    const group = groupOf(run);
+    const first = group[0];
+    if (first === undefined) continue;
+    const swapT = run.kind === "build" ? run.t1 : run.t0;
+    const c = center(unionRects(group.map((l) => projectBoxBounds(projection, l.geometry.bounds))));
+    const d = screenOf(projection, index.displacement(first.path, swapT));
+    const list = out.get(run.callout) ?? [];
+    list.push({ x: c.x + d.x, y: c.y + d.y });
+    out.set(run.callout, list);
+  }
+  return out;
+}
+
 /** Keys strictly increasing in time: a key at the time of the previous one replaces it. */
-function pushKey<K extends { readonly t: number }>(keys: K[], k: K): void {
+export function pushKey<K extends { readonly t: number }>(keys: K[], k: K): void {
   const last = keys[keys.length - 1];
   if (last !== undefined && k.t <= last.t + EPS) keys[keys.length - 1] = { ...k, t: last.t };
   else keys.push(k);
@@ -66,7 +132,7 @@ function pushKey<K extends { readonly t: number }>(keys: K[], k: K): void {
 
 /**
  * Tracks of every leaf under a flying node. `index` gives the world displacement (loop moves),
- * `leaves` the rest geometry, `slot` the callout slot. Nodes that are not leaves fly as one rigid
+ * `leaves` the rest geometry, `slots` the callout slots. Nodes that are not leaves fly as one rigid
  * unit: every leaf under them shares the node's centre.
  */
 export function flightTracks(input: {
@@ -75,30 +141,21 @@ export function flightTracks(input: {
   readonly leaves: readonly WorldLeaf[];
   readonly index: MoveIndex;
   readonly projection: Projection;
-  readonly slot: Vec2;
+  /** Slot (screen point the copy is centred on) of each play of a callout, by index. */
+  readonly slots: ReadonlyMap<number, Vec2>;
   readonly loop: number;
 }): Flights {
-  const { runs, leaves, index, projection, slot, loop } = input;
+  const { runs, leaves, index, projection, slots, loop } = input;
   const byLeaf = new Map<string, { run: FlightRun; from: Vec2; to: Vec2 }[]>();
   const rects: Rect[] = [];
   const rest = (l: WorldLeaf): Rect => projectBoxBounds(projection, l.geometry.bounds);
-  const under = (run: FlightRun): WorldLeaf[] =>
-    leaves.filter((l) => l.path === run.path || l.path.startsWith(`${run.path}/`));
-  // the leaves that fly together: a node's own (one run), or the leaves a step adds of a partly
-  // added sub-assembly (one run each, the same window): one rigid unit centred on the slot
-  const unitOf = new Map<string, WorldLeaf[]>();
+  const groupOf = flightGroups(runs, leaves);
   for (const run of runs) {
-    if (run.unit === undefined) continue;
-    const k = `${run.unit}\0${run.kind}\0${run.t0}\0${run.t1}`;
-    unitOf.set(k, [...(unitOf.get(k) ?? []), ...under(run)]);
-  }
-  for (const run of runs) {
-    const mine = under(run);
+    const mine = leaves.filter((l) => l.path === run.path || l.path.startsWith(`${run.path}/`));
     if (mine.length === 0) continue;
-    const group =
-      run.unit === undefined
-        ? mine
-        : (unitOf.get(`${run.unit}\0${run.kind}\0${run.t0}\0${run.t1}`) ?? mine);
+    const group = groupOf(run);
+    const slot = slots.get(run.callout);
+    if (slot === undefined) continue;
     const c = center(unionRects(group.map(rest)));
     const start = { x: slot.x - c.x, y: slot.y - c.y };
     // the swap is the end of a build's flight and the start of an unbuild's
