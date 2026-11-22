@@ -60,13 +60,13 @@ shown, and which pages carry it. Then choose, and **tell the user which and why*
 | One figure (exploded or assembled drawing) that should move: parts lift out and seat                         | **Figure mode** (`figures[]`)       | [from a figure](from-figure.md): extract or render the figure page, then `pcosmo assets figure` |
 | A step-by-step booklet, especially a complex or curved model (wheels, slopes, wedges, rounds, printed parts) | **Storyboard** (`storyboards[]`)    | section 5 and [from instructions](from-instructions.md)                                         |
 | A spec document with dimensions, a plan, a blocky model, or a request for explode, labels, or nested detail  | **Reconstruction** (`assemblies[]`) | [assemblies](assemblies.md); a plan: [from a plan](from-plan.md)                                |
-| A booklet of blocky, axis-aligned parts that should be rebuilt in 3D                                         | Reconstruction with a build program | [from instructions](from-instructions.md) section 4: **not drawn in this build**                |
+| A booklet of blocky, axis-aligned parts that should be rebuilt in 3D                                         | Reconstruction with a build program | [from instructions](from-instructions.md) section 4                                             |
 
 Faithful versus modelled: a **storyboard** replays the document's own artwork flat, step by step (faithful, no
 explode, images dominate the file size). A **reconstruction** is 3D parts that you place from the document's numbers
 (any program, any explode, but only as good as your placement, and verified by rendering). A **figure** moves the
 sprites cut out of one drawing between the two states it shows. Tiers combine: a reconstructed server can carry a
-figure as the close-up of its heat sinks, but close-ups are not drawn in this build (section 4).
+figure as the close-up of its heat sinks (a `closeup` naming a figure or an assembly template; section 4).
 
 If the request fits two rows, ask one question (which matters more: the document's own pictures, or a model you can
 explode), and meanwhile do the cheaper one.
@@ -101,16 +101,14 @@ Work in `doc/` below the working directory. Pages are 1-based; boxes are in pt, 
 read coordinates off it, `pcosmo assets shrink <img> --max-px 1600 -o <out.png>`, and then read every coordinate from
 the shrunk file.
 
-## 4. What this build draws, and what it does not (yet)
+## 4. What this build draws
 
-Drawn: **figures**, **assemblies** with explode and implode, and **storyboards** (`build` and `unbuild` of a
-storyboard in `steps[].assembly`, forward and back; an explode of a storyboard is `assembly/storyboard-no-explode`).
-
-Not drawn yet, and `pcosmo validate` rejects each with `assembly/unsupported`: `kind: "build"` programs (with
-`from: "callout"` and `subBuild`), the `build` / `unbuild` actions on an assembly, `closeup`, rack `programs` and
-`slots[].assembly`. Do not try another spelling and do not drop the content silently: use the nearest drawn tier
-(a storyboard for a booklet; an exploded view played in reverse for a model), say what you left out and why, and offer
-it for a later release.
+**Figures**, **assemblies** with explode, implode and **build programs** (`build` / `unbuild`, sub-builds, parts
+callouts, view turns), close-ups of an assembly template or a figure, and **storyboards** (`build` and `unbuild` of a
+storyboard in `steps[].assembly`, forward and back). Two refusals to know: an explode of a storyboard is
+`assembly/storyboard-no-explode`, and a `closeup` that names a storyboard is `assembly/unsupported`. Do not try
+another spelling and do not drop the content silently: use the nearest thing that is drawn, say what you left out and
+why.
 
 ## 5. Turning pages into a spec
 
@@ -167,7 +165,7 @@ page numbers, never text or art copied from a real document.
    step N (1-based; it needs a spec with steps and is exclusive with `--time`). `Read` it next to the document page
    it came from (the `compose` or `render` PNG). Check each step: the right images, in the right order, the caption
    and step number the document prints, the parts and counts, the attach point where the document's arrow points.
-3. Build every step you changed. At most **3 rounds** of fix and rebuild; after that report what is still wrong.
+3. Build every step you changed. Steps you cannot place or read confidently are reported, never hidden.
    Steps you cannot place or read confidently are reported, never hidden.
 4. Build the animated SVG last, and report the `wrote` lines.
 

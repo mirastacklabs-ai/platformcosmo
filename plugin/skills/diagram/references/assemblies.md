@@ -25,7 +25,7 @@ Everything is offline.
    `pcosmo validate` until it reports no errors, then run `--suggest` again.
 5. **Never put text from the user's material on a command line.** Titles, labels and attributions go into the spec
    file with `Write`; shell arguments are only paths, numbers and fixed flags you chose.
-6. **Do not work around `assembly/unsupported`.** See section 1: tell the user which feature this build cannot draw yet.
+6. **Do not work around `assembly/unsupported`.** See section 1: tell the user which feature is refused.
 7. Write only inside the user's working directory. Images the spec uses are copied there first (section 2.4).
 
 ## 1. What this build draws, and what it does not (yet)
@@ -34,11 +34,10 @@ Drawn: assemblies with nested parts, primitives and the `hw:`, `auto:`, `brick:`
 **explode and implode** programs and the `explode` / `implode` step actions, `labels: "always"`, part paths in
 `steps[].focus` and `steps[].set`.
 
-Not drawn yet: `kind: "build"` programs and the `build` / `unbuild` actions on an assembly, `closeup`, rack `programs`,
-`slots[].assembly`, build steps with `from: "callout"` or `subBuild`. `pcosmo validate` rejects every one of them
-with `assembly/unsupported`. Do not try another spelling and do not drop the content silently: do the explode version
-(a "how it goes together" request becomes an exploded view played in reverse: explode, then implode), say what you left
-out and why, and offer it for a later release. A booklet "build in N steps" request: see [from instructions](from-instructions.md) (storyboards are drawn).
+Also drawn: `kind: "build"` programs and the `build` / `unbuild` actions (with `from`, `subBuild`, `view` and parts
+callouts), `closeup` on an assembly or a figure, rack `programs` and `slots[].assembly`; for booklets see [from
+instructions](from-instructions.md). Refused with `assembly/unsupported`: a `closeup` that names a storyboard. Do not
+try another spelling and do not drop content silently: say what you left out and why.
 
 Other things you will see and that are fine: `assembly/depth-approx` (info: an epoch of the motion has an approximate
 draw order because depth copies are not drawn yet), `assembly/compressed` (info: set the `duration` it suggests),
@@ -343,7 +342,7 @@ say the same thing:
    sub-assembly's stages with `focus` on the nested owner (caption `"<sub-assembly>: <stage>"`), then **one** final step
    that implodes the nested sub-assemblies first and the root last. Steps for the root assembly carry **no `focus`**:
    focusing one part zooms onto it and crops the assembly.
-8. Builds are not drawn in this release (section 1).
+8. The suggestion is an explode program; it does not write build programs.
 
 Still look at the result: the suggestion is a good start, not a verified picture (section 4).
 
