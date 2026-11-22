@@ -127,9 +127,7 @@ export function viewCopySpec(): PlatformCosmoSpec {
  * copy 1 is unclipped and drawn for the slide. With `shape: "cylinder"` the piston does not fill
  * its box, so it is not split: it keeps the named fallback (`assembly/clip-fallback`).
  */
-export function crossingClipSpec(
-  opts: { readonly shape?: "cylinder" } = {},
-): PlatformCosmoSpec {
+export function crossingClipSpec(opts: { readonly shape?: "cylinder" } = {}): PlatformCosmoSpec {
   return {
     meta: { version: "1", title: "Clipped while crossing" },
     assemblies: [

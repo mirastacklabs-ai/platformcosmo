@@ -391,7 +391,9 @@ describe("window clip swaps are pixel-invisible (A1-2c, §9.5)", () => {
     let n = 0;
     for (let q = 0; q < a.length; q += 4) {
       if (
-        Math.abs(a[q]! - b[q]!) + Math.abs(a[q + 1]! - b[q + 1]!) + Math.abs(a[q + 2]! - b[q + 2]!) >
+        Math.abs(a[q]! - b[q]!) +
+          Math.abs(a[q + 1]! - b[q + 1]!) +
+          Math.abs(a[q + 2]! - b[q + 2]!) >
         6
       )
         n++;
@@ -422,7 +424,10 @@ describe("window clip swaps are pixel-invisible (A1-2c, §9.5)", () => {
     for (const t of swaps) {
       const across = diff(await frame(t - 0.001), await frame(t + 0.001));
       // the same 2 ms of motion without a swap, on one copy
-      const same = diff(await frame(t - 0.001, t < 5 ? 0 : 1), await frame(t + 0.001, t < 5 ? 0 : 1));
+      const same = diff(
+        await frame(t - 0.001, t < 5 ? 0 : 1),
+        await frame(t + 0.001, t < 5 ? 0 : 1),
+      );
       expect(across, `t=${t}`).toBeLessThanOrEqual(same + 8);
     }
   }, 120_000);

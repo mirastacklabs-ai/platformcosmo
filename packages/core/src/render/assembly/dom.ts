@@ -376,7 +376,9 @@ export function clipDef(
           return `${q.x},${q.y}`;
         }),
     );
-    hull = padHull(hull, (a, b) => (face.has(`${a.x},${a.y}`) && face.has(`${b.x},${b.y}`) ? 0 : pad.width));
+    hull = padHull(hull, (a, b) =>
+      face.has(`${a.x},${a.y}`) && face.has(`${b.x},${b.y}`) ? 0 : pad.width,
+    );
   }
   ctx.count(2);
   return h(

@@ -337,10 +337,7 @@ describe("clip frames (§9.4, §9.5)", () => {
     it("a cylinder (does not fill its box) is not split: hidden while it crosses, named", async () => {
       const cyl: Scene = {
         ...scene,
-        items: [
-          scene.items[0]!,
-          { ...scene.items[1]!, fills: false },
-        ],
+        items: [scene.items[0]!, { ...scene.items[1]!, fills: false }],
         zcyl: ["e/piston"],
       };
       const c = solve(cyl);
