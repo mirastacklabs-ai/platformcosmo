@@ -289,12 +289,14 @@ function notices() {
   }
   return `${lines.join("\n").trimEnd()}\n`;
 }
-// Size guard. Baseline: 6,052,234 bytes (R-2 storyboards, +15 KB on top of 6,036,917, which the
+// Size guard. Baseline: 6,137,161 bytes (D-4a, phase 2 lifted: +31 KB on 6,105,784 of #117 with
+// #119/#120; the gallery story with its embedded synthetic images, about 17 KB of it, figure
+// close-up levels, level camera and label rules). Before: 6,052,234 bytes (R-2 storyboards, +15 KB on top of 6,036,917, which the
 // assemblies Phase 2/3 work had reached: depth copies, the levels/views/builds animator, close-up
 // checks, label and image fixes, suggest heuristics, definePack; 5,968,158 for D-2b; 5,842,308 for
 // D-1 on top of D-2a; 5,382,188 with the brand fonts before those). The guard sits about 1.3%
 // above, so any growth needs a decision: raise it only with a PR note that lists what grew and why.
-const MAX_BUNDLE_BYTES = 6_130_000;
+const MAX_BUNDLE_BYTES = 6_220_000;
 if (Buffer.byteLength(out) > MAX_BUNDLE_BYTES) {
   console.error(
     `plugin/bin/pcosmo.mjs is ${Buffer.byteLength(out)} bytes, over the ${MAX_BUNDLE_BYTES} guard; check for an accidental dependency or asset.`,

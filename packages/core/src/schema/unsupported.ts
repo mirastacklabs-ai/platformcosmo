@@ -21,8 +21,9 @@ export const UNRENDERED: Readonly<Record<GuardGroup, boolean>> = {
   /**
    * Phase 2, server → rack → hall: rack `programs`, slot `assembly`, `closeup` (fields and
    * `…/closeup` paths), actions on racks and slots, build programs and build/unbuild actions.
+   * Lifted by D-4a.
    */
-  phase2: true,
+  phase2: false,
   /** Phase 3, tier A documents: `storyboards` and build/unbuild actions on them. Lifted by R-2. */
   storyboards: false,
   /** Phase 3, callouts and sub-builds of build programs: `from: "callout"` and `subBuild` (A2-7). */
@@ -171,6 +172,36 @@ export function unsupportedDiagnostics(
   (spec.racks ?? []).forEach((r, i) =>
     (r.slots ?? []).forEach((sl, j) => reserved(sl.id, `/racks/${i}/slots/${j}/id`)),
   );
+
+  // A storyboard close-up level is not drawn yet (its level would show an empty frame), whatever
+  // the groups: refused at the `closeup` field until storyboard levels render.
+  const boards = new Set((spec.storyboards ?? []).map((b) => b.id));
+  if (boards.size > 0) {
+    const sb = (ref: string | undefined, at: string): void => {
+      if (ref === undefined || !boards.has(ref)) return;
+      out.push({
+        severity: "error",
+        code: "assembly/unsupported",
+        path: at,
+        message: `"closeup": ${JSON.stringify(ref)} names a storyboard; storyboard close-ups are not drawn yet.`,
+        suggestion:
+          "Use an assembly template or a figure as the close-up, or show the storyboard in the main scene",
+        params: { closeup: ref },
+      });
+    };
+    const sbParts = (list: readonly SpecPart[] | undefined, base: string): void =>
+      (list ?? []).forEach((p, k) => {
+        sb(p.closeup, `${base}/parts/${k}/closeup`);
+        sbParts(p.parts, `${base}/parts/${k}`);
+      });
+    (spec.assemblies ?? []).forEach((a, i) => {
+      sb(a.closeup, `/assemblies/${i}/closeup`);
+      sbParts(a.parts, `/assemblies/${i}`);
+    });
+    (spec.racks ?? []).forEach((r, i) =>
+      (r.slots ?? []).forEach((sl, j) => sb(sl.closeup, `/racks/${i}/slots/${j}/closeup`)),
+    );
+  }
 
   if (groups.phase2) {
     (spec.racks ?? []).forEach((rack, i) => {

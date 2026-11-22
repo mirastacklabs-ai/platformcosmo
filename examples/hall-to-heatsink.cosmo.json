@@ -1,0 +1,326 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "From the hall to the heat sink",
+    "description": "A data hall down to one CPU's heat sinks and back: rack close-up, a server built from its board plan, and a synthetic heat-sink installation figure as the deepest close-up."
+  },
+  "images": [
+    {
+      "id": "hs-base",
+      "src": "data:image/png;base64,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",
+      "source": {
+        "document": "Synthetic installation figure (scripts/gen-example-figures.mjs)",
+        "figure": "Board"
+      }
+    },
+    {
+      "id": "hs-sprite",
+      "src": "data:image/png;base64,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",
+      "source": {
+        "document": "Synthetic installation figure (scripts/gen-example-figures.mjs)",
+        "figure": "Heat sink"
+      }
+    }
+  ],
+  "figures": [
+    {
+      "id": "hs-install",
+      "base": "hs-base",
+      "pose": "exploded",
+      "parts": [
+        {
+          "id": "hs-1",
+          "image": "hs-sprite",
+          "seat": [180, 280],
+          "exploded": [180, 80],
+          "label": "Heat sink"
+        }
+      ]
+    }
+  ],
+  "assemblies": [
+    {
+      "id": "board-plan",
+      "template": true,
+      "units": "in",
+      "labels": "always",
+      "parts": [
+        {
+          "id": "pcb",
+          "shape": "plate",
+          "size": [13, 12, 0.06],
+          "color": "green"
+        },
+        {
+          "id": "cpu-1",
+          "type": "socket",
+          "at": [2, 6, 0.06],
+          "size": [2.2, 2.2, 0.3],
+          "label": "CPU 1",
+          "closeup": "hs-install"
+        },
+        {
+          "id": "cpu-2",
+          "type": "socket",
+          "at": [6, 6, 0.06],
+          "size": [2.2, 2.2, 0.3],
+          "label": "CPU 2",
+          "closeup": "hs-install"
+        },
+        {
+          "id": "dimm-bank",
+          "type": "dimm-slot",
+          "count": 4,
+          "at": [9.5, 5, 0.06],
+          "pitch": [0.4, 0, 0],
+          "size": [0.25, 5.2, 0.4],
+          "label": "DIMM"
+        },
+        {
+          "id": "pci",
+          "type": "pci-slot",
+          "count": 5,
+          "at": [1, 1, 0.06],
+          "pitch": [0, 0.8, 0],
+          "size": [3.5, 0.3, 0.45],
+          "label": "PCI"
+        },
+        {
+          "id": "bridge",
+          "type": "chip",
+          "at": [5, 3, 0.06],
+          "size": [1.2, 1.2, 0.12],
+          "label": "Chipset"
+        },
+        {
+          "id": "battery",
+          "type": "battery",
+          "shape": "cylinder",
+          "at": [11, 1, 0.06],
+          "size": [0.8, 0.8, 0.12],
+          "label": "Battery"
+        }
+      ]
+    },
+    {
+      "id": "srv-2u",
+      "template": true,
+      "units": "mm",
+      "parts": [
+        {
+          "id": "chassis",
+          "shape": "hw:chassis-2u",
+          "size": [430, 700, 85],
+          "role": "shell"
+        },
+        {
+          "id": "board",
+          "use": "board-plan",
+          "at": [40, 300, 4],
+          "size": [330, 305, 12]
+        },
+        {
+          "id": "fan",
+          "type": "fan",
+          "shape": "hw:fan",
+          "count": 4,
+          "at": [30, 230, 4],
+          "pitch": [95, 0, 0],
+          "size": [80, 38, 76],
+          "label": "System fan"
+        },
+        {
+          "id": "psu",
+          "type": "psu",
+          "shape": "hw:psu",
+          "at": [315, 4, 4],
+          "size": [95, 200, 76],
+          "label": "Power supply"
+        },
+        {
+          "id": "sled",
+          "type": "drive",
+          "count": 2,
+          "at": [20, 620, 4],
+          "pitch": [0, 0, 40],
+          "size": [150, 75, 38],
+          "label": "Drive sled"
+        },
+        {
+          "id": "lid",
+          "shape": "hw:lid",
+          "at": [0, 0, 85],
+          "size": [430, 700, 3],
+          "role": "cover",
+          "label": "Top cover"
+        }
+      ],
+      "programs": [
+        {
+          "id": "assemble",
+          "kind": "build",
+          "steps": [
+            {
+              "caption": "Board",
+              "add": ["board/pcb", "board/cpu-*", "board/bridge", "board/battery"]
+            },
+            {
+              "caption": "Memory and PCI",
+              "add": ["board/dimm-bank-*", "board/pci-*"]
+            },
+            {
+              "caption": "Fans, PSU, drives",
+              "add": ["fan-*", "psu", "sled-*"]
+            },
+            {
+              "caption": "Cover",
+              "add": ["lid"]
+            }
+          ]
+        },
+        {
+          "id": "open",
+          "stages": [
+            {
+              "label": "Cover",
+              "parts": ["lid"],
+              "direction": "up"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "racks": [
+    {
+      "id": "r1",
+      "slots": [
+        {
+          "at": 20,
+          "type": "server-2u"
+        }
+      ]
+    },
+    {
+      "id": "r2",
+      "slots": [
+        {
+          "id": "srv",
+          "at": 20,
+          "type": "server-2u",
+          "label": "App server",
+          "closeup": "srv-2u"
+        }
+      ]
+    },
+    {
+      "id": "r3",
+      "slots": [
+        {
+          "at": 20,
+          "type": "server-2u"
+        }
+      ]
+    },
+    {
+      "id": "r4",
+      "slots": [
+        {
+          "at": 20,
+          "type": "server-2u"
+        }
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "id": "row-a",
+      "members": ["r1", "r2"]
+    },
+    {
+      "id": "row-b",
+      "members": ["r3", "r4"]
+    }
+  ],
+  "aisles": [
+    {
+      "id": "cold",
+      "kind": "cold",
+      "rows": ["row-a", "row-b"]
+    }
+  ],
+  "steps": [
+    {
+      "caption": "The hall",
+      "duration": 2
+    },
+    {
+      "caption": "Row A",
+      "focus": "row-a",
+      "duration": 2
+    },
+    {
+      "caption": "Rack R2: the app server slides out",
+      "assembly": [
+        {
+          "explode": "r2"
+        }
+      ],
+      "focus": "r2",
+      "duration": 4
+    },
+    {
+      "caption": "Building the server",
+      "assembly": [
+        {
+          "build": "r2/srv/closeup",
+          "program": "assemble",
+          "to": 3
+        }
+      ],
+      "focus": "r2/srv/closeup",
+      "duration": 8
+    },
+    {
+      "caption": "The board: two CPU sockets",
+      "focus": "r2/srv/closeup/board",
+      "duration": 3
+    },
+    {
+      "caption": "CPU 1: seating its heat sink",
+      "assembly": [
+        {
+          "implode": "r2/srv/closeup/board/cpu-1/closeup"
+        }
+      ],
+      "focus": "r2/srv/closeup/board/cpu-1/closeup",
+      "duration": 5
+    },
+    {
+      "caption": "Cover on",
+      "assembly": [
+        {
+          "build": "r2/srv/closeup",
+          "program": "assemble"
+        }
+      ],
+      "focus": "r2/srv/closeup",
+      "duration": 3
+    },
+    {
+      "caption": "Back into the rack",
+      "assembly": [
+        {
+          "implode": "r2"
+        }
+      ],
+      "focus": "r2",
+      "duration": 4
+    },
+    {
+      "caption": "The hall",
+      "duration": 2
+    }
+  ]
+}

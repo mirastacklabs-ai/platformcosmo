@@ -50,8 +50,8 @@ import { h } from "../../emit/xml.js";
 import { projectBoxBounds, unionRects } from "../../geometry/index.js";
 import { endsAwayFromBase } from "../../scene/assembly/timing.js";
 import { resolveStoryboard } from "../../scene/storyboards.js";
-import { closesLoop, resolveFigure } from "../../scene/boards.js";
-import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
+import { closesLoop, loopFigures } from "../../scene/boards.js";
+import type { PlatformCosmoSpec, SpecPart } from "../../schema/types.gen.js";
 import { LOOP_START_MIN } from "../../scene/assembly/build.js";
 import { stepTimes } from "../boards/timeline.js";
 import { parseCopyKey } from "../../depth/copies.js";
@@ -59,7 +59,14 @@ import { copySuffix } from "../../emit/ids.js";
 import { ELEMENT_WARN, MAX_LEVELS } from "../../scene/assembly/levels.js";
 import { MAX_VIEWS } from "../../scene/assembly/views.js";
 import { levelOf } from "../../scene/assembly/levels.js";
-import { buildLevelGroups, levelFocusRect, roundRect } from "./levels.js";
+import {
+  applyAffine,
+  buildLevelGroups,
+  levelFocusRect,
+  roundRect,
+  type LevelsDeps,
+} from "./levels.js";
+import { cameraHalf } from "../../anim/timeline.js";
 import { groupTracks, placementAttr } from "./groups.js";
 import { scopeIds, viewNode, viewRender } from "./views.js";
 import {
@@ -135,6 +142,14 @@ export interface AssemblyRenderContext {
   readonly budgets?: Partial<DepthBudgets>;
   /** Focus rect margins, as `RenderModel.focusRects` (default none). */
   readonly focusMargin?: { readonly side: number; readonly bottom: number };
+  /**
+   * Screen rect of the main scene's other content (1.1 objects, figure panels): with the main
+   * assemblies' extents it is the overview area a close-up level fills (§8.4). Absent: the
+   * assemblies' extents alone.
+   */
+  readonly overviewArea?: Rect;
+  /** Content of figure close-up levels (`BoardsBuild.levelFigure`). */
+  readonly levelFigure?: LevelsDeps["figure"];
 }
 
 /** What `AssemblyBuild.place` needs once the view box is final (§7.6). */
@@ -164,9 +179,11 @@ export interface AssemblyBuild {
   readonly levelNodes?: SvgNode[];
   /**
    * Places the parts callouts and the callout slots inside each step's camera window (callout.ts),
-   * once the final view box is known: moves the callout boxes and the flights' first keys.
+   * once the final view box is known: moves the callout boxes and the flights' first keys; also
+   * splits level transitions around camera moves and hides any leader label a step's camera
+   * window would still cut, which it reports (`assembly/label-omitted`). Idempotent.
    */
-  place?(env: PlaceEnv): void;
+  place?(env: PlaceEnv): readonly Diagnostic[] | void;
 }
 
 const EPS = 1e-9;
@@ -249,13 +266,20 @@ export interface GroupBuild extends AssemblyBuild {
   place(env: PlaceEnv): void;
   /** Screen rect of a node (assembly, sub-assembly or part) at the END of a step, margin-free. */
   nodeRect(step: number, id: string): Rect | undefined;
+  /** Leader labels showing from the camera's move into a step to its settled end (§7.4). */
+  labelsIn(step: number): { id: string; path: string; assembly: string; rects: Rect[] }[];
+  /** Hides leader labels over loop windows: labels a camera window would cut (`HideWindow`). */
+  hideLabels(hide: ReadonlyMap<string, readonly HideWindow[]>): void;
+  /** JSON pointer of the spec part at `path` of `assembly` (diagnostics). */
+  pointerOf(assembly: string, path: string): string;
 }
 
 function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
   const { scene, projection } = ctx;
   const { ids, assemblies } = input;
   const diagnostics: Diagnostic[] = [];
-  const specAsm = new Map((ctx.spec?.assemblies ?? []).map((a) => [a.id, a]));
+  const allSpecAsm = ctx.spec?.assemblies ?? [];
+  const specAsm = new Map(allSpecAsm.map((a) => [a.id, a]));
 
   const leaves = worldLeaves(assemblies);
   const leafByPath = new Map(leaves.map((l) => [l.path, l]));
@@ -357,6 +381,48 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
   }
 
   // ---- labels ------------------------------------------------------------------------------
+  // `labels` of the templates parts `use`, by the path of each use instance (nested uses too),
+  // so a board plan used inside a server keeps its `labels: "always"`
+  const useModes = new Map<string, "exploded" | "always" | "never">();
+  const usesOf = (parts: readonly SpecPart[] | undefined, prefix: string, depth: number): void => {
+    if (depth > 8) return; // deeper than any valid path (§13); template cycles are refused
+    for (const p of parts ?? []) {
+      const n = p.count ?? 1;
+      const ids = n > 1 ? Array.from({ length: n }, (_, k) => `${p.id}-${k + 1}`) : [p.id];
+      const t = p.use === undefined ? undefined : specAsm.get(p.use);
+      for (const id of ids) {
+        const path = `${prefix}/${id}`;
+        if (t?.labels !== undefined) useModes.set(path, t.labels);
+        usesOf(t === undefined ? p.parts : t.parts, path, depth + 1);
+      }
+    }
+  };
+  for (const a of assemblies) {
+    usesOf(specAsm.get(input.templateOf?.get(a.id) ?? a.id)?.parts, a.root.path, 1);
+  }
+  /** Pointer of the spec part at `path` (counted instances: the declaring part; inside a `use`d
+   * template: that template's part). Falls back to the nearest pointer found. */
+  const partPointer = (assembly: string, path: string): string => {
+    const base = pointerOfAssembly.get(assembly) ?? "";
+    const a = assemblies.find((x) => x.id === assembly);
+    const tpl = specAsm.get(input.templateOf?.get(assembly) ?? assembly);
+    if (a === undefined || tpl === undefined || !base.startsWith("/assemblies/")) return base;
+    if (path === a.root.path || !path.startsWith(`${a.root.path}/`)) return base;
+    let list: readonly SpecPart[] | undefined = tpl.parts;
+    let at = base;
+    for (const seg of path.slice(a.root.path.length + 1).split("/")) {
+      const k = (list ?? []).findIndex((p) => p.id === seg || countedOf(p, seg));
+      if (k < 0) return at;
+      const part = (list as readonly SpecPart[])[k] as SpecPart;
+      at = `${at}/parts/${k}`;
+      const ti = part.use === undefined ? -1 : allSpecAsm.findIndex((x) => x.id === part.use);
+      if (ti >= 0) {
+        at = `/assemblies/${ti}`;
+        list = allSpecAsm[ti]?.parts;
+      } else list = part.parts;
+    }
+    return at;
+  };
   const labels = buildLabels({
     projection,
     prefix: ctx.prefix,
@@ -367,7 +433,22 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     fit: ctx.fit,
     ...(ctx.fixedLabels === undefined ? {} : { fixed: ctx.fixedLabels }),
     assemblies,
-    labelMode: (id) => specAsm.get(input.templateOf?.get(id) ?? id)?.labels ?? "exploded",
+    pointer: partPointer,
+    presence: (path) => {
+      const v = pres.get(path)?.visibility;
+      if (v === undefined || v.length === 0) return undefined;
+      return { times: v.map((k) => k.t), at: (t) => evalVisible(v, t) };
+    },
+    labelMode: (id, path) => {
+      const own = specAsm.get(input.templateOf?.get(id) ?? id)?.labels ?? "exploded";
+      if (path === undefined || useModes.size === 0) return own;
+      // the nearest `use` above the node that sets a mode
+      for (let p = path; p.includes("/"); p = p.slice(0, p.lastIndexOf("/"))) {
+        const m = useModes.get(p);
+        if (m !== undefined) return m;
+      }
+      return own;
+    },
     leaves,
     index,
     runs: loopBuild.runs,
@@ -376,6 +457,7 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
   });
   diagnostics.push(...labels.diagnostics);
   const labelTracks = [...labels.tracks].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const builtLabelTracks = [...labelTracks];
 
   // ---- tracks and wrappers per item -------------------------------------------------------
   const registered: Registered[] = [];
@@ -1066,6 +1148,18 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     loop: total,
     settled: loopBuild.settled,
     focusRect,
+    stepLabels: (step) => {
+      // from the camera's move into the step (the previous step's end) to its settled end
+      const c = clock[step - 1];
+      return c === undefined
+        ? []
+        : ((a: number, b: number) =>
+            labels.labelsShownIn(a, b).flatMap((l) => {
+              // does the step move this part (or a part it carries)?
+              const moved = index.chain(l.path).some((m) => m.t1 > a + EPS && m.t0 < b - EPS);
+              return l.rects.map((q) => ({ ...q, part: l.path, moved }));
+            }))(clock[step - 2]?.end ?? 0, stepEndTime(Math.min(c.end, total)));
+    },
     frameAt,
     stepEnd,
     elements: countElements([...objects, ...labels.nodes, ...domCtx.defs]),
@@ -1090,6 +1184,24 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     diagnostics,
     nodeRect,
     place,
+    labelsIn: (step) => {
+      const c = clock[step - 1];
+      return c === undefined
+        ? []
+        : labels.labelsShownIn(clock[step - 2]?.end ?? 0, stepEndTime(Math.min(c.end, total)));
+    },
+    hideLabels: (hide) => {
+      // always from the tracks as built, so placing again gives the same result
+      for (let i = 0; i < labelTracks.length; i++) {
+        const lt = builtLabelTracks[i] as LabelTrack;
+        const w = hide.get(lt.id);
+        labelTracks[i] =
+          w === undefined || w.length === 0
+            ? lt
+            : { ...lt, opacity: hiddenIn(lt.opacity, w, total) };
+      }
+    },
+    pointerOf: partPointer,
   };
 }
 
@@ -1134,6 +1246,134 @@ function mergeRanges(
 }
 
 const byKey = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * Leader labels a step's camera window still cuts, or that sit under a pinned overlay (the zoom
+ * widened once for them, `zoomFor`), are hidden over that step (from the camera's move into it
+ * to its end) and reported, never drawn cut (§7.4). `pick(k)` is the group in effect at step k
+ * and the map from its coordinates to the viewport's. Idempotent (`hideLabels` starts from the
+ * built tracks).
+ */
+function hideCutLabelsFor(
+  env: PlaceEnv,
+  n: number,
+  clk: readonly { readonly start: number; readonly end: number }[],
+  total: number,
+  focusOf: (k: number) => string | undefined,
+  pick: (k: number) => { g: GroupBuild; map: (q: Rect) => Rect } | undefined,
+  all: readonly GroupBuild[],
+): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  const groupsHide = new Map<GroupBuild, Map<string, HideWindow[]>>();
+  const V = env.viewBox;
+  const hit = (a: Rect, b: Rect): boolean =>
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  for (let k = 1; k <= n; k++) {
+    const W = env.window(k);
+    const c = clk[k - 1];
+    const p = pick(k);
+    if (W === undefined || c === undefined || p === undefined) continue;
+    const s = V.width / W.width;
+    const keep = (env.pinned ?? []).map((q) => ({
+      x: W.x + (q.x - V.x) / s,
+      y: W.y + (q.y - V.y) / s,
+      width: q.width / s,
+      height: q.height / s,
+    }));
+    const within = (a: Rect): boolean =>
+      a.x >= W.x - 0.01 &&
+      a.y >= W.y - 0.01 &&
+      a.x + a.width <= W.x + W.width + 0.01 &&
+      a.y + a.height <= W.y + W.height + 0.01;
+    for (const l of p.g.labelsIn(k)) {
+      if (l.path === focusOf(k)) continue; // the focused node's own label is never hidden
+      const rects = l.rects.map(p.map).filter((q) => hit(q, W));
+      const cut = rects.some((q) => !within(q));
+      const under = rects.some((q) => keep.some((r) => hit(q, r)));
+      if (!cut && !under) continue;
+      let hide = groupsHide.get(p.g);
+      if (hide === undefined) groupsHide.set(p.g, (hide = new Map()));
+      const list = hide.get(l.id) ?? [];
+      // out with the camera's move into the step, back in with its move out of it
+      list.push({
+        t0: clk[k - 2]?.end ?? 0,
+        t1: c.start,
+        t2: c.end,
+        t3: clk[k]?.start ?? total,
+      });
+      hide.set(l.id, list);
+      out.push({
+        severity: "info",
+        code: "assembly/label-omitted",
+        path: p.g.pointerOf(l.assembly, l.path),
+        message: `The label of part ${JSON.stringify(l.path)} is hidden during step ${k}: ${
+          cut ? "the camera's window would cut it" : "a pinned overlay (the caption) would cover it"
+        }`,
+        suggestion: "Focus a node that holds it, or move the focus so the label fits",
+        params: { part: l.path, step: k },
+      });
+    }
+  }
+  for (const g of all) g.hideLabels(groupsHide.get(g) ?? new Map());
+  return out;
+}
+
+/** A label hidden over a step: fades out over [t0, t1], stays out to t2, fades in by t3. */
+interface HideWindow {
+  readonly t0: number;
+  readonly t1: number;
+  readonly t2: number;
+  readonly t3: number;
+}
+
+/** `keys` times the hide windows' factor (1 outside, 0 in [t1, t2], linear on the fades). */
+function hiddenIn(
+  keys: readonly OpacityKey[],
+  wins: readonly HideWindow[],
+  total: number,
+): OpacityKey[] {
+  const factor = (t: number): number => {
+    let f = 1;
+    for (const w of wins) {
+      let g = 1;
+      if (t >= w.t1 - 1e-9 && t <= w.t2 + 1e-9) g = 0;
+      else if (t > w.t0 && t < w.t1) g = (w.t1 - t) / (w.t1 - w.t0);
+      else if (t > w.t2 && t < w.t3) g = (t - w.t2) / (w.t3 - w.t2);
+      f = Math.min(f, g);
+    }
+    return f;
+  };
+  const easingAt = (t: number): OpacityKey["easing"] => {
+    let e: OpacityKey["easing"] = "linear";
+    for (const k of keys) if (k.t <= t + 1e-9) e = k.easing;
+    return e;
+  };
+  const times = [
+    ...new Set(
+      [0, total, ...keys.map((k) => k.t), ...wins.flatMap((w) => [w.t0, w.t1, w.t2, w.t3])]
+        .map((t) => Math.round(t * 10000) / 10000)
+        .filter((t) => t >= 0 && t <= total),
+    ),
+  ].sort((a, b) => a - b);
+  return times.map((t, i) => {
+    const next = times[i + 1];
+    // a stepped original key stays stepped where the factor does not change after it
+    const flat = next === undefined || Math.abs(factor(t) - factor(next)) < 1e-9;
+    return {
+      t,
+      opacity: round2((keys.length === 0 ? 1 : evalOpacity(keys, t)) * factor(t)),
+      easing: flat ? easingAt(t) : "linear",
+    };
+  });
+}
+
+/** `seg` is an instance id (`<id>-<n>`, n in 1..count) of the counted part `p`. */
+const countedOf = (p: SpecPart, seg: string): boolean => {
+  const n = p.count ?? 1;
+  if (n < 2 || !seg.startsWith(`${p.id}-`)) return false;
+  const k = seg.slice(p.id.length + 1);
+  return /^[1-9][0-9]*$/.test(k) && Number(k) <= n;
+};
 
 const sortedRecord = <T>(r: Record<string, T>): Record<string, T> =>
   Object.fromEntries(Object.entries(r).sort(([a], [b]) => byKey(a, b)));
@@ -1210,7 +1450,7 @@ export function buildAssemblyRender(
   );
   if (!closeLast && (ctx.spec?.figures !== undefined || ctx.spec?.storyboards !== undefined)) {
     closeLast = closesLoop(
-      (ctx.spec.figures ?? []).map((f, i) => resolveFigure(f, i).figure),
+      loopFigures(ctx.spec, levels),
       plan,
       (ctx.spec.storyboards ?? []).map((b) => resolveStoryboard(b)),
     );
@@ -1229,7 +1469,23 @@ export function buildAssemblyRender(
     assets,
     foreign,
   });
-  if (levels.length === 0 && turned.length === 0) return main;
+  if (levels.length === 0 && turned.length === 0) {
+    return {
+      ...main,
+      place: (env) => {
+        main.place(env);
+        return hideCutLabelsFor(
+          env,
+          scene.timeline.length,
+          main.model.clock,
+          main.model.loop,
+          (k) => scene.timeline[k - 1]?.focus,
+          () => ({ g: main, map: (q) => q }),
+          [main],
+        );
+      },
+    };
+  }
 
   // ---- quarter-turn views ------------------------------------------------------------------
   const diagnostics: Diagnostic[] = [...main.diagnostics];
@@ -1279,7 +1535,15 @@ export function buildAssemblyRender(
   }
 
   // ---- close-up levels ---------------------------------------------------------------------
-  const target = roundRect(unionRects(main.extents));
+  const target = roundRect(
+    unionRects([...main.extents, ...(ctx.overviewArea === undefined ? [] : [ctx.overviewArea])]),
+  );
+  // a level is its own world: drawn with its own projection, without the main scene's labels
+  const levelCtx = (p: Projection): AssemblyRenderContext => {
+    const { fixedLabels: _main, ...rest } = ctx;
+    void _main;
+    return { ...rest, projection: p };
+  };
   const lv =
     levels.length === 0
       ? undefined
@@ -1289,8 +1553,9 @@ export function buildAssemblyRender(
           margin: ctx.focusMargin ?? { side: 0, bottom: 0 },
           target,
           main,
-          build: (l) =>
-            buildGroup(ctx, {
+          ...(ctx.levelFigure === undefined ? {} : { figure: ctx.levelFigure }),
+          build: (l, p) =>
+            buildGroup(levelCtx(p), {
               assemblies: l.assembly === undefined ? [] : [l.assembly],
               ids,
               statics: [],
@@ -1337,7 +1602,7 @@ export function buildAssemblyRender(
     const focus = k < 0 ? undefined : scene.timeline[k]?.focus;
     return focus === undefined ? undefined : levelOf(levels, focus)?.path;
   };
-  const gtracks = groupTracks({
+  const groupInput = {
     total,
     clock: clk,
     plan,
@@ -1347,10 +1612,13 @@ export function buildAssemblyRender(
     mainLayers:
       lv === undefined
         ? []
-        : ["background", "groups", "edges", "flows", "objects", "labels", "dcflows"].map(
+        : // the canvas background never fades (a close-up has the canvas behind it); its grid does
+          ["grid", "groups", "edges", "flows", "objects", "labels", "dcflows"].map(
             (l) => `${ctx.prefix}-ly_${l}`,
           ),
-  });
+  };
+  // rebuilt in `place` once the camera windows are known (`cameraHalf`); same array object
+  const gtracks = groupTracks(groupInput);
   const groupState = (
     t: number,
   ): { transforms: Record<string, string>; opacity: Record<string, number> } => {
@@ -1370,6 +1638,26 @@ export function buildAssemblyRender(
       opacity: sortedRecord({ ...st.opacity, ...g.opacity }),
     };
   };
+  const hideCutLabels = (env: PlaceEnv): Diagnostic[] =>
+    hideCutLabelsFor(
+      env,
+      scene.timeline.length,
+      clk,
+      total,
+      (k) => scene.timeline[k - 1]?.focus,
+      (k) => {
+        const lp = levelAtStep(k - 1);
+        const rec = lp === undefined ? undefined : lv?.levels.find((l) => l.path === lp);
+        if (rec !== undefined) {
+          const g = lv?.groups.get(rec.path);
+          return g === undefined ? undefined : { g, map: (q) => applyAffine(rec.overview, q) };
+        }
+        const v = plan[k - 1]?.view ?? 0;
+        const g = v === 0 ? main : (viewGroups.find((x) => x.turn === v)?.group ?? main);
+        return { g, map: (q) => q };
+      },
+      [main, ...viewGroups.map((x) => x.group), ...(lv?.groups.values() ?? [])],
+    );
   const settled = main.model.settled.map((v, i) => {
     const list = all.map((g) => g.settled[i]).filter((x): x is number => x !== undefined);
     return list.length === 0 ? v : Math.max(...list);
@@ -1408,6 +1696,20 @@ export function buildAssemblyRender(
       const inView = v === 0 ? undefined : viewGroups.find((x) => x.turn === v);
       return (inView?.group.model ?? main.model).focusRect(step, id);
     },
+    stepLabels: (step) => {
+      // the labels of the level in effect, placed by its overview, else of the view in effect
+      const lp = levelAtStep(step - 1);
+      const rec = lp === undefined ? undefined : lv?.levels.find((l) => l.path === lp);
+      if (rec !== undefined)
+        return (rec.model?.stepLabels?.(step) ?? []).map((q) => ({
+          ...applyAffine(rec.overview, q),
+          ...(q.part === undefined ? {} : { part: q.part }),
+          ...(q.moved === undefined ? {} : { moved: q.moved }),
+        }));
+      const v = plan[step - 1]?.view ?? 0;
+      const inView = v === 0 ? undefined : viewGroups.find((x) => x.turn === v);
+      return (inView?.group.model ?? main.model).stepLabels?.(step) ?? [];
+    },
     levelFocusRect: (step, id) =>
       lv === undefined
         ? undefined
@@ -1430,6 +1732,25 @@ export function buildAssemblyRender(
     place: (env) => {
       main.place?.(env);
       for (const v of viewGroups) v.group.place?.(env);
+      const omitted = hideCutLabels(env);
+      if (lv === undefined) return omitted;
+      // a transition that changes the level and the camera splits its window (§8.4): the camera
+      // moves in one half (anim/timeline.ts `cameraHalves`), the levels cross-fade in the other
+      const n = scene.timeline.length;
+      const at = (k: number) => {
+        const path = k < 0 || k >= n ? undefined : levelAtStep(k);
+        const depth = path === undefined ? 0 : (levels.find((l) => l.path === path)?.depth ?? 0);
+        const view = k < 0 || k >= n ? undefined : env.window(k + 1);
+        return { level: path, depth, ...(view === undefined ? {} : { view }) };
+      };
+      const halves = Array.from({ length: n + 1 }, (_, k) => cameraHalf(at(k - 1), at(k)));
+      if (halves.some((h) => h !== undefined))
+        gtracks.splice(
+          0,
+          gtracks.length,
+          ...groupTracks({ ...groupInput, cameraHalf: (k) => halves[k] }),
+        );
+      return omitted;
     },
   };
 }

@@ -77,6 +77,8 @@ import {
 import type { WorldLeaf } from "./world.js";
 
 const GAP = 18;
+/** A counted part's instance path: `<parent>/<id>-<n>`. */
+const COUNTED = /^(.+)-([1-9][0-9]*)$/;
 const EPS = 1e-9;
 /** Fraction of a move over which its label fades in (§6.6). */
 const FADE_FRACTION = 0.2;
@@ -116,7 +118,20 @@ export interface LabelContext {
   /** Label boxes already placed by the main scene: they never move, every part label avoids them. */
   readonly fixed?: readonly Rect[];
   readonly assemblies: readonly SceneAssembly[];
-  readonly labelMode: (assembly: string) => "exploded" | "always" | "never";
+  /**
+   * `labels` mode of an assembly, or of the node at `path` in it: a part placed with `use` takes
+   * the mode of the template it uses (the nearest one that sets it).
+   */
+  readonly labelMode: (assembly: string, path?: string) => "exploded" | "always" | "never";
+  /**
+   * When a built leaf is present (B-3 presence): the times its presence changes and whether it is
+   * present at `t`. Absent (or undefined for a path): always present.
+   */
+  readonly presence?: (
+    path: string,
+  ) => { readonly times: readonly number[]; readonly at: (t: number) => boolean } | undefined;
+  /** JSON pointer of the spec part at `path` (diagnostics); absent: "". */
+  readonly pointer?: (assembly: string, path: string) => string;
   readonly leaves: readonly WorldLeaf[];
   readonly index: MoveIndex;
   readonly runs: readonly StageRun[];
@@ -139,6 +154,12 @@ export interface LabelOutput {
    * during that window must contain.
    */
   readonly rectsUnder: (path: string, a: number, b: number) => Rect[];
+  /** Leader labels showing at some time of [a, b]: track id, part path, assembly, and their boxes
+   * (leaders included) where they are then. */
+  readonly labelsShownIn: (
+    a: number,
+    b: number,
+  ) => { id: string; path: string; assembly: string; rects: Rect[] }[];
 }
 
 interface NodeInfo {
@@ -229,7 +250,9 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
   const extents: Rect[] = [];
   const diagnostics: Diagnostic[] = [];
   const shown: {
+    id: string;
     path: string;
+    assembly: string;
     rest: Rect[];
     motion: readonly TrackKey[];
     keys: readonly OpacityKey[];
@@ -241,7 +264,12 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
   for (const asm of ctx.assemblies) {
     if (ctx.labelMode(asm.id) === "never") continue;
     const walk = (n: SceneAssembly["root"]): void => {
-      if (n.label !== undefined && n.label !== "" && n.path !== asm.id) {
+      if (
+        n.label !== undefined &&
+        n.label !== "" &&
+        n.path !== asm.id &&
+        ctx.labelMode(asm.id, n.path) !== "never"
+      ) {
         const under = ctx.leaves.filter((l) => movesPath(n.path, l.path));
         if (under.length > 0)
           info.set(n.path, {
@@ -422,7 +450,27 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       firstShow.set(path, { ...prev, details: true });
     }
   };
+  // Instances of one counted part (`<id>-<n>` siblings with the same label) that a stage moves
+  // together are named by ONE label, on the lowest-numbered of them (§6.6): eight DIMMs show one
+  // "DIMM", not eight piled-up pills.
+  /** Instances whose label a sibling shows, with that sibling. */
+  const carried = new Map<string, string>();
+  const siblingKey = (path: string, label: string): string | undefined => {
+    const m = COUNTED.exec(path);
+    return m === null ? undefined : `${m[1] as string}\u0000${label}`;
+  };
   for (const run of runs) {
+    const first = new Map<string, { path: string; n: number }>();
+    if (run.kind !== "implode" && run.stage.labels === "show") {
+      for (const mv of run.moves) {
+        const inf = info.get(mv.path);
+        const key = inf === undefined ? undefined : siblingKey(mv.path, inf.label);
+        if (key === undefined) continue;
+        const n = Number(COUNTED.exec(mv.path)?.[2]);
+        const cur = first.get(key);
+        if (cur === undefined || n < cur.n) first.set(key, { path: mv.path, n });
+      }
+    }
     for (const mv of run.moves) {
       const inf = info.get(mv.path);
       if (run.kind === "implode") {
@@ -430,11 +478,22 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
         continue;
       }
       if (inf === undefined || run.stage.labels !== "show") continue;
+      const key = siblingKey(mv.path, inf.label);
+      const rep = key === undefined ? undefined : first.get(key)?.path;
+      if (rep !== undefined && rep !== mv.path) {
+        if (!carried.has(mv.path)) carried.set(mv.path, rep);
+        continue;
+      }
       const dur = mv.t1 - mv.t0;
       addEvent(mv.path, { t: r4(mv.t1 - dur * FADE_FRACTION), kind: "in", t1: mv.t1 });
       noteShow(mv.path, run, mv.t1);
     }
   }
+  // a carried instance that never shows a label of its own has no events at all
+  const unlabelled = [...carried.keys()]
+    .sort()
+    .filter((path) => !(events.get(path) ?? []).some((e) => e.kind === "in"));
+  for (const path of unlabelled) events.delete(path);
   // A labelled node that no stage moves (or moves only through an ancestor) shows its label
   // with the first `labels: show` stage of its assembly and hides with the implode, like the
   // moved ones (it is placed after them). A leaf of a `labels: always` assembly has its top-face
@@ -443,19 +502,27 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
   const unmoved = [...info.keys()].sort().filter((path) => {
     const inf = info.get(path) as NodeInfo;
     const leaf = inf.leaves.length === 1 && inf.leaves[0]?.path === path;
-    return !moved.has(path) && !(leaf && ctx.labelMode(inf.assembly) === "always");
+    return !moved.has(path) && !(leaf && ctx.labelMode(inf.assembly, path) === "always");
   });
   const omit = (path: string, why: string, suggestion: string): void => {
     const inf = info.get(path) as NodeInfo;
     diagnostics.push({
       severity: "info",
       code: "assembly/label-omitted",
-      path: "",
+      path: ctx.pointer?.(inf.assembly, path) ?? "",
       message: `The label of part ${JSON.stringify(path)} (${JSON.stringify(inf.label)}) is not drawn: ${why}`,
       suggestion,
       params: { part: path, label: inf.label },
     });
   };
+  for (const path of unlabelled) {
+    const by = carried.get(path) as string;
+    omit(
+      path,
+      `it moves with ${JSON.stringify(by)}, whose label names every instance of its part`,
+      "Give the instances different labels to label each one",
+    );
+  }
   // an unmoved node under a labelled ancestor is named by that ancestor's label: no label of its own
   const statics: string[] = [];
   for (const path of unmoved) {
@@ -493,10 +560,14 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
   }
   for (const path of statics) {
     if (firstShow.has(path)) continue;
+    const inf = info.get(path) as NodeInfo;
+    const leaf = inf.leaves.length === 1 && inf.leaves[0]?.path === path;
     omit(
       path,
       "no stage moves it, and its assembly has no stage with labels: show to show it in",
-      "Set labels: show on a stage, or set the assembly's labels to always to print it on its top face",
+      leaf
+        ? 'Set labels: show on a stage, or "labels": "always" on the assembly (or the template it uses) to print it on its top face'
+        : "Set labels: show on a stage that moves it (top-face labels are for single parts)",
     );
   }
 
@@ -766,7 +837,7 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       x: q.x - sx,
       y: q.y - sy,
     }));
-    shown.push({ path, rest, motion, keys });
+    shown.push({ id, path, assembly: inf.assembly, rest, motion, keys });
     placed.push({
       path,
       box,
@@ -800,11 +871,76 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
   for (const path of [...movedOrder, ...statics.filter((q) => firstShow.has(q))]) place(path);
 
   // ---- top-face labels ------------------------------------------------------------------
+  // instances of one counted part with the same label (a bank of DIMM slots) share one label,
+  // centred on the top of the whole bank, on the nearest instance's track (§6.6)
+  const banks = new Map<string, WorldLeaf[]>();
+  const bankOf = (l: WorldLeaf): string | undefined => {
+    const label = l.node.label;
+    const m = COUNTED.exec(l.path);
+    return label === undefined || label === "" || m === null
+      ? undefined
+      : `${m[1] as string}\u0000${label}`;
+  };
   for (const l of ctx.leaves) {
-    if (ctx.labelMode(l.assembly) !== "always") continue;
+    if (ctx.labelMode(l.assembly, l.path) !== "always") continue;
+    const key = bankOf(l);
+    if (key === undefined) continue;
+    const list = banks.get(key);
+    if (list === undefined) banks.set(key, [l]);
+    else list.push(l);
+  }
+  const nOf = (l: WorldLeaf): number => Number(COUNTED.exec(l.path)?.[2]);
+  /** When a part outside `bank` covers the point `top` (on the bank's top face, seated). */
+  const bankCover = (
+    bank: readonly WorldLeaf[],
+    top: Vec3,
+  ): { times: number[]; at: (t: number) => boolean } => {
+    const own = new Set(bank.map((x) => x.path));
+    const times = [
+      ...new Set(ctx.leaves.flatMap((x) => index.chain(x.path).flatMap((m) => [m.t0, m.t1]))),
+    ];
+    const host = bank[0] as WorldLeaf;
+    return {
+      times,
+      at: (t) => {
+        const occ = occAt(t);
+        const p = shiftOf(top, index.displacement(host.path, t));
+        const sp = project(p);
+        // only parts that are there: a lid a build has not added yet covers nothing
+        return occ.rects.some(
+          (r, k) =>
+            !own.has(occ.owner[k] as string) &&
+            containsPoint(r, sp) &&
+            rayHits(p, view, occ.boxes[k] as Box3) &&
+            (ctx.presence?.(occ.owner[k] as string)?.at(t) ?? true),
+        );
+      },
+    };
+  };
+  for (const l of ctx.leaves) {
+    if (ctx.labelMode(l.assembly, l.path) !== "always") continue;
     const label = l.node.label;
     if (label === undefined || label === "") continue;
-    const b = l.depthBox;
+    const bank = banks.get(bankOf(l) ?? "") ?? [l];
+    // the label rides the instance drawn last (the nearest one), so no instance covers it
+    const near = (x: WorldLeaf): number =>
+      x.depthBox.origin.x + x.depthBox.size.x / 2 + x.depthBox.origin.y + x.depthBox.size.y / 2;
+    const first = bank.reduce(
+      (a, x) => (near(x) > near(a) || (near(x) === near(a) && nOf(x) < nOf(a)) ? x : a),
+      bank[0] as WorldLeaf,
+    );
+    if (first !== l) {
+      diagnostics.push({
+        severity: "info",
+        code: "assembly/label-omitted",
+        path: ctx.pointer?.(l.assembly, l.path) ?? "",
+        message: `The label of part ${JSON.stringify(l.path)} (${JSON.stringify(label)}) is not drawn: ${JSON.stringify(first.path)}'s top-face label names every instance of its part`,
+        suggestion: "Give the instances different labels to label each one",
+        params: { part: l.path, label },
+      });
+      continue;
+    }
+    const b = bank.length === 1 ? l.depthBox : boxUnion(bank.map((x) => x.depthBox));
     const top = projection.project({
       x: b.origin.x + b.size.x / 2,
       y: b.origin.y + b.size.y / 2,
@@ -817,7 +953,7 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
       diagnostics.push({
         severity: "info",
         code: "assembly/label-omitted",
-        path: "",
+        path: ctx.pointer?.(l.assembly, l.path) ?? "",
         message: `The label of part ${JSON.stringify(l.path)} (${JSON.stringify(label)}) is not drawn: its top face is too small for the text`,
         suggestion:
           "Raise the assembly's fit, enlarge the part, or label it with a leader (explode it with labels: show)",
@@ -827,38 +963,62 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     }
     const id = `${ids.partLabel(l.path)}__top`;
     const chain = index.chain(l.path);
-    // visible while the leaf is at its base pose: hidden between a move's start and the time
-    // its displacement is back to the base value
-    const opacity = restOpacity(chain, ctx.loop, (t) =>
-      screenOf(projection, index.displacement(l.path, t)),
+    // visible while the leaf is seated (no displacement) and present: hidden while it moves or is
+    // away, and while a build has not added it yet (§6.6)
+    const pr = ctx.presence?.(l.path);
+    // a bank label sits in the labels layer, so it is hidden while another part covers the
+    // middle of the bank's top (a lid closed over a board): no label floats over a cover
+    const covered =
+      bank.length === 1
+        ? undefined
+        : bankCover(bank, {
+            x: b.origin.x + b.size.x / 2,
+            y: b.origin.y + b.size.y / 2,
+            z: b.origin.z + b.size.z,
+          });
+    const opacity = restOpacity(
+      chain,
+      ctx.loop,
+      (t) => screenOf(projection, index.displacement(l.path, t)),
+      covered === undefined
+        ? pr
+        : {
+            times: [...(pr?.times ?? []), ...covered.times],
+            at: (t) => (pr?.at(t) ?? true) && !covered.at(t),
+          },
     );
+    // a single part's label rides inside its part group; a bank's label spans several parts, so
+    // it sits in the labels layer (above every instance) and rides the host's track
+    const own = bank.length === 1;
+    const motion = own ? [] : offsetTrack(plain(chain), ctx.loop, projection);
     tracks.push({
       id,
       path: l.path,
       kind: "top",
-      motion: [],
+      motion,
       opacity,
       initial: opacity[0]?.opacity ?? 1,
     });
-    topLabels.set(
-      l.path,
-      h(
-        "g",
-        {
-          id,
-          class: `${P}-plabel`,
-          ...((opacity[0]?.opacity ?? 1) < 1 ? { opacity: opacity[0]?.opacity ?? 1 } : {}),
-        },
-        ctx.text({
-          x: round2(top.x),
-          y: round2(top.y + fs2 / 3),
-          size: fs2,
-          anchor: "middle",
-          cls: "t-primary",
-          content: text,
-        }),
-      ),
+    const tf = own ? undefined : translateOf(evalOffset(motion, 0));
+    const node = h(
+      "g",
+      {
+        id,
+        class: `${P}-plabel`,
+        ...((opacity[0]?.opacity ?? 1) < 1 ? { opacity: opacity[0]?.opacity ?? 1 } : {}),
+        ...(tf === undefined ? {} : { transform: tf }),
+      },
+      ctx.text({
+        x: round2(top.x),
+        y: round2(top.y + fs2 / 3),
+        size: fs2,
+        anchor: "middle",
+        cls: "t-primary",
+        content: text,
+      }),
     );
+    if (own) topLabels.set(l.path, node);
+    else nodes.push(node);
     elements += 2;
     extents.push({ x: top.x - faceW / 2, y: top.y - fs2, width: faceW, height: fs2 * 2 });
   }
@@ -879,29 +1039,86 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     }
     return out;
   };
-  return { nodes, tracks, extents, elements, top: topLabels, diagnostics, rectsUnder };
+  /** Every leader label showing at some time of [a, b]: its id, part and where it is then. */
+  const labelsShownIn = (
+    a: number,
+    b: number,
+  ): { id: string; path: string; assembly: string; rects: Rect[] }[] => {
+    const out: { id: string; path: string; assembly: string; rects: Rect[] }[] = [];
+    for (const e of shown) {
+      const times = [
+        a,
+        b,
+        ...[...e.motion.map((k) => k.t), ...e.keys.map((k) => k.t)].filter((t) => t > a && t < b),
+      ];
+      const rects: Rect[] = [];
+      for (const t of [...new Set(times)].sort((x, y) => x - y)) {
+        if (evalOpacity(e.keys, t) <= 0) continue;
+        const o = evalOffset(e.motion, t);
+        for (const q of e.rest) rects.push({ ...q, x: q.x + o.x, y: q.y + o.y });
+      }
+      if (rects.length > 0) out.push({ id: e.id, path: e.path, assembly: e.assembly, rects });
+    }
+    return out;
+  };
+  return {
+    nodes,
+    tracks,
+    extents,
+    elements,
+    top: topLabels,
+    diagnostics,
+    rectsUnder,
+    labelsShownIn,
+  };
 }
 
-/** Opacity 1 while the displacement equals its t = 0 value, 0 otherwise (step changes). */
+/** The box around `boxes` (non-empty). */
+function boxUnion(boxes: readonly Box3[]): Box3 {
+  const lo = (k: "x" | "y" | "z"): number => Math.min(...boxes.map((b) => b.origin[k]));
+  const hi = (k: "x" | "y" | "z"): number => Math.max(...boxes.map((b) => b.origin[k] + b.size[k]));
+  return {
+    origin: { x: lo("x"), y: lo("y"), z: lo("z") },
+    size: { x: hi("x") - lo("x"), y: hi("y") - lo("y"), z: hi("z") - lo("z") },
+  };
+}
+
+/**
+ * Opacity 1 while the leaf is seated (no displacement) and present, 0 otherwise (step changes).
+ */
 function restOpacity(
   chain: readonly { readonly t0: number; readonly t1: number }[],
   loop: number,
   disp: (t: number) => { x: number; y: number },
+  presence?: { readonly times: readonly number[]; readonly at: (t: number) => boolean },
 ): OpacityKey[] {
-  if (loop <= 0 || chain.length === 0) return [];
-  const times = [...new Set([0, r4(loop), ...chain.flatMap((m) => [r4(m.t0), r4(m.t1)])])]
+  if (loop <= 0 || (chain.length === 0 && presence === undefined)) return [];
+  const times = [
+    ...new Set([
+      0,
+      r4(loop),
+      ...chain.flatMap((m) => [r4(m.t0), r4(m.t1)]),
+      ...(presence?.times ?? []).map(r4),
+    ]),
+  ]
     .filter((t) => t >= 0 && t <= loop)
     .sort((a, b) => a - b);
-  const d0 = disp(0);
-  const atRest = (t: number): boolean => {
+  const seated = (t: number): boolean => {
     const d = disp(t);
-    return Math.abs(d.x - d0.x) < 0.005 && Math.abs(d.y - d0.y) < 0.005;
+    return Math.abs(d.x) < 0.005 && Math.abs(d.y) < 0.005;
   };
   const keys: OpacityKey[] = [];
   for (let i = 0; i < times.length; i++) {
     const a = times[i] as number;
     const b = times[i + 1];
-    const v = atRest(a) && (b === undefined || atRest(b)) ? 1 : 0;
+    // seated at both ends of the interval; presence (and cover) are constant inside it, so
+    // its middle says
+    const v =
+      seated(a) &&
+      (b === undefined || seated(b)) &&
+      (presence?.at(b === undefined ? a : (a + b) / 2) ?? true)
+        ? 1
+        : 0;
     const last = keys[keys.length - 1];
     if (last !== undefined && last.opacity === v) continue;
     if (last !== undefined) keys[keys.length - 1] = { ...last, easing: "step" };

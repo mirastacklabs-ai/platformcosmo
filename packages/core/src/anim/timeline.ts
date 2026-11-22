@@ -46,10 +46,78 @@ const MAX_ZOOM = 3;
 /** Zoom onto the step's focus rect; undefined for the full view (no focus, unknown target, tiny zoom). */
 export function zoomFor(model: RenderModel, step: SceneStep | undefined): Zoom | undefined {
   if (!step?.focus) return undefined;
-  // an assembly node is framed at the end pose of this step (§7.4), labels included
-  const r = model.assembly?.focusRect(step.index, step.focus) ?? model.focusRects[step.focus];
-  const v = model.viewBox;
-  if (!r || !(v.width > 0) || !(v.height > 0)) return undefined;
+  // an assembly node is framed at the end pose of this step (§7.4), labels included; a node
+  // inside a close-up level where that level's overview puts it (the level group is in the
+  // camera). A level's own root does not zoom: the level is shown at its overview (§8.4).
+  const asm = model.assembly;
+  if (asm?.levels?.some((l) => l.path === step.focus) === true) return undefined;
+  const own = asm?.focusRect(step.index, step.focus);
+  const world = own ?? model.focusRects[step.focus];
+  const inLevel = world === undefined ? asm?.levelFocusRect?.(step.index, step.focus) : undefined;
+  const r = world ?? inLevel;
+  if (r === undefined) return undefined;
+  let z = zoomOnto(model.viewBox, r);
+  if (z === undefined || (own === undefined && inLevel === undefined)) return z;
+  // an assembly step: a label of the focused subtree or of a part the step moves that the
+  // window cuts, or that sits under a pinned overlay (caption, metric tiles), widens the window
+  // ONCE to hold it; any other label the window cuts or covers is hidden over the step and
+  // reported by the render (§7.4), so a focus zoom stays a focus zoom
+  const focus = step.focus;
+  const labels = (asm?.stepLabels?.(step.index) ?? []).filter(
+    (q) =>
+      q.moved === true ||
+      (q.part !== undefined && (q.part === focus || q.part.startsWith(`${focus}/`))),
+  );
+  if (labels.length === 0) return z;
+  const pinned = [
+    ...(model.captionRect === undefined ? [] : [model.captionRect]),
+    ...Object.values(model.metricRects ?? {}),
+  ];
+  {
+    const s = z.scale;
+    const zt = z;
+    // a pinned rect seen through the zoom, in world units
+    const keep = pinned.map((k) => ({
+      x: (k.x - zt.tx) / s,
+      y: (k.y - zt.ty) / s,
+      width: k.width / s,
+      height: k.height / s,
+    }));
+    const grow: Rect[] = [];
+    for (const q of labels) {
+      if (!overlaps(q, zt.viewBox)) continue;
+      const under = keep.find((k) => overlaps(q, k));
+      if (under !== undefined) {
+        // room for the overlay on the side it is pinned to (below a caption, above the tiles)
+        const below = under.y + under.height / 2 > q.y + q.height / 2;
+        grow.push(
+          below
+            ? { ...q, height: q.height + under.height }
+            : { ...q, y: q.y - under.height, height: q.height + under.height },
+        );
+      } else if (!inside(q, zt.viewBox)) grow.push(q);
+    }
+    if (grow.length === 0) return z;
+    z = zoomOnto(model.viewBox, unionOf([r, ...grow]));
+  }
+  return z;
+}
+
+const overlaps = (a: Rect, b: Rect): boolean =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+const inside = (a: Rect, b: Rect): boolean =>
+  a.x >= b.x && a.y >= b.y && a.x + a.width <= b.x + b.width && a.y + a.height <= b.y + b.height;
+const unionOf = (rs: readonly Rect[]): Rect => {
+  const x0 = Math.min(...rs.map((q) => q.x));
+  const y0 = Math.min(...rs.map((q) => q.y));
+  const x1 = Math.max(...rs.map((q) => q.x + q.width));
+  const y1 = Math.max(...rs.map((q) => q.y + q.height));
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+};
+
+/** The zoom that frames `r` in the view box `v` (padding, 3x cap); undefined for a tiny zoom. */
+function zoomOnto(v: Rect, r: Rect): Zoom | undefined {
+  if (!(v.width > 0) || !(v.height > 0)) return undefined;
   const pad = Math.max(24, 0.25 * Math.max(r.width, r.height));
   const w = r.width + 2 * pad;
   const h = r.height + 2 * pad;
@@ -157,19 +225,80 @@ export function ease(x: number): number {
 export function cameraStops(
   zooms: readonly (Zoom | undefined)[],
   w: Windows,
+  /** Per transition (`cameraHalves`): the half the camera moves in; absent: the whole window. */
+  halves: readonly ("first" | "second" | undefined)[] = [],
 ): { readonly t: number; readonly z: Zoom | undefined }[] {
   const n = zooms.length;
   const trs = w.durations.map(transitionSeconds);
   const stops: { t: number; z: Zoom | undefined }[] = [{ t: 0, z: undefined }];
-  stops.push({ t: trs[0] ?? 0, z: zooms[0] });
+  /** The move from `a` (at `t0`) to `b` (at `t1`), in the half `halves[k]` when set. */
+  const move = (k: number, t0: number, t1: number, a: Zoom | undefined, b: Zoom | undefined) => {
+    const h = halves[k];
+    const m = t0 + (t1 - t0) / 2;
+    if (h === "first") stops.push({ t: t0, z: a }, { t: m, z: b }, { t: t1, z: b });
+    else if (h === "second") stops.push({ t: t0, z: a }, { t: m, z: a }, { t: t1, z: b });
+    else stops.push({ t: t0, z: a }, { t: t1, z: b });
+  };
+  if (halves[0] === undefined) stops.push({ t: trs[0] ?? 0, z: zooms[0] });
+  else {
+    stops.pop();
+    move(0, 0, trs[0] ?? 0, undefined, zooms[0]);
+  }
   for (let i = 1; i < n; i++) {
     const start = w.starts[i] ?? 0;
-    stops.push({ t: start - (trs[i - 1] ?? 0), z: zooms[i - 1] });
-    stops.push({ t: start, z: zooms[i] });
+    move(i, start - (trs[i - 1] ?? 0), start, zooms[i - 1], zooms[i]);
   }
-  stops.push({ t: w.total - (trs[n - 1] ?? 0), z: zooms[n - 1] });
-  stops.push({ t: w.total, z: undefined });
+  move(n, w.total - (trs[n - 1] ?? 0), w.total, zooms[n - 1], undefined);
   return stops;
+}
+
+/** Depth and path of the close-up level a focus id shows (0: the main scene). */
+function levelOfFocus(
+  model: RenderModel,
+  focus: string | undefined,
+): { readonly path: string | undefined; readonly depth: number } {
+  let best: { path: string; depth: number } | undefined;
+  if (focus !== undefined) {
+    for (const l of model.assembly?.levels ?? []) {
+      if (focus !== l.path && !focus.startsWith(`${l.path}/`)) continue;
+      if (best === undefined || l.path.length > best.path.length) best = l;
+    }
+  }
+  return { path: best?.path, depth: best?.depth ?? 0 };
+}
+
+const sameView = (a: Rect | undefined, b: Rect | undefined): boolean =>
+  a === undefined
+    ? b === undefined
+    : b !== undefined && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+
+/**
+ * Where the camera moves in a transition that also changes the close-up level in effect (§8.4):
+ * going deeper (or across) it moves in the FIRST half and the level grows in the second; coming
+ * out the level shrinks first and the camera moves in the SECOND half. So the camera never zooms
+ * one way while a level grows the other. Undefined: the level or the view does not change.
+ */
+export function cameraHalf(
+  from: { readonly level: string | undefined; readonly depth: number; readonly view?: Rect },
+  to: { readonly level: string | undefined; readonly depth: number; readonly view?: Rect },
+): "first" | "second" | undefined {
+  if (from.level === to.level || sameView(from.view, to.view)) return undefined;
+  return to.depth >= from.depth ? "first" : "second";
+}
+
+/** `cameraHalf` of every transition of the loop: into step i (0..n-1), then the closing one (n). */
+export function cameraHalves(
+  model: RenderModel,
+  zooms: readonly (Zoom | undefined)[],
+): ("first" | "second" | undefined)[] {
+  const tl = model.scene.timeline;
+  if ((model.assembly?.levels?.length ?? 0) === 0) return [];
+  const at = (i: number) => {
+    if (i < 0 || i >= tl.length) return { level: undefined, depth: 0, view: undefined };
+    const l = levelOfFocus(model, tl[i]?.focus);
+    return { level: l.path, depth: l.depth, view: zooms[i]?.viewBox };
+  };
+  return Array.from({ length: tl.length + 1 }, (_, i) => cameraHalf(at(i - 1), at(i)));
 }
 
 /**
@@ -183,7 +312,7 @@ export function frameViewBox(
   time: number,
 ): Rect | undefined {
   if (zooms.length === 0 || w.total <= 0 || !zooms.some((z) => z !== undefined)) return undefined;
-  const stops = cameraStops(zooms, w);
+  const stops = cameraStops(zooms, w, cameraHalves(model, zooms));
   const t = ((time % w.total) + w.total) % w.total;
   let i = 0;
   while (i < stops.length - 2 && t >= (stops[i + 1]?.t ?? 0)) i++;
