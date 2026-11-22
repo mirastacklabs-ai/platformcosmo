@@ -26,6 +26,7 @@ import {
   runFigure,
   shrinkImage,
   trim,
+  zoom,
   type FigureSourceInfo,
   type Raster,
   type Rect,
@@ -73,7 +74,8 @@ Commands:
   doctor                                   Check the environment and print the limits
   schema                                   Print the figure manifest JSON Schema
   crop <img> --rect x,y,w,h -o out.png     Crop (--transparent [--tolerance 12] removes the
-                                           edge-connected background, --trim drops empty margins)
+                                           edge-connected background, --trim drops empty margins,
+                                           --scale 0.25-8 zooms the result last)
   cutout <img> --seed x,y[;x,y...] -o sprite.png
                                            Silhouette-cut one part (--polygon x,y;x,y;...,
                                            --prior box|cylinder|none, --mask auto|rect, --holes)
@@ -352,12 +354,14 @@ async function cropCmd(ctx: Ctx, args: string[]): Promise<number> {
     transparent: { type: "boolean" },
     tolerance: { type: "string" },
     trim: { type: "boolean" },
+    scale: { type: "string" },
   });
   const [file] = oneInput(p, "assets crop", 1, "one image");
   const rect = rectArg(p, "rect");
   if (!rect) throw new UsageError("assets crop needs --rect x,y,w,h");
   const out = needed(p, "out", "assets crop");
   const tolerance = num(p, "tolerance");
+  const scale = num(p, "scale");
   const diags: Diagnostic[] = [];
   const json = flag(p, "json");
   if (!pngExt(out)) diags.push(bad("output", "-o must end in .png"));
@@ -377,6 +381,11 @@ async function cropCmd(ctx: Ctx, args: string[]): Promise<number> {
     const t = trim(cur);
     diags.push(...t.diagnostics);
     cur = t.value;
+  }
+  if (cur && scale !== undefined) {
+    const z = zoom(cur, scale);
+    diags.push(...z.diagnostics);
+    cur = z.value;
   }
   if (!cur || hasErrors(diags)) return finish(ctx, json, "crop", diags, {}, [], []);
   const w = await writeOne(ctx, out, encodePng(cur), diags);
