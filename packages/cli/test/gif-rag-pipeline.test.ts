@@ -20,17 +20,17 @@ async function gif(): Promise<Buffer> {
   const out = await mkdtemp(join(tmpdir(), "pcosmo-gif-"));
   const packs = await mkdtemp(join(tmpdir(), "pcosmo-gif-packs-"));
   dirs.push(out, packs);
-  const r = await run(
-    ["build", spec, "--gif", "--fps", "4", "-o", out, "--name", "rag", "--packs-dir", packs],
-    { ...defaultDeps(), env: {} },
-  );
+  const r = await run(["build", spec, "--gif", "-o", out, "--name", "rag", "--packs-dir", packs], {
+    ...defaultDeps(),
+    env: {},
+  });
   expect(r.code, `${r.stdout}${r.stderr}`).toBe(0);
   expect(await readdir(out)).toContain("rag.gif");
   return readFile(join(out, "rag.gif"));
 }
 
-test("rag-pipeline exports a deterministic GIF", async () => {
+test("rag-pipeline exports a deterministic GIF at the default fps", async () => {
   const a = await gif();
   expect(a.subarray(0, 6).toString("latin1")).toBe("GIF89a");
   expect(Buffer.compare(a, await gif())).toBe(0);
-}, 240_000);
+}, 600_000);

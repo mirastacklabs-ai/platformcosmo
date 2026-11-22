@@ -44,107 +44,178 @@ async function init(): Promise<void> {
   return ready;
 }
 
+/**
+ * resvg-wasm panics are `unreachable` traps without unwinding: the wasm shadow stack and the
+ * Resvg object stay leaked, and enough of them break every later render of the instance. After
+ * the first trap the renderer is therefore refused for good, with the original panic attached.
+ */
+let poisoned: Error | undefined;
+
 function renderPng(
   svg: string,
   scale: number,
   fonts: Parameters<RasterizeFn>[1]["fonts"],
 ): Uint8Array {
+  if (poisoned) {
+    throw new Error(
+      "resvg renderer is unusable after an earlier panic in this process; restart it to rasterize again",
+      { cause: poisoned },
+    );
+  }
   const family = fonts[0]?.family;
-  const resvg = new Resvg(svg, {
-    fitTo: { mode: "zoom", value: scale },
-    font: {
-      fontBuffers: fonts.map((f) => f.sfnt),
-      loadSystemFonts: false,
-      ...(family
-        ? { defaultFontFamily: family, sansSerifFamily: family, serifFamily: family }
-        : {}),
-    },
-  });
-  let png: Uint8Array;
+  let resvg: InstanceType<typeof Resvg> | undefined;
   try {
+    resvg = new Resvg(svg, {
+      fitTo: { mode: "zoom", value: scale },
+      font: {
+        fontBuffers: fonts.map((f) => f.sfnt),
+        loadSystemFonts: false,
+        ...(family
+          ? { defaultFontFamily: family, sansSerifFamily: family, serifFamily: family }
+          : {}),
+      },
+    });
     const image = resvg.render();
+    let png: Uint8Array;
     try {
       png = image.asPng();
     } finally {
-      image.free();
+      try {
+        image.free();
+      } catch {
+        /* a failed render must report its own error, not free's */
+      }
     }
+    resvg.free();
+    return png;
   } catch (e) {
-    // After a render panic the object is still borrowed and `free` throws "recursive use of an
-    // object": that must not replace the real error.
-    try {
-      resvg.free();
-    } catch {
-      /* the render error is the one to report */
+    if (resvg) {
+      try {
+        resvg.free();
+      } catch {
+        /* after a panic the object is still borrowed and free throws "recursive use" */
+      }
+    }
+    if (e instanceof Error && e.name === "RuntimeError") {
+      poisoned = new Error(`resvg render failed (renderer panic): ${e.message}`, { cause: e });
+      throw poisoned;
     }
     throw e;
   }
-  resvg.free();
-  return png;
 }
 
-const NUM = "[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?";
-const attr = (tag: string, name: string): string | undefined =>
-  new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
+const attrRe = (name: string): RegExp => new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`);
+const attr = (tag: string, name: string): string | undefined => {
+  const m = attrRe(name).exec(tag);
+  return m ? (m[1] ?? m[2]) : undefined;
+};
+const NUM = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
 const num = (v: string | undefined): number | undefined =>
-  v !== undefined && new RegExp(`^${NUM}$`).test(v.trim()) ? Number(v) : undefined;
+  v !== undefined && NUM.test(v.trim()) ? Number(v) : undefined;
+/** Attributes that move, clip, mask or filter an element (or restyle it); any quoting. */
+const GEOMETRY_ATTRS = /\s(?:transform|filter|mask|clip-path|style|clip|overflow)\s*=/;
+/** Elements whose children are not drawn in plain viewBox coordinates. */
+const OPAQUE_PARENTS = new Set([
+  "symbol",
+  "pattern",
+  "marker",
+  "mask",
+  "clipPath",
+  "defs",
+  "svg",
+  "foreignObject",
+]);
+const MARGIN = 1; // user units a use must clear the viewBox by
 
 /**
- * resvg-wasm 2.6.2 panics ("unreachable") when a layer (a clipped symbol `<use>`, or opacity,
- * mask or filter) lies entirely beyond roughly one canvas size outside the canvas, which is what
- * a zoomed camera does to the icons of every node it leaves out. Returns the SVG without the
- * symbol `<use>` elements that are wholly outside the root viewBox (invisible, so removing them
- * changes no pixel), or undefined when none can be removed. A `<use>` under a transform, or with
- * one of its own, is kept: its box is not in viewBox coordinates.
+ * resvg-wasm 2.6.2 traps when a layer (a clipped symbol `<use>`, opacity, mask, filter) lies far
+ * outside the canvas, which is what a zoomed camera does to the icons of every node it leaves
+ * out. Returns the SVG without the symbol `<use>` elements that are clearly outside the root
+ * viewBox (invisible, so removing them changes no pixel), or undefined when nothing is removed.
+ * Conservative: anything it cannot place in plain viewBox coordinates is kept (see OPAQUE_PARENTS,
+ * GEOMETRY_ATTRS, an aspect-changing root, a stylesheet that mentions geometry properties, or a
+ * document that does not tokenise back to itself).
  */
 export function cullOffscreenSymbolUses(svg: string): string | undefined {
-  const tokens = svg.match(/<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|<[^>]*>|[^<]+/g) ?? [];
+  if (!svg.includes("<symbol")) return undefined;
+  const tokens = svg.match(/<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|<[^>]*>|[^<]+/g);
+  if (!tokens || tokens.join("") !== svg) return undefined;
   const root = tokens.find((t) => /^<svg[\s>]/.test(t));
-  const vb = (root ? attr(root, "viewBox") : undefined)
+  if (!root) return undefined;
+  const vb = attr(root, "viewBox")
     ?.trim()
     .split(/[\s,]+/)
     .map(Number);
-  if (!vb || vb.length !== 4 || vb.some((n) => !Number.isFinite(n))) return undefined;
+  if (!vb || vb.length !== 4 || vb.some((n) => !Number.isFinite(n)) || vb[2]! <= 0 || vb[3]! <= 0)
+    return undefined;
   const [vx, vy, vw, vh] = vb as [number, number, number, number];
+  // the visible area is the viewBox only when the canvas has its aspect ratio (to within the
+  // rounding of emitted numbers, far under MARGIN)
+  const cw = num(attr(root, "width"));
+  const ch = num(attr(root, "height"));
+  if (
+    GEOMETRY_ATTRS.test(root) ||
+    attr(root, "preserveAspectRatio") !== undefined ||
+    (cw !== undefined && ch !== undefined && Math.abs(cw / ch - vw / vh) > 5e-4 * (vw / vh)) ||
+    (cw === undefined) !== (ch === undefined)
+  )
+    return undefined;
   const symbols = new Set<string>();
+  let inStyle = false;
   for (const t of tokens) {
     if (t.startsWith("<symbol")) {
       const id = attr(t, "id");
       if (id) symbols.add(id);
+    } else if (t.startsWith("<style")) {
+      inStyle = true;
+    } else if (t.startsWith("</style")) {
+      inStyle = false;
+    } else if (inStyle && /transform|filter|clip|mask|overflow|display|visibility/.test(t)) {
+      return undefined;
     }
   }
   if (symbols.size === 0) return undefined;
-  const open: boolean[] = []; // per open element: has a transform
-  let transformed = 0;
+  const stack: boolean[] = []; // per open element: not drawn in plain viewBox coordinates
+  let blocked = 0;
   let removed = 0;
   const out: string[] = [];
   for (const t of tokens) {
     if (!t.startsWith("<") || t.startsWith("<!") || t.startsWith("<?")) {
       out.push(t);
     } else if (t.startsWith("</")) {
-      if (open.pop()) transformed--;
+      if (stack.pop()) blocked--;
       out.push(t);
     } else {
+      const name = /^<([^\s/>]+)/.exec(t)?.[1] ?? "";
       const selfClosing = t.endsWith("/>");
-      const hasTransform = attr(t, "transform") !== undefined;
-      if (t.startsWith("<use") && selfClosing && !hasTransform && transformed === 0) {
+      if (name === "use" && selfClosing && blocked === 0 && !GEOMETRY_ATTRS.test(t)) {
         const ref = (attr(t, "href") ?? attr(t, "xlink:href"))?.replace(/^#/, "");
         const [x, y, w, h] = ["x", "y", "width", "height"].map((n) => num(attr(t, n)));
         if (
           ref !== undefined &&
           symbols.has(ref) &&
+          attr(t, "id") === undefined &&
           x !== undefined &&
           y !== undefined &&
           w !== undefined &&
           h !== undefined &&
-          (x + w <= vx || x >= vx + vw || y + h <= vy || y >= vy + vh)
+          w >= 0 &&
+          h >= 0 &&
+          (x + w < vx - MARGIN ||
+            x > vx + vw + MARGIN ||
+            y + h < vy - MARGIN ||
+            y > vy + vh + MARGIN)
         ) {
           removed++;
           continue;
         }
       }
       if (!selfClosing) {
-        open.push(hasTransform);
-        if (hasTransform) transformed++;
+        const b =
+          (OPAQUE_PARENTS.has(name) && !(name === "svg" && stack.length === 0)) ||
+          GEOMETRY_ATTRS.test(t);
+        stack.push(b);
+        if (b) blocked++;
       }
       out.push(t);
     }
@@ -154,15 +225,5 @@ export function cullOffscreenSymbolUses(svg: string): string | undefined {
 
 export const rasterize: RasterizeFn = async (svg, { scale, fonts }) => {
   await init();
-  try {
-    return renderPng(svg, scale, fonts);
-  } catch (e) {
-    const culled = cullOffscreenSymbolUses(svg);
-    if (culled === undefined) throw e;
-    try {
-      return renderPng(culled, scale, fonts);
-    } catch {
-      throw e;
-    }
-  }
+  return renderPng(cullOffscreenSymbolUses(svg) ?? svg, scale, fonts);
 };
