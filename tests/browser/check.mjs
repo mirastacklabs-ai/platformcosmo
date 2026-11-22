@@ -574,6 +574,89 @@ async function checkCopySwaps(name, browser, blocked, file, mode) {
   });
 }
 
+/**
+ * Window clips (assemblies 9.5, A1-2c): for fixtures marked `exact`, at each swap time, the frame
+ * with only the one copy forced visible must equal the frame with only the other (no pixel apart
+ * beyond the harness's colour tolerance) over the copies' region, at device scale 1 and 2: the
+ * clipped copy keeps the whole outline. Copies are forced with `visibility: … !important`, which
+ * beats the animation. The region is the union of the copies' boxes plus a 6 px margin.
+ */
+async function checkCopySwapsExact(name, browser, blocked, file, mode) {
+  const entry = info?.copies?.[file];
+  if (!entry?.exact || mode === "img") return;
+  const bad = [];
+  for (const dsf of [1, 2]) {
+    await withPage(
+      browser,
+      blocked,
+      { reducedMotion: "no-preference", deviceScaleFactor: dsf },
+      async (page) => {
+        const box = await open(page, mode, file);
+        const scratch = await scratchOf(page);
+        const force = (ids, on) =>
+          page.evaluate(
+            ([m, list, keep]) => {
+              const doc = m === "object" ? document.getElementById("el").contentDocument : document;
+              for (const id of list) {
+                doc
+                  .getElementById(id)
+                  .style.setProperty("visibility", id === keep ? "visible" : "hidden", "important");
+              }
+            },
+            [mode, ids, on],
+          );
+        // only the copies' own region (with a margin for the stroke): text elsewhere (the caption)
+        // may be repainted with different sub-pixel anti-aliasing between two screenshots
+        const region = (ids) =>
+          page.evaluate(
+            ([m, list]) => {
+              const host = m === "object" ? document.getElementById("el") : null;
+              const doc = host ? host.contentDocument : document;
+              const off = host ? host.getBoundingClientRect() : { x: 0, y: 0 };
+              const rs = list.map((id) => doc.getElementById(id).getBoundingClientRect());
+              const x0 = Math.min(...rs.map((r) => r.left)) + off.x - 6;
+              const y0 = Math.min(...rs.map((r) => r.top)) + off.y - 6;
+              const x1 = Math.max(...rs.map((r) => r.right)) + off.x + 6;
+              const y1 = Math.max(...rs.map((r) => r.bottom)) + off.y + 6;
+              return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+            },
+            [mode, ids],
+          );
+        for (const { t, ids } of entry.swaps) {
+          const frames = [];
+          for (const id of ids) {
+            await force(ids, id);
+            await seek(page, mode, t);
+            const r = await region(ids);
+            const x = Math.max(box.x, r.x);
+            const y = Math.max(box.y, r.y);
+            const clip = {
+              x,
+              y,
+              width: Math.min(box.x + box.width, r.x + r.width) - x,
+              height: Math.min(box.y + box.height, r.y + r.height) - y,
+            };
+            frames.push(await shot(page, clip));
+          }
+          for (let k = 1; k < frames.length; k++) {
+            if (frames[k] === frames[0]) continue;
+            const d = (await pixels(scratch, frames[0], frames[k])).diff;
+            if (d > 0) bad.push(`dsf ${dsf} t=${t}: ${(d * 100).toFixed(4)}% of pixels differ`);
+          }
+        }
+      },
+    );
+  }
+  rec(
+    name,
+    file,
+    mode,
+    "window clip: both copies draw the same pixels at each swap (dsf 1 and 2)",
+    bad.length === 0 ? "pass" : "fail",
+    bad.length ? bad.join("; ") : `${entry.swaps.length} swap(s), identical`,
+  );
+}
+
 async function checkFixtureInline(name, browser, blocked) {
   await withPage(browser, blocked, { reducedMotion: "no-preference" }, async (page) => {
     await open(page, "inline", info.loop);
@@ -691,6 +774,7 @@ for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
         await checkReduced(name, browser, blocked, file, mode, expected);
         await checkDark(name, browser, blocked, file, mode);
         await checkCopySwaps(name, browser, blocked, file, mode);
+        await checkCopySwapsExact(name, browser, blocked, file, mode);
       }
     }
     if (info) {
