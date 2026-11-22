@@ -5,7 +5,7 @@ export interface GalleryItem {
   name: string;
   title: string;
   description: string;
-  group: "launch" | "datacenter" | "provider";
+  group: "launch" | "datacenter" | "document" | "provider";
   /** True when scripts/prepare.mjs rendered a preview. */
   preview: boolean;
   spec: string;
@@ -21,6 +21,7 @@ interface SpecShape {
   meta?: { title?: string; description?: string };
   nodes?: { icon?: string }[];
   racks?: unknown;
+  storyboards?: unknown;
   equipment?: unknown;
 }
 
@@ -28,6 +29,7 @@ function groupOf(spec: SpecShape): GalleryItem["group"] {
   if (spec.nodes?.some((n) => PROVIDER_PREFIXES.some((p) => n.icon?.startsWith(p)))) {
     return "provider";
   }
+  if (spec.storyboards !== undefined) return "document";
   return spec.racks !== undefined || spec.equipment !== undefined ? "datacenter" : "launch";
 }
 
@@ -54,7 +56,8 @@ export default {
           description: meta?.description ?? "",
           group: groupOf(spec),
           preview: existsSync(here(`./public/gallery/${name}.svg`)),
-          spec: text,
+          // inline image data is long and unreadable; the copied example keeps it
+          spec: text.replace(/(data:image\/[a-z+]+;base64,)[A-Za-z0-9+/=]+/g, "$1..."),
         } satisfies GalleryItem;
       });
   },

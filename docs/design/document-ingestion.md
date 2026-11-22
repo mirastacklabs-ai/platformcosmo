@@ -1379,8 +1379,11 @@ assumption, and anything that needs a screenshot.
   vector-only page; (3) a damaged file: wrong startxref and `/Length`, a bogus hint table, an
   object stream; (4) hostile files: a decompression bomb, deep nesting, a self-referencing form,
   `/JavaScript`, `/OpenAction`, `/EmbeddedFiles` (all ignored), an RC4 and an AES-256 file with
-  an empty user password (decrypted), one with a user password (refused); (5) a synthetic brick booklet whose pages embed PNG renders of the
-  assemblies §19.5 rover produced by pcosmo itself, with step numbers and `2x` counts as text.
+  an empty user password (decrypted), one with a user password (refused); (5) a synthetic brick booklet (`tests/fixtures/booklet/gen.mjs`, `--check` | `--write`
+  | `--pdf <file>`; 10 pages: cover, parts list, build steps 1-8 with a cab sub-build) whose pages embed
+  flat-shaded isometric renders of the assemblies §19.5 rover, drawn by the script itself, with
+  step numbers and `2x` counts as text. `examples/rover-booklet.cosmo.json` is the storyboard made
+  from the images that `assets pdf extract` returns for it (checked pixel for pixel).
 - `tests/fixtures/figures/gen.mjs` (Track C) draws synthetic line-art figures reproducing every
   trap of §6: two overlapping identical parts, a part with an enclosed white interior (fins), a
   part partly over board content, arrows touching parts, a numbered callout joined by a leader to
