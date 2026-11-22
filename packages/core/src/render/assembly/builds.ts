@@ -22,6 +22,8 @@ export interface PresenceEvent {
   readonly t: number;
   readonly visible: boolean;
   readonly floor: number;
+  /** The swap of a callout flight (§7.6): no fade, the overlay copy covers the other side. */
+  readonly swap?: true;
 }
 
 /** Presence of one leaf of a build program on the loop. */
@@ -95,9 +97,17 @@ export function presenceTracks(
     if (e.visible) {
       const t = Math.max(e.t, out);
       setVis(t, true);
-      ramps.push({ t0: t, t1: Math.min(r4(t + BUILD_FADE), next), from: 0, to: 1 });
+      // a swap is opaque at once: the overlay copy flew in at full opacity (a zero-length ramp
+      // also lifts a leaf that a loop-start fade left at 0)
+      ramps.push(
+        e.swap === true
+          ? { t0: t, t1: t, from: 0, to: 1 }
+          : { t0: t, t1: Math.min(r4(t + BUILD_FADE), next), from: 0, to: 1 },
+      );
     } else {
-      ramps.push({ t0: Math.max(r4(e.t - BUILD_FADE), prev, e.floor), t1: e.t, from: 1, to: 0 });
+      if (e.swap !== true) {
+        ramps.push({ t0: Math.max(r4(e.t - BUILD_FADE), prev, e.floor), t1: e.t, from: 1, to: 0 });
+      }
       setVis(e.t, false);
     }
   });

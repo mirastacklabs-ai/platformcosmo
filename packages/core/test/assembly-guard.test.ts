@@ -55,13 +55,13 @@ const paths = (groups: Record<string, boolean>) =>
   }).map((d) => d.path);
 
 describe("schema 1.2.0 guard", () => {
-  test("phases 1a (R-1) and 1b (B-1 + B-2) are lifted; phases 2 and 3 are still unrendered", () => {
+  test("phases 1a (R-1), 1b (B-1 + B-2) and 3 (A2-7) are lifted; phase 2 is not", () => {
     expect(UNRENDERED).toEqual({
       phase1a: false,
       phase1b: false,
       phase2: true,
       storyboards: false,
-      phase3: true,
+      phase3: false,
     });
   });
 
@@ -203,7 +203,7 @@ describe("schema 1.2.0 guard", () => {
     ]);
   });
 
-  test("lifting phase 2 and storyboards (R-2) leaves only the phase 3 build-step features", () => {
+  test("lifting phase 2 and storyboards leaves only the phase 3 build-step features", () => {
     expect(paths({ phase3: true })).toEqual([
       "/assemblies/0/programs/1/steps/0/from",
       "/assemblies/0/programs/1/steps/0/subBuild",

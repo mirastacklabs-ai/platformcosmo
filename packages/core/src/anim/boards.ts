@@ -115,7 +115,12 @@ export function boardsLoop(
     rules.push(rule(p.id, kf.add(stops), "linear"));
   }
   for (const f of bm.fades) {
-    const stops = f.keys.map((k): [number, string] => [k.t / loop, `opacity:${t4(k.v)}`]);
+    // a non-linear easing (the opening ramp of a storyboard) must reach the CSS too, or the loop
+    // and the frames (which ease) would disagree; linear keys stay as they were (byte identity)
+    const stops = f.keys.map((k, i): [number, string] => [
+      k.t / loop,
+      `opacity:${t4(k.v)}${i < f.keys.length - 1 && timing(k.easing) !== "linear" ? `;animation-timing-function:${timing(k.easing)}` : ""}`,
+    ]);
     rules.push(rule(f.id, kf.add(stops), "linear"));
   }
 

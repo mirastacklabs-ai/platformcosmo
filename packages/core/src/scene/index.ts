@@ -35,7 +35,8 @@ import { particleCount, PARTICLE_LIMIT } from "../schema/semantic.js";
 import type { PlatformCosmoSpec, SpecFlow, SpecNode } from "../schema/types.gen.js";
 import { boardOverlapDiagnostics, buildFigureScene, figureFocusIds } from "./boards.js";
 import { AssemblyPrograms } from "./assembly/plan.js";
-import { buildCloseups, type CloseupBuild } from "./assembly/closeup.js";
+import { buildCloseups, type CloseupBuild, type CloseupHost } from "./assembly/closeup.js";
+import { buildRackAssemblies, hasSlotCloseups, targetedRacks } from "./assembly/racks.js";
 import { levelFocusTargets } from "./assembly/levels.js";
 import { usedViews, viewScenes } from "./assembly/views.js";
 import { stepViews } from "./assembly/timing.js";
@@ -560,10 +561,40 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
   let programs: AssemblyPrograms | undefined;
   let closeups: CloseupBuild | undefined;
   let viewList: SceneAssemblies["views"];
-  if ((spec.assemblies?.length ?? 0) > 0) {
+  // Racks a step action targets become assemblies (§8.1) and slots with `closeup` host levels
+  // (§8.4); every other rack keeps its 1.1 objects, and a spec without either skips this.
+  const dc = context.dc;
+  const withRacks =
+    frag !== undefined &&
+    dc !== undefined &&
+    ((dc.buildAssembly !== undefined && targetedRacks(spec).length > 0) ||
+      (dc.slotHosts !== undefined && hasSlotCloseups(spec)));
+  /** Racks drawn as assemblies: their 1.1 objects leave the object list. */
+  let rackIds: ReadonlySet<string> = new Set();
+  let hosts: readonly CloseupHost[] = [];
+  if ((spec.assemblies?.length ?? 0) > 0 || withRacks) {
+    // ONE planner for the racks, the spec assemblies and the close-up instances: one work budget,
+    // one level machine, one step plan (W-1)
     programs = new AssemblyPrograms(spec);
-    const pre = unionBox([...boxes.values(), ...(frag ? [frag.bounds] : [])]);
     const dcShapes = context.dc?.shapes;
+    let rackAssemblies: readonly SceneAssembly[] = [];
+    if (withRacks && frag !== undefined) {
+      const racks = buildRackAssemblies(spec, dc, frag, {
+        planner: programs,
+        ...(context.parts === undefined ? {} : { parts: context.parts }),
+        ...(dcShapes === undefined ? {} : { dcShapes }),
+      });
+      diagnostics.push(...racks.diagnostics);
+      rackAssemblies = racks.assemblies;
+      rackIds = new Set(racks.assemblies.map((a) => a.id));
+      hosts = racks.hosts;
+    }
+    // spec assemblies stand +x of everything, the racks' drawer travel included
+    const pre = unionBox([
+      ...boxes.values(),
+      ...(frag ? [frag.bounds] : []),
+      ...rackAssemblies.map((a) => a.reachBounds),
+    ]);
     assemblyScene = buildAssemblies(spec, {
       reach: programs.reach,
       origin: {
@@ -576,15 +607,23 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
       ...(context.images ? { images: context.images } : {}),
     });
     assemblyScene = programs.attach(assemblyScene);
+    if (rackAssemblies.length > 0) {
+      assemblyScene = {
+        ...assemblyScene,
+        assemblies: [...assemblyScene.assemblies, ...rackAssemblies].sort(byId),
+      };
+    }
     diagnostics.push(...assemblyScene.diagnostics);
     for (const [path, state] of assemblyStates(assemblyScene.assemblies)) states[path] ??= state;
     // close-up levels (§8.4) and quarter-turn views (§7.7): only when the spec has them, so a
     // spec without keeps its scene byte for byte
     if (
+      hosts.length > 0 ||
       assemblyScene.assemblies.some((a) => assemblyNodes(a).some((n) => n.closeup !== undefined))
     ) {
       closeups = buildCloseups(spec, assemblyScene.assemblies, {
         programs,
+        hosts,
         color: resolveColor as (c: string) => string | undefined,
         ...(context.parts === undefined ? {} : { parts: context.parts }),
         ...(dcShapes === undefined ? {} : { dcShapes }),
@@ -821,7 +860,19 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
       padding: spec.canvas?.padding ?? 32,
       aspect: (spec.canvas?.aspect ?? "auto") as SceneGraph["canvas"]["aspect"],
     },
-    objects: allObjects,
+    // a rack in assembly mode is drawn by its assembly: its rack, front shell and slot objects
+    // go (routing, overlaps and focus above still used their boxes, which the assembly keeps)
+    objects:
+      rackIds.size === 0
+        ? allObjects
+        : allObjects.filter((o) => {
+            if (o.source !== "dc") return true;
+            const slash = o.id.indexOf("/");
+            if (slash > 0) return !rackIds.has(o.id.slice(0, slash));
+            return (
+              !rackIds.has(o.id) && !(o.id.endsWith("_front") && rackIds.has(o.id.slice(0, -6)))
+            );
+          }),
     groups: allGroups,
     edges,
     flows,

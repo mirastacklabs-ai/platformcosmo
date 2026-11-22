@@ -44,6 +44,8 @@ export interface GroupTrack {
 export interface ViewSwitch {
   readonly t: number;
   readonly view: QuarterTurn;
+  /** Cross-fade length when shorter than `VIEW_FADE` (the loop closure of a very short last step). */
+  readonly fade?: number;
 }
 
 /**
@@ -54,6 +56,8 @@ export interface ViewSwitch {
 export function viewSwitches(
   plan: readonly AssemblyStepPlan[],
   clock: readonly AssemblyStepClock[],
+  /** Loop length: with it, a loop that ends in a turned view cross-fades back to view 0 (§7.3). */
+  total?: number,
 ): ViewSwitch[] {
   const out: ViewSwitch[] = [];
   let view: QuarterTurn = 0;
@@ -72,6 +76,12 @@ export function viewSwitches(
     out.push(...own);
     view = sp.view ?? last;
   });
+  // loop closure: the view returns to 0 in the closing window so the restart never snaps
+  const lastEnd = clock[clock.length - 1]?.end;
+  if (total !== undefined && lastEnd !== undefined && total > lastEnd + EPS) {
+    const at = Math.max(...out.map((s) => s.t), Math.min(lastEnd, total - VIEW_FADE));
+    if (view !== 0) out.push({ t: r4(at), view: 0, fade: r4(Math.min(VIEW_FADE, total - at)) });
+  }
   return out
     .map((s, i) => ({ s, i }))
     .sort((a, b) => a.s.t - b.s.t || a.i - b.i)
@@ -89,7 +99,12 @@ export function viewOpacityAt(
   for (let i = 0; i < switches.length; i++) if ((switches[i] as ViewSwitch).t <= t + EPS) j = i;
   const cur = j < 0 ? 0 : (switches[j] as ViewSwitch).view;
   const prev = j < 1 ? 0 : (switches[j - 1] as ViewSwitch).view;
-  const f = j < 0 ? 1 : clamp01((t - (switches[j] as ViewSwitch).t) / VIEW_FADE);
+  const f =
+    j < 0
+      ? 1
+      : clamp01(
+          (t - (switches[j] as ViewSwitch).t) / ((switches[j] as ViewSwitch).fade ?? VIEW_FADE),
+        );
   return r2(turn === cur ? (turn === prev ? 1 : f) : turn === prev ? 1 - f : 0);
 }
 
@@ -145,8 +160,8 @@ export function groupTracks(input: GroupInput): GroupTrack[] {
   const out: GroupTrack[] = [];
 
   if (input.views.length > 0) {
-    const sw = viewSwitches(input.plan, clock);
-    const bps = sw.flatMap((s) => [s.t, s.t + VIEW_FADE]);
+    const sw = viewSwitches(input.plan, clock, total);
+    const bps = sw.flatMap((s) => [s.t, s.t + (s.fade ?? VIEW_FADE)]);
     for (const v of input.views) {
       out.push({
         id: v.group,

@@ -245,18 +245,23 @@ function trackOf(
     }
     keys.push({ t, v, e });
   };
-  const rest = valueAt(el, n);
-  const from = valueAt(el, start);
-  const ramps = from.some((x, i) => x !== (rest[i] as number));
-  // the opening ramp from the rest frame eases (§14)
-  push(0, rest, ramps ? EASE : LINEAR);
-  if (ramps) push(r4(Math.min(MAX_RAMP, Math.max(MIN_RAMP, bt.firstAt))), from, LINEAR);
   const mine = [
     ...(bt.runs.get(el.frame)?.map((r) => ({ r, k: el.inK })) ?? []),
     ...(el.outK === undefined
       ? []
       : (bt.runs.get(el.frame + 1)?.map((r) => ({ r, k: el.outK as readonly LKey[] })) ?? [])),
   ].sort((a, b) => a.r.t0 - b.r.t0);
+  const rest = valueAt(el, n);
+  const from = valueAt(el, start);
+  const ramps = from.some((x, i) => x !== (rest[i] as number));
+  // the opening ramp from the rest frame eases (§14)
+  push(0, rest, ramps ? EASE : LINEAR);
+  // The ramp lasts until the element's own first traversal (at most MAX_RAMP), so the frame at
+  // t = 0 and the ones right after it differ by a hair, not by a jump: a seek to exactly 0 in
+  // Chromium can land a millisecond late, and a 1 ms ramp made that visible (a flaky browser
+  // check). Only the last frame's elements ramp, and their traversal starts late.
+  const ownFirst = mine[0]?.r.t0 ?? bt.firstAt;
+  if (ramps) push(r4(Math.min(MAX_RAMP, Math.max(MIN_RAMP, ownFirst))), from, LINEAR);
   for (const { r, k } of mine) {
     const at = (tau: number): number =>
       r4(Math.min(r.limit, r.t0 + (r.reversed ? r.length - tau : tau) * r.scale));

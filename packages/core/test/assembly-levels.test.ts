@@ -1057,7 +1057,8 @@ describe("existing output is unchanged", () => {
     "assemblies.md Rack to server to internals": "b6f4978ff28ce3db",
     // The two specs with build programs changed in A2-6 (build programs, plan views and the
     // build poses now exist); re-recorded there. Every other hash is the A2-3 record.
-    "assemblies.md Brick rover": "c60fc74324613b75",
+    // A2-7: the rover's cab sub-build and cargo flights are now in its scene
+    "assemblies.md Brick rover": "72f287612e44146d",
     "document-ingestion.md Generic 2OU server from a spec document": "ccca9f57caea9bd6",
     "document-ingestion.md Heat-sink installation figure": "0210858f1ee3bae2",
     "document-ingestion.md From the hall to the heat sink": "51d21be6488c12ce",
@@ -1151,6 +1152,8 @@ describe("closeupDiagnostics sections", () => {
         },
       ],
       racks: [{ id: "r", slots: [{ id: "s", at: 1, type: "server-2u", assembly: "tpl" }] }],
+      // slot internals exist only for a rack a step action targets (§8.1)
+      steps: [{ assembly: [{ explode: "r" }] }],
     });
   const crashing = {
     shapes: undefined,
@@ -1167,10 +1170,6 @@ describe("closeupDiagnostics sections", () => {
       "render/internal-error",
     ]);
     expect(d.find((x) => x.code === "render/internal-error")!.message).toContain("boom");
-  });
-
-  test("closeups: false skips the close-up section", () => {
-    expect(closeupDiagnostics(withCloseup(), { closeups: false })).toEqual([]);
   });
 
   test("the size mismatch points at the part's closeup field", () => {

@@ -52,6 +52,7 @@ import { endsAwayFromBase } from "../../scene/assembly/timing.js";
 import { resolveStoryboard } from "../../scene/storyboards.js";
 import { closesLoop, resolveFigure } from "../../scene/boards.js";
 import type { PlatformCosmoSpec } from "../../schema/types.gen.js";
+import { LOOP_START_MIN } from "../../scene/assembly/build.js";
 import { stepTimes } from "../boards/timeline.js";
 import { parseCopyKey } from "../../depth/copies.js";
 import { copySuffix } from "../../emit/ids.js";
@@ -64,6 +65,7 @@ import { scopeIds, viewNode, viewRender } from "./views.js";
 import { clipDef, partGroup, withIdSuffix, wrap, type DomContext, type Wrappers } from "./dom.js";
 import { buildLabels, type LabelTrack, type TextSpec } from "./labels.js";
 import { andVisibility, presenceTracks, presentWindows, type PresenceTracks } from "./builds.js";
+import { flightTracks, slotOf } from "./flights.js";
 import { buildLoop, type StageRun } from "./loop.js";
 import {
   MoveIndex,
@@ -103,7 +105,6 @@ export interface AssemblyRenderContext {
   readonly fs: number;
   readonly text: (o: TextSpec) => SvgElement;
   readonly fit: (text: string, size: number, bold: boolean, maxWidth: number) => string;
-  readonly nudge: (box: Rect, placed: readonly Rect[]) => { dy: number };
   /** Scene objects that share the depth order (default none, see model.ts). */
   readonly statics?: readonly StaticItem[];
   readonly budgets?: Partial<DepthBudgets>;
@@ -225,6 +226,8 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     start: t.start,
     duration: t.duration,
     open: t.open,
+    ...(t.window.lead > 0 ? { lead: t.window.lead } : {}),
+    ...(t.window.hold > 0 ? { hold: LOOP_START_MIN } : {}),
     end: t.end,
   }));
   const loopBuild = buildLoop(assemblies, plan, times, total, closeLast, input.foreign);
@@ -294,7 +297,6 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     fs: ctx.fs,
     text: ctx.text,
     fit: ctx.fit,
-    nudge: ctx.nudge,
     assemblies,
     labelMode: (id) => specAsm.get(input.templateOf?.get(id) ?? id)?.labels ?? "exploded",
     leaves,
@@ -469,6 +471,58 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     const inner = copy === 0 ? dom.inner : withIdSuffix(dom.inner, copySuffix(copy), domCtx);
     objects.push(wrap(inner, w, domCtx));
   }
+  // ---- callout flights (§7.6) ---------------------------------------------------------------
+  // The overlay copy of each flying leaf: not a depth item, drawn after every item of the group.
+  const flights =
+    loopBuild.flights.length === 0 || leaves.length === 0
+      ? undefined
+      : flightTracks({
+          id: ids.flight,
+          runs: loopBuild.flights,
+          leaves,
+          index,
+          projection,
+          slot: slotOf(
+            unionRects(leaves.map((l) => projectBoxBounds(projection, l.geometry.bounds))),
+          ),
+          loop: total,
+        });
+  const flightList = flights?.tracks ?? [];
+  const idOf = (n: SvgNode): unknown =>
+    typeof n === "object" && "tag" in n ? n.attrs?.["id"] : undefined;
+  for (const ft of flightList) {
+    const leaf = leafByPath.get(ft.path);
+    if (leaf === undefined) continue;
+    const before = domCtx.defs.length;
+    const group = partGroup(domCtx, leaf, undefined, {});
+    // what the copy defines again (image clips, same ids) is already there
+    const known = new Set(domCtx.defs.slice(0, before).map(idOf));
+    const fresh = domCtx.defs.splice(before).filter((d) => !known.has(idOf(d)));
+    domCtx.defs.push(...fresh);
+    // the copy's ids are listed with the item's copies, so per-id rules reach it too
+    const list = (node: SvgNode): void => {
+      if (typeof node !== "object" || !("tag" in node)) return;
+      const id = node.attrs?.["id"];
+      if (typeof id === "string") copyList.set(id, [...(copyList.get(id) ?? [id]), `${id}__f`]);
+      for (const kid of node.children ?? []) list(kid);
+    };
+    list(group);
+    const tf = translateOf(evalOffset(ft.motion, 0));
+    const o0 = round2(evalOpacity(ft.opacity, 0));
+    objects.push(
+      h(
+        "g",
+        {
+          id: ft.id,
+          ...(tf === undefined ? {} : { transform: tf }),
+          ...(evalVisible(ft.visibility, 0) ? {} : { visibility: "hidden" }),
+          ...(o0 < 1 ? { opacity: o0 } : {}),
+        },
+        withIdSuffix(group, "__f", domCtx),
+      ),
+    );
+  }
+
   // Copy-aware ids (§9.4): `copyIds(id)` lists `id`, `id__c1`, … for every element of a copied
   // item (wrappers, part group, faces, overlay, top-face label); B emits per-id rules for all.
   const asmIds: IdScheme & AssemblyIdScheme = {
@@ -515,6 +569,8 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
       }),
     );
   }
+  // flights: the copy at the callout slot and at the hover point (§10)
+  reachRects.push(...(flights?.rects ?? []));
   const reach = reachRects.length === 0 ? undefined : unionRects(reachRects);
   if (reach !== undefined) extents.push(reach);
 
@@ -535,6 +591,11 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
       if (r.fade !== undefined) opacity[r.fade] = round2(evalOpacity(r.track.opacity, t));
     }
     for (const s of staticFades) opacity[s.id] = round2(evalOpacity(s.opacity, t));
+    for (const f of flightList) {
+      transforms[f.id] = translateFull(evalOffset(f.motion, t));
+      (evalVisible(f.visibility, t) ? visible : hidden).push(f.id);
+      opacity[f.id] = round2(evalOpacity(f.opacity, t));
+    }
     for (const lt of labelTracks) {
       // a top-face label rides inside its part, so each copy has its own (copyIds)
       for (const id of asmIds.copyIds(lt.id)) {
@@ -620,6 +681,7 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     ...(loopBuild.closure === undefined ? {} : { closure: loopBuild.closure }),
     approximate: result.approximate,
     moves: loopBuild.moves,
+    ...(flightList.length === 0 ? {} : { flights: flightList }),
     reach,
   };
   const _check: AssemblyRenderModel = model;
@@ -745,7 +807,11 @@ export function buildAssemblyRender(
   const basePoses: Record<string, readonly { program: string; level: number }[]> = {};
   for (const a of assemblies) basePoses[a.id] = a.basePose;
   for (const l of levels) if (l.assembly !== undefined) basePoses[l.path] = l.assembly.basePose;
-  let closeLast = endsAwayFromBase(plan[plan.length - 1]?.poses, basePoses);
+  let closeLast = endsAwayFromBase(
+    plan[plan.length - 1]?.poses,
+    basePoses,
+    plan[plan.length - 1]?.view ?? 0,
+  );
   if (!closeLast && (ctx.spec?.figures !== undefined || ctx.spec?.storyboards !== undefined)) {
     closeLast = closesLoop(
       (ctx.spec.figures ?? []).map((f, i) => resolveFigure(f, i).figure),

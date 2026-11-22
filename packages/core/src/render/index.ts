@@ -288,7 +288,11 @@ export function createRender(deps: RenderDeps): RenderFn {
         ...(options.images ? { images: options.images } : {}),
         ...(options.parts ? { parts: options.parts } : {}),
       });
-      diagnostics.push(...scene.diagnostics);
+      // validation reports the build-program warnings too: once each
+      const known = new Set(diagnostics.map((d) => `${d.code}\0${d.path}\0${d.message}`));
+      diagnostics.push(
+        ...scene.diagnostics.filter((d) => !known.has(`${d.code}\0${d.path}\0${d.message}`)),
+      );
       if (diagnostics.some((d) => d.severity === "error")) return fail(diagnostics, scene);
 
       const font = options.font ?? "embed";
