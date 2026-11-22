@@ -281,12 +281,20 @@ describe("D-4a: no label is drawn cut by the camera or under the caption (§7.4)
       .find((j) => j.includes('"title": "Rack to server to internals"'))!;
     const m = modelOf(JSON.parse(json) as core.PlatformCosmoSpec);
     const anim = core.createAnimator();
+    const A = m.assembly!;
     let zoomed = 0;
-    for (const c of m.assembly!.clock) {
-      for (const t of [(c.start + c.end) / 2, c.end - 0.01]) {
+    for (const c of A.clock) {
+      // late in the camera's move into the step a label may be fading out (it is hidden for the
+      // step), but none that is still shown is cut
+      const late = c.start - 0.1 * (c.start - (A.clock[c.step - 2]?.end ?? 0));
+      for (const [t, min] of [
+        [late, 0.25],
+        [(c.start + c.end) / 2, 0.01],
+        [c.end - 0.01, 0.01],
+      ] as const) {
         const v = anim.animate(m, { speed: 1, mode: "frame", time: t }).viewBox;
         if (v !== undefined) zoomed++;
-        expect(badLabels(m, t, v), `step ${c.step} at ${t}`).toEqual([]);
+        expect(badLabels(m, t, v, min), `step ${c.step} at ${t}`).toEqual([]);
       }
     }
     expect(zoomed).toBeGreaterThan(0);

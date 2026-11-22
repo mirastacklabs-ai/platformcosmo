@@ -357,7 +357,7 @@ describe("the story's model (core + DC pack)", () => {
     expect(A.frameAt(18.9).opacity[srv.group]!).toBeLessThan(1);
   });
 
-  test("labels: the board names its CPUs; a DIMM bank has one label; none is cut or under the caption", async () => {
+  test("labels: the board names its CPUs; a DIMM bank has one label", async () => {
     const m = await model();
     const A = m.assembly!;
     const srv = A.levels!.find((l) => l.path === "r2/srv/closeup")!;
@@ -370,13 +370,24 @@ describe("the story's model (core + DC pack)", () => {
     expect(srv.model!.frameAt(17).opacity[cpu1.id] ?? 1).toBe(1);
     const dimms = top.filter((t) => t.path.startsWith("r2/srv/closeup/board/dimm-bank-"));
     expect(dimms).toHaveLength(1);
-    // every step, measured on the drawn labels: none visible is cut by the camera window or
-    // covered by the caption (mid-step and at the settled end, camera still)
+  });
+
+  test("measured on the drawn labels, no label is cut by the camera or under the caption", async () => {
+    const m = await model();
+    const A = m.assembly!;
+    // mid-step and at the settled end of every step (the camera is still then)
     const anim = core.createAnimator();
     for (const c of A.clock) {
-      for (const t of [(c.start + c.end) / 2, c.end - 0.01]) {
+      // late in the camera's move into the step a label may be fading out (it is hidden for the
+      // step), but none that is still shown is cut
+      const late = c.start - 0.1 * (c.start - (A.clock[c.step - 2]?.end ?? 0));
+      for (const [t, min] of [
+        [late, 0.25],
+        [(c.start + c.end) / 2, 0.01],
+        [c.end - 0.01, 0.01],
+      ] as const) {
         const v = anim.animate(m, { speed: 1, mode: "frame", time: t }).viewBox;
-        expect(badLabels(m, t, v), `step ${c.step} at ${t}`).toEqual([]);
+        expect(badLabels(m, t, v, min), `step ${c.step} at ${t}`).toEqual([]);
       }
     }
   });

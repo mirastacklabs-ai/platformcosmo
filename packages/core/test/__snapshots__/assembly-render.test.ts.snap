@@ -3,7 +3,7 @@
 exports[`snapshots of the Phase 1b examples > GPU server (§19.2) 1`] = `
 {
   "assets": 1,
-  "end3": "5052e39055f7d313",
+  "end3": "33ac8318a9bd0079",
   "epochs": 3,
   "items": 41,
   "labels": 13,

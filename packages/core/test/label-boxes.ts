@@ -76,7 +76,7 @@ function boxOf(g: El): Rect | undefined {
 }
 
 /** Leader labels visible (opacity above 0.01) at `t`, with their box in the main camera's world. */
-export function visibleLabels(m: LabelModel, t: number): { id: string; rect: Rect }[] {
+export function visibleLabels(m: LabelModel, t: number, min = 0.01): { id: string; rect: Rect }[] {
   const A = m.assembly;
   if (A === undefined) return [];
   const st = A.frameAt(t);
@@ -97,7 +97,7 @@ export function visibleLabels(m: LabelModel, t: number): { id: string; rect: Rec
       if (id !== undefined && id.includes("-pl_") && !id.endsWith("__top")) {
         const op = (st.opacity[id] ?? num(n.attrs?.opacity ?? 1)) * levelOpacity;
         const box = boxOf(n);
-        if (op > 0.01 && box !== undefined) {
+        if (op > min && box !== undefined) {
           const [, tx, ty] = affine(st.transforms[id] ?? String(n.attrs?.transform ?? ""));
           const [s, lx, ly] = level;
           out.push({
@@ -121,7 +121,8 @@ export function visibleLabels(m: LabelModel, t: number): { id: string; rect: Rec
 }
 
 /** Visible labels the window `v` (the frame's view box) cuts or the caption covers. */
-export function badLabels(m: LabelModel, t: number, v: Rect | undefined): string[] {
+/** `min`: the opacity above which a label counts as shown (a label fading out may be cut). */
+export function badLabels(m: LabelModel, t: number, v: Rect | undefined, min = 0.01): string[] {
   const w = v ?? m.viewBox;
   const s = m.viewBox.width / w.width;
   const cap = m.captionRect;
@@ -137,7 +138,7 @@ export function badLabels(m: LabelModel, t: number, v: Rect | undefined): string
   const hit = (a: Rect, b: Rect): boolean =>
     a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
   const out: string[] = [];
-  for (const l of visibleLabels(m, t)) {
+  for (const l of visibleLabels(m, t, min)) {
     const q = l.rect;
     if (!hit(q, w)) continue;
     const inside =

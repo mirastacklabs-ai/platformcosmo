@@ -365,10 +365,17 @@ describe("unmoved parts under a labelled group are named by it", () => {
     const anim = createAnimator();
     let zoomed = 0;
     for (const c of A.clock) {
-      for (const t of [(c.start + c.end) / 2, c.end - 0.01]) {
+      // late in the camera's move into the step a label may be fading out (it is hidden for the
+      // step), but none that is still shown is cut
+      const late = c.start - 0.1 * (c.start - (A.clock[c.step - 2]?.end ?? 0));
+      for (const [t, min] of [
+        [late, 0.25],
+        [(c.start + c.end) / 2, 0.01],
+        [c.end - 0.01, 0.01],
+      ] as const) {
         const v = anim.animate(model, { speed: 1, mode: "frame", time: t }).viewBox;
         if (v !== undefined) zoomed++;
-        expect(badLabels(model, t, v), `step ${c.step} at ${t}`).toEqual([]);
+        expect(badLabels(model, t, v, min), `step ${c.step} at ${t}`).toEqual([]);
       }
     }
     expect(zoomed).toBeGreaterThan(0);
