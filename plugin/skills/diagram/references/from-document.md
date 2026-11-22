@@ -166,7 +166,6 @@ page numbers, never text or art copied from a real document.
    it came from (the `compose` or `render` PNG). Check each step: the right images, in the right order, the caption
    and step number the document prints, the parts and counts, the attach point where the document's arrow points.
 3. Build every step you changed. Steps you cannot place or read confidently are reported, never hidden.
-   Steps you cannot place or read confidently are reported, never hidden.
 4. Build the animated SVG last, and report the `wrote` lines.
 
 ## 8. Limits to know
