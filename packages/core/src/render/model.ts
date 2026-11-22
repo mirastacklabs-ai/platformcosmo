@@ -810,13 +810,16 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   const flowFollows = shareDepth
     ? scene.flows.flatMap((f) => {
         const e = edgeById.get(f.edge);
-        const follows = e === undefined || e.kind !== "cable" ? [] : cableFollows(e);
+        // any edge, hidden ones included: the DC pack's own rack flows (`dc_p_*`, `dc_n_*`,
+        // `dc_air_*`) run on hidden edges of kind `edge` between slots (§8.1)
+        const follows = e === undefined ? [] : cableFollows(e);
         return follows.length === 0 ? [] : [{ flow: f.id, follows }];
       })
     : [];
   const asmResult = buildAssemblyRender({
     scene,
     ...(shareDepth ? { statics: staticItems } : {}),
+    fixedLabels: [...placed],
     ...(flowFollows.length === 0 ? {} : { flowFollows }),
     spec: inputs.spec,
     images: inputs.images,

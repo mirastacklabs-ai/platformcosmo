@@ -176,7 +176,6 @@ export function assemblyPlanDiagnostics(
 ): Diagnostic[] {
   if ((spec.steps?.length ?? 0) === 0) return [];
   if ((spec.assemblies?.length ?? 0) === 0 && !needsRacks(spec, ctx.dc)) return [];
-  // a section the DC pack or the close-ups cannot build is reported by `closeupDiagnostics`
   const p = planScene(spec, {
     ...(ctx.parts === undefined ? {} : { parts: ctx.parts }),
     ...(ctx.dcShapes === undefined ? {} : { dcShapes: ctx.dcShapes }),
@@ -193,7 +192,14 @@ export function assemblyPlanDiagnostics(
     ...(p.closeups?.levels.flatMap((l) => (l.assembly === undefined ? [] : [l.assembly])) ?? []),
   ];
   const views = stepViews(spec, ctx.isFocusTarget);
-  return p.programs.plan(all, figures, views, ctx.gated ? { gated: ctx.gated } : {}).compression;
+  const { compression } = p.programs.plan(
+    all,
+    figures,
+    views,
+    ctx.gated ? { gated: ctx.gated } : {},
+  );
+  // a section that threw is reported here too (`validate` drops the copy `closeupDiagnostics` adds)
+  return [...p.errors, ...compression];
 }
 
 /** The codes `closeupDiagnostics` reports (the size and depth checks of §8.5). */

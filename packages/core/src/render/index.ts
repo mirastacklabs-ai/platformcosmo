@@ -321,7 +321,9 @@ export function createRender(deps: RenderDeps): RenderFn {
         font,
         prefix,
         ...(options.icons ? { icons: options.icons } : {}),
-        ...(parsed.figures !== undefined || parsed.assemblies !== undefined
+        ...(parsed.figures !== undefined ||
+        parsed.assemblies !== undefined ||
+        scene.assemblies !== undefined
           ? { spec: parsed, ...(options.images ? { images: options.images } : {}) }
           : {}),
       });

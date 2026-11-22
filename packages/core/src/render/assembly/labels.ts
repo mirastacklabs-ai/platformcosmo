@@ -82,6 +82,8 @@ export interface LabelContext {
   readonly text: (o: TextSpec) => SvgElement;
   readonly fit: (text: string, size: number, bold: boolean, maxWidth: number) => string;
   readonly nudge: (box: Rect, placed: readonly Rect[]) => { dy: number };
+  /** Label boxes already placed by the main scene: obstacles for every part label. */
+  readonly fixed?: readonly Rect[];
   readonly assemblies: readonly SceneAssembly[];
   readonly labelMode: (assembly: string) => "exploded" | "always" | "never";
   readonly leaves: readonly WorldLeaf[];
@@ -239,7 +241,7 @@ export function buildLabels(ctx: LabelContext): LabelOutput {
     }
   }
 
-  const placed: Rect[] = [];
+  const placed: Rect[] = [...(ctx.fixed ?? [])];
   const size = ctx.labelSize;
   const lineH = size * 1.25;
   for (const path of [...firstShow.keys()].sort()) {

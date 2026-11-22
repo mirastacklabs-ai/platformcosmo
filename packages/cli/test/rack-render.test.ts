@@ -146,3 +146,112 @@ describe("the rear-door heat exchanger (rack-b1)", () => {
     expect(r.diagnostics.filter((d) => d.code.endsWith("collision"))).toEqual([]);
   }, 120000);
 });
+
+/** The hall with two racks exploded together (their drawers meet in the aisle between rows). */
+const both: core.PlatformCosmoSpec = {
+  ...(hall as object),
+  steps: [{ duration: 6, assembly: [{ explode: "rack-a1" }, { explode: "rack-b1" }] }],
+} as unknown as core.PlatformCosmoSpec;
+
+/** Every element of a layer, depth first. */
+const elementsOf = (
+  nodes: readonly core.SvgNode[],
+  out: core.SvgElement[] = [],
+): core.SvgElement[] => {
+  for (const n of nodes) {
+    if (typeof n !== "object" || n === null || !("tag" in n)) continue;
+    out.push(n);
+    elementsOf(n.children ?? [], out);
+  }
+  return out;
+};
+
+describe("particles of a hidden-while-displaced flow (8.1, D31)", () => {
+  test("a DC flow's fade wrapper stays in the DC flow layer, above the objects", async () => {
+    const r = await render(targeting("rack-a1"), {
+      dc: dcPack,
+      themes: themeRegistry,
+      font: "system",
+      outputs: ["animated"],
+      optimize: false,
+    });
+    const svg = String(r.outputs.find((o) => o.kind === "animated")!.data);
+    const wraps = [...svg.matchAll(/<g id="[^"]*-fw_flow_5fdc_5ff_5f\d+"/g)].map((m) => m.index!);
+    expect(wraps.length).toBeGreaterThan(0);
+    const objects = svg.indexOf('-ly_objects"');
+    const dcflows = svg.indexOf('-ly_dcflows"');
+    expect(objects).toBeGreaterThan(0);
+    expect(dcflows).toBeGreaterThan(objects);
+    for (const w of wraps) expect(w).toBeGreaterThan(dcflows);
+  }, 120000);
+
+  test("the rack's own flows (hidden edges) fade while their slot is out (19.4)", () => {
+    const md = readFileSync(new URL("../../../docs/design/assemblies.md", import.meta.url), "utf8");
+    const json = [...md.matchAll(/```json\n([\s\S]*?)```/g)]
+      .map((m) => m[1] as string)
+      .find((j) => j.includes('"title": "Rack to server to internals"'))!;
+    const m = modelOf(JSON.parse(json) as core.PlatformCosmoSpec);
+    // dc_p_2 / dc_n_4 run to the app server's slot (flows dc_f_3, dc_f_5), on hidden edges
+    const keys = m.assembly!.staticFades.map((f) => f.key);
+    for (const k of ["flow_dc_f_3", "flow_dc_f_5"]) expect(keys, k).toContain(k);
+    const flows = m.assembly!.staticFades.filter((f) => /^flow_dc_f_[2-5]$/.test(f.key));
+    const at = (t: number): number[] => flows.map((f) => m.assembly!.frameAt(t).opacity[f.id]!);
+    expect(new Set(at(0))).toEqual(new Set([1]));
+    expect(new Set(at(4))).toEqual(new Set([0])); // the drawers are out
+    expect(new Set(at(m.assembly!.loop - 0.01))).toEqual(new Set([1])); // racked again
+  });
+});
+
+describe("two racks targeted together", () => {
+  test("depth diagnostics of a rack-only spec point at /racks/<i> (N2)", async () => {
+    const r = await render(both, {
+      dc: dcPack,
+      themes: themeRegistry,
+      font: "system",
+      outputs: ["static"],
+    });
+    const depth = r.diagnostics.filter((d) => d.code === "assembly/transit-collision");
+    expect(depth.length).toBeGreaterThan(0);
+    for (const d of depth) expect(d.path, d.message).toMatch(/^\/racks\/\d+$/);
+    // every depth diagnostic has a pointer, a cable-first pair at the cable (`/cables/<i>`)
+    const all = r.diagnostics.filter((d) => /^assembly\/(depth-|clip-|transit-)/.test(d.code));
+    for (const d of all) expect(d.path, `${d.code}: ${d.message}`).not.toBe("");
+  }, 120000);
+});
+
+describe("the rack label is an obstacle for part labels (N1)", () => {
+  test("A1's label stays clear of the part labels of A1 and B1 at t = 3", () => {
+    const m = modelOf(both);
+    const els = elementsOf([...m.layers.labels, ...m.layers.objects]);
+    const text = (el: core.SvgElement): string =>
+      (el.children ?? []).filter((c) => typeof c === "string").join("");
+    const rack = els.find((e) => e.tag === "text" && text(e) === "A1")!;
+    expect(rack).toBeDefined();
+    const rx = Number(rack.attrs!["x"]);
+    const ry = Number(rack.attrs!["y"]);
+    // the rack label's box: centred on x, about 22 px wide, one text line high
+    const a = { x0: rx - 11, x1: rx + 11, y0: ry - 12, y1: ry + 4 };
+    const state = m.assembly!.frameAt(3);
+    const pills = els.filter(
+      (e) => e.tag === "g" && typeof e.attrs?.["id"] === "string" && /-pl_/.test(e.attrs["id"]),
+    );
+    expect(pills.length).toBeGreaterThan(0);
+    for (const g of pills) {
+      const rect = elementsOf(g.children ?? []).find((e) => e.attrs?.["class"] === "pc-t-elabel");
+      if (rect === undefined) continue;
+      const [dx, dy] = (
+        /translate\(([-\d.]+)[ ,]([-\d.]+)\)/.exec(
+          state.transforms[g.attrs!["id"] as string] ?? "",
+        ) ?? [0, 0, 0]
+      )
+        .slice(1)
+        .map(Number) as [number, number];
+      const x = Number(rect.attrs!["x"]) + dx;
+      const y = Number(rect.attrs!["y"]) + dy;
+      const w = Number(rect.attrs!["width"]);
+      const h = Number(rect.attrs!["height"]);
+      const hit = x < a.x1 && a.x0 < x + w && y < a.y1 && a.y0 < y + h;
+      expect(hit, String(g.attrs!["id"])).toBe(false);
+    }
+  });
+});

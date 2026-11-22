@@ -433,9 +433,12 @@ with it.
 - Cables (and their flows) touching a displaced slot are hidden while it is displaced
   (opacity track on the cable segments), and reappear when it is back. Displaced means the
   slot's displacement (its own moves and its ancestors') is not zero; the segments switch at
-  once (no ramp) and leave the depth order meanwhile; the particles of a flow on such a cable
-  ride in a wrapper with the same fade.
-- The rack keeps its 1.1 label, under its 1.1 box (the rack itself never moves).
+  once (no ramp) and leave the depth order meanwhile; the particles of any flow whose edge
+  touches such a slot ride in a wrapper with the same fade: cables, and the DC pack's own rack
+  flows (power, network and air on its hidden edges between slots). Their group stays in the DC
+  flow layer (D31), above the objects.
+- The rack keeps its 1.1 label, under its 1.1 box (the rack itself never moves), and part
+  labels avoid it like every other label of the main scene.
 
 ### 8.2 Slot internals
 

@@ -106,6 +106,8 @@ export interface AssemblyRenderContext {
   readonly text: (o: TextSpec) => SvgElement;
   readonly fit: (text: string, size: number, bold: boolean, maxWidth: number) => string;
   readonly nudge: (box: Rect, placed: readonly Rect[]) => { dy: number };
+  /** Label boxes of the main scene (rack labels, row pills, object labels): part labels avoid them. */
+  readonly fixedLabels?: readonly Rect[];
   /** Scene objects that share the depth order (default none, see model.ts). */
   readonly statics?: readonly StaticItem[];
   /**
@@ -275,6 +277,12 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
   const result = depthEpochs(inputs, loopBuild.moves, total, {
     projection,
     pointer: (key) => {
+      // a cable segment (`cable_<edge>_<n>`, model.ts) points at its spec cable
+      const cable = /^cable_(.+)_\d+$/.exec(key)?.[1];
+      if (cable !== undefined) {
+        const i = (ctx.spec?.cables ?? []).findIndex((c) => c.id === cable);
+        return i < 0 ? "" : `/cables/${i}`;
+      }
       const path = itemPath.get(key);
       const leaf = path === undefined ? undefined : leafByPath.get(path);
       return leaf === undefined ? "" : (pointerOfAssembly.get(leaf.assembly) ?? "");
@@ -283,7 +291,6 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     ...(ctx.budgets === undefined ? {} : { budgets: ctx.budgets }),
   });
   diagnostics.push(...result.diagnostics);
-  const pathOf = itemPath;
   const clipOf = new Map(result.clips.map((c) => [c.item, c]));
   const epochSets = result.epochs.map((e) => new Set(e.order));
 
@@ -325,6 +332,7 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     text: ctx.text,
     fit: ctx.fit,
     nudge: ctx.nudge,
+    ...(ctx.fixedLabels === undefined ? {} : { fixed: ctx.fixedLabels }),
     assemblies,
     labelMode: (id) => specAsm.get(input.templateOf?.get(id) ?? id)?.labels ?? "exploded",
     leaves,
@@ -413,7 +421,7 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
       objects.push(h("g", { id, ...(o0 < 1 ? { opacity: o0 } : {}) }, st.node));
       continue;
     }
-    const path = pathOf.get(key);
+    const path = itemPath.get(key);
     const leaf = path === undefined ? undefined : leafByPath.get(path);
     if (path === undefined || leaf === undefined) continue;
     let dom = itemDom.get(key);
@@ -425,7 +433,7 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
       let host: readonly TrackKey[] = [];
       let motion: readonly TrackKey[];
       if (clip !== undefined) {
-        const solidPath = pathOf.get(clip.solid);
+        const solidPath = itemPath.get(clip.solid);
         const solidChain = solidPath === undefined ? [] : index.chain(solidPath);
         host = offsetTrack(plain(solidChain), total, projection, extraTimes);
         motion = offsetTrack(relativeMoves(chain, solidChain), total, projection, extraTimes);
