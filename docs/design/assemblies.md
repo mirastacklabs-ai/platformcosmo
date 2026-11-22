@@ -1116,7 +1116,7 @@ and explains it:
      that face of the body and spans at least half of it. A flat part on a board (a DIMM, a
      chip, a row of them) is thin but covers nothing, and a thin sheet floating above the body
      is not a cover;
-   - fasteners (small, repeated, `type` screw, bolt, clip, pin);
+   - fasteners (small, repeated, `type` screw, bolt, clip, pin, nut, washer, rivet, fastener);
    - shells (open containers), sub-assemblies;
    - internals: enclosed or seated inside a shell, or inside the body on another part;
    - components: parts sitting on the body's top face (a board's chips, DIMMs, connectors),
