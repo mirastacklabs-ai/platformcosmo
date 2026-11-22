@@ -57,6 +57,7 @@ describe("assets (usage)", () => {
       ["crop", "i.png", "--rect", "1,2,3", "-o", "o.png"],
       ["crop", "i.png", "--rect", "1,2,3,x", "-o", "o.png"],
       ["crop", "--rect", "1,2,3,4", "-o", "o.png"],
+      ["crop", "i.png", "--rect", "0,0,5,5", "--scale", "big", "-o", "o.png"],
       ["cutout", "i.png", "-o", "o.png"],
       ["cutout", "i.png", "--seed", "1", "-o", "o.png"],
       ["cutout", "i.png", "--seed", "1,2", "--prior", "blob", "-o", "o.png"],
@@ -157,6 +158,63 @@ describe("assets crop", () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("asset/bad-option");
     expect(await readdir(dir)).toEqual(["i.png"]);
+  });
+  test("--scale zooms the result last, deterministically", async () => {
+    const dir = await tmp();
+    await writeFile(join(dir, "i.png"), encodePng(sample()));
+    const args = ["crop", "i.png", "--rect", "10,5,40,30", "--scale", "2", "-o", "z.png", "--json"];
+    const r = await cli(dir, args);
+    expect(r.code).toBe(0);
+    expect(json(r.stdout)).toMatchObject({ ok: true, width: 80, height: 60 });
+    const first = await readFile(join(dir, "z.png"));
+    expect((await cli(dir, args)).code).toBe(0);
+    expect(Buffer.compare(first, await readFile(join(dir, "z.png")))).toBe(0);
+    const h = await cli(dir, [
+      "crop",
+      "i.png",
+      "--rect",
+      "0,0,60,40",
+      "--scale",
+      "0.5",
+      "-o",
+      "h.png",
+    ]);
+    expect(h.code).toBe(0);
+    const hr = await raster(join(dir, "h.png"));
+    expect([hr.width, hr.height]).toEqual([30, 20]);
+  });
+  test("--scale out of range is a diagnostic, exit 1, nothing written", async () => {
+    const dir = await tmp();
+    await writeFile(join(dir, "i.png"), encodePng(sample()));
+    for (const k of ["0.1", "8.5", "0", "-2"]) {
+      const r = await cli(dir, [
+        "crop",
+        "i.png",
+        "--rect",
+        "0,0,5,5",
+        `--scale=${k}`,
+        "-o",
+        "o.png",
+      ]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("asset/bad-option");
+    }
+    expect(await readdir(dir)).toEqual(["i.png"]);
+  });
+  test("a bad --scale is reported even when the input cannot be read", async () => {
+    const dir = await tmp();
+    const r = await cli(dir, [
+      "crop",
+      "gone.png",
+      "--rect",
+      "0,0,5,5",
+      "--scale",
+      "9",
+      "-o",
+      "o.png",
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("asset/bad-option");
   });
   test("output must be .png", async () => {
     const dir = await tmp();

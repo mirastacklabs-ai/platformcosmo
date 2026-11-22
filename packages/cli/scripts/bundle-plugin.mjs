@@ -96,6 +96,7 @@ const result = await build({
   loader: { ".wasm": "binary", ".woff2": "binary", ".ttf": "binary", ".otf": "binary" },
   logLevel: "warning",
   alias: {
+    "@platformcosmo/core/internal": `${root}packages/core/src/internal.ts`,
     "@platformcosmo/core/node": `${root}packages/core/src/node.ts`,
     "@platformcosmo/core": src("core"),
     "@platformcosmo/themes": src("themes"),
