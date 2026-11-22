@@ -3,7 +3,7 @@
 exports[`keyframes per wrapper property (snapshots) > 2U GPU server (19.2) 1`] = `
 {
   "animatedIds": 87,
-  "keyframes": 66,
+  "keyframes": 68,
   "loopSeconds": 21,
   "samples": [
     {
@@ -37,12 +37,12 @@ exports[`keyframes per wrapper property (snapshots) > 2U GPU server (19.2) 1`] =
     {
       "copy": "pc-t-pl_srv.board",
       "kf": [
-        "21s linear 0:opacity:0/linear 0.125714:opacity:0/linear 0.133333:opacity:1/step-end 0.761905:opacity:0/linear 1:opacity:0",
+        "21s linear 0:opacity:0/linear 0.125714:opacity:0/linear 0.133333:opacity:1/step-end 0.29523299999999997:opacity:1/step-end 0.295238:opacity:0/step-end 0.485714:opacity:1/step-end 0.761905:opacity:0/linear 1:opacity:0",
       ],
       "kind": "label",
     },
   ],
-  "sha": "37aeb8420b90bbcd",
+  "sha": "a3a3739dc9526c37",
 }
 `;
 

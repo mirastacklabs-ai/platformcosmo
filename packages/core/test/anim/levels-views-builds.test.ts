@@ -468,7 +468,11 @@ describe("close-up chain: level cross-fades", () => {
     const host = sink.fromHost(sink.hostAt(3));
     expect(at(t1)).toEqual([host.scale, host.tx, host.ty]);
     expect(frameOf(m, t1)[g]!.opacity).toBe(0);
-    const mid = at((t0 + t1) / 2)[0];
+    // the shrink has its own half of the transition when the camera moves too (§8.4: the
+    // level shrinks first, the camera moves after): its middle is between overview and host
+    const half = (t0 + t1) / 2;
+    const moved = at((half + t1) / 2)[0] === at(t1)[0];
+    const mid = at(moved ? (t0 + half) / 2 : half)[0];
     expect(mid).toBeLessThan(ov.scale);
     expect(mid).toBeGreaterThan(host.scale);
     // at the end the level's content sits inside the host's rect

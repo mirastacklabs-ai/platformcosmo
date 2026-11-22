@@ -1121,19 +1121,27 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   }
   // The parts callouts and callout slots go inside each step's camera window (assembly §7.6),
   // which needs the final view box and focus rects.
-  const runPlace = (): void => {
-    if (asmBuild?.place === undefined) return;
-    const partial = { viewBox: vb, focusRects, assembly: asmBuild.model } as unknown as RenderModel;
-    asmBuild.place({
+  const runPlace = (): readonly Diagnostic[] => {
+    if (asmBuild?.place === undefined) return [];
+    const partial = {
       viewBox: vb,
-      pinned: [...(captionRect ? [captionRect] : []), ...Object.values(metricRects)],
-      window: (step) => {
-        const st = scene.timeline.find((s) => s.index === step);
-        return st === undefined ? undefined : zoomFor(partial, st)?.viewBox;
-      },
-    });
+      focusRects,
+      assembly: asmBuild.model,
+      ...(captionRect ? { captionRect } : {}),
+      metricRects,
+    } as unknown as RenderModel;
+    return (
+      asmBuild.place({
+        viewBox: vb,
+        pinned: [...(captionRect ? [captionRect] : []), ...Object.values(metricRects)],
+        window: (step) => {
+          const st = scene.timeline.find((s) => s.index === step);
+          return st === undefined ? undefined : zoomFor(partial, st)?.viewBox;
+        },
+      }) ?? []
+    );
   };
-  runPlace();
+  diagnostics.push(...runPlace());
   const missing = [
     ...new Set([
       ...missingGlyphs(displayText.join(""), "display"),

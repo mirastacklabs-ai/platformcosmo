@@ -1047,9 +1047,15 @@ describe("close-up entry and group state (Q02, Q04)", () => {
     );
     const e3 = A.stepEnd(3);
     expect(ops(e3)).toEqual([0, 1, 0, 0]);
-    // mid-transition into step 3: both levels half there, the scale between start and overview
+    // mid-way through the cross-fade into step 3: both levels half there, the scale between
+    // start and overview. When the camera also moves, the cross-fade has its own half of the
+    // transition (§8.4: camera first going deeper), so find that half.
     const c = A.clock;
-    const t = (c[1]!.end + c[2]!.start) / 2;
+    const a = c[1]!.end;
+    const b = c[2]!.start;
+    const m2 = (a + b) / 2;
+    const still = A.frameAt((a + m2) / 2).opacity[l1.group] === A.frameAt(a).opacity[l1.group];
+    const t = still ? (m2 + b) / 2 : (a + m2) / 2;
     const mid = A.frameAt(t);
     expect(mid.opacity[l1.group]).toBeCloseTo(0.5, 2);
     expect(mid.opacity[l2.group]).toBeCloseTo(0.5, 2);

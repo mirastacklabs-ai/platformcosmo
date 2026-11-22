@@ -20,7 +20,7 @@ exports[`close-up chain: level cross-fades > keyframes of the level groups (snap
         },
         {
           "opacity": 1,
-          "p": 0.442857,
+          "p": 0.471429,
         },
         {
           "opacity": 0,
@@ -62,7 +62,7 @@ exports[`close-up chain: level cross-fades > keyframes of the level groups (snap
             7.14,
             22.52,
           ],
-          "p": 0.442857,
+          "p": 0.728564,
         },
         {
           "matrix": [
@@ -70,7 +70,7 @@ exports[`close-up chain: level cross-fades > keyframes of the level groups (snap
             0,
             0.01,
           ],
-          "p": 0.5,
+          "p": 0.7285710000000001,
         },
         {
           "matrix": [
@@ -94,7 +94,7 @@ exports[`close-up chain: level cross-fades > keyframes of the level groups (snap
         },
         {
           "opacity": 0,
-          "p": 0.442857,
+          "p": 0.471429,
         },
         {
           "opacity": 1,
@@ -106,7 +106,7 @@ exports[`close-up chain: level cross-fades > keyframes of the level groups (snap
         },
         {
           "opacity": 0,
-          "p": 0.785714,
+          "p": 0.7571429999999999,
         },
         {
           "opacity": 0,
@@ -128,7 +128,7 @@ exports[`close-up chain: level cross-fades > keyframes of the level groups (snap
             -46.18,
             41.96,
           ],
-          "p": 0.442857,
+          "p": 0.471429,
         },
         {
           "matrix": [
@@ -148,11 +148,19 @@ exports[`close-up chain: level cross-fades > keyframes of the level groups (snap
         },
         {
           "matrix": [
+            0.3385,
+            -46.16,
+            41.97,
+          ],
+          "p": 0.757136,
+        },
+        {
+          "matrix": [
             0.3383,
             -46.18,
             41.96,
           ],
-          "p": 0.785714,
+          "p": 0.7571429999999999,
         },
         {
           "matrix": [

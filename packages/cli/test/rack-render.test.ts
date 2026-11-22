@@ -272,35 +272,48 @@ describe("D-4a: a targeted rack keeps its 1.1 look at rest", () => {
   }, 120000);
 });
 
-describe("D-4a: the camera never cuts a label its step brings in (§7.4)", () => {
-  test("§19.4 step 2: every label that fades in lies inside the zoom window", () => {
+describe("D-4a: no label is drawn cut by the camera or under the caption (§7.4)", () => {
+  test("§19.4: each label showing in a zoomed step is inside the window and off the caption, or hidden", () => {
     const md = readFileSync(new URL("../../../docs/design/assemblies.md", import.meta.url), "utf8");
     const json = [...md.matchAll(/```json\n([\s\S]*?)```/g)]
       .map((x) => x[1] as string)
       .find((j) => j.includes('"title": "Rack to server to internals"'))!;
     const m = modelOf(JSON.parse(json) as core.PlatformCosmoSpec);
+    const A = m.assembly!;
     const animator = core.createAnimator();
-    for (const step of [2, 4]) {
+    const cap = m.captionRect!;
+    let checked = 0;
+    for (let step = 1; step <= m.scene.timeline.length; step++) {
       // the step output's view box is the step's camera window
-      const v = animator.animate(m, { speed: 1, mode: "step", step }).viewBox!;
-      expect(v).toBeDefined();
-      const labels = m.assembly!.stepLabels!(step);
-      expect(labels.length).toBeGreaterThan(0);
-      for (const q of labels) {
+      const v = animator.animate(m, { speed: 1, mode: "step", step }).viewBox;
+      if (v === undefined) continue;
+      const k = m.viewBox.width / v.width;
+      const c = {
+        x: v.x + (cap.x - m.viewBox.x) / k,
+        y: v.y + (cap.y - m.viewBox.y) / k,
+        w: cap.width / k,
+        h: cap.height / k,
+      };
+      const opacity = A.frameAt(A.clock[step - 1]!.end - 0.01).opacity;
+      for (const q of A.stepLabels!(step)) {
         const out =
           q.x + q.width <= v.x ||
           q.x >= v.x + v.width ||
           q.y + q.height <= v.y ||
           q.y >= v.y + v.height;
+        if (out) continue;
+        checked++;
         const inside =
           q.x >= v.x - 0.01 &&
           q.y >= v.y - 0.01 &&
           q.x + q.width <= v.x + v.width + 0.01 &&
           q.y + q.height <= v.y + v.height + 0.01;
-        expect(out || inside, `step ${step}: ${JSON.stringify(q)} in ${JSON.stringify(v)}`).toBe(
-          true,
-        );
+        const under =
+          q.x < c.x + c.w && c.x < q.x + q.width && q.y < c.y + c.h && c.y < q.y + q.height;
+        if (inside && !under) continue;
+        expect(opacity[A.ids.partLabel(q.part!)], `step ${step}: ${q.part}`).toBe(0);
       }
     }
+    expect(checked).toBeGreaterThan(0);
   });
 });
