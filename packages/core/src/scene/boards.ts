@@ -35,6 +35,7 @@ import type {
   SpecAssemblyAction,
   SpecEasing,
   SpecFigure,
+  SpecPart,
   SpecStep,
 } from "../schema/types.gen.js";
 
@@ -547,6 +548,55 @@ export interface PlanOptions {
   readonly storyboards?: ReadonlyMap<string, ResolvedStoryboard>;
   /** Seconds step 1 holds its motion for the loop-start fades (§7.4); 0 when there are none. */
   readonly loopHold?: number;
+  /**
+   * Figure and storyboard ids a `closeup` names (`closeupRefs`): drawn only in their close-up
+   * levels, so an action on the bare id is `assembly/unknown-target` (reported with `gated`).
+   */
+  readonly closeupOnly?: ReadonlySet<string>;
+}
+
+/**
+ * The figure close-up instance an action target names (§8.4): `figures` keys instances by their
+ * path (`<host>/closeup`, a copy of the figure with that id); the longest such prefix of
+ * `target` wins, so a path below the instance is reported as "moves as a whole".
+ */
+export function figureInstanceOf(
+  figures: ReadonlyMap<string, ResolvedFigure>,
+  target: string,
+): ResolvedFigure | undefined {
+  const segs = target.split("/");
+  for (let i = segs.length; i > 1; i--) {
+    if (segs[i - 1] !== "closeup") continue;
+    const f = figures.get(segs.slice(0, i).join("/"));
+    if (f !== undefined) return f;
+  }
+  return undefined;
+}
+
+/**
+ * Ids of the figures and storyboards some `closeup` names (spec assemblies, their parts at any
+ * depth, rack slots). Like templates they are drawn only inside their close-up levels (§8.4),
+ * never as a panel of the main scene. Sorted.
+ */
+export function closeupRefs(spec: PlatformCosmoSpec): Set<string> {
+  const refs = new Set<string>();
+  const parts = (list: readonly SpecPart[] | undefined): void => {
+    for (const p of list ?? []) {
+      if (p.closeup !== undefined) refs.add(p.closeup);
+      parts(p.parts);
+    }
+  };
+  for (const a of spec.assemblies ?? []) {
+    if (a.closeup !== undefined) refs.add(a.closeup);
+    parts(a.parts);
+  }
+  for (const r of spec.racks ?? [])
+    for (const sl of r.slots ?? []) if (sl.closeup !== undefined) refs.add(sl.closeup);
+  const boards = new Set([
+    ...(spec.figures ?? []).map((f) => f.id),
+    ...(spec.storyboards ?? []).map((b) => b.id),
+  ]);
+  return new Set([...refs].filter((r) => boards.has(r)).sort());
 }
 
 /** One action planned by another track: `start` and `length` are filled in by the step. */
@@ -582,6 +632,23 @@ export function planFigureSteps(
   return closesLoop(figures.values(), first.plan, opts.storyboards?.values())
     ? planPass(spec, figures, views, opts, true)
     : first;
+}
+
+/**
+ * Every figure the step plan has poses for, for `closesLoop`: the spec's figures and one copy
+ * per figure close-up level, identified by the level path (§8.4).
+ */
+export function loopFigures(
+  spec: PlatformCosmoSpec,
+  levels: readonly { readonly path: string; readonly ref: string; readonly kind: string }[] = [],
+): ResolvedFigure[] {
+  const out = (spec.figures ?? []).map((f, i) => resolveFigure(f, i).figure);
+  for (const l of levels) {
+    if (l.kind !== "figure") continue;
+    const f = out.find((x) => x.id === l.ref);
+    if (f !== undefined) out.push({ ...f, id: l.path });
+  }
+  return out;
 }
 
 /**
@@ -648,6 +715,9 @@ function planBoardAction(
   };
 }
 
+/** "Figure "id"", or "Figure close-up "path"" for a close-up instance (§8.4). */
+const fname = (id: string): string => `Figure${id.includes("/") ? " close-up" : ""} ${q(id)}`;
+
 function planPass(
   spec: PlatformCosmoSpec,
   figures: ReadonlyMap<string, ResolvedFigure>,
@@ -689,6 +759,8 @@ function planPass(
   declare(spec.assemblies, "phase1b", "an assembly");
   declare(spec.storyboards, "storyboards", "a storyboard");
   const sortedFigs = [...figures.keys()].sort();
+  /** Figure ids for suggestions (close-up instances are paths). */
+  const figNames = sortedFigs.filter((f) => !f.includes("/"));
   const boards = opts.storyboards ?? new Map<string, ResolvedStoryboard>();
   const sortedBoards = [...boards.keys()].sort();
   // A storyboard's timeline starts where its first action starts: `build` at frame 0 (nothing
@@ -713,8 +785,9 @@ function planPass(
       const at = `/steps/${si}/assembly/${ai}`;
       const kind = actionKey(a);
       const target = (a as unknown as Record<string, string>)[kind] as string;
-      const root = target.split("/")[0] as string;
-      const fig = figures.get(root);
+      // a figure close-up instance (§8.4) is keyed by its path: `<host>/closeup`
+      const fig = figures.get(target.split("/")[0] as string) ?? figureInstanceOf(figures, target);
+      const root = fig?.id ?? (target.split("/")[0] as string);
       // A storyboard is planned here once its guard group is lifted; while it is gated it is an
       // unknown target below, like every other gated root.
       const board =
@@ -739,6 +812,19 @@ function planPass(
         // phase1a lifts it must not resolve here (tracks §0), so report it unknown.
         const gatedPhases = opts.gated;
         if (gatedPhases === undefined || gatedPhases.phase1a) return;
+        if (opts.closeupOnly?.has(root) === true) {
+          diagnostics.push(
+            mk(
+              "error",
+              "assembly/unknown-target",
+              `${at}/${kind}`,
+              `${q(root)} is a close-up: it is drawn only where a "closeup" shows it, so ${q(target)} is not a target`,
+              'Name the close-up instance, e.g. "<host>/closeup"',
+              { id: target },
+            ),
+          );
+          return;
+        }
         const phase = phaseOf.get(root);
         if (phase !== undefined && phase !== "none" && !gatedPhases[phase]) return; // lifted: other track
         diagnostics.push(
@@ -749,10 +835,10 @@ function planPass(
             phase === undefined
               ? `Unknown ${kind} target ${q(target)}`
               : `Cannot ${kind} ${q(target)}: it is ${labelOf.get(root)}, not a figure`,
-            closest(root, sortedFigs) !== undefined
-              ? `Did you mean "${closest(root, sortedFigs)}"?`
-              : sortedFigs.length > 0
-                ? `Figures: ${sortedFigs.join(", ")}`
+            closest(root, figNames) !== undefined
+              ? `Did you mean "${closest(root, figNames)}"?`
+              : figNames.length > 0
+                ? `Figures: ${figNames.join(", ")}`
                 : 'Declare a figure in "figures"',
             { id: target },
           ),
@@ -765,7 +851,7 @@ function planPass(
             "error",
             "assembly/unknown-target",
             `${at}/${kind}`,
-            `Figure ${q(root)} moves as a whole; ${q(target)} is not a target`,
+            `${fname(root)} moves as a whole; ${q(target)} is not a target`,
             `Use "${root}"`,
             { id: target },
           ),
@@ -778,7 +864,7 @@ function planPass(
             "error",
             "assembly/figure-no-build",
             `${at}/${kind}`,
-            `Figure ${q(root)} cannot ${kind}: figures explode and implode`,
+            `${fname(root)} cannot ${kind}: figures explode and implode`,
             `Use "${kind === "build" ? "implode" : "explode"}" instead`,
             { id: target },
           ),
@@ -792,7 +878,7 @@ function planPass(
             "error",
             "assembly/unknown-program",
             `${at}/program`,
-            `Figure ${q(root)} has no programs (program ${q(prog)}); its stages are its only program`,
+            `${fname(root)} has no programs (program ${q(prog)}); its stages are its only program`,
             'Remove "program"',
             { id: prog },
           ),
@@ -808,7 +894,7 @@ function planPass(
             "error",
             "assembly/stage-out-of-range",
             `${at}/to`,
-            `Figure ${q(root)} has ${n} stage${n === 1 ? "" : "s"}; "to": ${to} is out of range`,
+            `${fname(root)} has ${n} stage${n === 1 ? "" : "s"}; "to": ${to} is out of range`,
             `Use a value from 0 to ${n}`,
             { to, stages: n },
           ),
@@ -821,7 +907,7 @@ function planPass(
             "error",
             "assembly/explode-backwards",
             `${at}/to`,
-            `Figure ${q(root)} is at stage ${cur}; explode to ${to} would go backwards`,
+            `${fname(root)} is at stage ${cur}; explode to ${to} would go backwards`,
             `Use "implode" to return to stage ${to}`,
             { from: cur, to },
           ),
@@ -834,7 +920,7 @@ function planPass(
             "error",
             "assembly/implode-forwards",
             `${at}/to`,
-            `Figure ${q(root)} is at stage ${cur}; implode to ${to} would go forwards`,
+            `${fname(root)} is at stage ${cur}; implode to ${to} would go forwards`,
             `Use "explode" to reach stage ${to}`,
             { from: cur, to },
           ),
@@ -927,8 +1013,10 @@ export interface BoardOptions {
 }
 
 export interface FigureScene {
-  /** Figures by id (spec order of `Map` insertion). */
+  /** Figures by id (spec order of `Map` insertion), without the close-up-only ones. */
   readonly figures: ReadonlyMap<string, ResolvedFigure>;
+  /** Figures a `closeup` names (`closeupRefs`): no panel; their levels plan copies of them. */
+  readonly closeupFigures: ReadonlyMap<string, ResolvedFigure>;
   /** Diagnostics of the resolution and of the step plan. */
   readonly diagnostics: readonly Diagnostic[];
   readonly assemblies: SceneAssemblies;
@@ -992,12 +1080,15 @@ export function figureFocusIds(
   images: ImageAssetResolver | undefined,
 ): Set<string> {
   const out = new Set<string>();
+  const closeupOnly = closeupRefs(spec);
   for (const f of spec.figures ?? []) {
+    if (closeupOnly.has(f.id)) continue; // no panel of its own (§8.4)
     const a = images?.get(f.base);
     if (a !== undefined && panelSize(f.width ?? DEFAULT_WIDTH, a.width, a.height) !== undefined)
       out.add(f.id);
   }
   for (const sb of spec.storyboards ?? []) {
+    if (closeupOnly.has(sb.id)) continue;
     const board = resolveStoryboard(sb);
     const first = images?.get((board.frames[0] as { model: string }).model);
     if (storyboardGeometry(board, first) !== undefined) out.add(board.id);
@@ -1085,15 +1176,28 @@ export function buildFigureScene(
   };
   const origin = opts.origin ?? { x: 0, y: 0, z: 0 };
   let nextX = origin.x;
+  // figures and storyboards a `closeup` names are drawn only in their levels (§8.4)
+  const closeupOnly = closeupRefs(spec);
+  const closeupFigures = new Map<string, ResolvedFigure>();
 
   specFigures.forEach((sf, i) => {
     const { figure, diagnostics: d } = resolveFigure(sf, i);
     diagnostics.push(...d);
-    if (figures.has(figure.id)) return; // duplicate id: reported by semantic validation
-    figures.set(figure.id, figure);
-    const width = sf.width ?? DEFAULT_WIDTH;
+    if (figures.has(figure.id) || closeupFigures.has(figure.id)) return; // duplicate id: reported by semantic validation
     const images = figureImages(figure);
     for (const k of images) if (!used.includes(k)) used.push(k);
+    if (closeupOnly.has(figure.id)) {
+      closeupFigures.set(figure.id, figure);
+      credit(toSource(sf.source));
+      credit(imageSource.get(figure.base));
+      sf.parts.forEach((p) => {
+        credit(toSource(p.source));
+        credit(imageSource.get(p.image));
+      });
+      return;
+    }
+    figures.set(figure.id, figure);
+    const width = sf.width ?? DEFAULT_WIDTH;
     const anchor: Vec3 =
       sf.pos === undefined
         ? { x: r2(nextX), y: origin.y, z: 0 }
@@ -1128,6 +1232,7 @@ export function buildFigureScene(
   // Storyboards (R-2) stand in the same row after the figures.
   (spec.storyboards ?? []).forEach((ss, i) => {
     if (figures.has(ss.id) || storyboards.has(ss.id)) return; // duplicate id: reported by semantic validation
+    if (closeupOnly.has(ss.id)) return; // drawn by its close-up levels only
     const board = resolveStoryboard(ss);
     storyboards.set(board.id, board);
     storyboardIds.add(board.id);
@@ -1165,11 +1270,13 @@ export function buildFigureScene(
   const planned = planFigureSteps(spec, figures, views, {
     ...(opts.gated ? { gated: opts.gated } : {}),
     ...(storyboards.size > 0 ? { storyboards } : {}),
+    ...(closeupOnly.size > 0 ? { closeupOnly } : {}),
   });
   diagnostics.push(...planned.diagnostics);
 
   return {
     figures,
+    closeupFigures,
     storyboards,
     storyboardIds,
     diagnostics,

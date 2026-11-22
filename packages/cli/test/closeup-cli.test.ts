@@ -1,11 +1,8 @@
-// D-1b: close-up size and depth checks in `pcosmo validate` and `build` (assemblies 8.5, 18).
-// Phase 2 is still gated: the real wiring is checked for `assembly/unsupported`, and the checks
-// themselves run with the guard lifted by dropping that error from the core's validate (the CLI
-// and the scene are the real ones; `render` is rebuilt around the lifted validate).
+// D-1b: close-up size and depth checks in `pcosmo validate` and `build` (assemblies 8.5, 18),
+// through the real CLI wiring (phase 2 is lifted since D-4a).
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import * as core from "@platformcosmo/core";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { defaultDeps, run } from "../src/index.js";
 
@@ -71,44 +68,8 @@ const levelsOver = (): Obj => {
   });
 };
 
-const lifted = (): ReturnType<typeof defaultDeps> => {
-  const base = defaultDeps();
-  const validate: typeof core.validate = (s, c) => {
-    const r = core.validate(s, c);
-    // the guard, and the rack targets only phase 2 resolves (a rack is "not a figure" until then)
-    const diagnostics = r.diagnostics.filter(
-      (d) =>
-        d.code !== "assembly/unsupported" &&
-        !(
-          d.code === "assembly/unknown-target" &&
-          /^\/steps\/\d+\/assembly\/\d+\/explode$/.test(d.path) &&
-          d.params?.["id"] === "r1"
-        ),
-    );
-    const valid = !diagnostics.some((d) => d.severity === "error");
-    return valid && r.valid === false
-      ? { valid, spec: s as never, diagnostics }
-      : { ...r, valid, diagnostics };
-  };
-  return {
-    ...base,
-    env: {},
-    cwd: dir,
-    core: {
-      ...base.core,
-      validate,
-      render: core.createRender({
-        validate,
-        buildScene: core.buildScene,
-        createAnimator: core.createAnimator,
-        exportOutputs: core.exportOutputs,
-        rasterize: core.rasterize,
-        emit: core.emit,
-        optimize: core.optimize,
-      }),
-    },
-  };
-};
+/** The real wiring (phase 2 is lifted, D-4a): nothing is filtered any more. */
+const lifted = (): ReturnType<typeof defaultDeps> => ({ ...defaultDeps(), env: {}, cwd: dir });
 
 let n = 0;
 async function file(body: Obj): Promise<string> {
@@ -128,17 +89,17 @@ async function validateJson(body: Obj, d = lifted()): Promise<{ code: number; di
 }
 const only = (ds: Diag[], code: string): Diag[] => ds.filter((d) => d.code === code);
 
-describe("gated by default", () => {
-  test("the real wiring still rejects close-ups with assembly/unsupported and nothing else new", async () => {
+describe("phase 2 is lifted (D-4a)", () => {
+  test("the real wiring validates close-ups: the size check, no assembly/unsupported", async () => {
     const r = await run(["validate", await file(mk([111, 100, 50])), "--json"], {
       ...defaultDeps(),
       env: {},
       cwd: dir,
     });
     const diags = (JSON.parse(r.stdout) as { diagnostics: Diag[] }).diagnostics;
-    expect(r.code).toBe(1);
-    expect(only(diags, "assembly/unsupported").length).toBeGreaterThan(0);
-    expect(only(diags, "assembly/size-mismatch")).toEqual([]);
+    expect(r.code).toBe(0);
+    expect(only(diags, "assembly/unsupported")).toEqual([]);
+    expect(only(diags, "assembly/size-mismatch")).toHaveLength(1);
   });
 });
 
@@ -294,12 +255,10 @@ describe("slots[].assembly through the CLI (DC pack wired)", () => {
     expect(svg).toMatch(/-o_r1\.srv\.b"/);
   });
 
-  test("a fitting template reports nothing; the gate rejects it by default", async () => {
+  test("a fitting template reports nothing, with the real wiring", async () => {
     const ok = await validateJson(rack([300, 300, 20]));
+    expect(ok.code).toBe(0);
     expect(only(ok.diags, "assembly/size-mismatch")).toEqual([]);
-    const f = await file(rack([300, 300, 20]));
-    const gated = await run(["validate", f, "--json"], { ...defaultDeps(), env: {}, cwd: dir });
-    expect(gated.code).toBe(1);
-    expect(gated.stdout).toContain("assembly/unsupported");
+    expect(only(ok.diags, "assembly/unsupported")).toEqual([]);
   });
 });

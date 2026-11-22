@@ -35,6 +35,7 @@ import {
   traversalSeconds,
 } from "./particles.js";
 import {
+  cameraHalves,
   cameraStops,
   transitionSeconds,
   cameraTransform,
@@ -438,7 +439,7 @@ function loopLayer(
   ];
   const pinSel = pinned.join(",");
   if (zooms.some((z) => z !== undefined) && total > 0) {
-    const stops = cameraStops(zooms, win);
+    const stops = cameraStops(zooms, win, cameraHalves(model, zooms));
     const keyframes = (fmt: (z: Zoom | undefined) => string): [number, string][] =>
       stops.map((s) => [s.t / total, `transform:${fmt(s.z)}`]);
     rules.push(

@@ -68,6 +68,7 @@ export default defineConfig({
           { text: "Claude Code plugin", link: "/guide/plugin" },
           { text: "Spec format", link: "/guide/spec" },
           { text: "CLI reference", link: "/guide/cli" },
+          { text: "Assemblies and close-ups", link: "/guide/assemblies" },
           { text: "Themes and fonts", link: "/guide/themes" },
           { text: "Icons", link: "/guide/icons" },
           { text: "Lesson templates", link: "/guide/lessons" },

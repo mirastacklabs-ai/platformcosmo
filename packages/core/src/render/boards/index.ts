@@ -22,6 +22,7 @@ import { fmt } from "../../geometry/index.js";
 import {
   closesLoop,
   figureSegment,
+  loopFigures,
   panelSize,
   resolveFigure,
   type FigureSegment,
@@ -89,7 +90,26 @@ export interface BoardsBuild {
   readonly diagnostics: readonly Diagnostic[];
   /** Text of the pinned credits line; empty when no source credits anyone. */
   readonly creditsLine: string;
+  /**
+   * The figure of a figure close-up level (§8.4), drawn in `area` (the level's own coordinates)
+   * on first call; its tracks join `model` (call it before the tracks are first read).
+   * Absent when the scene has no figure levels.
+   */
+  readonly levelFigure?: (path: string, area: Rect) => FigureLevel | undefined;
 }
+
+/** A figure close-up level's content in its own coordinates. */
+export interface FigureLevel {
+  /** Panel, arrows, labels: the level group's children. */
+  readonly nodes: readonly SvgNode[];
+  /** The panel (the figure's rest bounds). */
+  readonly rest: Rect;
+  /** The panel with its moving sprites and labels. */
+  readonly reach: Rect;
+}
+
+/** Share of a level's area the figure's base image may fill (the rest is for labels). */
+const LEVEL_FILL = 0.8;
 
 const LABEL_CLASS = "t-primary";
 const MAX_LABEL = 150;
@@ -101,13 +121,16 @@ export function buildBoards(ctx: BoardsContext): BoardsBuild | undefined {
   const all = scene.assemblies?.boards ?? [];
   const boards = all.filter((b) => b.kind === "figure");
   const storyboards = all.filter((b) => b.kind === "storyboard");
-  if (spec === undefined || images === undefined || all.length === 0) return undefined;
+  const sceneLevels = scene.assemblies?.levels ?? [];
+  const hasFigureLevels = sceneLevels.some((l) => l.kind === "figure");
+  if (spec === undefined || images === undefined || (all.length === 0 && !hasFigureLevels))
+    return undefined;
 
   const plan = scene.assemblies?.plan ?? [];
-  // The loop closes (§7.4) when some figure ends away from its base pose, or a storyboard
-  // away from its last frame (the rest frame).
+  // The loop closes (§7.4) when some figure (or figure close-up instance) ends away from its
+  // base pose, or a storyboard away from its last frame (the rest frame).
   const closeLast = closesLoop(
-    (spec.figures ?? []).map((f, i) => resolveFigure(f, i).figure),
+    loopFigures(spec, sceneLevels),
     plan,
     (spec.storyboards ?? []).map((b) => resolveStoryboard(b)),
   );
@@ -146,22 +169,16 @@ export function buildBoards(ctx: BoardsContext): BoardsBuild | undefined {
   const ordered = [...boards].sort(
     (a, b) => a.anchor.x + a.anchor.y - (b.anchor.x + b.anchor.y) || (a.id < b.id ? -1 : 1),
   );
-  for (const board of ordered) {
-    const index = (spec.figures ?? []).findIndex((f) => f.id === board.id);
-    const specFigure = spec.figures?.[index];
-    const baseAsset = specFigure === undefined ? undefined : images.get(specFigure.base);
-    if (specFigure === undefined || baseAsset === undefined) continue;
-    const size = panelSize(board.width, baseAsset.width, baseAsset.height);
-    if (size === undefined) continue;
-    const figure: ResolvedFigure = resolveFigure(specFigure, index).figure;
-
-    const o = ctx.projection.project(board.anchor);
-    const panel: Rect = {
-      x: o.x,
-      y: f2(o.y - size.height),
-      width: size.width,
-      height: size.height,
-    };
+  /**
+   * Draws one figure on `panel` (screen rect): the panel group (base image, frame, sprites),
+   * arrows and labels, and registers its tracks. `figure.id` keys the plan poses and the element
+   * ids: a figure id for a main-scene panel, a level path for a close-up instance (§8.4).
+   */
+  const drawFigure = (
+    figure: ResolvedFigure,
+    baseAsset: ImageAsset,
+    panel: Rect,
+  ): { panelNode: SvgNode; arrowNodes: SvgNode[]; labelNodes: SvgNode[]; reach: Rect[] } => {
     const layout = layoutFigure(figure, panel, panel.width, baseAsset.width, (image) => {
       const a = images.get(image);
       return a === undefined ? undefined : { width: a.width, height: a.height };
@@ -284,24 +301,40 @@ export function buildBoards(ctx: BoardsContext): BoardsBuild | undefined {
     }
 
     // ---- panel node ----------------------------------------------------------------------
-    const bd = ids.board(figure.id);
-    place(
-      h(
-        "g",
-        { id: bd },
-        imageUse(ids.image(baseAsset.hash), baseAsset, panel),
-        h("rect", {
-          class: `${P}-board`,
-          x: panel.x,
-          y: panel.y,
-          width: panel.width,
-          height: panel.height,
-        }),
-        ...spriteNodes,
-      ),
-      board.anchor,
-      figure.id,
+    const panelNode = h(
+      "g",
+      { id: ids.board(figure.id) },
+      imageUse(ids.image(baseAsset.hash), baseAsset, panel),
+      h("rect", {
+        class: `${P}-board`,
+        x: panel.x,
+        y: panel.y,
+        width: panel.width,
+        height: panel.height,
+      }),
+      ...spriteNodes,
     );
+    return { panelNode, arrowNodes, labelNodes, reach };
+  };
+
+  for (const board of ordered) {
+    const index = (spec.figures ?? []).findIndex((f) => f.id === board.id);
+    const specFigure = spec.figures?.[index];
+    const baseAsset = specFigure === undefined ? undefined : images.get(specFigure.base);
+    if (specFigure === undefined || baseAsset === undefined) continue;
+    const size = panelSize(board.width, baseAsset.width, baseAsset.height);
+    if (size === undefined) continue;
+    const figure: ResolvedFigure = resolveFigure(specFigure, index).figure;
+
+    const o = ctx.projection.project(board.anchor);
+    const panel: Rect = {
+      x: o.x,
+      y: f2(o.y - size.height),
+      width: size.width,
+      height: size.height,
+    };
+    const { panelNode, arrowNodes, labelNodes, reach } = drawFigure(figure, baseAsset, panel);
+    place(panelNode, board.anchor, figure.id);
     if (figure.label !== undefined) {
       const title = ctx.fit(figure.label, ctx.labelSize, true, Math.max(panel.width, 160 * ctx.fs));
       labelNodes.unshift(
@@ -333,6 +366,56 @@ export function buildBoards(ctx: BoardsContext): BoardsBuild | undefined {
     };
   }
 
+  // ---- figure close-up instances (§8.4) ---------------------------------------------------
+  // A level shows its own copy of the figure (`figure.id` = the level path, so it keeps its own
+  // pose). The panel is sized when the level's area is known (`levelFigure`); the images are
+  // registered now, with the other image definitions.
+  const levelFigures = new Map<string, { figure: ResolvedFigure; base: ImageAsset }>();
+  for (const l of sceneLevels) {
+    if (l.kind !== "figure") continue;
+    const index = (spec.figures ?? []).findIndex((f) => f.id === l.ref);
+    const specFigure = spec.figures?.[index];
+    const baseAsset = specFigure === undefined ? undefined : images.get(specFigure.base);
+    if (specFigure === undefined || baseAsset === undefined) continue;
+    if (!(baseAsset.width > 0 && baseAsset.height > 0)) continue;
+    const figure: ResolvedFigure = { ...resolveFigure(specFigure, index).figure, id: l.path };
+    addAsset(baseAsset);
+    for (const part of figure.parts) {
+      const a = images.get(part.image);
+      if (a !== undefined) addAsset(a);
+    }
+    levelFigures.set(l.path, { figure, base: baseAsset });
+  }
+  const levelMemo = new Map<string, FigureLevel | undefined>();
+  const levelFigure = (path: string, area: Rect): FigureLevel | undefined => {
+    if (levelMemo.has(path)) return levelMemo.get(path);
+    const lf = levelFigures.get(path);
+    let out: FigureLevel | undefined;
+    if (lf !== undefined && area.width > 0 && area.height > 0) {
+      // the base image contained in the level's area, leaving room for labels and arrows
+      const k = Math.min(
+        (area.width * LEVEL_FILL) / lf.base.width,
+        (area.height * LEVEL_FILL) / lf.base.height,
+      );
+      const width = f2(lf.base.width * k);
+      const height = f2(lf.base.height * k);
+      const panel: Rect = {
+        x: f2(area.x + (area.width - width) / 2),
+        y: f2(area.y + (area.height - height) / 2),
+        width,
+        height,
+      };
+      const d = drawFigure(lf.figure, lf.base, panel);
+      out = {
+        nodes: [d.panelNode, ...d.arrowNodes, ...d.labelNodes],
+        rest: panel,
+        reach: unionOf(d.reach),
+      };
+    }
+    levelMemo.set(path, out);
+    return out;
+  };
+
   // ---- storyboards (R-2) -----------------------------------------------------------------
   if (storyboards.length > 0) {
     const first = (id: string): number | undefined => {
@@ -355,7 +438,7 @@ export function buildBoards(ctx: BoardsContext): BoardsBuild | undefined {
       },
     );
   }
-  if (objects.length === 0) return undefined;
+  if (objects.length === 0 && levelFigures.size === 0) return undefined;
   // figures and storyboards in one pass (each kind is already in this order, so a spec with only
   // one kind is unchanged)
   if (boards.length > 0 && storyboards.length > 0) {
@@ -400,7 +483,17 @@ export function buildBoards(ctx: BoardsContext): BoardsBuild | undefined {
     assets,
     desc: creditsDesc(credits),
   };
-  return { objects, labels, defs, extents, focus, model, diagnostics, creditsLine: line };
+  return {
+    objects,
+    labels,
+    defs,
+    extents,
+    focus,
+    model,
+    diagnostics,
+    creditsLine: line,
+    ...(levelFigures.size === 0 ? {} : { levelFigure }),
+  };
 }
 
 // ---------------------------------------------------------------------------------------------

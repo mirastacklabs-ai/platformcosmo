@@ -33,7 +33,13 @@ import { RouteLanes, routeEdge, type Rect } from "../routing/router.js";
 import { labelFontSizeFor } from "../text/index.js";
 import { particleCount, PARTICLE_LIMIT } from "../schema/semantic.js";
 import type { PlatformCosmoSpec, SpecFlow, SpecNode } from "../schema/types.gen.js";
-import { boardOverlapDiagnostics, buildFigureScene, figureFocusIds } from "./boards.js";
+import {
+  boardOverlapDiagnostics,
+  buildFigureScene,
+  figureFocusIds,
+  type FigureScene,
+  type ResolvedFigure,
+} from "./boards.js";
 import { AssemblyPrograms } from "./assembly/plan.js";
 import type { CloseupBuild } from "./assembly/closeup.js";
 import { needsRacks, planScene } from "./assembly/plan-scene.js";
@@ -48,6 +54,26 @@ import {
 } from "./assembly/tree.js";
 import { NODE_TYPES, PRIMITIVE_HEIGHT } from "./categories.js";
 import { NODE_HEIGHT, footprintOf } from "./sizes.js";
+
+/**
+ * The figures the step plan knows: the main scene's, plus one copy of a figure per figure
+ * close-up level, keyed (and identified) by the level's path, so each instance keeps its own
+ * pose (§8.4: two hosts of one figure are two independent instances).
+ */
+function withFigureInstances(
+  figureScene: FigureScene | undefined,
+  closeups: CloseupBuild | undefined,
+): ReadonlyMap<string, ResolvedFigure> {
+  const base = figureScene?.figures ?? new Map<string, ResolvedFigure>();
+  const levels = (closeups?.levels ?? []).filter((l) => l.kind === "figure");
+  if (levels.length === 0 || figureScene === undefined) return base;
+  const out = new Map(base);
+  for (const l of levels) {
+    const f = figureScene.closeupFigures.get(l.ref) ?? base.get(l.ref);
+    if (f !== undefined) out.set(l.path, { ...f, id: l.path });
+  }
+  return out;
+}
 
 /** Adds close-up levels (their images and credits too) and view scenes; absent: unchanged. */
 function withLevels(
@@ -791,7 +817,7 @@ export const buildScene: BuildSceneFn = (spec: PlatformCosmoSpec, context) => {
         ...assemblyScene.assemblies,
         ...(closeups?.levels.flatMap((l) => (l.assembly === undefined ? [] : [l.assembly])) ?? []),
       ],
-      figureScene?.figures ?? new Map(),
+      withFigureInstances(figureScene, closeups),
       stepViews(spec, (id) => Object.hasOwn(focusTargets, id)),
       figureScene !== undefined && figureScene.storyboards.size > 0
         ? { storyboards: figureScene.storyboards }

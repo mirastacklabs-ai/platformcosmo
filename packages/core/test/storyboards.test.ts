@@ -371,7 +371,7 @@ describe("scene: boards, plan, validation", () => {
     expect(bad.assemblies!.plan[0]!.actions.map((x) => x.kind)).toEqual(["build"]);
   });
 
-  test("the default guard lets storyboards through; callouts and sub-builds stay gated", () => {
+  test("the default guard lets storyboards and build programs through (every phase lifted)", () => {
     const r = validate(board({}, STEPS));
     expect(r.diagnostics.filter((d) => d.code === "assembly/unsupported")).toEqual([]);
     expect(r.valid).toBe(true);
@@ -387,9 +387,11 @@ describe("scene: boards, plan, validation", () => {
         },
       ],
     });
+    expect(gated.diagnostics.filter((d) => d.code === "assembly/unsupported")).toEqual([]);
+    // validate checks the sub-build itself
     expect(
-      gated.diagnostics.filter((d) => d.code === "assembly/unsupported").map((d) => d.path),
-    ).toContain("/assemblies/0/programs/0");
+      gated.diagnostics.filter((d) => d.severity === "error").map((d) => [d.code, d.path]),
+    ).toEqual([["assembly/unknown-target", "/assemblies/0/programs/0/steps/0/subBuild"]]);
   });
 
   test("compression is reported once, with the duration that fits", () => {

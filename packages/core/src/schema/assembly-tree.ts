@@ -48,6 +48,8 @@ export interface TNode {
   readonly shape?: string;
   /** Close-up reference (assembly, figure or storyboard id), addressed through `closeup`. */
   readonly closeup?: string;
+  /** A figure or storyboard close-up instance (kind `figure` / `board`): the id it draws. */
+  readonly ref?: string;
   progs: readonly ProgInfo[];
   /** `assemblies[].program`: the default program id. */
   readonly defaultProg?: string;
@@ -453,6 +455,7 @@ export class AssemblyModel {
       node = {
         id: "closeup",
         kind: "figure",
+        ref,
         ptr: "",
         tags: [],
         progs: [],
@@ -464,6 +467,7 @@ export class AssemblyModel {
       node = {
         id: "closeup",
         kind: "board",
+        ref,
         ptr: "",
         tags: [],
         progs: [],

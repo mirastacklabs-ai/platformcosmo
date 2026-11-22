@@ -1,13 +1,13 @@
 // W-2: a rack in assembly mode drawn in its hall (assemblies 8.1, 9.1): it shares the depth order
 // with the other objects and cable segments, cables (and their particles) hide while a slot they
 // touch is displaced, the rack keeps its 1.1 label, and the rear-door heat exchanger slides out
-// clear of the posts. Phase 2 is still gated: scenes come from `buildScene` directly and renders
-// from `createRender` with the guard dropped from validate (as closeup-cli.test.ts does).
+// clear of the posts. Scenes come from `buildScene` directly, renders from `createRender`.
 import { readFileSync } from "node:fs";
 import * as core from "@platformcosmo/core";
 import { dcPack } from "@platformcosmo/dc-pack";
 import { themeRegistry } from "@platformcosmo/themes";
 import { describe, expect, test } from "vitest";
+import { badLabels } from "../../core/test/label-boxes.js";
 
 type Obj = Record<string, unknown>;
 const hall = JSON.parse(
@@ -43,18 +43,8 @@ const idsOf = (nodes: readonly core.SvgNode[], out: string[] = []): string[] => 
   return out;
 };
 
-const lifted: typeof core.validate = (s, c) => {
-  const r = core.validate(s, c);
-  const diagnostics = r.diagnostics.filter(
-    (d) =>
-      d.code !== "assembly/unsupported" &&
-      !(
-        d.code === "assembly/unknown-target" &&
-        /^\/steps\/\d+\/assembly\/\d+\/(explode|implode)$/.test(d.path)
-      ),
-  );
-  return { valid: !diagnostics.some((d) => d.severity === "error"), spec: s as never, diagnostics };
-};
+/** The shipped validate: phase 2 is lifted (D-4a). */
+const lifted: typeof core.validate = core.validate;
 const render = core.createRender({
   validate: lifted,
   buildScene: core.buildScene,
@@ -253,5 +243,60 @@ describe("the rack label is an obstacle for part labels (N1)", () => {
       const hit = x < a.x1 && a.x0 < x + w && y < a.y1 && a.y0 < y + h;
       expect(hit, String(g.attrs!["id"])).toBe(false);
     }
+  });
+});
+
+describe("D-4a: a targeted rack keeps its 1.1 look at rest", () => {
+  test("device fronts set into their carrier are leaves of their own: nothing falls back to hiding", async () => {
+    // before: the GPU node's grille (gpu/front, set 3 mm into the chassis) and the ToR's ports and
+    // LEDs (set into the face plate) interpenetrated their carrier and were hidden until clear
+    const r = await render(targeting("rack-a1"), {
+      dc: dcPack,
+      themes: themeRegistry,
+      font: "system",
+      outputs: ["static"],
+    });
+    const hidden = r.diagnostics.filter((d) => d.code === "assembly/clip-fallback");
+    // only the uplink cable that runs into the ToR's front stays (named, never silent)
+    for (const d of hidden) expect(d.message, d.message).toMatch(/^"cable_uplink-a_\d+" crosses/);
+    const m = modelOf(targeting("rack-a1"));
+    const leaves = m.scene.assemblies!.assemblies.find((a) => a.id === "rack-a1")!;
+    const find = (path: string): core.SceneAssemblyNode | undefined => {
+      const walk = (n: core.SceneAssemblyNode): core.SceneAssemblyNode | undefined =>
+        n.path === path ? n : n.children.map(walk).find((x) => x !== undefined);
+      return walk(leaves.root);
+    };
+    const chassis = find("rack-a1/gpu/chassis")!;
+    const front = find("rack-a1/gpu/front")!;
+    // the chassis ends where the grille starts
+    expect(chassis.local.origin.y + chassis.local.size.y).toBeCloseTo(front.local.origin.y, 6);
+  }, 120000);
+});
+
+describe("D-4a: no label is drawn cut by the camera or under the caption (§7.4)", () => {
+  test("§19.4: measured on the drawn labels, at every step (mid-step and settled)", () => {
+    const md = readFileSync(new URL("../../../docs/design/assemblies.md", import.meta.url), "utf8");
+    const json = [...md.matchAll(/```json\n([\s\S]*?)```/g)]
+      .map((x) => x[1] as string)
+      .find((j) => j.includes('"title": "Rack to server to internals"'))!;
+    const m = modelOf(JSON.parse(json) as core.PlatformCosmoSpec);
+    const anim = core.createAnimator();
+    const A = m.assembly!;
+    let zoomed = 0;
+    for (const c of A.clock) {
+      // late in the camera's move into the step a label may be fading out (it is hidden for the
+      // step), but none that is still shown is cut
+      const late = c.start - 0.1 * (c.start - (A.clock[c.step - 2]?.end ?? 0));
+      for (const [t, min] of [
+        [late, 0.25],
+        [(c.start + c.end) / 2, 0.01],
+        [c.end - 0.01, 0.01],
+      ] as const) {
+        const v = anim.animate(m, { speed: 1, mode: "frame", time: t }).viewBox;
+        if (v !== undefined) zoomed++;
+        expect(badLabels(m, t, v, min), `step ${c.step} at ${t}`).toEqual([]);
+      }
+    }
+    expect(zoomed).toBeGreaterThan(0);
   });
 });
