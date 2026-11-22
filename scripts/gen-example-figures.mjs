@@ -11,7 +11,7 @@
 //   scripts/pc exec node scripts/gen-example-figures.mjs --check   fail when they differ
 import { Buffer } from "node:buffer";
 import { readFileSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { URL, fileURLToPath } from "node:url";
 import { crc32, deflateSync, inflateSync } from "node:zlib";
 
 /** Supersampling factor: shapes are drawn at SS times the output size, then box-filtered. */

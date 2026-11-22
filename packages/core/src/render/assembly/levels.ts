@@ -191,8 +191,7 @@ export function buildLevelGroups(levels: readonly SceneLevel[], deps: LevelsDeps
     // placed 1:1, centred; only an unscaled level is scaled to the area
     const fitted = containAffine(reach, deps.target);
     const scaled = own !== projection || (content.length > 0 && l.assembly === undefined);
-    const overview =
-      scaled && fitted.scale > 1 ? containAffine(reach, deps.target, 1) : fitted;
+    const overview = scaled && fitted.scale > 1 ? containAffine(reach, deps.target, 1) : fitted;
     const enter = containAffine(rest, hostRect);
     const hostAt = (step: number): Rect => {
       const r =
