@@ -1,7 +1,8 @@
 // Synthetic figure images for the gallery example "From the hall to the heat sink"
 // (examples/hall-to-heatsink.cosmo.json; document-ingestion §7.3, §12). No third-party content:
-// a line-art board drawn in a near-isometric plane with two CPU sockets (the figure's base, heat
-// sinks erased) and one heat-sink sprite (transparent outside its silhouette) that both seats share.
+// the corner of a line-art board around ONE CPU socket, drawn in a near-isometric plane (the
+// figure's base, heat sink erased), and the heat-sink sprite (transparent outside its silhouette):
+// the close-up of one socket shows that socket and its heat sink, so sizes reconcile.
 //
 // Everything is integer geometry drawn at twice the size and box-downsampled, so the pixels are
 // the same on every machine. The PNG bytes depend on the zlib build, so `--check` compares the
@@ -25,18 +26,12 @@ const AZ = [0, -1];
 /** Heat-sink footprint and height in figure pixels (x, y, z). */
 const HS = { w: 120, d: 92, h: 64, base: 8 };
 
-/** Top-left of each seated heat-sink sprite, as the spec states it (`figures[0].parts[].seat`). */
-export const SEATS = [
-  [180, 360],
-  [370, 372],
-];
-/** Where the exploded sprites hover (the figure is drawn exploded). */
-export const EXPLODED = [
-  [180, 120],
-  [370, 132],
-];
+/** Top-left of the seated heat-sink sprite, as the spec states it (`figures[0].parts[].seat`). */
+export const SEATS = [[180, 280]];
+/** Where the exploded sprite hovers (the figure is drawn exploded). */
+export const EXPLODED = [[180, 80]];
 
-const BASE_SIZE = [740, 560];
+const BASE_SIZE = [520, 480];
 
 const PAPER = [255, 255, 255, 255];
 const INK = [38, 44, 52, 255];
@@ -222,56 +217,40 @@ export function heatsink() {
 export function base() {
   const c = canvas(BASE_SIZE[0], BASE_SIZE[1], PAPER);
   const { anchor } = spriteAnchor();
-  // board origin so that a heat sink seated at SEATS[0] stands on socket 1 at board (sx, sy)
+  // board origin so that the heat sink seated at SEATS[0] stands on the socket at board `sock`
   const s1 = [SEATS[0][0] + anchor[0], SEATS[0][1] + anchor[1]];
-  const sock = { x: 123, y: 80 };
+  const sock = { x: 70, y: 70 };
   const o = [s1[0] - sock.x * AX[0] - sock.y * AY[0], s1[1] - sock.x * AX[1] - sock.y * AY[1]];
-  // socket 2's board x from its seat (the seats differ along board x only)
-  const s2x = sock.x + (SEATS[1][0] - SEATS[0][0]) / AX[0];
 
-  quad(c, o, 0, 0, 520, 320, BOARD, 2);
-  quad(c, o, 8, 8, 504, 304, BOARD, 1, 0, BOARD_EDGE);
-  // traces between the sockets, the chipset and the memory
+  // the corner of the board around one CPU socket
+  quad(c, o, 0, 0, 300, 240, BOARD, 2);
+  quad(c, o, 8, 8, 284, 224, BOARD, 1, 0, BOARD_EDGE);
   const trace = (pts) => {
     for (let i = 0; i + 1 < pts.length; i++)
       line(c, proj(o, ...pts[i]), proj(o, ...pts[i + 1]), 1.2, TRACE);
   };
-  for (let k = 0; k < 6; k++) {
-    trace([
-      [sock.x + HS.w + 6, sock.y + 14 + k * 12],
-      [s2x - 6, sock.y + 14 + k * 12],
-    ]);
-    trace([
-      [sock.x + 20 + k * 10, sock.y - 6],
-      [sock.x + 20 + k * 10, 40],
-      [200 + k * 8, 40],
-    ]);
-  }
+  // traces from the socket to the memory slots and to the voltage regulators in front
   for (let k = 0; k < 5; k++)
     trace([
-      [s2x + HS.w + 6, sock.y + 14 + k * 14],
-      [452, sock.y + 14 + k * 14],
+      [sock.x + HS.w + 6, sock.y + 14 + k * 14],
+      [214, sock.y + 14 + k * 14],
     ]);
-  // mounting holes
-  for (const [x, y] of [
-    [22, 22],
-    [498, 22],
-    [22, 298],
-    [498, 298],
-  ])
-    quad(c, o, x - 5, y - 5, 10, 10, PAPER, 1.2);
-  // sockets (frame, inner area, pin grid) where the heat sinks seat
-  for (const x of [sock.x, s2x]) {
-    quad(c, o, x - 4, sock.y - 4, HS.w + 8, HS.d + 8, SOCKET, 1.5);
-    quad(c, o, x + 12, sock.y + 12, HS.w - 24, HS.d - 24, SOCKET_IN, 1);
-    for (let i = 0; i < 8; i++)
-      for (let j = 0; j < 6; j++) quad(c, o, x + 18 + i * 11, sock.y + 18 + j * 10, 3, 3, PIN, 0);
-  }
-  // memory slots right of socket 2, a chipset in front, expansion slots behind
-  for (let k = 0; k < 6; k++) quad(c, o, 458 + k * 8, 50, 4, 230, SLOT, 1);
-  quad(c, o, 250, 18, 46, 36, CHIP, 1.5);
-  for (let k = 0; k < 3; k++) quad(c, o, 40 + k * 120, 230 + k * 0, 100, 14, SLOT, 1);
-  quad(c, o, 40, 262, 220, 14, SLOT, 1);
+  for (let k = 0; k < 5; k++)
+    trace([
+      [sock.x + 16 + k * 12, sock.y - 6],
+      [sock.x + 16 + k * 12, 36],
+    ]);
+  // mounting hole
+  quad(c, o, 17, 213, 10, 10, PAPER, 1.2);
+  // the socket (frame, inner area, pin grid) where the heat sink seats
+  quad(c, o, sock.x - 4, sock.y - 4, HS.w + 8, HS.d + 8, SOCKET, 1.5);
+  quad(c, o, sock.x + 12, sock.y + 12, HS.w - 24, HS.d - 24, SOCKET_IN, 1);
+  for (let i = 0; i < 8; i++)
+    for (let j = 0; j < 6; j++)
+      quad(c, o, sock.x + 18 + i * 11, sock.y + 18 + j * 10, 3, 3, PIN, 0);
+  // memory slots beside the socket, voltage regulators in front of it
+  for (let k = 0; k < 4; k++) quad(c, o, 220 + k * 16, 40, 6, 170, SLOT, 1);
+  for (let k = 0; k < 4; k++) quad(c, o, sock.x + 4 + k * 28, 14, 18, 16, CHIP, 1.2);
   return downsample(c);
 }
 

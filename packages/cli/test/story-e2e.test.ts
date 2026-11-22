@@ -212,7 +212,8 @@ describe("the story's model (core + DC pack)", () => {
       m.layers.overlay.find((n) => JSON.stringify(n).includes(fig.group)),
     );
     expect(group).toContain(A.ids.boardItem(INSTANCE, "s.hs-1"));
-    expect(group).toContain(A.ids.boardItem(INSTANCE, "s.hs-2"));
+    // one socket, one heat sink: the close-up depicts exactly its host (cpu-1)
+    expect(group).not.toContain(A.ids.boardItem(INSTANCE, "s.hs-2"));
     const poses = m.boards!.tracks(1).poses.map((p) => p.id);
     expect(poses).toContain(A.ids.boardItem(INSTANCE, "s.hs-1"));
     // the server level is magnified in its own projection; its overview places it about 1:1
@@ -231,6 +232,93 @@ describe("the story's model (core + DC pack)", () => {
     expect(v(5)).toBeDefined(); // r2/srv/closeup/board: zoomed inside the level
     expect(v(5)!.width).toBeLessThan(m.viewBox.width);
     expect(v(6)).toBeUndefined(); // the figure close-up
+  });
+
+  test("level entries: the camera moves first, then the level grows with the camera still", async () => {
+    const m = await model();
+    const A = m.assembly!;
+    const srv = A.levels!.find((l) => l.path === "r2/srv/closeup")!;
+    const anim = core.createAnimator();
+    const view = (t: number) => anim.animate(m, { speed: 1, mode: "frame", time: t }).viewBox;
+    const op = (t: number) => A.frameAt(t).opacity[srv.group] ?? 0;
+    // step 3 (zoomed on r2) -> step 4 (the server level): transition [7.2, 8.0], halves at 7.6
+    expect(view(7.21)).toBeDefined(); // still zoomed on r2
+    for (const t of [7.3, 7.45, 7.55]) expect(op(t), `level at ${t}`).toBe(0); // camera moves
+    expect(view(7.6)).toBeUndefined(); // the camera is home before the level shows
+    for (const t of [7.7, 7.8, 7.9]) {
+      expect(view(t), `camera at ${t}`).toBeUndefined();
+      expect(op(t)).toBeGreaterThan(0);
+    }
+    // step 7 (server level) -> step 8 (zoomed on r2): the level shrinks first, then the camera
+    // moves: transition [26.25, 27.0], halves at 26.625
+    for (const t of [26.3, 26.5, 26.6]) expect(view(t), `camera at ${t}`).toBeUndefined();
+    expect(op(26.3)).toBeGreaterThan(0);
+    for (const t of [26.7, 26.9]) expect(op(t)).toBe(0);
+    expect(view(26.9)).toBeDefined();
+  });
+
+  test("a parent level holds its pose while a child grows out of it, and on the way back", async () => {
+    const m = await model();
+    const A = m.assembly!;
+    const srv = A.levels!.find((l) => l.path === "r2/srv/closeup")!;
+    const fig = A.levels!.find((l) => l.path === INSTANCE)!;
+    const tf = (t: number) => A.frameAt(t).transforms[srv.group];
+    const hold = tf(18.0);
+    // step 5 -> 6 (into the figure): [18.25, 19.0]; step 6 -> 7 (back): [23.25, 24.0]
+    for (const t of [18.3, 18.45, 18.6, 18.75, 18.9, 23.3, 23.45, 23.5, 23.75, 23.9])
+      expect(tf(t), `server placement at ${t}`).toBe(hold);
+    // ...while the figure grows (its placement changes) and the server fades out
+    expect(A.frameAt(18.7).transforms[fig.group]).not.toBe(A.frameAt(18.9).transforms[fig.group]);
+    expect(A.frameAt(18.9).opacity[srv.group]!).toBeLessThan(1);
+  });
+
+  test("labels: the board names its CPUs; a DIMM bank has one label; none is cut or under the caption", async () => {
+    const m = await model();
+    const A = m.assembly!;
+    const srv = A.levels!.find((l) => l.path === "r2/srv/closeup")!;
+    type LT = { id: string; path: string; kind: string; opacity: { t: number; opacity: number }[] };
+    const tracks = (srv.model as unknown as { labelTracks: LT[] }).labelTracks;
+    const top = tracks.filter((t) => t.kind === "top");
+    const cpu1 = top.find((t) => t.path === "r2/srv/closeup/board/cpu-1")!;
+    expect(cpu1).toBeDefined();
+    // shown at the board step (17 s), as the level draws it
+    expect(srv.model!.frameAt(17).opacity[cpu1.id] ?? 1).toBe(1);
+    const dimms = top.filter((t) => t.path.startsWith("r2/srv/closeup/board/dimm-bank-"));
+    expect(dimms).toHaveLength(1);
+    // every step: each label showing in it lies inside the camera window, off the caption
+    const anim = core.createAnimator();
+    const cap = m.captionRect!;
+    for (let k = 1; k <= m.scene.timeline.length; k++) {
+      const v = anim.animate(m, { speed: 1, mode: "step", step: k }).viewBox ?? m.viewBox;
+      const s = m.viewBox.width / v.width;
+      // the caption seen through the zoom, in world units
+      const c = {
+        x: v.x + (cap.x - m.viewBox.x) / s,
+        y: v.y + (cap.y - m.viewBox.y) / s,
+        w: cap.width / s,
+        h: cap.height / s,
+      };
+      // a label the window would still cut, or that sits under the caption, is hidden then
+      const t = A.clock[k - 1]!.end - 0.01;
+      const opacity = A.frameAt(t).opacity;
+      for (const q of A.stepLabels!(k)) {
+        const out =
+          q.x + q.width <= v.x ||
+          q.x >= v.x + v.width ||
+          q.y + q.height <= v.y ||
+          q.y >= v.y + v.height;
+        if (out) continue;
+        const inside =
+          q.x >= v.x - 0.01 &&
+          q.y >= v.y - 0.01 &&
+          q.x + q.width <= v.x + v.width + 0.01 &&
+          q.y + q.height <= v.y + v.height + 0.01;
+        const under =
+          q.x < c.x + c.w && c.x < q.x + q.width && q.y < c.y + c.h && c.y < q.y + q.height;
+        if (inside && !under) continue;
+        expect(opacity[A.ids.partLabel(q.part!)], `step ${k}: ${q.part} cut or covered`).toBe(0);
+      }
+    }
   });
 
   test("the example's synthetic images are what the committed generator draws", async () => {

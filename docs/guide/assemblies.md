@@ -67,7 +67,8 @@ A template larger than the interior by more than 10% is shrunk to fit and report
 
 The camera zooms at most 3x, so a hall cannot zoom down to a heat sink. A **close-up** is a finer
 drawing of one node, shown as its own level when a step focuses it. Set `closeup` on a rack slot,
-an assembly or a part; it names a template assembly, a figure or a storyboard:
+an assembly or a part; it names a template assembly or a figure (storyboard close-ups are not
+drawn yet, so `validate` refuses them):
 
 ```json
 { "id": "srv", "at": 20, "type": "server-2u", "closeup": "srv-2u" }
@@ -84,7 +85,9 @@ The close-up is addressed explicitly through the reserved path segment `closeup`
 
 - `focus: "r2/srv/closeup"` shows the level: it cross-fades in from the node's place on screen
   and grows to fill the view; leaving the focus reverses it. The level is drawn at its own
-  scale, so lines and labels keep their normal width.
+  scale, so lines and labels keep their normal width. If the camera has to move as well, it
+  moves first (going in) or last (coming out), never while the level grows; a parent level stays
+  still while a child level grows out of it.
 - `focus` on a node inside a level (`r2/srv/closeup/board`) zooms onto that node.
 - Actions name the instance: `build: "r2/srv/closeup"`, `implode: "r2/srv/closeup/board/cpu-1/closeup"`.
   Each instance keeps its own pose, also two hosts of the same template or figure.
@@ -145,9 +148,12 @@ when a step has more kinds than fit). `callout: true` shows the box without flig
 ## Labels
 
 A stage with `labels: "show"` shows the label of each part it moves, with a leader line. Instances
-of one counted part (`count`) moved together share one label. A labelled part that is not drawn
-is always reported (`assembly/label-omitted`, info) with the reason. `labels: "always"` on an
-assembly prints each part's label on its top face at rest (for board plans).
+of one counted part (`count`) moved together share one label. `labels: "always"` on an assembly
+prints each part's label on its top face while the part is seated (for board plans); a part placed
+with `use` follows the template it uses, and a bank of counted parts gets one label. A zoom never
+cuts a label: it widens once to hold the step's labels, and a label it still cannot hold (or that
+would sit under the caption) is hidden for that step. A labelled part that is not drawn is always
+reported (`assembly/label-omitted`, info) with the reason and a pointer to the part.
 
 ## Checking a spec
 
