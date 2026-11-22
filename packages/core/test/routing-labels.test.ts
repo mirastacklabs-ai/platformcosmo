@@ -156,6 +156,7 @@ describe("no visible edge runs under a label, badge, icon plate or group pill (r
     test(f, async () => {
       const raw = JSON.parse(readFileSync(`${dir}${f}`, "utf8")) as Record<string, unknown>;
       if (raw.racks || raw.equipment) return; // DC examples need the DC pack
+      if (raw.assemblies || raw.storyboards) return; // 1.2.0 stories: images and shape packs come from the CLI
       const { res, svg, edges, visible } = await renderExample(raw);
       expect(edges.size, "edge paths parsed from the SVG").toBe(visible.length);
       expect(emittedBoxes(svg).length).toBeGreaterThan(0);
