@@ -138,13 +138,24 @@ cylinder (a screw head); `prism` vertical hexagon; `wedge` a 45 degree slope (hi
 - `brick:` stud-grid bricks: `brick plate tile round slope` in `units: "stud"` with `params.studs` and `params.inverted`.
   Positions must be whole studs and plates, otherwise the warning `brick/off-grid`. Hinges, angled rotations and
   flexible parts are not available: approximate and list it as an assumption.
+- **Engine anchors** (assemblies design 5.2). At default sizes the `auto:` engine parts compose without interpenetration
+  only at the positions `engineLayout(n)` (`@platformcosmo/parts-auto`) returns; block min corner is the origin, `x`
+  along the crank, `+y` the intake side, `z` up. Pitch is `420 / n` (105 for 4 cylinders), bore `i` centred at
+  `x = (i + 0.5) * pitch`, `y = 115`. Pass `params.cylinders = n` to the block, crankshaft, head, valve cover, intake,
+  exhaust and camshafts. Crankshaft `at [-40, 55, 13]` (500x120x120; axis `y` 115, `z` 73); pin heights `73 +/- 30` in
+  flat-plane order down, up, up, down (43, 103, 103, 43). Rod `at [boreX - 12, 90, pinZ - 25]`, piston
+  `at [boreX - 41, 74, pinZ + 90]` (up-throw crowns end at `z` 259, under the bore plugs); place each one, they cannot
+  use `count`/`pitch`. From 5 cylinders size each piston `[bore, bore, 66]` with `bore = floor(0.8 * pitch)`; from 6
+  each rod `[floor(0.3 * pitch), 50, 156]` (or always pass the `size` `engineLayout` returns). Others: `oil-pan`
+  `[0, 0, -90]`, head gasket (`plate`) `[0, 12, 260]` size `[420, 206, 4]`, `head` `[0, 0, 264]`, `valve-cover`
+  `[0, 15, 364]`, `intake` `[0, 230, 269]`, `exhaust` `[0, -90, 274]`, `camshaft` x2 `[0, 60, 314]` / `[0, 130, 314]`.
 
 **Default sizes** (mm, `[x, y, z]`; a shape scales per axis to the `size` you give, so omit `size` only when you want
 these): `hw:board` 305x330x12, `cpu` 76x56x5, `heatsink` 105x90x60, `dimm` 133.35x4x31.25, `gpu-card` 267x38x111,
 `nic-ocp3` 76x115x16, `nvme-m2` 80x22x3.8, `e1s` 33.75x118.75x9.5 (flat), `psu` 73.5x185x39, `fan` 60x56x60,
 `riser` 130x12x100, `pcie-card` 168x20x69, `chassis-2u` 482.6x740x88.9, `lid` 447.6x740x3. `auto:block-i4` 420x230x260
-(length along `x`), `head` 420x230x100, `valve-cover` 400x200x70, `crankshaft` 420x120x120, `camshaft` 420x40x40,
-`piston` 82x82x66, `rod` 24x50x150, `valve` 34x34x110, `oil-pan` 420x230x90, `intake` 380x110x90, `exhaust` 380x90x80,
+(length along `x`), `head` 420x230x100, `valve-cover` 420x200x70, `crankshaft` 500x120x120, `camshaft` 420x40x40,
+`piston` 82x82x66, `rod` 24x50x156, `valve` 34x34x110, `oil-pan` 420x230x90, `intake` 420x110x90, `exhaust` 420x90x80,
 `timing-belt` 20x200x300. Fronts of `hw:` devices are at `+y`. `hw:chassis-2u` (default 482.6x740x88.9): floor and walls are 1.5 mm; the floor's top is
 at `z = 1.5`, the interior runs `x` 19 to 463.6 (rack ears 17.5 mm each side) and `y` 1.5 to 738.5 from the chassis' `at`, and
 it is open at the top: put contents at `z >= 1.5`, `y >= 1.5` (a part at `y = 0` is inside the back wall). `pcosmo` has no command that lists shapes: this is the list.
@@ -289,6 +300,25 @@ say the same thing:
    (`out`), then covers on a hidden side. One stage per class and direction; a class of more than 24 leaf parts is
    split into consecutive stages in spec order. Each sub-assembly's own parts get their own nested program. Nested owners
    are imploded before the root.
+   - **Nested programs must move something.** A sub-assembly whose own program would move fewer than two leaves in
+     total, or whose only stage is "moving as one" (a piston with its rod), gets no nested program and no focused
+     steps, and is listed as skipped ("one stage: the root moves it as a unit"). Two or more leaves keep the program,
+     also with a single stage (a sub-board whose one "Components" stage lifts 8 chips).
+   - **Covers move aside.** A cover on the body's top face that is one part (not a counted row or a group), thin in `z`
+     (at most 20% of its largest extent), carries no other cover and has parts under it that leave later does **not**
+     lift `+z`: stacked above the exploded parts it would hide them. It slides off along a visible horizontal axis at
+     its own height, `distance` `auto` (its extent on that axis plus the gap). Shorter side first (`+x` on a tie), then
+     the longer, else `+z`. An axis is taken only when the path is free (nothing, a fastener on the cover included,
+     rises above its underside on the way) and its end position lies beyond the body and over none of the parts that
+     leave later. A thick cover (a cylinder head), one that carries another cover, one with nothing below it that
+     leaves later, and one not on the top face keep `+z`.
+   - **Exits.** A sub-assembly or internal enclosed by the body (within 1% of the body's extent per axis) leaves through
+     the first face it is flush with (`+z`, `+x`, `+y`, then `-z`, `-x`, `-y`; flush also takes 1% of the body's extent
+     on that axis, both ways), not `out` or `away` through the body: pistons at a block's open top go `+z`, a crank as
+     long as the block `+x`. A face is skipped when a part that leaves at the same time or later reaches beyond it over
+     the part's footprint (a pulley past the crank's end); with no clear face it falls back to `away` (`out` for a
+     sub-assembly). A part exiting through a hidden face passes through the cover on that side, so that cover leaves
+     first.
    - **Mounting depth.** A part carried by another (its bottom touches the carrier's top over its footprint: a heat sink
      on a CPU on a board, a card on a board in a case) leaves **before** its carrier, top-most first, so the carrier never
      passes through it (`assembly/transit-collision`). A part carried by a cover, internal or component joins the
