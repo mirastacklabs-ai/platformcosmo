@@ -151,8 +151,8 @@ A stage with `labels: "show"` shows the label of each part it moves, with a lead
 of one counted part (`count`) moved together share one label. `labels: "always"` on an assembly
 prints each part's label on its top face while the part is seated (for board plans); a part placed
 with `use` follows the template it uses, and a bank of counted parts gets one label. A zoom never
-cuts a label: it widens once to hold the step's labels, and a label it still cannot hold (or that
-would sit under the caption) is hidden for that step. A labelled part that is not drawn is always
+cuts a label: it widens once for the labels of the focused part and of the parts the step moves,
+and any other label it would cut (or that would sit under the caption) fades out for that step. A labelled part that is not drawn is always
 reported (`assembly/label-omitted`, info) with the reason and a pointer to the part.
 
 ## Checking a spec

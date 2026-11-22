@@ -455,12 +455,15 @@ number of seconds with `D − lead(D) − tr(D) − 0.2 ≥ L_i`, where `lead(D)
   explicit implode step avoids the fast return; the skill does that. When the last step is not zoomed the window `tr_n = min(0.8, 0.25·d_n)` is still reserved at its end for the fast return, so the loop restart never snaps.
 - **Focus on assemblies**: `focus` on an assembly, sub-assembly or part frames its box at the
   END pose of the step (`AssemblyRenderModel.focusRect(step, id)`), so an exploded unit fits
-  the zoom; B uses it instead of `RenderModel.focusRects` when present. Every label showing
-  during the step (from the camera's move into it to its settled end, leaders included,
-  `AssemblyRenderModel.stepLabels`) that the zoom window would cut, or that would sit under a
-  pinned overlay (caption, metric tiles), widens the window: at most four rounds, and the full
-  view, where neither can happen, is the bound. Labels wholly outside stay out. So no label is
-  drawn cropped at the window's edge or under the caption.
+  the zoom; B uses it instead of `RenderModel.focusRects` when present. A label of the focused
+  subtree, or of a part the step moves, that the zoom window would cut, or that would sit under a
+  pinned overlay (caption, metric tiles), widens the window once to hold it
+  (`AssemblyRenderModel.stepLabels`, from the camera's move into the step to its settled end,
+  leaders included). Every other label the window would cut or cover is hidden over that step:
+  it fades out with the camera's move into the step and back in with its move out, and is
+  reported as `assembly/label-omitted` at the part's pointer. The focused node's own label is
+  never hidden. So no label is drawn cropped at the window's edge or under the caption, and a
+  focus zoom stays a focus zoom.
 
 ### 7.5 Interactive Play/Step
 
@@ -546,11 +549,14 @@ with it.
   under a pixel at rack scale, so the rack at rest looks as in 1.1. Slot ids `frame` are reserved in assembly mode
   (`assembly/reserved-id`).
 - `front` = the rack's front side in world (mirrored rows: `−y`), so `drawer` slides devices
-  out of the front. In a mirrored row the rack's rear (its rear-door heat exchanger) faces the
-  viewer; in assembly mode it is drawn in front of the PDUs behind it, by geometry. The 1.1
-  drawing keeps the unmirrored draw order (rear door first), so it paints the PDUs over the door:
-  a targeted mirrored rack with a rear-door heat exchanger differs there from its 1.1 look, by
-  design (the 1.1 bytes stay as they are). A rack in a mirrored row is **turned half a turn** (a row facing the other
+  out of the front. A targeted rack in a mirrored row is turned half a turn, where the 1.1
+  drawing only reflected `y`: the rear posts swap sides, `pdu-a` moves to the other side and now
+  stands behind the right stile of the rear door, and the rear-door heat exchanger is narrowed to
+  hang between the posts (so it can slide out). Its rear faces the viewer, so the door is drawn in
+  front of the PDU behind it, by geometry; the 1.1 drawing, which also kept the unmirrored draw
+  order (rear door first), paints the PDU over the door. A targeted mirrored rack with a rear-door
+  heat exchanger therefore differs there from its 1.1 look, by design (the 1.1 bytes stay as they
+  are). A rack in a mirrored row is **turned half a turn** (a row facing the other
   way), not reflected: asymmetric details (a single PDU, a device's LED side) change sides
   relative to the 1.1 look, which reflected only `y`. The DC pack records which racks it
   mirrored (`buildDcScene` keeps the flag beside the fragment, so the fragment's bytes do not
