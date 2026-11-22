@@ -5,8 +5,8 @@ Start here. Read this file, `PROGRESS.md`, `DECISIONS.md` (D1–D85), `CLAUDE.md
 
 ## State of main
 
-- v1 is delivered; the assemblies tracks (Phases 1a → 3) are merged except the three open PRs below.
-  Session 3 merged #108–#121 (batch #118 carried #108–#113, #115, #116). Phase 2 is lifted (D-4a, #121).
+- v1 is delivered; the assemblies tracks (Phases 1a → 3) are merged except the two open PRs below; D-3c (#123) is merged.
+  Session 3 merged #108–#121 and #123 (batch #118 carried #108–#113, #115, #116). Phase 2 is lifted (D-4a, #121).
 - Owner scope: after the assemblies tracks, npm publishing in a separate app+browser session
   (`docs/release/npm-publishing-checklist.md`). Never publish from a coding session. The owner OK'd
   merging PRs.
@@ -16,7 +16,6 @@ Start here. Read this file, `PROGRESS.md`, `DECISIONS.md` (D1–D85), `CLAUDE.md
 | PR   | What                                                                     |
 | ---- | ------------------------------------------------------------------------ |
 | #122 | GIF/PNG export of `rag-pipeline` failed (resvg panic on offscreen icons) |
-| #123 | D-3c documents and booklets skill                                        |
 | #124 | D-4b synthetic brick rover booklet fixture and gallery entries           |
 
 ## Backlog (from the orchestrator's `followups.md`, not blocking)

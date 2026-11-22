@@ -23,7 +23,7 @@ Resume point for the autonomous run: read this file and `DECISIONS.md`, then con
 | Assemblies Phase 1a figure mode                                | done                                                                                                                                                                                       | #80–#83, #85–#88, #91, #97                                                                                                                                                     | opus (review), sonnet impl                            |
 | Assemblies Phase 1b plans and basic explode                    | done                                                                                                                                                                                       | #90, #93, #96, #101–#103                                                                                                                                                       | opus (review), sonnet impl                            |
 | Assemblies Phase 2 server, rack, hall (D-4a lifts `phase2`)    | done                                                                                                                                                                                       | #84, #89, #92, #95, #104, #107, #113, #114, #117, #121; batch #118 carried #108–#113, #115, #116                                                                               | opus (review), sonnet impl                            |
-| Assemblies Phase 3 storyboards, copies, documents, booklets    | storyboards #105, depth copies #106 and #119 (A1-2c), PDF #94, small follow-ups #120 merged; GIF fix #122, D-3c skill #123 and D-4b booklet and gallery #124 in PR (re-check before merge) | #94, #105, #106, #119, #120; in PR: #122, #123, #124                                                                                                                           | opus (review), sonnet impl                            |
+| Assemblies Phase 3 storyboards, copies, documents, booklets    | storyboards #105, depth copies #106 and #119 (A1-2c), PDF #94, small follow-ups #120, D-3c skill #123 merged; GIF fix #122 and D-4b booklet and gallery #124 in PR (re-check before merge) | #94, #105, #106, #119, #120, #123; in PR: #122, #124                                                                                                                           | opus (review), sonnet impl                            |
 
 ## Evidence
 
@@ -48,4 +48,4 @@ live on Cloudflare (no GitHub Pages deploy).
 
 ## Next
 
-See HANDOFF.md: merge #122, #123, #124, then the npm session (`docs/release/npm-publishing-checklist.md`).
+See HANDOFF.md: merge #122, #124, then the npm session (`docs/release/npm-publishing-checklist.md`).
