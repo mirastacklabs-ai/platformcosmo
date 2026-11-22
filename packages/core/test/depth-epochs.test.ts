@@ -538,11 +538,12 @@ describe("cycles and copies", () => {
     expect(r.approximate).toEqual([{ t0: 0, t1: 1 }]);
   });
 
-  it("a cycle of FORCED edges only: one forced edge is dropped and reported (E-Q05/E-Q09)", () => {
+  it("a FORCED cycle across intervals, no pair flips: copies make it exact (A1-2c)", () => {
     // Within one interval the forced rules cannot close a cycle, but across intervals they can:
     // a sits in b's bottom face [0,1) (a < b, weak-behind), b in c's [1,2) (b < c), c in a's
     // [2,3) (c < a); the others are parked far away. No pair has both directions, so the union
-    // graph has a cycle of forced edges only.
+    // graph has a cycle of forced edges only. The copy groups are cut where the next interval
+    // would close the cycle: [0, 2) holds a < b < c, [2, 3) c < a; a gets one copy.
     const instant = (path: string, t: number, d: ReturnType<typeof v>): LoopMove => ({
       path,
       t0: t,
@@ -563,13 +564,36 @@ describe("cycles and copies", () => {
       instant("a", 2, v(-10, -10, 1.5)),
     ];
     const r = depthEpochs(items, moves, 3);
+    invariants(r, 3);
     expect(r.stats.copyConflicts).toBe(0);
-    const cyc = r.diagnostics.filter((d) => d.code === "assembly/depth-cycle");
-    expect(cyc).toHaveLength(1);
-    expect(cyc[0]!.params).toMatchObject({ strength: "forced" });
-    expect([...r.order].sort()).toEqual(["a", "b", "c"]);
-    expect(r.approximate.length).toBeGreaterThan(0);
+    expect(codes(r)).toEqual([]);
+    expect(r.approximate).toEqual([]);
+    expect(r.stats.cycleDrops).toBe(0);
+    expect(r.stats.copies).toBe(1);
+    expect(r.order).toEqual(["a", "b", "c", "a__c1"]);
+    expect(r.epochs.map((e) => [e.t0, e.t1, e.order])).toEqual([
+      [0, 2, ["a", "b", "c"]],
+      [2, 3, ["b", "c", "a__c1"]],
+    ]);
     expect(depthEpochs([...items].reverse(), [...moves].reverse(), 3)).toEqual(r);
+    // One order (Phase 1b, or beyond the copy budget): one forced edge is dropped and reported.
+    const one = depthEpochs(items, moves, 3, { budgets: { maxCopyRatio: 0 } });
+    expect(codes(one)).toEqual(["budget/depth-copies", "assembly/depth-cycle"]);
+    expect(one.diagnostics[1]!.params).toMatchObject({ strength: "forced" });
+    expect([...one.order].sort()).toEqual(["a", "b", "c"]);
+    expect(one.approximate.length).toBeGreaterThan(0);
+  });
+
+  it("a cycle inside ONE interval still takes the one-order path unchanged (no copy helps)", () => {
+    // the three static boxes above, plus a mover far away: one group, so no copy path
+    const r = depthEpochs(
+      [...items, { key: "m", path: "m", box: box(50, 50, 0, 1, 1, 1) }],
+      [{ path: "m", t0: 0, t1: 1, from: v(0, 0, 0), to: v(0, 0, 1), easing: "linear" }],
+      1,
+    );
+    expect(codes(r)).toEqual(["assembly/depth-cycle"]);
+    expect(r.stats.copies).toBe(0);
+    expect(r.order).toEqual(["m", "y", "z", "x"]);
   });
 
   it("with copies, each group is ordered by its own edges: no cycle across intervals", () => {

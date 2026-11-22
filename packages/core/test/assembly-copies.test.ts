@@ -19,7 +19,7 @@ import type { AssemblyIdScheme, AssemblyRenderModel, IdScheme } from "../src/con
 import { assemblyAnim, assemblyFrame, assemblyStepEnd } from "../src/anim/assembly.js";
 import { parseCopyKey } from "../src/depth/copies.js";
 import { fixtureTheme } from "./fixtures/theme.js";
-import { clippedCopySpec, copySwapSpec } from "./copies-fixtures.js";
+import { clippedCopySpec, copySwapSpec, crossingClipSpec } from "./copies-fixtures.js";
 
 function build(spec: PlatformCosmoSpec): { model: RenderModel; codes: string[] } {
   const scene = buildScene(spec, {});
@@ -275,6 +275,69 @@ describe("clipped copies (§9.4, §9.5)", () => {
       const shown = v.filter((id) => f.visible.includes(id));
       expect(shown.length, `t=${t}`).toBe(e.order.some((k) => k.startsWith(P)) ? 1 : 0);
     }
+  });
+});
+
+describe("clipped only while crossing: a clipped and an unclipped copy (§9.5, A1-2c)", () => {
+  const { model, codes } = build(crossingClipSpec());
+  const am = A(model);
+  const P = "kit/arm/piston";
+
+  test("validates; copy 0 clipped, copy 1 not; nothing hidden until clear, nothing approximate", () => {
+    expect(validate(crossingClipSpec()).diagnostics.filter((d) => d.severity === "error")).toEqual(
+      [],
+    );
+    expect(codes).not.toContain("assembly/clip-fallback");
+    expect(codes).not.toContain("assembly/depth-approx");
+    const it = am.items.find((i) => i.item === P)!;
+    expect(it.copies).toBe(2);
+    expect(Object.keys(it.clips ?? {})).toEqual(["0"]);
+    expect(am.approximate).toEqual([]);
+    expect(am.items.find((i) => i.item === "kit/block")!.copies).toBe(1);
+  });
+
+  test("DOM: only copy 0 sits under the clip; ids unique; copyIds lists both copies", () => {
+    const clip = am.items.find((i) => i.item === P)!.clips![0]!.clip;
+    const c0 = chainTo(model.layers.objects, am.ids.partMotion(P, 0));
+    const c1 = chainTo(model.layers.objects, am.ids.partMotion(P, 1));
+    expect(c0.some((e) => e.attrs?.["clip-path"] === `url(#${clip})`)).toBe(true);
+    expect(c1.length).toBeGreaterThan(0);
+    expect(c1.some((e) => e.attrs?.["clip-path"] !== undefined)).toBe(false);
+    for (const id of [am.ids.partMotion(P, 0), am.ids.partVisible(P, 0), am.ids.object(P)]) {
+      expect(am.ids.copyIds(id)).toEqual([id, `${id}__c1`]);
+    }
+    for (const mode of ["loop", "interactive"] as const) {
+      const svg = emit(model, animator.animate(model, { speed: 1, mode }), { font: "system" });
+      const all = idsIn(svg);
+      expect(new Set(all).size, mode).toBe(all.length);
+      expect(svg.split(`<clipPath id="${clip}"`), mode).toHaveLength(2);
+    }
+  });
+
+  test("one copy at a time, the epoch's; frames agree with the animation at every swap", () => {
+    const v = [am.ids.partVisible(P, 0), am.ids.partVisible(P, 1)];
+    const anim = assemblyAnim(am, 1);
+    expect(anim.props.filter((p) => p.kind === "visibility").map((p) => p.id)).toEqual(
+      expect.arrayContaining(v),
+    );
+    let both = 0;
+    for (const t of swapTimes(am)) {
+      const e = epochOf(am, t);
+      const f = am.frameAt(t);
+      const shown = v.filter((id) => f.visible.includes(id));
+      const want = e.order.find((k) => parseCopyKey(k).item === P);
+      expect(shown, `t=${t}`).toEqual(
+        want === undefined ? [] : [am.ids.partVisible(P, parseCopyKey(want).copy)],
+      );
+      if (want !== undefined) both |= 1 << parseCopyKey(want).copy;
+      const a = assemblyFrame(am, 1, t)!;
+      for (const id of f.visible) expect(a[id]?.visibility, `${id} @${t}`).toBe("visible");
+      for (const id of f.hidden) expect(a[id]?.visibility, `${id} @${t}`).toBe("hidden");
+      for (const [id, tf] of Object.entries(f.transforms)) {
+        expect(a[id]?.transform, `${id} @${t}`).toBe(tf);
+      }
+    }
+    expect(both).toBe(3); // both copies are used
   });
 });
 

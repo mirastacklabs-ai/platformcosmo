@@ -170,6 +170,8 @@ export interface PaintOptions {
   readonly forceVisible?: readonly string[];
   /** Replace an item's clip prism (negative controls: a clip at the wrong face). */
   readonly prism?: (item: string, prism: Box3) => Box3;
+  /** Clip every copy of a clipped item, ignoring per-copy clips (negative control, §9.5). */
+  readonly clipEveryCopy?: boolean;
 }
 
 /** The painter SVG of the epoch containing `t`. */
@@ -185,6 +187,8 @@ export function paintSvg(
   const index = new Map(keys.map((k, i) => [k, i]));
   const byKey = new Map(scene.items.map((i) => [i.key, i]));
   const clips = new Map(result.clips.map((c) => [c.item, c]));
+  // clips per copy (§9.4): an item clipped only while it crosses has unclipped copies (§9.5)
+  const copyClips = new Map(result.items.map((i) => [i.item, i.clips]));
   const visible = new Set(epochAt(result, t).order);
   const forced = new Set(opts.forceVisible ?? []);
   const round = new Set(scene.zcyl ?? []);
@@ -204,7 +208,8 @@ export function paintSvg(
       .map((b) => `<polygon points="${silhouette(b, round.has(key))}" fill="${fill}"/>`)
       .join("");
     const d = displacementAt(scene.moves, it.path, t);
-    const clip = clips.get(key);
+    const clip =
+      opts.clipEveryCopy || copyClips.get(key)?.[copy] !== undefined ? clips.get(key) : undefined;
     if (!clip || mode === "none") {
       body.push(`<g transform="${tr(d)}">${polys}</g>`);
       continue;

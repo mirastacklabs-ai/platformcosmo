@@ -119,3 +119,43 @@ export function viewCopySpec(): PlatformCosmoSpec {
   });
   return spec as unknown as PlatformCosmoSpec;
 }
+
+/**
+ * A piston clipped only while it crosses (§9.5, A1-2c): it rises out of the static block through
+ * its top face, then slides sideways once clear. Its motion relative to the block has two axes,
+ * so no single static clip is valid for the loop: copy 0 is clipped and drawn while it crosses,
+ * copy 1 is unclipped and drawn for the slide.
+ */
+export function crossingClipSpec(): PlatformCosmoSpec {
+  return {
+    meta: { version: "1", title: "Clipped while crossing" },
+    assemblies: [
+      {
+        id: "kit",
+        units: "mm",
+        parts: [
+          { id: "block", size: [400, 400, 200], color: "#64748b" },
+          {
+            id: "arm",
+            at: [100, 100, 50],
+            parts: [{ id: "piston", size: [200, 200, 130], color: "#f59e0b" }],
+          },
+        ],
+        programs: [
+          {
+            id: "p",
+            stages: [
+              { parts: ["arm"], direction: "up", distance: 300 },
+              { parts: ["arm/piston"], direction: "+x", distance: 400 },
+            ],
+          },
+        ],
+      },
+    ],
+    steps: [
+      { caption: "Rest", duration: 2 },
+      { caption: "Out", assembly: [{ explode: "kit" }], duration: 6 },
+      { caption: "Back", assembly: [{ implode: "kit" }], duration: 6 },
+    ],
+  } as unknown as PlatformCosmoSpec;
+}

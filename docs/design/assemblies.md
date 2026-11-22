@@ -570,7 +570,8 @@ certified (step 2) and heuristic (centre depth). A cycle is broken deterministic
 heuristic edges, then certified ones, each time the edge whose endpoints have the smallest
 centre-depth difference (ties by the item keys); a forced edge is dropped only when a cycle has
 nothing else left (no single interval can form one, but forced edges of different intervals can
-close a cycle in the one DOM order of Phase 1b), by the same rule. The existing Kahn release
+close a cycle in the one DOM order of Phase 1b; with copies, A1-2c splits such a cycle over copy
+groups instead, §9.4), by the same rule. The existing Kahn release
 rule (lowest depth key, then id) then emits the order. Every broken certified or forced edge is
 reported as `assembly/depth-cycle` (info) and marks the epoch `approximate`.
 
@@ -628,8 +629,28 @@ each group is ordered by the static algorithm over the loop-wide edges, its own 
 chain that keeps the static items in one fixed order (taken from the loop-wide edges alone; the
 chain is never dropped by the cycle rule), so static items never need a copy. Epochs then break
 at group boundaries too, and the construction above embeds every epoch. A clipped item's copies
-all carry its clip (one shared `clipPath`). A spec without such a pair takes the one-order path
-unchanged (byte-identical to Phase 1b). Beyond the copy budget, or when the orders would exceed
+all carry its clip (one shared `clipPath`), except the unclipped copies of an item clipped only
+while it crosses (§9.5). A spec without such a pair takes the one-order path unchanged
+(byte-identical to Phase 1b) unless its certified and forced edges close a cycle across
+intervals (below).
+
+A1-2c ([tracks](./assemblies-tracks.md)) adds two rules. **Cycles across intervals.** A group
+is also cut where the certified and forced edges that occur in it (plus its conflict directions)
+would close a cycle; only edges inside one strongly connected component of the loop-wide
+certified and forced edges (with both directions of every conflict) are tracked. So a cycle that
+holds only across intervals (a < b, then b < c, then c < a, no pair flipping) is split over
+groups and costs a copy, not a dropped edge, and the copy path is taken for it even without a
+flipping pair. An edge that closes a cycle inside a group's first interval alone is left to the
+§9.3 cycle rule (no copy can help there, it is dropped either way); if that leaves one group and
+no pair flips, the one-order path runs unchanged. **Static chain.** The chain is first the order
+of the loop-wide edges (as in A1-2b). When it closes cycles inside groups, a second chain is
+derived from the groups: one graph in which every static item is one node and every moving item
+is one node per group, holding each group's own edges (the base edges that occur in it and its
+conflict directions); a path from one static item to another there means the first must precede
+the second in some group, directly or through other static items, so its topological order (the
+§9.3 cycle rule and Kahn release rule) keeps the chain off every cycle the groups do not close by
+themselves. The chain that drops fewer certified or forced edges inside their own groups is used
+(the first on ties; the second only if its copies fit). Beyond the copy budget, or when the orders would exceed
 the work budget (`budget/time`), the epochs are merged into one order as in Phase 1b: the
 direction held shorter (then later) is dropped and its intervals are approximate
 (`assembly/depth-approx` with `copy: true`).
@@ -696,11 +717,26 @@ it is ordered by separation or bisection only (approximate where those cannot de
   footprint ⊥ `u` never leaves the clip prism, which is what the proof above needs. The solid
   itself may move (its total track rides on `partHost`). If the relative motion has a ⊥ `u`
   component anywhere in the loop (the piston later slides sideways once clear, or an insert is
-  pulled out obliquely): Phase 1b falls back to hiding the leaf until clear for the crossing
-  epochs (`assembly/clip-fallback`, info); Phase 3 is to use two copies instead, a clipped copy
-  visible only during the crossing epochs and an unclipped copy for the rest of the loop,
-  swapped by visibility like any other copy (§9.4). A1-2b does not do this yet: such leaves keep
-  the hidden-until-clear fallback (follow-up track A1-2c).
+  pulled out obliquely): Phase 1b fell back to hiding the leaf until clear for the crossing
+  epochs (`assembly/clip-fallback`, info). Since A1-2c it gets **two copies** instead: a clipped
+  copy visible only in its **crossing window** W and an unclipped copy for the rest of the loop,
+  swapped by visibility like any other copy (§9.4). W is the union of the phases in which the
+  leaf may meet a member of the block (swept boxes interpenetrate), counted only while the leaf
+  exists. The clip is valid when the rule above holds over W instead of the loop: the leaf's
+  range relative to the block over W has zero width on every axis but `u` (one footprint ⊥ `u`,
+  motion along `u` only), its part below the face plane at its lowest position lies inside the
+  members and its part beyond the plane at its highest meets none. Outside W the leaf meets no
+  member, so the unclipped copy is ordered exactly by separation. W's ends are phase boundaries,
+  and at each the leaf is clear of the face (its part below the plane is inside the block, and it
+  meets no member), so it lies inside the clip prism and both copies draw the same pixels: the
+  swap is invisible. Copy 0 is the clipped one; the unclipped one takes the next copy numbers,
+  has no `partHost` and no clip wrapper, and both count toward the copy budget (copies ≤ 0.5 ×
+  items; beyond it the remaining such leaves keep the hidden-until-clear fallback, with a
+  `budget/depth-copies` warning). No second copy is made when the block's members never pass a
+  hidden face of the leaf (the leaf is an occluder that fills its box and the members are
+  weak-behind it): they are drawn before it, exact without a clip. A leaf whose crossing window
+  has motion ⊥ `u` (it crosses at two footprints, or slides while it crosses) keeps the
+  fallback.
 - Regression fixture: the engine example (§19.3) exercises all three: valves inserted in the
   casting and enclosed by casting ∪ cover at rest, camshafts flush in the cover, pistons
   crossing the block deck.

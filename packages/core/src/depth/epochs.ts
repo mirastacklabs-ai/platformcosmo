@@ -36,6 +36,7 @@ import {
 } from "./enclosure.js";
 import type { Bounds, Vec } from "./enclosure.js";
 import { copyKey, planCopies } from "./copies.js";
+import type { CopyPlanResult } from "./copies.js";
 
 /**
  * Depth epochs and copies (assemblies §9.3–§9.5; tracks A1-2a, A1-2b). Input: the depth items of
@@ -56,7 +57,12 @@ import { copyKey, planCopies } from "./copies.js";
  *    lies inside the union of the members, its part above F at its highest position meets no
  *    member, and at some time it crosses F. The clip solid is the member that carries F; the
  *    item is drawn after every member it meets (forced). `inserts` is preferred; at most one
- *    clip per item.
+ *    clip per item. Motion across several axes (A1-2c): the same test over the item's crossing
+ *    window W only (the phases in which it may meet the block), where its relative range must
+ *    have zero width on every axis but `u`; then the item is split in two items of one key, the
+ *    clipped one present in W and an unclipped one present elsewhere (it meets no member there),
+ *    and the output gives them consecutive copy numbers (two copies, §9.5). Not when the members
+ *    are weak-behind the item (it is an occluder they never pass): they order exactly as is.
  * 1. Phases: the loop is split at every move start and end, every instant move, every presence
  *    change, and every instant a clipped item's `+u` face passes F (root finding): at or below F
  *    the item is inside the block and hidden (a `+u` face below F would project INTO the clip;
@@ -91,7 +97,11 @@ import { copyKey, planCopies } from "./copies.js";
  *    a copy (A1-2b): the final intervals are grouped greedily into maximal runs in which no such
  *    pair changes direction, and each group gets its own order (the loop-wide edges, the group's
  *    directions, and a chain keeping the static items in one fixed order, so static items never
- *    need a copy). `planCopies` (copies.ts) then embeds every epoch's order in one DOM order with
+ *    need a copy). A1-2c: a group is also cut where the certified and forced edges occurring in
+ *    it would close a cycle (so a cycle that holds only across intervals costs a copy, and the
+ *    copy path is taken for it even without a flipping pair); and when the chain from the
+ *    loop-wide edges closes cycles inside groups, a chain derived from the groups' own edges
+ *    (`groupChain`) is used if it drops fewer. `planCopies` (copies.ts) then embeds every epoch's order in one DOM order with
  *    copies (LIS construction, §9.4). Copies beyond `maxCopyRatio` × items (0.5), or orders over
  *    the work budget, fall back to the Phase 1b path (`budget/depth-copies` / `budget/time`): one
  *    order, the conflicting direction held shorter (then later) is dropped, its intervals
@@ -726,6 +736,36 @@ interface Task {
 
 const NO_CLIP = -1;
 
+/** One copy group: final intervals [k0, k1) and its conflict direction codes. */
+interface CopyGroup {
+  readonly k0: number;
+  k1: number;
+  readonly dirs: number[];
+}
+
+/** Watched edges per final interval (A1-2c), with the base edges' ends. */
+interface Watch {
+  readonly at: readonly (readonly number[])[];
+  readonly from: readonly number[];
+  readonly to: readonly number[];
+}
+
+/** The orders of every copy group under one static chain, and what they cost. */
+interface Grouped {
+  readonly orders: number[][];
+  drops: number;
+  /** Certified or forced edges dropped inside their own group (each approximate, reported). */
+  inside: number;
+  readonly cycles: [Diagnostic, string][];
+  readonly approx: number[];
+}
+
+/** An item clipped only in its crossing window (§9.5, A1-2c): span indices of the window. */
+interface Split {
+  readonly p: number;
+  readonly phases: readonly number[];
+}
+
 class EpochSolver {
   private readonly diags: Diags;
   private readonly hw: number;
@@ -847,6 +887,12 @@ class EpochSolver {
     };
   }
 
+  /** Item count before splits (`applySplits`); items `n0..` are second items of split ones. */
+  private n0 = 0;
+  /** Item index → the original item (identity below `n0`). */
+  private base: number[] = [];
+  /** Items with a crossing-window clip (each has one extra copy). */
+  private splitCount = 0;
   private statPhases = 0;
   /** Work of building one phase (items + chain entries + moves + presence windows). */
   private phaseCost = 1;
@@ -903,10 +949,13 @@ class EpochSolver {
     let windows = 0;
     for (const x of this.it) windows += x.present?.length ?? 0;
     this.phaseCost = n + this.chain.reduce((s, c) => s + c.length, 0) + this.mv.length + windows;
+    this.n0 = n;
+    this.base = Array.from({ length: n }, (_, i) => i);
     let spans = this.spans([]);
-    this.assignClips(spans);
+    const splits = this.assignClips(spans);
+    if (splits.length > 0) this.applySplits(spans, splits);
     const events = this.clipEvents(spans);
-    if (events.length > 0) spans = this.spans(events);
+    if (events.length > 0 || splits.length > 0) spans = this.spans(events);
     for (const sp of spans) this.solvePhase(this.phase(sp));
     this.statPhases = spans.length;
     this.statMoving = spans.filter((s) => s.moving).length;
@@ -929,6 +978,83 @@ class EpochSolver {
       diagnostics: this.diags.finish(),
       stats: this.stats(),
     };
+  }
+
+  /**
+   * §9.5 two copies (A1-2c): each split item keeps its index and clip and exists only in its
+   * crossing window W (the union of its span indices); a second item of the same key, unclipped,
+   * exists in the rest of its presence. Both are ordinary items from here on (W's ends become
+   * presence cuts, so every phase lies inside or outside W); `base` maps the second item back,
+   * and the output gives it the item's next copy numbers (`copyOffsets`).
+   */
+  private applySplits(spans: readonly Span[], splits: readonly Split[]): void {
+    const L = this.loop;
+    const n = this.it.length;
+    const extra: number[] = [];
+    const cut = (
+      ws: readonly (readonly [number, number])[],
+      keep: readonly (readonly [number, number])[],
+    ): [number, number][] => {
+      const out: [number, number][] = [];
+      for (const a of ws)
+        for (const b of keep) {
+          const t0 = Math.max(a[0], b[0]);
+          const t1 = Math.min(a[1], b[1]);
+          if (t1 - t0 > TIME_EPS) out.push([t0, t1]);
+        }
+      return out.sort((x, y) => x[0] - y[0]);
+    };
+    for (const { p, phases } of splits) {
+      const win: [number, number][] = [];
+      for (const k of phases) {
+        const last = win[win.length - 1];
+        const sp = spans[k]!;
+        if (last && sp.a <= last[1] + TIME_EPS) last[1] = sp.b;
+        else win.push([sp.a, sp.b]);
+      }
+      const rest: [number, number][] = [];
+      let t = 0;
+      for (const w of win) {
+        if (w[0] - t > TIME_EPS) rest.push([t, w[0]]);
+        t = w[1];
+      }
+      if (L - t > TIME_EPS) rest.push([t, L]);
+      const item = this.it[p]!;
+      const all = item.present ?? [[0, L]];
+      this.it[p] = { ...item, present: cut(all, win) };
+      const outside = cut(all, rest);
+      if (outside.length === 0) continue;
+      this.it.push({ ...item, present: outside });
+      this.chain.push(this.chain[p]!);
+      this.base.push(p);
+      extra.push(p);
+    }
+    const m = this.it.length;
+    const clipSolid = new Int32Array(m).fill(NO_CLIP);
+    clipSolid.set(this.clipSolid);
+    this.clipSolid = clipSolid;
+    const clipAxis = new Int8Array(m).fill(-1);
+    clipAxis.set(this.clipAxis);
+    this.clipAxis = clipAxis;
+    const depth0 = new Float64Array(m);
+    depth0.set(this.depth0);
+    this.depth0 = depth0;
+    for (let q = n; q < m; q++) {
+      this.depth0[q] = this.depth0[extra[q - n]!]!;
+      this.hidden.push([]);
+      this.clipMembers.push([]);
+    }
+    // a clip block member that was split: the clipped item is drawn after both of its items
+    for (let i = 0; i < m; i++) {
+      const mem = this.clipMembers[i]!;
+      if (mem.length === 0) continue;
+      for (let q = n; q < m; q++) if (mem.includes(extra[q - n]!)) mem.push(q);
+    }
+    this.splitCount = extra.length;
+    let windows = 0;
+    for (const x of this.it) windows += x.present?.length ?? 0;
+    this.phaseCost =
+      m + this.chain.reduce((sum, c) => sum + c.length, 0) + this.mv.length + windows;
   }
 
   private normalize(): void {
@@ -1395,7 +1521,7 @@ class EpochSolver {
    * loop-wide relative ranges are accumulated with ONE pose per phase (cost: phases × (items +
    * candidates), charged to the pair budget).
    */
-  private assignClips(spans: readonly Span[]): void {
+  private assignClips(spans: readonly Span[]): Split[] {
     const n = this.it.length;
     const keyIndex = new Map<string, number>();
     this.it.forEach((x, i) => keyIndex.set(x.key, i));
@@ -1431,7 +1557,7 @@ class EpochSolver {
     );
     if (pairs === null) {
       this.overBudget();
-      return;
+      return [];
     }
     const disp0 = this.it.map((_, i) => this.dispAtTime(i, 0));
     const at0 = (i: number): Bounds => shift(this.it[i]!.bbox, disp0[i]!);
@@ -1470,7 +1596,13 @@ class EpochSolver {
       readonly hi: number[];
       meets: boolean;
     }
+    /** A1-2c two-copy candidate: relative ranges over the phases in which p may meet s only. */
+    interface WCand extends Cand {
+      /** Span indices (ascending) in which p is present and may interpenetrate s. */
+      readonly phases: number[];
+    }
     const cands: Cand[] = [];
+    const wcands: WCand[] = [];
     for (let q = 0; q < pairs.length; q += 2) {
       for (const [p, s] of [
         [pairs[q]!, pairs[q + 1]!],
@@ -1482,8 +1614,17 @@ class EpochSolver {
         if (!interpenetrates(loopBounds[p]!, loopBounds[s]!)) continue;
         // Cheap pair-only filters first: at most one axis of relative motion, and the item's
         // footprint ⊥ that axis inside the block's bounding box (an explicit `inserts` target
-        // always stays, so an invalid insert is reported).
+        // always stays, so an invalid insert is reported). Motion along several axes may still
+        // be clipped while it crosses, with a second, unclipped copy for the rest (§9.5, A1-2c).
         const axes = this.motionAxes(p, s);
+        const fresh = (): Cand => ({
+          p,
+          s,
+          lo: [Infinity, Infinity, Infinity],
+          hi: [-Infinity, -Infinity, -Infinity],
+          meets: false,
+        });
+        if (axes < 0) wcands.push({ ...fresh(), phases: [] });
         if (P.insertsKey !== S.key) {
           if (axes < 0) continue;
           // Rigid with each other over the loop: only a seated (interpenetrating) pair matters.
@@ -1494,16 +1635,11 @@ class EpochSolver {
             if (!footprintInside(at0(p), bb as unknown as Bounds, u)) continue;
           }
         }
-        cands.push({
-          p,
-          s,
-          lo: [Infinity, Infinity, Infinity],
-          hi: [-Infinity, -Infinity, -Infinity],
-          meets: false,
-        });
+        cands.push(fresh());
       }
     }
     cands.sort((a, b) => a.p - b.p || a.s - b.s);
+    wcands.sort((a, b) => a.p - b.p || a.s - b.s);
     if (cands.length * spans.length + this.pairChecks > this.budgets.maxPairChecks) {
       // No clips: crossings fall back to hidden-until-clear; ordering still runs.
       this.diags.add({
@@ -1513,9 +1649,24 @@ class EpochSolver {
         message: `${cands.length} clip candidates over ${spans.length} phases exceed the work budget; no face-exit clips are assigned.`,
         params: { candidates: cands.length, phases: spans.length },
       });
-      return;
+      return [];
     }
     this.pairChecks += cands.length * spans.length;
+    if (wcands.length > 0) {
+      if (wcands.length * spans.length + this.pairChecks > this.budgets.maxPairChecks) {
+        this.diags.add({
+          severity: "warning",
+          code: "budget/time",
+          path: "",
+          message: `${wcands.length} two-copy clip candidates over ${spans.length} phases exceed the work budget; items that move across several axes are hidden while they cross.`,
+          params: { candidates: wcands.length, phases: spans.length },
+        });
+        wcands.length = 0;
+      } else {
+        this.pairChecks += wcands.length * spans.length;
+      }
+    }
+    let spanIndex = 0;
     poses((ph, pose) => {
       for (const c of cands) {
         this.rel(ph, pose, c.p, c.s);
@@ -1529,6 +1680,20 @@ class EpochSolver {
           c.meets = mayInterpenetrate(this.it[c.p]!.bbox, this.it[c.s]!.bbox, lo, hi);
         }
       }
+      for (const c of wcands) {
+        if (!ph.present[c.p]) continue;
+        this.rel(ph, pose, c.p, c.s);
+        const lo: Vec = [this.rlo[0]!, this.rlo[1]!, this.rlo[2]!];
+        const hi: Vec = [this.rhi[0]!, this.rhi[1]!, this.rhi[2]!];
+        if (!mayInterpenetrate(this.it[c.p]!.bbox, this.it[c.s]!.bbox, lo, hi)) continue;
+        c.meets = true;
+        c.phases.push(spanIndex);
+        for (let k = 0; k < 3; k++) {
+          c.lo[k] = Math.min(c.lo[k]!, lo[k]!);
+          c.hi[k] = Math.max(c.hi[k]!, hi[k]!);
+        }
+      }
+      spanIndex++;
     });
     const byItem = new Map<number, Cand[]>();
     for (const c of cands) {
@@ -1536,6 +1701,16 @@ class EpochSolver {
       if (l) l.push(c);
       else byItem.set(c.p, [c]);
     }
+    const wByItem = new Map<number, WCand[]>();
+    for (const c of wcands) {
+      if (!c.meets) continue;
+      const l = wByItem.get(c.p);
+      if (l) l.push(c);
+      else wByItem.set(c.p, [c]);
+    }
+    const splits: Split[] = [];
+    const splitLimit = Math.floor(Math.max(0, this.budgets.maxCopyRatio) * n);
+    let overSplit = 0;
     for (let p = 0; p < n; p++) {
       const P = this.it[p]!;
       const insertsIdx = P.insertsKey !== undefined ? keyIndex.get(P.insertsKey) : undefined;
@@ -1573,6 +1748,54 @@ class EpochSolver {
           break;
         }
       }
+      // §9.5, A1-2c: motion across several axes relative to a block. A static clip is valid for
+      // the phases in which p may meet the block (its crossing window W) when p's motion
+      // relative to the block there is along one axis `u` with one footprint ⊥ `u`: a clipped
+      // copy is drawn in W and an unclipped copy elsewhere (where p meets no member).
+      const wgroups = new Map<number, WCand[]>();
+      for (const c of done ? [] : (wByItem.get(p) ?? [])) pushMap(wgroups, blockOf[c.s]!, c);
+      const worder = [...wgroups.keys()].sort(
+        (a, b) => (a === insertsBlock ? 0 : 1) - (b === insertsBlock ? 0 : 1) || a - b,
+      );
+      for (const g of worder) {
+        const members = wgroups.get(g)!;
+        // p an occluder whose hidden faces the members never pass (weak-behind p): the members
+        // are drawn before p, exact, so no clip and no second copy is needed (§9.5)
+        if (
+          P.solid &&
+          members.every((c) =>
+            weakBehind(this.it[c.s]!.bbox, P.bbox, [-c.lo[0]!, -c.lo[1]!, -c.lo[2]!]),
+          )
+        ) {
+          continue;
+        }
+        const s0 = members[0]!.s;
+        const lo = [Infinity, Infinity, Infinity];
+        const hi = [-Infinity, -Infinity, -Infinity];
+        const phases = new Set<number>();
+        for (const c of members) {
+          for (let k = 0; k < 3; k++) {
+            // relative to s0: rel(p, s0) = rel(p, m) + (d_m − d_s0), constant in a loop block
+            const d = disp0[c.s]![k]! - disp0[s0]![k]!;
+            lo[k] = Math.min(lo[k]!, c.lo[k]! + d);
+            hi[k] = Math.max(hi[k]!, c.hi[k]! + d);
+          }
+          for (const x of c.phases) phases.add(x);
+        }
+        const clip = this.blockClip(p, members, disp0, { lo, hi });
+        if (!clip) continue;
+        if (splits.length >= splitLimit) {
+          overSplit++;
+          break;
+        }
+        this.clips.push(clip.clip);
+        this.clipSolid[p] = clip.solid;
+        this.clipAxis[p] = clip.u;
+        this.clipMembers[p] = members.map((c) => c.s);
+        splits.push({ p, phases: [...phases].sort((a, b) => a - b) });
+        done = true;
+        break;
+      }
       if (!done && insertsIdx !== undefined && this.it[insertsIdx]!.solid) {
         // Report an invalid insert only if it ever reaches past a VISIBLE face of its solid:
         // hidden-face entries need no clip (weak-behind orders them exactly).
@@ -1591,6 +1814,16 @@ class EpochSolver {
         }
       }
     }
+    if (overSplit > 0) {
+      this.diags.add({
+        severity: "warning",
+        code: "budget/depth-copies",
+        path: "",
+        message: `${splitLimit + overSplit} items would need a second copy for a clip while they cross (§9.5), more than the ${splitLimit} copies allowed (${this.budgets.maxCopyRatio} × ${n} items); the other ${overSplit} are hidden while they cross.`,
+        params: { limit: splitLimit, items: n, hidden: overSplit },
+      });
+    }
+    return splits;
   }
 
   /**
@@ -1632,23 +1865,42 @@ class EpochSolver {
    * Then the prism over p's footprint from F outward is exact while p's `+u` face is at or beyond
    * F (§9.5's side-face proof only uses the plane), and p is enclosed by the block while below.
    * The clip solid is the member that carries F over p's footprint (its track is the block's).
+   *
+   * `win` (A1-2c): p's range relative to `members[0]` over its crossing window only (the phases
+   * in which it may meet the block) instead of the loop. The clip is then valid for that window
+   * when the range has zero width on every axis but one (`u`): one footprint ⊥ `u`, motion along
+   * `u` only. Outside the window p meets no member, so an unclipped copy is exact there.
    */
   private blockClip(
     p: number,
     members: readonly { readonly s: number; readonly lo: number[]; readonly hi: number[] }[],
     disp0: readonly Vec[],
+    win?: { readonly lo: readonly number[]; readonly hi: readonly number[] },
   ): { clip: DepthClip; solid: number; u: number } | undefined {
     if (members.length === 0 || members.length > MAX_UNION_BOXES) return undefined;
     const s0 = members[0]!.s;
-    const axes = this.motionAxes(p, s0);
-    if (axes < 0) return undefined;
-    const lo = members[0]!.lo;
-    const hi = members[0]!.hi;
-    const r0: Vec = [
-      disp0[p]![0] - disp0[s0]![0],
-      disp0[p]![1] - disp0[s0]![1],
-      disp0[p]![2] - disp0[s0]![2],
-    ];
+    let axes: number;
+    let lo: readonly number[];
+    let hi: readonly number[];
+    let r0: Vec;
+    if (win === undefined) {
+      axes = this.motionAxes(p, s0);
+      if (axes < 0) return undefined;
+      lo = members[0]!.lo;
+      hi = members[0]!.hi;
+      r0 = [
+        disp0[p]![0] - disp0[s0]![0],
+        disp0[p]![1] - disp0[s0]![1],
+        disp0[p]![2] - disp0[s0]![2],
+      ];
+    } else {
+      lo = win.lo;
+      hi = win.hi;
+      const moving = [0, 1, 2].filter((k) => !(hi[k]! - lo[k]! <= EPS));
+      if (moving.length > 1) return undefined;
+      axes = moving.length === 0 ? 0 : moving[0]! + 1;
+      r0 = [lo[0]!, lo[1]!, lo[2]!];
+    }
     const P = this.it[p]!.bbox;
     const P0 = shift(P, r0);
     const frame: Bounds[] = members.map((m) =>
@@ -1726,11 +1978,11 @@ class EpochSolver {
     if (this.clips.length === 0) return out;
     let evals = 0;
     const cap = this.budgets.maxCollisionSamples;
-    const keyIndex = new Map(this.it.map((x, i) => [x.key, i] as const));
-    const clipped = this.clips.map((c) => {
-      const p = keyIndex.get(c.item)!;
-      return { p, s: this.clipSolid[p]!, u: this.clipAxis[p]! };
-    });
+    // by index (an item with a crossing window has a second, unclipped item of the same key)
+    const clipped: { p: number; s: number; u: number }[] = [];
+    for (let p = 0; p < this.clipSolid.length; p++) {
+      if (this.clipSolid[p]! >= 0) clipped.push({ p, s: this.clipSolid[p]!, u: this.clipAxis[p]! });
+    }
     const refine = (f: (t: number) => number, a: number, b: number, fa: number): number => {
       let lo = a;
       let hi = b;
@@ -2447,7 +2699,7 @@ class EpochSolver {
         message: `"${this.it[i]!.key}" crosses a visible face of "${this.it[s]!.key}"${this.clipMembers[i]!.length > 0 ? " (outside its clip block)" : ""} without a valid static clip; it is hidden until clear.`,
         params: { item: this.it[i]!.key, solid: this.it[s]!.key },
       },
-      `${i}/${s}`,
+      `${this.base[i]}/${this.base[s]}`,
     );
   }
 
@@ -2477,7 +2729,7 @@ class EpochSolver {
           message: `Visibility of "${this.it[i]!.key}" could not be certified in [${fmtT(ta)}, ${fmtT(tb)}] s; the midpoint pose decides.`,
           params: { item: this.it[i]!.key, t0: ta, t1: tb },
         },
-        `v${i}`,
+        `v${this.base[i]}`,
       );
     }
     for (let q = 0; q < res.pairs.length; q += 2) {
@@ -2496,7 +2748,7 @@ class EpochSolver {
           message: `Depth order of "${this.it[i]!.key}" and "${this.it[j]!.key}" could not be certified in [${fmtT(ta)}, ${fmtT(tb)}] s; the static rule at the midpoint decides.`,
           params: { items: [this.it[i]!.key, this.it[j]!.key], t0: ta, t1: tb },
         },
-        `p${i}/${j}`,
+        `p${this.base[i]}/${this.base[j]}`,
       );
     }
   }
@@ -2603,7 +2855,7 @@ class EpochSolver {
               message: `"${this.it[x]!.key}" must be drawn before "${this.it[y]!.key}" in some epochs and after it in others; no depth copy is made for it (${this.noCopy}), so those epochs are approximate.`,
               params: { items: [this.it[x]!.key, this.it[y]!.key], copy: true },
             },
-            `c${pe.i}/${pe.j}`,
+            `c${this.base[pe.i]}/${this.base[pe.j]}`,
           );
         }
       }
@@ -2621,7 +2873,7 @@ class EpochSolver {
       drop: (e) => {
         if (ed.str[e]! < C) return;
         this.markApprox(ed.occ[e]!);
-        this.cycleDiag(ed, e, `${e}`);
+        this.cycleDiag(ed, e, `${this.base[ed.from[e]!]}/${this.base[ed.to[e]!]}`);
       },
       release: () => {
         if (!released) {
@@ -2656,10 +2908,16 @@ class EpochSolver {
    * the §9.3 cycle rule: per nontrivial strongly connected component, the least edge by
    * (strength, centre-depth difference, keys) is dropped (`hooks.drop`). Over the cycle budget a
    * fallback release places the best unplaced item and ignores its pending in-edges
-   * (`hooks.released`); `hooks.release` returning false aborts (null).
+   * (`hooks.released`); `hooks.release` returning false aborts (null). `nodes`: a graph over
+   * other nodes, each standing for an item (`item(v)`, for depth and key; ties by node id).
    */
-  private kahn(ed: EdgeList, hooks: KahnHooks): { order: number[]; drops: number } | null {
-    const n = this.it.length;
+  private kahn(
+    ed: EdgeList,
+    hooks: KahnHooks,
+    nodes?: { readonly count: number; readonly item: (v: number) => number },
+  ): { order: number[]; drops: number } | null {
+    const n = nodes?.count ?? this.it.length;
+    const item = nodes?.item ?? ((v: number): number => v);
     const efrom = ed.from;
     const eto = ed.to;
     const estr = ed.str;
@@ -2676,9 +2934,10 @@ class EpochSolver {
     const dropped = new Uint8Array(E);
     const placed = new Uint8Array(n);
     const better = (x: number, y: number): boolean => {
-      const d = this.depth0[x]! - this.depth0[y]!;
+      const d = this.depth0[item(x)]! - this.depth0[item(y)]!;
       if (d !== 0) return d < 0; // raw values: a strict weak order (E-Q06)
-      return cmpStr(this.it[x]!.key, this.it[y]!.key) < 0;
+      const c = cmpStr(this.it[item(x)]!.key, this.it[item(y)]!.key);
+      return c !== 0 ? c < 0 : x < y; // equal keys: a split item's two nodes (A1-2c)
     };
     const heap = new MinHeap(better);
     for (let i = 0; i < n; i++) if (indeg[i] === 0) heap.push(i);
@@ -2687,9 +2946,14 @@ class EpochSolver {
     const edgeLess = (a: number, b: number): boolean => {
       if (estr[a] !== estr[b]) return estr[a]! < estr[b]!;
       if (ediff[a] !== ediff[b]) return ediff[a]! < ediff[b]!;
-      const f = cmpStr(this.it[efrom[a]!]!.key, this.it[efrom[b]!]!.key);
+      const f = cmpStr(this.it[item(efrom[a]!)]!.key, this.it[item(efrom[b]!)]!.key);
       if (f !== 0) return f < 0;
-      return cmpStr(this.it[eto[a]!]!.key, this.it[eto[b]!]!.key) < 0;
+      const t = cmpStr(this.it[item(eto[a]!)]!.key, this.it[item(eto[b]!)]!.key);
+      if (t !== 0) return t < 0;
+      // equal keys only for a split item's two nodes (A1-2c): node ids, then edge index
+      if (efrom[a] !== efrom[b]) return efrom[a]! < efrom[b]!;
+      if (eto[a] !== eto[b]) return eto[a]! < eto[b]!;
+      return a < b;
     };
     let drops = 0;
     let tarjanWork = 0;
@@ -2823,13 +3087,31 @@ class EpochSolver {
   // Orders: one (Phase 1b, fallback) or one per group with depth copies (A1-2b)
   // -------------------------------------------------------------------------------------------
 
-  private keyed(epochs: readonly IndexEpoch[], use?: readonly (readonly number[])[]): DepthEpoch[] {
+  /**
+   * Output copy number of copy `c` of item index `i`: the second item of a split item (A1-2c)
+   * continues its original's copy numbers. `copies[i]`: copies per index (default 1 each).
+   */
+  private copyOffsets(copies?: readonly number[]): Int32Array {
+    const off = new Int32Array(this.it.length);
+    for (let i = this.n0; i < this.it.length; i++) off[i] = copies?.[this.base[i]!] ?? 1;
+    return off;
+  }
+
+  private keyed(
+    epochs: readonly IndexEpoch[],
+    off: Int32Array,
+    use?: readonly (readonly number[])[],
+  ): DepthEpoch[] {
     return epochs.map((e, k) => ({
       t0: e.t0,
       t1: e.t1,
-      order: e.order.map((i, q) => copyKey(this.it[i]!.key, use?.[k]?.[q] ?? 0)),
+      order: e.order.map((i, q) => this.copyKeyOf(i, off[i]! + (use?.[k]?.[q] ?? 0))),
       approximate: e.approximate,
     }));
+  }
+
+  private copyKeyOf(i: number, copy: number): string {
+    return copyKey(this.it[i]!.key, copy);
   }
 
   /** One DOM order for the whole loop, no copies (Phase 1b; the fallback of the copy path). */
@@ -2838,22 +3120,27 @@ class EpochSolver {
     const sink: Diagnostic[] = [];
     const { epochs, transitions } = this.buildEpochs([order], undefined, spans, sink);
     for (const d of sink) this.diags.add(d);
+    const off = this.copyOffsets();
+    this.extraCopies = this.splitCount;
     return {
-      epochs: this.keyed(epochs),
+      epochs: this.keyed(epochs, off),
       transitions,
-      order: order.map((i) => this.it[i]!.key),
+      order: order.map((i) => this.copyKeyOf(i, off[i]!)),
       items: this.drawItems(),
     };
   }
 
   /**
-   * §9.4 with copies. Undefined (nothing changed) when no pair needs a copy, when certification
-   * ran over its budget, or when copies do not fit (`budget/depth-copies`, `budget/time`): the
-   * caller then takes the one-order path.
+   * §9.4 with copies. Taken when a pair needs a copy (its certified or forced direction changes)
+   * or when the certified and forced edges close a cycle that holds only across intervals
+   * (A1-2c). Undefined (nothing changed) otherwise, when certification ran over its budget, or
+   * when copies do not fit (`budget/depth-copies`, `budget/time`): the caller then takes the
+   * one-order path.
    */
   private withCopies(spans: readonly Span[]): Ordered | undefined {
     const pairs = this.sortedPairs();
-    if (!pairs.some(EpochSolver.strongConflict)) return undefined;
+    const flips = pairs.some(EpochSolver.strongConflict);
+    if (!flips && !this.strongCyclic(pairs)) return undefined;
     if (this.degraded) {
       // already reported as budget/time by the certification
       this.noCopy = "depth certification ran over its work budget";
@@ -2894,16 +3181,256 @@ class EpochSolver {
         }
       }
     }
-    // Groups: maximal runs of final intervals in which no conflicting pair changes direction
-    // (greedy, so as few orders as possible). Both directions inside one interval (only at
-    // tolerance-wide overlaps): the loop-wide winner, approximate.
+    // A1-2c: the certified and forced edges that can lie on a cycle (inside one strongly
+    // connected component of those edges and both directions of every conflict), per interval.
+    const watch = this.watchedEdges(base, conflicts, work);
+    const grouped =
+      (watch && this.groupIntervals(conflicts, at, watch)) ??
+      this.groupIntervals(conflicts, at, null)!;
+    // without a flipping pair, only a cycle across intervals brings us here: one group is the
+    // one-order path unchanged (a cycle inside one interval needs a dropped edge either way)
+    if (!flips && grouped.groups.length < 2) return undefined;
+    const { groups, groupOf, pending, localApprox } = grouped;
+    work = 2 * groups.length * (2 * n + base.from.length + conflicts.length); // with retries
+    if (work > budgets.maxPhaseWork) return this.copiesOverWork(work);
+    // Static items keep one order in every group (a chain of edges that is never dropped), so
+    // they never need a copy: the order of the loop-wide edges alone decides it, unless that
+    // order closes cycles inside groups which an order derived from the groups avoids (A1-2c).
+    const isStatic = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      isStatic[i] = this.chain[i]!.every((m) => vecCmp(this.mv[m]!.from, this.mv[m]!.to) === 0)
+        ? 1
+        : 0;
+    }
+    const abort = { drop: () => undefined, release: () => false, released: () => undefined };
+    const ref = this.kahn(base, abort);
+    if (ref === null) return this.copiesOverCycles();
+    const chainA = ref.order.filter((i) => isStatic[i]);
+    const orderAll = (chain: readonly number[]): Grouped | null => {
+      const out: Grouped = { orders: [], drops: 0, inside: 0, cycles: [], approx: [] };
+      for (const g of groups) {
+        const ga = F_[g.k0]!.ta;
+        const gb = F_[g.k1 - 1]!.tb;
+        // All loop-wide edges keep the orders of neighbouring groups alike (fewer copies); if
+        // they close a cycle that costs a certified or forced edge, the group's own edges (those
+        // that occur in it, §9.3 step 4) are tried too and the one with fewer such drops is kept.
+        let best = this.orderGroup(base, chain, conflicts, g.dirs, ga, gb, false);
+        if (best === null) return null;
+        if (best.strong > 0) {
+          const own = this.orderGroup(base, chain, conflicts, g.dirs, ga, gb, true);
+          if (own === null) return null;
+          if (own.strong < best.strong) best = own;
+        }
+        out.drops += best.drops;
+        out.inside += best.cycles.length;
+        out.cycles.push(...best.cycles);
+        out.approx.push(...best.approx);
+        out.orders.push(best.order);
+      }
+      return out;
+    };
+    const withA = orderAll(chainA);
+    if (withA === null) return this.copiesOverCycles();
+    const tries: Grouped[] = [withA];
+    if (withA.inside > 0 && chainA.length > 1) {
+      const chainB = this.groupChain(groups, base, conflicts, isStatic);
+      if (chainB !== undefined && !sameList(chainB, chainA)) {
+        const withB = orderAll(chainB);
+        if (withB !== null && withB.inside < withA.inside) tries.unshift(withB);
+      }
+    }
+    // Epochs over the groups, then the copies; undone when the copies do not fit.
+    const limit = Math.max(
+      0,
+      Math.floor(Math.max(0, budgets.maxCopyRatio) * this.n0) - this.splitCount,
+    );
+    let failed: CopyPlanResult | undefined;
+    for (const t of tries) {
+      const flags = F_.map((f) => f.approximate);
+      const mark = this.approxRanges.length;
+      this.approxRanges.push(...localApprox, ...t.approx);
+      const sink: Diagnostic[] = [];
+      const built = this.buildEpochs(t.orders, groupOf, spans, sink);
+      const plan = planCopies(
+        n,
+        t.orders[groupOf[0]!]!,
+        built.epochs.map((e) => e.order),
+        (i) => isStatic[i] === 1,
+        limit,
+      );
+      if (!plan.ok) {
+        F_.forEach((f, k) => {
+          f.approximate = flags[k]!;
+        });
+        this.approxRanges.length = mark;
+        failed = plan;
+        continue;
+      }
+      for (const [d, k] of [...pending, ...t.cycles]) this.diags.add(d, k);
+      for (const d of sink) this.diags.add(d);
+      this.cycleDrops += t.drops;
+      this.copyConflicts += both;
+      this.extraCopies = plan.plan.extra + this.splitCount;
+      const off = this.copyOffsets(plan.plan.copies);
+      return {
+        epochs: this.keyed(built.epochs, off, plan.plan.use),
+        transitions: built.transitions,
+        order: plan.plan.dom.map(([i, c]) => this.copyKeyOf(i, off[i]! + c)),
+        items: this.drawItems(plan.plan.copies),
+      };
+    }
+    if (failed !== undefined && !failed.ok && failed.reason === "budget") {
+      this.noCopy = "beyond the copy budget, budget/depth-copies";
+      this.diags.add({
+        severity: "warning",
+        code: "budget/depth-copies",
+        path: "",
+        message: `The depth order needs more than ${limit} depth copies (${budgets.maxCopyRatio} × ${this.n0} items); the epochs are merged into one order and approximate.`,
+        params: { limit, items: this.n0 },
+      });
+    } else if (failed !== undefined && !failed.ok && failed.reason === "static") {
+      // The static chain keeps every static item in one order, so this needs a fallback
+      // release inside a group; reported rather than silent.
+      const key = this.it[failed.item]!.key;
+      this.noCopy = `the static item "${key}" would need one`;
+      this.diags.add({
+        severity: "info",
+        code: "assembly/depth-approx",
+        path: this.pointer(key),
+        message: `The static item "${key}" would need a depth copy (static items are never copied); the epochs are merged into one order and approximate.`,
+        params: { item: key, copy: true },
+      });
+    }
+    return undefined;
+  }
+
+  /** The certified and forced loop-wide edges close a cycle (no flipping pair needed). */
+  private strongCyclic(pairs: readonly PairEdges[]): boolean {
+    const n = this.it.length;
+    const out: number[][] = Array.from({ length: n }, () => []);
+    const indeg = new Int32Array(n);
+    for (const pe of pairs) {
+      const keep = this.winner(pe)!;
+      if (keep.d.strength < C) continue;
+      const [a, b] = keep.fwd ? [pe.i, pe.j] : [pe.j, pe.i];
+      out[a]!.push(b);
+      indeg[b]!++;
+    }
+    const st: number[] = [];
+    for (let i = 0; i < n; i++) if (indeg[i] === 0) st.push(i);
+    let placed = 0;
+    while (st.length > 0) {
+      const v = st.pop()!;
+      placed++;
+      for (const w of out[v]!) if (--indeg[w]! === 0) st.push(w);
+    }
+    return placed < n;
+  }
+
+  /**
+   * Certified and forced base edges that can lie on a cycle of some group (A1-2c): those inside
+   * one strongly connected component of the graph of these edges plus both directions of every
+   * conflict (a cycle of a subgraph lies in one component of the whole). Per final interval, the
+   * watched edges that occur in it. Undefined over the phase-work budget (`work` so far).
+   */
+  private watchedEdges(
+    base: EdgeList,
+    conflicts: readonly PairEdges[],
+    work: number,
+  ): Watch | undefined {
+    const n = this.it.length;
+    const adj: number[][] = Array.from({ length: n }, () => []);
+    for (let e = 0; e < base.from.length; e++)
+      if (base.str[e]! >= C) adj[base.from[e]!]!.push(base.to[e]!);
+    for (const pe of conflicts) {
+      adj[pe.i]!.push(pe.j);
+      adj[pe.j]!.push(pe.i);
+    }
+    const comp = sccIds(n, adj);
+    const at: number[][] = Array.from({ length: this.finals.length }, () => []);
+    for (let e = 0; e < base.from.length; e++) {
+      if (base.str[e]! < C || comp[base.from[e]!] !== comp[base.to[e]!]) continue;
+      const occ = base.occ[e]!;
+      for (let q = 0; q < occ.length; q += 2) {
+        const [k0, k1] = this.finalRange(occ[q]!, occ[q + 1]!);
+        work += k1 - k0;
+        if (work > this.budgets.maxPhaseWork) return undefined;
+        for (let k = k0; k < k1; k++) at[k]!.push(e);
+      }
+    }
+    return { at, from: base.from, to: base.to };
+  }
+
+  /**
+   * Greedy maximal runs of final intervals (copy groups) in which no conflicting pair changes
+   * direction (A1-2b) and, with `watch`, the certified and forced edges occurring in the run
+   * close no cycle (A1-2c: a run is cut where the next interval would close one, so a cycle that
+   * holds only across intervals costs a copy, not a dropped edge). An edge that closes a cycle
+   * within a group's first interval alone is left to the cycle rule (it is dropped either way).
+   * Both directions of a pair inside one interval (only at tolerance-wide overlaps): the
+   * loop-wide winner, approximate. Null when cycle tracking runs over the phase-work budget.
+   */
+  private groupIntervals(
+    conflicts: readonly PairEdges[],
+    at: readonly (readonly number[])[],
+    watch: Watch | null,
+  ): {
+    groups: CopyGroup[];
+    groupOf: Int32Array;
+    pending: [Diagnostic, string][];
+    localApprox: number[];
+  } | null {
+    const F_ = this.finals;
+    const K = F_.length;
+    const n = this.it.length;
     const localApprox: number[] = [];
     /** Diagnostics reported only when the copy path is taken. */
     const pending: [Diagnostic, string][] = [];
     const dirOf = new Int8Array(conflicts.length).fill(-1);
     let touched: number[] = [];
     const groupOf = new Int32Array(K);
-    const groups: { k0: number; k1: number; dirs: number[] }[] = [];
+    const groups: CopyGroup[] = [];
+    // The group's tracked graph: adjacency, a stack of pushed tails (undo, reset), edge flags.
+    const tOut: number[][] = watch ? Array.from({ length: n }, () => []) : [];
+    const tails: number[] = [];
+    const inT = new Uint8Array(watch ? watch.from.length : 0);
+    const inList: number[] = [];
+    const ignored = new Uint8Array(inT.length);
+    const seen = new Int32Array(watch ? n : 0);
+    let stamp = 0;
+    let dfs = 0;
+    let over = false;
+    const stack: number[] = [];
+    /** dst reachable from src in the tracked graph. */
+    const reaches = (src: number, dst: number): boolean => {
+      if (src === dst) return true;
+      stamp++;
+      stack.length = 0;
+      stack.push(src);
+      seen[src] = stamp;
+      while (stack.length > 0) {
+        const v = stack.pop()!;
+        const out = tOut[v]!;
+        dfs += 1 + out.length;
+        for (const w of out) {
+          if (w === dst) return true;
+          if (seen[w] !== stamp) {
+            seen[w] = stamp;
+            stack.push(w);
+          }
+        }
+      }
+      if (dfs > this.budgets.maxPhaseWork) over = true;
+      return false;
+    };
+    const push = (a: number, b: number): void => {
+      tOut[a]!.push(b);
+      tails.push(a);
+    };
+    const dirEnds = (code: number): [number, number] => {
+      const pe = conflicts[code >> 1]!;
+      return code & 1 ? [pe.j, pe.i] : [pe.i, pe.j];
+    };
     for (let k = 0; k < K; k++) {
       const raw = at[k]!;
       const codes: number[] = [];
@@ -2925,7 +3452,7 @@ class EpochSolver {
                 message: `"${a}" and "${b}" need both orders inside [${fmtT(F_[k]!.ta)}, ${fmtT(F_[k]!.tb)}] s (a tolerance-wide overlap); "${a}" is drawn first there, approximate.`,
                 params: { items: [a, b], t0: F_[k]!.ta, t1: F_[k]!.tb },
               },
-              `b${pe.i}/${pe.j}`,
+              `b${this.base[pe.i]}/${this.base[pe.j]}`,
             ]);
           }
           continue;
@@ -2937,11 +3464,56 @@ class EpochSolver {
         const c = codes[q]! >> 1;
         if (dirOf[c]! >= 0 && dirOf[c] !== (codes[q]! & 1)) fits = false;
       }
+      if (fits && watch) {
+        const mark = tails.length;
+        const markE = inList.length;
+        for (const e of watch.at[k]!) {
+          if (inT[e] || ignored[e]) continue;
+          if (reaches(watch.to[e]!, watch.from[e]!)) {
+            fits = false;
+            break;
+          }
+          push(watch.from[e]!, watch.to[e]!);
+          inT[e] = 1;
+          inList.push(e);
+        }
+        for (let q = 0; fits && q < codes.length; q++) {
+          if (dirOf[codes[q]! >> 1]! >= 0) continue;
+          const [a, b] = dirEnds(codes[q]!);
+          if (reaches(b, a)) fits = false;
+          else push(a, b);
+        }
+        if (!fits) {
+          while (tails.length > mark) tOut[tails.pop()!]!.pop();
+          while (inList.length > markE) inT[inList.pop()!] = 0;
+        }
+      }
       if (!fits) {
         for (const c of touched) dirOf[c] = -1;
         touched = [];
         groups.push({ k0: k, k1: k, dirs: [] });
+        if (watch) {
+          for (const a of tails) tOut[a]!.length = 0;
+          tails.length = 0;
+          for (const e of inList) inT[e] = 0;
+          inList.length = 0;
+          for (const e of watch.at[k]!) {
+            if (ignored[e]) continue;
+            if (reaches(watch.to[e]!, watch.from[e]!)) {
+              ignored[e] = 1;
+              continue;
+            }
+            push(watch.from[e]!, watch.to[e]!);
+            inT[e] = 1;
+            inList.push(e);
+          }
+          for (const code of codes) {
+            const [a, b] = dirEnds(code);
+            if (!reaches(b, a)) push(a, b);
+          }
+        }
       }
+      if (over) return null;
       const g = groups[groups.length - 1]!;
       for (const code of codes) {
         const c = code >> 1;
@@ -2953,95 +3525,59 @@ class EpochSolver {
       g.k1 = k + 1;
       groupOf[k] = groups.length - 1;
     }
-    work = 2 * groups.length * (2 * n + base.from.length + conflicts.length); // with retries
-    if (work > budgets.maxPhaseWork) return this.copiesOverWork(work);
-    // Static items keep one order in every group (a chain of edges that is never dropped), so
-    // they never need a copy: the order of the loop-wide edges alone decides it.
-    const isStatic = new Uint8Array(n);
-    for (let i = 0; i < n; i++) {
-      isStatic[i] = this.chain[i]!.every((m) => vecCmp(this.mv[m]!.from, this.mv[m]!.to) === 0)
-        ? 1
-        : 0;
-    }
-    const abort = { drop: () => undefined, release: () => false, released: () => undefined };
-    const ref = this.kahn(base, abort);
-    if (ref === null) return this.copiesOverCycles();
-    const chain = ref.order.filter((i) => isStatic[i]);
-    let drops = 0;
-    const cycles: [Diagnostic, string][] = [];
-    const orders: number[][] = [];
+    return { groups, groupOf, pending, localApprox };
+  }
+
+  /**
+   * A static chain derived from the groups (A1-2c): one graph in which every static item is one
+   * node and every moving item is a node per group, with each group's own edges (base edges that
+   * occur in it, and its conflict directions). A path from one static item to another there
+   * means the first must precede the second in some group, directly or through other static
+   * items, so a topological order of it (§9.3 cycle rule, Kahn release rule) keeps the chain off
+   * every cycle the groups' own edges do not already close. Undefined over the phase-work budget
+   * or the cycle budget.
+   */
+  private groupChain(
+    groups: readonly CopyGroup[],
+    base: EdgeList,
+    conflicts: readonly PairEdges[],
+    isStatic: Uint8Array,
+  ): number[] | undefined {
+    const n = this.it.length;
+    const F_ = this.finals;
+    const itemOf: number[] = Array.from({ length: n }, (_, i) => i);
+    const ed = newEdges();
+    let work = 0;
     for (const g of groups) {
+      work += n + base.from.length + g.dirs.length;
+      if (work > this.budgets.maxPhaseWork) return undefined;
       const ga = F_[g.k0]!.ta;
       const gb = F_[g.k1 - 1]!.tb;
-      // All loop-wide edges keep the orders of neighbouring groups alike (fewer copies); if they
-      // close a cycle that costs a certified or forced edge, the group's own edges (those that
-      // occur in it, §9.3 step 4) are tried too and the one with fewer such drops is kept.
-      let best = this.orderGroup(base, chain, conflicts, g.dirs, ga, gb, false);
-      if (best === null) return this.copiesOverCycles();
-      if (best.strong > 0) {
-        const own = this.orderGroup(base, chain, conflicts, g.dirs, ga, gb, true);
-        if (own === null) return this.copiesOverCycles();
-        if (own.strong < best.strong) best = own;
+      const local = new Map<number, number>();
+      const node = (i: number): number => {
+        if (isStatic[i]) return i;
+        let v = local.get(i);
+        if (v === undefined) {
+          v = itemOf.length;
+          itemOf.push(i);
+          local.set(i, v);
+        }
+        return v;
+      };
+      for (let e = 0; e < base.from.length; e++) {
+        if (!overlapsRange(base.occ[e]!, ga, gb)) continue;
+        addEdge(ed, node(base.from[e]!), node(base.to[e]!), base.str[e]!, base.diff[e]!, []);
       }
-      drops += best.drops;
-      cycles.push(...best.cycles);
-      localApprox.push(...best.approx);
-      orders.push(best.order);
-    }
-    // Epochs over the groups, then the copies; undone when the copies do not fit.
-    const flags = F_.map((f) => f.approximate);
-    const mark = this.approxRanges.length;
-    this.approxRanges.push(...localApprox);
-    const sink: Diagnostic[] = [];
-    const built = this.buildEpochs(orders, groupOf, spans, sink);
-    const limit = Math.floor(Math.max(0, budgets.maxCopyRatio) * n);
-    const plan = planCopies(
-      n,
-      orders[groupOf[0]!]!,
-      built.epochs.map((e) => e.order),
-      (i) => isStatic[i] === 1,
-      limit,
-    );
-    if (!plan.ok) {
-      F_.forEach((f, k) => {
-        f.approximate = flags[k]!;
-      });
-      this.approxRanges.length = mark;
-      if (plan.reason === "budget") {
-        this.noCopy = "beyond the copy budget, budget/depth-copies";
-        this.diags.add({
-          severity: "warning",
-          code: "budget/depth-copies",
-          path: "",
-          message: `The depth order needs more than ${limit} depth copies (${budgets.maxCopyRatio} × ${n} items); the epochs are merged into one order and approximate.`,
-          params: { limit, items: n },
-        });
-      } else {
-        // The static chain keeps every static item in one order, so this needs a fallback
-        // release inside a group; reported rather than silent.
-        const key = this.it[plan.item]!.key;
-        this.noCopy = `the static item "${key}" would need one`;
-        this.diags.add({
-          severity: "info",
-          code: "assembly/depth-approx",
-          path: this.pointer(key),
-          message: `The static item "${key}" would need a depth copy (static items are never copied); the epochs are merged into one order and approximate.`,
-          params: { item: key, copy: true },
-        });
+      for (const code of g.dirs) {
+        const pe = conflicts[code >> 1]!;
+        const d = code & 1 ? pe.bwd! : pe.fwd!;
+        const [a, b] = code & 1 ? [pe.j, pe.i] : [pe.i, pe.j];
+        addEdge(ed, node(a), node(b), d.strength, d.diff, []);
       }
-      return undefined;
     }
-    for (const [d, k] of [...pending, ...cycles]) this.diags.add(d, k);
-    for (const d of sink) this.diags.add(d);
-    this.cycleDrops += drops;
-    this.copyConflicts += both;
-    this.extraCopies = plan.plan.extra;
-    return {
-      epochs: this.keyed(built.epochs, plan.plan.use),
-      transitions: built.transitions,
-      order: plan.plan.dom.map(([i, c]) => copyKey(this.it[i]!.key, c)),
-      items: this.drawItems(plan.plan.copies),
-    };
+    const abort = { drop: () => undefined, release: () => false, released: () => undefined };
+    const r = this.kahn(ed, abort, { count: itemOf.length, item: (v) => itemOf[v]! });
+    return r === null ? undefined : r.order.filter((v) => v < n && isStatic[v]);
   }
 
   /**
@@ -3066,14 +3602,8 @@ class EpochSolver {
     approx: number[];
   } | null {
     const ed = newEdges();
-    const inGroup = (occ: readonly number[]): boolean => {
-      for (let q = 0; q < occ.length; q += 2) {
-        if (occ[q]! < gb - TIME_EPS && occ[q + 1]! > ga + TIME_EPS) return true;
-      }
-      return false;
-    };
     for (let e = 0; e < base.from.length; e++) {
-      if (own && !inGroup(base.occ[e]!)) continue;
+      if (own && !overlapsRange(base.occ[e]!, ga, gb)) continue;
       addEdge(ed, base.from[e]!, base.to[e]!, base.str[e]!, base.diff[e]!, base.occ[e]!);
     }
     for (let q = 0; q + 1 < chain.length; q++) addEdge(ed, chain[q]!, chain[q + 1]!, CHAIN, 0, []);
@@ -3105,7 +3635,7 @@ class EpochSolver {
           }
         }
         if (!inside) return;
-        this.cycleDiag(ed, e, `g${ed.from[e]}/${ed.to[e]}`, cycles);
+        this.cycleDiag(ed, e, `g${this.base[ed.from[e]!]}/${this.base[ed.to[e]!]}`, cycles);
       },
       release: () => false,
       released: () => undefined,
@@ -3300,15 +3830,22 @@ class EpochSolver {
     return { epochs, transitions };
   }
 
-  /** Draw items with `copies[i]` copies each (default 1); a clip applies to every copy. */
+  /**
+   * Draw items with `copies[i]` copies per index (default 1). A clip applies to every copy of a
+   * clipped index; a split item's second index (A1-2c) adds its unclipped copies after them.
+   */
   private drawItems(copies?: readonly number[]): AssemblyDrawItem[] {
     const clipOf = new Map(this.clips.map((c) => [c.item, c]));
-    return this.it.map((x, i) => {
+    const second = new Map<number, number>();
+    for (let i = this.n0; i < this.it.length; i++) second.set(this.base[i]!, i);
+    return this.it.slice(0, this.n0).map((x, i) => {
       const c = clipOf.get(x.key);
       const k = copies?.[i] ?? 1;
+      const j = second.get(i);
+      const total = k + (j === undefined ? 0 : (copies?.[j] ?? 1));
       const clips: Record<number, { clip: string; solid: string }> = {};
       if (c) for (let q = 0; q < k; q++) clips[q] = { clip: c.clip, solid: c.solid };
-      return { item: x.key, path: x.path ?? x.key, copies: k, ...(c ? { clips } : {}) };
+      return { item: x.key, path: x.path ?? x.key, copies: total, ...(c ? { clips } : {}) };
     });
   }
 }
@@ -3328,7 +3865,71 @@ function boxRel(a: Bounds, b: Bounds): -1 | 0 | 1 {
   return ab === ba ? 0 : ab ? 1 : -1;
 }
 
-function pushMap(m: Map<number, number[]>, k: number, v: number): void {
+/** Some `[ta, tb]` of the flat list `occ` overlaps the open range (ga, gb). */
+function overlapsRange(occ: readonly number[], ga: number, gb: number): boolean {
+  for (let q = 0; q < occ.length; q += 2) {
+    if (occ[q]! < gb - TIME_EPS && occ[q + 1]! > ga + TIME_EPS) return true;
+  }
+  return false;
+}
+
+/** Strongly connected component id per node (iterative Tarjan; ids in completion order). */
+function sccIds(n: number, adj: readonly (readonly number[])[]): Int32Array {
+  const index = new Int32Array(n).fill(-1);
+  const low = new Int32Array(n);
+  const onStack = new Uint8Array(n);
+  const comp = new Int32Array(n).fill(-1);
+  const st: number[] = [];
+  const callV: number[] = [];
+  const callE: number[] = [];
+  let counter = 0;
+  let comps = 0;
+  for (let root = 0; root < n; root++) {
+    if (index[root] !== -1) continue;
+    index[root] = low[root] = counter++;
+    st.push(root);
+    onStack[root] = 1;
+    callV.push(root);
+    callE.push(0);
+    while (callV.length > 0) {
+      const v = callV[callV.length - 1]!;
+      const ei = callE[callE.length - 1]!;
+      const out = adj[v]!;
+      if (ei < out.length) {
+        callE[callE.length - 1] = ei + 1;
+        const w = out[ei]!;
+        if (index[w] === -1) {
+          index[w] = low[w] = counter++;
+          st.push(w);
+          onStack[w] = 1;
+          callV.push(w);
+          callE.push(0);
+        } else if (onStack[w]) {
+          low[v] = Math.min(low[v]!, index[w]!);
+        }
+        continue;
+      }
+      callV.pop();
+      callE.pop();
+      if (callV.length > 0) {
+        const u = callV[callV.length - 1]!;
+        low[u] = Math.min(low[u]!, low[v]!);
+      }
+      if (low[v] === index[v]) {
+        for (;;) {
+          const w = st.pop()!;
+          onStack[w] = 0;
+          comp[w] = comps;
+          if (w === v) break;
+        }
+        comps++;
+      }
+    }
+  }
+  return comp;
+}
+
+function pushMap<T>(m: Map<number, T[]>, k: number, v: T): void {
   const l = m.get(k);
   if (l) {
     if (!l.includes(v)) l.push(v);

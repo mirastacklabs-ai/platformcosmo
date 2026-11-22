@@ -711,9 +711,9 @@ export interface PartTrack {
   /**
    * Clipped copies only: the clipping solid's TOTAL screen track (its own `host`, when it is
    * clipped itself, plus its motion), so nested inserts compose; else empty. A copy is clipped
-   * only if its motion relative to the solid has no component ⊥ the clip axis anywhere in the
-   * loop (§9.5); otherwise the crossing epochs fall back (Phase 1b) or use a separate clipped
-   * copy swapped with an unclipped one (Phase 3).
+   * only if its motion relative to the solid has no component ⊥ the clip axis while it is
+   * visible (§9.5): over the whole loop, or, for an item clipped only while it crosses (A1-2c),
+   * over its crossing epochs, with an unclipped copy (no `host`) for the rest of the loop.
    */
   readonly host: readonly TrackKey[];
   /**
