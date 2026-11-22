@@ -842,6 +842,9 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
       }),
     fit: (text, size, bold, maxWidth) => fit(text, size, bold, maxWidth),
     focusMargin: { side: MARGIN_FOCUS, bottom: labelSize + 6 },
+    // close-up levels fill the main scene's overview area (§8.4)
+    ...(extents.length > 0 ? { overviewArea: unionRects(extents) } : {}),
+    ...(boardsBuild?.levelFigure === undefined ? {} : { levelFigure: boardsBuild.levelFigure }),
   });
   if (asmResult) diagnostics.push(...asmResult.diagnostics);
   const asmBuild = asmResult !== undefined && "model" in asmResult ? asmResult : undefined;
@@ -1090,7 +1093,12 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
         const c = projection.project({ x: gx1, y, z });
         d += `M${fmt(a.x)} ${fmt(a.y)}L${fmt(c.x)} ${fmt(c.y)}`;
       }
-      layers.background.push(h("path", { class: `${P}-grid`, d }));
+      // with close-up levels the grid fades out with the main world (its own id, so the canvas
+      // background never fades: §8.4); without levels the bytes are as before
+      const faded = (scene.assemblies?.levels?.length ?? 0) > 0;
+      layers.background.push(
+        h("path", { ...(faded ? { id: `${P}-ly_grid` } : {}), class: `${P}-grid`, d }),
+      );
     }
   }
 
@@ -1118,19 +1126,27 @@ export function buildModelWithDiagnostics(inputs: ModelInputs): BuiltModel {
   }
   // The parts callouts and callout slots go inside each step's camera window (assembly §7.6),
   // which needs the final view box and focus rects.
-  const runPlace = (): void => {
-    if (asmBuild?.place === undefined) return;
-    const partial = { viewBox: vb, focusRects, assembly: asmBuild.model } as unknown as RenderModel;
-    asmBuild.place({
+  const runPlace = (): readonly Diagnostic[] => {
+    if (asmBuild?.place === undefined) return [];
+    const partial = {
       viewBox: vb,
-      pinned: [...(captionRect ? [captionRect] : []), ...Object.values(metricRects)],
-      window: (step) => {
-        const st = scene.timeline.find((s) => s.index === step);
-        return st === undefined ? undefined : zoomFor(partial, st)?.viewBox;
-      },
-    });
+      focusRects,
+      assembly: asmBuild.model,
+      ...(captionRect ? { captionRect } : {}),
+      metricRects,
+    } as unknown as RenderModel;
+    return (
+      asmBuild.place({
+        viewBox: vb,
+        pinned: [...(captionRect ? [captionRect] : []), ...Object.values(metricRects)],
+        window: (step) => {
+          const st = scene.timeline.find((s) => s.index === step);
+          return st === undefined ? undefined : zoomFor(partial, st)?.viewBox;
+        },
+      }) ?? []
+    );
   };
-  runPlace();
+  diagnostics.push(...runPlace());
   const missing = [
     ...new Set([
       ...missingGlyphs(displayText.join(""), "display"),

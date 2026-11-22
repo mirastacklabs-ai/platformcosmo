@@ -3,12 +3,12 @@
 exports[`snapshots of the Phase 1b examples > GPU server (§19.2) 1`] = `
 {
   "assets": 1,
-  "end3": "90c62bfd9b62cd8e",
+  "end3": "33ac8318a9bd0079",
   "epochs": 3,
   "items": 41,
-  "labels": 39,
+  "labels": 13,
   "loop": 21,
-  "rest": "964ac6470ed8048e",
+  "rest": "fe34ac2417b923cc",
   "settled": [
     undefined,
     4,
@@ -18,10 +18,10 @@ exports[`snapshots of the Phase 1b examples > GPU server (§19.2) 1`] = `
   ],
   "tracks": 41,
   "viewBox": {
-    "height": 522.06,
+    "height": 456.6,
     "width": 625.2,
     "x": -492.16,
-    "y": -186.08,
+    "y": -149.08,
   },
 }
 `;
@@ -29,12 +29,12 @@ exports[`snapshots of the Phase 1b examples > GPU server (§19.2) 1`] = `
 exports[`snapshots of the Phase 1b examples > engine teardown (§19.3) 1`] = `
 {
   "closure": undefined,
-  "end3": "0af8820651d0db10",
+  "end3": "22573a1fa7f4a0b6",
   "epochs": 31,
   "items": 26,
-  "labels": 14,
+  "labels": 11,
   "loop": 18,
-  "rest": "e9e808003f00411e",
+  "rest": "db883f9c5d55113e",
   "settled": [
     undefined,
     2.96,

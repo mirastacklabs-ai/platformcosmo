@@ -1312,7 +1312,10 @@ describe("determinism, bounds, 1.1 identity and agreement with validation", () =
 
   test("1.1 specs gain nothing: no assemblies, no assembly diagnostics", () => {
     const dir = new URL("../../../examples/", import.meta.url);
-    const files = readdirSync(dir).filter((f) => f.endsWith(".cosmo.json"));
+    // the 1.2.0 gallery story (D-4a) is the one example with assembly content
+    const files = readdirSync(dir).filter(
+      (f) => f.endsWith(".cosmo.json") && f !== "hall-to-heatsink.cosmo.json",
+    );
     expect(files.length).toBeGreaterThan(5);
     for (const f of files) {
       const g = scene(JSON.parse(readFileSync(new URL(f, dir), "utf8")) as PlatformCosmoSpec);

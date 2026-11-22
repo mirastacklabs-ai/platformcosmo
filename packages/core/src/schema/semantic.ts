@@ -11,6 +11,7 @@ import { closest, didYouMean, q } from "./suggest.js";
 import { assemblyDiagnostics, figureDiagnostics, isAssemblyPath } from "./assembly-semantic.js";
 import { UNRENDERED, unsupportedDiagnostics } from "./unsupported.js";
 import { assemblyPlanDiagnostics } from "../scene/assembly/plan-scene.js";
+import { closeupRefs } from "../scene/boards.js";
 
 /** Σ over every flow of ceil(rate × 2); shared formula with Track B (no path lengths needed). */
 export const PARTICLE_LIMIT = 2000;
@@ -221,12 +222,17 @@ export function semanticDiagnostics(
     const k = ids.get(ep)?.kind;
     return k === "group" || k === "row" || k === "aisle";
   };
+  /** Figures and storyboards a `closeup` names: drawn only in their levels (§8.4). */
+  const closeupOnly =
+    spec.figures === undefined && spec.storyboards === undefined
+      ? new Set<string>()
+      : closeupRefs(spec);
   /**
    * A figure or storyboard id is a camera focus target (R-1, R-2): the panel is framed (a
-   * figure with its moving sprites).
+   * figure with its moving sprites). A close-up-only one has no panel.
    */
   const isFigure = (ep: string): boolean =>
-    ids.get(ep)?.kind === "figure" || ids.get(ep)?.kind === "storyboard";
+    (ids.get(ep)?.kind === "figure" || ids.get(ep)?.kind === "storyboard") && !closeupOnly.has(ep);
   const unknownObject = (path: string, ep: string, what: string, allowAreas = false): void => {
     const slash = ep.indexOf("/");
     let message = `Unknown ${what} ${q(ep)}`;
@@ -446,7 +452,15 @@ export function semanticDiagnostics(
           { id: key },
         );
     }
-    if (
+    if (s.focus !== undefined && closeupOnly.has(s.focus)) {
+      err(
+        "assembly/unknown-target",
+        `${base}/focus`,
+        `Focus target ${q(s.focus)} is a close-up: it is drawn only where a "closeup" shows it`,
+        'Focus the close-up instance, e.g. "<host>/closeup"',
+        { id: s.focus },
+      );
+    } else if (
       s.focus !== undefined &&
       !isObject(s.focus) &&
       !isAreaRef(s.focus) &&

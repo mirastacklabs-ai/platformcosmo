@@ -702,14 +702,15 @@ describe("action targets and the guard (tracks §0)", () => {
     }
   });
 
-  test("validate with phases 1a and 1b lifted keeps the guard error and adds unknown-target for racks", () => {
+  test("validate with every phase lifted checks rack targets itself (no guard error)", () => {
     const r = validate({
       ...spec,
       steps: [{ assembly: [{ explode: "heat-sink" }, { implode: "r1/s" }] }],
     });
     const errors = codes(r.diagnostics.filter((d) => d.severity === "error"));
-    expect(errors).toContain("assembly/unsupported@/steps/0/assembly/1");
-    expect(errors).toContain("assembly/unknown-target@/steps/0/assembly/1/implode");
+    expect(errors.filter((e) => e.startsWith("assembly/unsupported"))).toEqual([]);
+    // a plain slot has no program of its own (§8.1)
+    expect(errors).toContain("assembly/unknown-program@/steps/0/assembly/1/implode");
     expect(errors.filter((e) => e.includes("/steps/0/assembly/0"))).toEqual([]);
   });
 });
@@ -849,10 +850,10 @@ describe("design examples", () => {
     expect(r.diagnostics.filter((d) => d.code.startsWith("schema/"))).toEqual([]);
     expect(r.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
     expect(r.valid).toBe(true);
-    // the 7.3 story still needs assemblies and racks: guarded, and its targets unknown
+    // the 7.3 story (assemblies, racks, close-ups) validates too since the phase 2 lift (D-4a)
     const story = validate(hallToSink);
-    expect(story.valid).toBe(false);
-    expect(story.diagnostics.some((d) => d.code === "assembly/unsupported")).toBe(true);
+    expect(story.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(story.valid).toBe(true);
   });
 
   test("the heat-sink example resolves to the expected SceneFlatBoard, plan and credits", () => {
@@ -928,13 +929,15 @@ describe("design examples", () => {
     ]);
   });
 
-  test("the 7.3 story's figure becomes a board next to the rest of the scene", () => {
-    const a = buildFigureScene(hallToSink)!.assemblies;
-    expect(a.boards.map((b) => [b.id, b.kind, b.width, b.images])).toEqual([
-      ["hs-install", "figure", 8, ["hs-base", "hs-sprite"]],
-    ]);
-    // only figure actions reach the figure plan
-    expect(a.plan.every((s) => s.actions.every((x) => x.target === "hs-install"))).toBe(true);
+  test("the 7.3 story's figure is a close-up only: no board in the main scene (§8.4)", () => {
+    const fs = buildFigureScene(hallToSink)!;
+    expect(fs.assemblies.boards).toEqual([]);
+    expect([...fs.figures.keys()]).toEqual([]);
+    expect([...fs.closeupFigures.keys()]).toEqual(["hs-install"]);
+    // its images and credits still belong to the scene (the close-up levels draw them)
+    expect(fs.assemblies.images).toEqual(["hs-base", "hs-sprite"]);
+    // the bare figure id plans nothing: actions name the close-up instances
+    expect(fs.assemblies.plan.every((s) => s.actions.length === 0)).toBe(true);
   });
 });
 
@@ -1043,5 +1046,75 @@ describe("boards, images and credits", () => {
     expect(da).toBe(JSON.stringify(diags(structuredClone(spec))));
     const fa = JSON.stringify([...buildFigureScene(spec)!.figures]);
     expect(fa).toBe(JSON.stringify([...buildFigureScene(structuredClone(spec))!.figures]));
+  });
+});
+
+describe("figure close-ups (D-4a, §8.4): instances are checked as figures, the bare id is no target", () => {
+  const story = (): PlatformCosmoSpec =>
+    [
+      ...readFileSync(
+        new URL("../../../docs/design/document-ingestion.md", import.meta.url),
+        "utf8",
+      ).matchAll(/```json\n([\s\S]*?)```/g),
+    ]
+      .map((m) => JSON.parse(m[1] as string) as PlatformCosmoSpec)
+      .find((s) => s.meta?.title === "From the hall to the heat sink")!;
+  const T = "r2/srv/closeup/board/cpu-1/closeup";
+  /** The story with the heat-sink step's actions (or focus) replaced; its errors. */
+  const errs = (actions: unknown[] | undefined, focus?: string): [string, string, string][] => {
+    const s = structuredClone(story()) as unknown as { steps: Record<string, unknown>[] };
+    const k = s.steps.findIndex((st) => st.focus === T);
+    if (actions !== undefined) s.steps[k]!.assembly = actions;
+    if (focus !== undefined) s.steps[k]!.focus = focus;
+    return validate(s)
+      .diagnostics.filter((d) => d.severity === "error")
+      .map((d) => [d.code, d.path.replace(/^\/steps\/\d+/, ""), d.message]);
+  };
+
+  test("the story as written is clean", () => {
+    expect(errs(undefined)).toEqual([]);
+  });
+
+  test.each([
+    [
+      "to past the stages",
+      [{ implode: T, to: 5 }],
+      "assembly/stage-out-of-range",
+      "/assembly/0/to",
+    ],
+    ["build", [{ build: T }], "assembly/figure-no-build", "/assembly/0/build"],
+    [
+      "a program",
+      [{ implode: T, program: "x" }],
+      "assembly/unknown-program",
+      "/assembly/0/program",
+    ],
+    ["a sprite path", [{ implode: `${T}/hs-1` }], "assembly/unknown-target", "/assembly/0/implode"],
+    ["backwards", [{ explode: T, to: 0 }], "assembly/explode-backwards", "/assembly/0/to"],
+    ["the bare id", [{ implode: "hs-install" }], "assembly/unknown-target", "/assembly/0/implode"],
+  ])("%s is reported", (_name, actions, code, path) => {
+    const e = errs(actions);
+    expect(e.map(([c, p]) => [c, p])).toEqual([[code, path]]);
+  });
+
+  test("messages name the close-up instance; the bare id says it is a close-up", () => {
+    expect(errs([{ implode: T, to: 5 }])[0]![2]).toBe(
+      `Figure close-up "${T}" has 1 stage; "to": 5 is out of range`,
+    );
+    expect(errs([{ implode: "hs-install" }])[0]![2]).toMatch(/"hs-install" is a close-up/);
+  });
+
+  test("a focus or set below the instance is refused, as build would ignore it", () => {
+    // build reports `semantic/unknown-focus` (no geometry) for it: validate now refuses it first
+    expect(errs(undefined, `${T}/hs-1`).map(([c, p]) => [c, p])).toEqual([
+      ["assembly/unknown-target", "/focus"],
+    ]);
+    expect(errs(undefined, `${T}/hs-1`)[0]![2]).toMatch(/inside the figure close-up/);
+  });
+
+  test("a focus on the bare id is refused; on the instance it is fine", () => {
+    expect(errs(undefined, "hs-install").map(([c, p]) => [c, p])).toEqual([
+      ["assembly/unknown-target", "/focus"],
+    ]);
   });
 });

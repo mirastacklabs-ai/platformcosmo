@@ -1057,8 +1057,13 @@ into a rack slot, the rack stands in a hall; the camera goes hall → row → ra
       "base": "hs-base",
       "pose": "exploded",
       "parts": [
-        { "id": "hs-1", "image": "hs-sprite", "seat": [180, 360], "exploded": [180, 120] },
-        { "id": "hs-2", "image": "hs-sprite", "seat": [370, 372], "exploded": [370, 132] }
+        {
+          "id": "hs-1",
+          "image": "hs-sprite",
+          "seat": [180, 280],
+          "exploded": [180, 80],
+          "label": "Heat sink"
+        }
       ]
     }
   ],
@@ -1142,7 +1147,7 @@ into a rack slot, the rack stands in a hall; the camera goes hall → row → ra
           "id": "psu",
           "type": "psu",
           "shape": "hw:psu",
-          "at": [330, 0, 4],
+          "at": [315, 4, 4],
           "size": [95, 200, 76],
           "label": "Power supply"
         },
@@ -1213,8 +1218,9 @@ into a rack slot, the rack stands in a hall; the camera goes hall → row → ra
       "focus": "r2/srv/closeup",
       "duration": 8
     },
+    { "caption": "The board: two CPU sockets", "focus": "r2/srv/closeup/board", "duration": 3 },
     {
-      "caption": "CPU 1: seating the heat sinks",
+      "caption": "CPU 1: seating its heat sink",
       "assembly": [{ "implode": "r2/srv/closeup/board/cpu-1/closeup" }],
       "focus": "r2/srv/closeup/board/cpu-1/closeup",
       "duration": 5
@@ -1240,9 +1246,18 @@ Fidelity per level: in the hall and rack views `r2/srv` is the DC pack's 2U box;
 `r2/srv/closeup` cross-fades to the `srv-2u` close-up instance (true scale: 430 × 700 × 85 mm against the DC device box,
 `size-mismatch` above 10%); `board` is the plan template at 13 × 12 in, fitted into its
 `size`; focusing `…/cpu-1/closeup` cross-fades to that socket's instance of the heat-sink
-figure (drawn exploded, `pose: "exploded"`, so the implode seats the heat sinks; the retention
-clip is in the same sprite group as its heat sink, §6.1), fitted to the socket's zoomed screen
-rect. `cpu-2` has its own instance. Leaving each focus reverses the cross-fade.
+figure (drawn exploded, `pose: "exploded"`, so the implode seats the heat sink; the retention
+clip is in the same sprite group as its heat sink, §6.1), growing from the socket's zoomed screen
+rect. The figure shows one socket and its heat sink, so the close-up of `cpu-1` depicts exactly
+its host. `cpu-2` has its own instance. Leaving each focus reverses the cross-fade.
+
+The figure is drawn only in its close-ups: a figure (or storyboard) that some `closeup` names is
+not a panel of the main scene, and its bare id is no action or focus target (assemblies §8.4).
+Each level is drawn at its own scale (its projection magnified to fill the overview area), the
+board step zooms inside the server's level, and the heat-sink level is the figure itself, fitted
+to the same area. The gallery example `examples/hall-to-heatsink.cosmo.json` is this spec with
+synthetic images (a line-art board and one heat-sink sprite, drawn by
+`scripts/gen-example-figures.mjs` and embedded as data URIs, so the example needs no files).
 
 ### 7.4 Storyboard (tier A), generic
 
