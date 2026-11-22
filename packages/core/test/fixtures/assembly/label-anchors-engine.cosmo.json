@@ -1,0 +1,256 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "Four-cylinder inline engine",
+    "description": "Exploded view in three stages."
+  },
+  "assemblies": [
+    {
+      "id": "engine",
+      "label": "Inline-four engine",
+      "units": "mm",
+      "fit": 14,
+      "parts": [
+        {
+          "id": "block",
+          "shape": "auto:block-i4",
+          "at": [0, 0, 0],
+          "size": [420, 230, 260],
+          "role": "body",
+          "label": "Cylinder block"
+        },
+        {
+          "id": "crankshaft",
+          "shape": "auto:crankshaft",
+          "at": [0, 55, 20],
+          "size": [420, 120, 120],
+          "role": "internal",
+          "label": "Crankshaft"
+        },
+        {
+          "id": "oil-pan",
+          "shape": "auto:oil-pan",
+          "at": [0, 0, -90],
+          "size": [420, 230, 90],
+          "role": "cover",
+          "label": "Oil pan"
+        },
+        {
+          "id": "head-gasket",
+          "shape": "plate",
+          "at": [0, 0, 260],
+          "size": [420, 230, 4],
+          "tone": "muted",
+          "label": "Head gasket"
+        },
+        {
+          "id": "head",
+          "shape": "auto:head",
+          "at": [0, 0, 264],
+          "size": [420, 230, 100],
+          "label": "Cylinder head"
+        },
+        {
+          "id": "valve-cover",
+          "shape": "auto:valve-cover",
+          "at": [10, 15, 364],
+          "size": [400, 200, 70],
+          "role": "cover",
+          "label": "Valve cover"
+        },
+        {
+          "id": "intake",
+          "shape": "auto:intake",
+          "at": [20, 230, 274],
+          "size": [380, 110, 90],
+          "label": "Intake manifold"
+        },
+        {
+          "id": "exhaust",
+          "shape": "auto:exhaust",
+          "at": [20, -90, 274],
+          "size": [380, 90, 80],
+          "label": "Exhaust manifold"
+        },
+        {
+          "id": "pr-1",
+          "label": "Piston and rod 1",
+          "parts": [
+            {
+              "id": "rod",
+              "shape": "auto:rod",
+              "at": [36, 90, 140],
+              "size": [24, 50, 100]
+            },
+            {
+              "id": "piston",
+              "shape": "auto:piston",
+              "at": [19, 74, 194],
+              "size": [82, 82, 66]
+            }
+          ]
+        },
+        {
+          "id": "pr-2",
+          "label": "Piston and rod 2",
+          "parts": [
+            {
+              "id": "rod",
+              "shape": "auto:rod",
+              "at": [136, 90, 140],
+              "size": [24, 50, 100]
+            },
+            {
+              "id": "piston",
+              "shape": "auto:piston",
+              "at": [119, 74, 194],
+              "size": [82, 82, 66]
+            }
+          ]
+        },
+        {
+          "id": "pr-3",
+          "label": "Piston and rod 3",
+          "parts": [
+            {
+              "id": "rod",
+              "shape": "auto:rod",
+              "at": [236, 90, 140],
+              "size": [24, 50, 100]
+            },
+            {
+              "id": "piston",
+              "shape": "auto:piston",
+              "at": [219, 74, 194],
+              "size": [82, 82, 66]
+            }
+          ]
+        },
+        {
+          "id": "pr-4",
+          "label": "Piston and rod 4",
+          "parts": [
+            {
+              "id": "rod",
+              "shape": "auto:rod",
+              "at": [336, 90, 140],
+              "size": [24, 50, 100]
+            },
+            {
+              "id": "piston",
+              "shape": "auto:piston",
+              "at": [319, 74, 194],
+              "size": [82, 82, 66]
+            }
+          ]
+        }
+      ],
+      "programs": [
+        {
+          "id": "suggested",
+          "label": "Engine: three-stage explode",
+          "stages": [
+            {
+              "distance": "auto",
+              "order": "outside-in",
+              "stagger": 0.08,
+              "duration": 0.8,
+              "labels": "show",
+              "label": "Top end",
+              "parts": ["valve-cover", "head", "head-gasket", "intake", "exhaust"],
+              "direction": "lift",
+              "overrides": {
+                "intake": {
+                  "direction": "+y"
+                },
+                "exhaust": {
+                  "direction": "-y"
+                }
+              }
+            },
+            {
+              "distance": "1.6x",
+              "order": "outside-in",
+              "stagger": 0.08,
+              "duration": 0.8,
+              "labels": "show",
+              "label": "Pistons and rods",
+              "parts": ["pr-*"],
+              "direction": "+z"
+            },
+            {
+              "distance": "auto",
+              "order": "outside-in",
+              "stagger": 0.08,
+              "duration": 0.8,
+              "labels": "show",
+              "label": "Crankshaft and oil pan",
+              "parts": ["crankshaft", "oil-pan"],
+              "direction": "-z",
+              "overrides": {
+                "crankshaft": {
+                  "direction": "-z",
+                  "distance": "0.6x"
+                },
+                "oil-pan": {
+                  "distance": "1.8x"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "program": "suggested"
+    }
+  ],
+  "steps": [
+    {
+      "caption": "Engine assembled",
+      "duration": 2
+    },
+    {
+      "caption": "Top end: valve cover, head, gasket, manifolds",
+      "assembly": [
+        {
+          "explode": "engine",
+          "program": "suggested",
+          "to": 1
+        }
+      ],
+      "duration": 3
+    },
+    {
+      "caption": "Pistons and connecting rods",
+      "assembly": [
+        {
+          "explode": "engine",
+          "program": "suggested",
+          "to": 2
+        }
+      ],
+      "duration": 3
+    },
+    {
+      "caption": "Crankshaft and oil pan",
+      "assembly": [
+        {
+          "explode": "engine",
+          "program": "suggested",
+          "to": 3
+        }
+      ],
+      "duration": 3
+    },
+    {
+      "caption": "Back together",
+      "assembly": [
+        {
+          "implode": "engine",
+          "program": "suggested"
+        }
+      ],
+      "duration": 4
+    }
+  ]
+}

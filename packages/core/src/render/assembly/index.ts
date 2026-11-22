@@ -103,7 +103,6 @@ export interface AssemblyRenderContext {
   readonly fs: number;
   readonly text: (o: TextSpec) => SvgElement;
   readonly fit: (text: string, size: number, bold: boolean, maxWidth: number) => string;
-  readonly nudge: (box: Rect, placed: readonly Rect[]) => { dy: number };
   /** Scene objects that share the depth order (default none, see model.ts). */
   readonly statics?: readonly StaticItem[];
   readonly budgets?: Partial<DepthBudgets>;
@@ -294,7 +293,6 @@ function buildGroup(ctx: AssemblyRenderContext, input: GroupInput): GroupBuild {
     fs: ctx.fs,
     text: ctx.text,
     fit: ctx.fit,
-    nudge: ctx.nudge,
     assemblies,
     labelMode: (id) => specAsm.get(input.templateOf?.get(id) ?? id)?.labels ?? "exploded",
     leaves,

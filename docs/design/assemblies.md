@@ -321,13 +321,38 @@ reported although a clear column exists (a false positive; use a side origin).
 
 When a stage has `labels: "show"`, each moved leaf (or moved sub-assembly) shows its `label`
 (and `detail` lines when `details`) once it arrives (fade in over the last 20% of its move),
-and hides at the start of the reverse move. Placement is computed once per final pose: eight
-candidate boxes around the part's screen bounding box at 18 px, preferring the side of the
-part's screen motion vector, then clockwise from it; the first box not overlapping placed
-labels or other parts' final boxes wins, else the first candidate nudged by the existing
-`nudgeLabel`. Leader: a 1 px line from the nearest point of the part's silhouette box to the
-label box, `leaders: false` removes it. Labels move with copy 0 of their part (same track) and
-sit in the `labels` layer. `assemblies[].labels: "always"` also prints every leaf's label
+and hides at the start of the reverse move. A labelled node that no stage moves (the chassis, an engine block) shows its label with the
+first `labels: "show"` stage of its assembly and hides with the implode or the loop closure; it
+is placed after the moved ones. A node that moves only as part of a labelled ancestor
+(sub-assembly) is named by that ancestor's label and gets none of its own, and so does a leaf
+of a `labels: "always"` assembly (it has its top-face label). Without a `labels: "show"` stage
+in its assembly, or under a labelled ancestor, the label is reported as `assembly/label-omitted`.
+
+Placement is computed once per node, at the pose it first shows in: eight candidate boxes
+around the node's visible screen extent at 18 px (then at 36 and 54 px), preferring the side of
+the node's screen motion vector, then clockwise from it. The first box that covers no other
+showing label (at its pose then), no showing label's leader end, and no other part's projected
+hull (a part whose hull holds the node's own, a carrier such as a board, is skipped), whose
+leader crosses no showing label and is crossed by no showing label's leader, with a leader of
+at most 54 px, wins; this is checked at the pose the label shows in and at the end of
+each later stage while it is up (at most 6 of them). When no candidate is free, the one covering
+the least wins (leader ends, then leader crossings, then labels, then parts, then leader length).
+
+Leader: a 1 px line from an anchor on the part to the label box, `leaders: false` removes it.
+The anchor is the nearest of the part's surface samples (a grid of points on each of the three
+viewer-facing faces of every solid primitive, thinned per primitive for large nodes) that are in
+view, i.e. not behind another part along the view ray, at the pose the label shows in and,
+among those, at the end of the most later stages while the label is up (poses between stage
+ends are not sampled); samples whose face neighbours are in view too are preferred, so the
+leader does not end on the edge of what covers it. The leader therefore ends on the part's own
+geometry, also for thin plates (whose screen box is mostly empty) and for parts lifted under a
+plate. A part partly hidden is placed around its visible samples; one covered everywhere is
+searched on a finer grid, and if nothing shows at all the anchor is on its hidden surface
+nearest the label. Hollow `tray` and `ring` primitives do not occlude. The work is bounded:
+occluder boxes are built once per time, culled to those overlapping the node, and a build stops
+testing occlusion after 2 million sample tests (later nodes are placed as if fully in view).
+Labels move with copy 0 of their part (same track) and sit in the `labels` layer.
+`assemblies[].labels: "always"` also prints every leaf's label
 upright on its projected top face at rest (truncated to fit, never skewed, like icons; for plans
 and board layouts), switching to leader labels while exploded; `never` disables part labels.
 `fade: "unselected"` dims (opacity 0.25) the owner's leaves not
@@ -1172,7 +1197,7 @@ suggestions):
 | `assembly/duplicate-part`                                                                                       | error                                             | sibling ids collide (also after `count` expansion)                                                                                                                    |
 | `brick/off-grid`                                                                                                | warning                                           | non-integer stud or plate position                                                                                                                                    |
 | `assembly/image-unresolved`                                                                                     | info                                              | a pack shape's decal (`left`/`right`) faces away from the viewer after the part's turn and is not drawn; reported once per spec part, not per copy or `use` instance  |
-| `assembly/label-omitted`                                                                                        | info                                              | a `labels: always` top-face label whose text does not fit the part's top face is not drawn                                                                            |
+| `assembly/label-omitted`                                                                                        | info                                              | a `labels: always` top-face label whose text does not fit the part's top face is not drawn, or a labelled part no stage moves has no leader label: its assembly has no `labels: show` stage, or a labelled ancestor names it |
 | `image/not-found`, `image/unsafe-path`                                                                          | error                                             | CLI path resolution (did-you-mean over files in the directory); also a part image whose asset the renderer was not given (with or without `crop`; once per spec part) |
 | `image/format`, `image/format-mismatch`                                                                         | error                                             | not PNG, JPEG or SVG by magic bytes (WebP: convert to PNG or JPEG) / differ from extension                                                                            |
 | `image/too-large`, `image/too-many`                                                                             | error                                             | §11.4 caps                                                                                                                                                            |
