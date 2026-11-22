@@ -27,6 +27,7 @@ import {
   shrinkImage,
   trim,
   zoom,
+  ZOOM_RANGE,
   type FigureSourceInfo,
   type Raster,
   type Rect,
@@ -365,6 +366,9 @@ async function cropCmd(ctx: Ctx, args: string[]): Promise<number> {
   const diags: Diagnostic[] = [];
   const json = flag(p, "json");
   if (!pngExt(out)) diags.push(bad("output", "-o must end in .png"));
+  if (scale !== undefined && !(scale >= ZOOM_RANGE.min && scale <= ZOOM_RANGE.max)) {
+    diags.push(bad("scale", `scale must be from ${ZOOM_RANGE.min} to ${ZOOM_RANGE.max}`));
+  }
   const img = diags.length === 0 ? await loadImage(ctx, file!, diags) : undefined;
   let cur: Raster | undefined;
   if (img) {

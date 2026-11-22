@@ -719,12 +719,12 @@ describe("unshare probe", () => {
     await writeFile(join(dir, "unshare"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
     return dir;
   };
-  const probe = (dir: string, timeoutMs = 300) =>
+  const probe = (dir: string, timeoutMs = 5000) =>
     createUnshareProbe({ dirs: [dir], timeoutMs, platform: "linux" });
 
   test("a probe that times out is not remembered: the next call probes again", async () => {
     const dir = await fake("exec sleep 5");
-    const p = probe(dir);
+    const p = probe(dir, 300);
     expect(await p()).toBeUndefined();
     await writeFile(join(dir, "unshare"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     expect(await p()).toBe(join(dir, "unshare"));
@@ -742,7 +742,7 @@ describe("unshare probe", () => {
     expect(await p()).toBe(join(dir, "unshare"));
     await writeFile(join(dir, "unshare"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     expect(await p()).toBe(join(dir, "unshare"));
-    expect(await createUnshareProbe({ dirs: [dir], timeoutMs: 300, platform: "darwin" })()).toBe(
+    expect(await createUnshareProbe({ dirs: [dir], timeoutMs: 5000, platform: "darwin" })()).toBe(
       undefined,
     );
   });

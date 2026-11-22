@@ -1407,7 +1407,7 @@ image index and bbox in `params`.
 
 Raster operations (`@platformcosmo/assets`, §5) use these `asset/*` codes, with a bbox in
 `params` wherever a region applies: errors `bad-option` (`params.option` names the option:
-tolerance, maxPx, rect, region, top, minScore, scales, svgSize, maxShift, exclude, input; the
+tolerance, maxPx, scale, rect, region, top, minScore, scales, svgSize, maxShift, exclude, input; the
 figure pipeline adds manifest, with a JSON pointer `path` into the manifest, outputs for
 `assets check`, figureId, dir and label),
 `bad-raster`, `too-large`, `too-expensive`, `empty`, `flat` (no texture under the mask),

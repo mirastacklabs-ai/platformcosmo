@@ -5,8 +5,6 @@
 
 /** Typo hints as core diagnostics give them. The suggestion text and matching are not stable. */
 export { didYouMean } from "./schema/suggest.js";
-// Pack-authoring limits and helpers shared by the bundled packs.
-export { MAX_PARAM_DIAGNOSTICS, MIN_DIM, finishGeometry, sanitizeSize } from "./parts/define.js";
 /**
  * For the DC pack's rack assemblies (assemblies.md 8): the A2-3 program resolver and step planner
  * run over a rack tree exactly as over a spec assembly, and a turned tray's depth halves are

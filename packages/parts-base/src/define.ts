@@ -1,5 +1,10 @@
-import { Draft, definePack, type ParamSpec, type ParamValue } from "@platformcosmo/core";
-import { MAX_PARAM_DIAGNOSTICS } from "@platformcosmo/core/internal";
+import {
+  Draft,
+  MAX_PARAM_DIAGNOSTICS,
+  definePack,
+  type ParamSpec,
+  type ParamValue,
+} from "@platformcosmo/core";
 
 /** Validated shape params: integers, booleans and enum strings only. */
 export type HwParams = Record<string, ParamValue>;

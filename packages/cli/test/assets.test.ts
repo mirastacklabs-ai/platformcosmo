@@ -201,6 +201,21 @@ describe("assets crop", () => {
     }
     expect(await readdir(dir)).toEqual(["i.png"]);
   });
+  test("a bad --scale is reported even when the input cannot be read", async () => {
+    const dir = await tmp();
+    const r = await cli(dir, [
+      "crop",
+      "gone.png",
+      "--rect",
+      "0,0,5,5",
+      "--scale",
+      "9",
+      "-o",
+      "o.png",
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("asset/bad-option");
+  });
   test("output must be .png", async () => {
     const dir = await tmp();
     await writeFile(join(dir, "i.png"), encodePng(sample()));

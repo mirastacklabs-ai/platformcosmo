@@ -55,7 +55,14 @@ export {
   halfOf,
 } from "./geometry/index.js";
 export type { Half, PartFace, PartPrimitiveFaces, StudGridOptions } from "./geometry/index.js";
-export { Draft, definePack } from "./parts/define.js";
+export {
+  Draft,
+  MAX_PARAM_DIAGNOSTICS,
+  MIN_DIM,
+  definePack,
+  finishGeometry,
+  sanitizeSize,
+} from "./parts/define.js";
 export type {
   PackOptions,
   Pack,

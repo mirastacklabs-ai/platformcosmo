@@ -16,7 +16,7 @@ import type {
 } from "@platformcosmo/core";
 import type { AssemblyBuild, AssemblyBuildOptions } from "@platformcosmo/core/internal";
 
-/** Engine entry points the CLI calls (all from `@platformcosmo/core`). */
+/** Engine entry points the CLI calls (from `@platformcosmo/core`, and `/internal` for the first-party helpers). */
 export interface CoreApi {
   parseSpec: ParseSpecFn;
   validate: ValidateFn;

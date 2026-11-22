@@ -1,6 +1,10 @@
 import {
+  MAX_PARAM_DIAGNOSTICS,
+  MIN_DIM,
   definePack,
+  finishGeometry,
   round2,
+  sanitizeSize as clampSize,
   type Axis,
   type Box3,
   type ParamSpec as CoreParamSpec,
@@ -13,12 +17,6 @@ import {
   type QuarterTurn,
   type Vec3,
 } from "@platformcosmo/core";
-import {
-  MAX_PARAM_DIAGNOSTICS,
-  MIN_DIM,
-  finishGeometry,
-  sanitizeSize as clampSize,
-} from "@platformcosmo/core/internal";
 
 export { MAX_PARAM_DIAGNOSTICS, MIN_DIM };
 /** Brick params are booleans and enums only. */
