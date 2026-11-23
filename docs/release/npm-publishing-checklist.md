@@ -36,8 +36,10 @@ Open gaps (fix before or during the next release):
 1. **Actions may not create PRs** in this repo, so changesets pushes `changeset-release/main` but fails to
    open the PR. Open it by hand (`gh pr create --head changeset-release/main`), or allow it in Settings,
    Actions, General.
-2. **Tags and GitHub releases are not pushed** (checkout uses `persist-credentials: false`). The 0.1.0
-   tags and releases were created by hand with `gh release create <pkg>@<version> --target <sha>`.
+2. **Tags:** `changeset publish` tags only locally (checkout uses `persist-credentials: false`), and the
+   action creates no releases (`createGithubReleases: false`). The workflow's last step creates the one
+   GitHub release, `platformcosmo@<version>` with its CHANGELOG section, once that version is on npm. The
+   per-package 0.1.0 releases and tags were deleted on 2026-11-23; only `platformcosmo@0.1.0` remains.
 3. **Trusted publishing (OIDC) not set up.** The packages exist now, so it can be. A trusted publisher
    expires if no publish uses it within 2 days: add it for all 12 packages right before the next release,
    then remove `NODE_AUTH_TOKEN` from `release.yml` and delete `NPM_TOKEN`. Check that
@@ -81,7 +83,7 @@ unstable subpath (D85).
 8. **Release.** Merge the version PR (checks green; `npm-publish` approval if required). The following run
    publishes. To stop at any point set `RELEASE_ENABLED` back to `false`.
 9. **Verify after publish.** `npm view platformcosmo version` and each `@platformcosmo/*`; the npm page
-   shows the provenance badge and the source commit; the GitHub tags and releases exist; in a clean
+   shows the provenance badge and the source commit; the `platformcosmo@<version>` GitHub release exists; in a clean
    container: `npx platformcosmo --version` and render one example
    (`npx platformcosmo build examples/<spec>.cosmo.json`); the plugin's `plugin.json` and marketplace
    versions match (`scripts/pc run check:versions`).

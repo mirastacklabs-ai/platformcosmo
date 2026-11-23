@@ -9,8 +9,9 @@ Start here. Read this file, `PROGRESS.md`, `DECISIONS.md` (D1–D86), `CLAUDE.md
   (batch #118 carried #108–#113, #115, #116). Phase 2 is lifted (D-4a, #121). #126 draws racks in
   mirrored rows as a true half turn (D86; changed only the dc-hall and hall-to-heatsink bytes).
 - Published to npm 2026-11-23: `platformcosmo` 0.1.0 (plugin and marketplace 0.1.0) and the 11
-  `@platformcosmo/*` packages (icons-* 0.0.1, the rest 0.1.0), with provenance; GitHub releases per
-  package. Release record and pipeline gaps: `docs/release/npm-publishing-checklist.md` ("First release").
+  `@platformcosmo/*` packages (icons-* 0.0.1, the rest 0.1.0), with provenance; one GitHub
+  release, `platformcosmo@0.1.0` (per-package releases removed; `release.yml` now creates only the
+  CLI's). Release record and pipeline gaps: `docs/release/npm-publishing-checklist.md` ("First release").
 - CI gate (#129, D87): `scripts/ci-gate.sh` skips tests when no code changed since the last green
   main commit (docs, Markdown, `.changeset/`, `.github/`, version-only bumps are not code). Owner rule:
   never rerun tests on code that already passed. The owner OK'd merging PRs.
