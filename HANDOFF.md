@@ -22,8 +22,8 @@ Start here. Read this file, `PROGRESS.md`, `DECISIONS.md` (D1–D86), `CLAUDE.md
 
 1. Before the next release (the `NPM_TOKEN` expires 2026-11-30): add trusted publishers for the 12
    packages (they expire if unused for 2 days, so do it right before releasing), then remove
-   `NODE_AUTH_TOKEN` from `release.yml` and delete the secret. Fix the two pipeline gaps in the checklist
-   (Actions may not open PRs; changesets does not push tags).
+   `NODE_AUTH_TOKEN` from `release.yml` and delete the secret. The two pipeline gaps are closed (#134,
+   Actions may open PRs); the version PR still needs a close and reopen to start CI (checklist, gap 1).
 2. Then, only if the owner asks, the backlog below. Nothing in it blocks a release.
 
 ## Open PRs
