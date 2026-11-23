@@ -6,6 +6,9 @@ name: Release
 # contents + pull-requests write) so the version PR triggers CI. The bot that commits the
 # version bump must be exempt from the DCO check (it cannot add a Signed-off-by trailer).
 # Without the secret this falls back to GITHUB_TOKEN and the version PR needs a manual CI run.
+#
+# Tests are not repeated on code that already passed: scripts/ci-gate.sh looks for the newest main
+# commit green in ci, browser and visual-regression; if no code changed since, only `pnpm build` runs.
 
 on:
   push:
@@ -22,9 +25,11 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
+      actions: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -33,7 +38,17 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run ci
+      - id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/ci-gate.sh ci.yml browser.yml visual-regression.yml
+      - if: steps.gate.outputs.engine == 'true'
+        run: pnpm run ci
+      - if: steps.gate.outputs.engine != 'true'
+        run: pnpm build # publish needs dist; tests already passed on identical code
       - name: Refuse to release while stage stubs remain
         run: "! grep -rl 'not implemented: owned by Track' packages/*/src"
       - uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
