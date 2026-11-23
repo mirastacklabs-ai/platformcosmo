@@ -8,17 +8,21 @@ Start here. Read this file, `PROGRESS.md`, `DECISIONS.md` (D1–D86), `CLAUDE.md
 - v1 is delivered; the assemblies tracks (Phases 1a → 3) are all merged. Session 3 merged #108–#126
   (batch #118 carried #108–#113, #115, #116). Phase 2 is lifted (D-4a, #121). #126 draws racks in
   mirrored rows as a true half turn (D86; changed only the dc-hall and hall-to-heatsink bytes).
-- Owner scope: after the assemblies tracks, npm publishing in a separate app+browser session
-  (`docs/release/npm-publishing-checklist.md`). Never publish from a coding session. The owner OK'd
-  merging PRs.
+- Published to npm 2026-11-23: `platformcosmo` 0.1.0 (plugin and marketplace 0.1.0) and the 11
+  `@platformcosmo/*` packages (icons-* 0.0.1, the rest 0.1.0), with provenance; GitHub releases per
+  package. Release record and pipeline gaps: `docs/release/npm-publishing-checklist.md` ("First release").
+- CI gate (#129, D87): `scripts/ci-gate.sh` skips tests when no code changed since the last green
+  main commit (docs, Markdown, `.changeset/`, `.github/`, version-only bumps are not code). Owner rule:
+  never rerun tests on code that already passed. The owner OK'd merging PRs.
 - Workspace is clean: 0 open PRs, branches `main` only (local and remote, `delete_branch_on_merge` on),
   no extra worktrees, no containers.
 
 ## Next session (Claude desktop app, with browser)
 
-1. npm publishing: follow `docs/release/npm-publishing-checklist.md` top to bottom. Known gaps: no
-   `npm-publish` environment, no `RELEASE_ENABLED` variable, `release.yml` authenticates with `NPM_TOKEN`
-   (plus provenance), not pure OIDC; npm name and `@platformcosmo` org availability unconfirmed.
+1. Before the next release (the `NPM_TOKEN` expires 2026-11-30): add trusted publishers for the 12
+   packages (they expire if unused for 2 days, so do it right before releasing), then remove
+   `NODE_AUTH_TOKEN` from `release.yml` and delete the secret. Fix the two pipeline gaps in the checklist
+   (Actions may not open PRs; changesets does not push tags).
 2. Then, only if the owner asks, the backlog below. Nothing in it blocks a release.
 
 ## Open PRs
@@ -62,7 +66,7 @@ Full CI is slow under load; run targeted tests first (`scripts/pc build`, then `
 
 ## Publishing
 
-`docs/release/npm-publishing-checklist.md` (owner's separate session; items marked unconfirmed need checking).
+`docs/release/npm-publishing-checklist.md`: the release flow, the first-release record and the open gaps.
 
 ## Website (platformcosmo.io)
 
@@ -134,7 +138,7 @@ Copy mirastacklabs.ai / infinitetokens.ai exactly; never re-typeset the logo.
 
 ## Human-only items
 
-npm: `docs/release/npm-publishing-checklist.md`. DCO app; Azure and Google Cloud icon terms (D29/D30);
+npm tokens and npm 2FA approvals. DCO app; Azure and Google Cloud icon terms (D29/D30);
 `CLAUDE_CODE_OAUTH_TOKEN` for a real prompt → diagram run; org-level Pages domain verification (`gh` needs
 `admin:org`); trademark search; conduct contact; renew `platformbuilds.*` domains; redirect README in the
 `platformcosmo` GitHub org; exclude `.claude/worktrees` and `.worktrees` from Spotlight.

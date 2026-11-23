@@ -1,28 +1,50 @@
 # npm publishing checklist
 
-For the owner's separate app + browser session. Nothing here has been run; never publish from a coding
-session. Derived from `.github/workflows/release.yml`, `.changeset/config.json`, the root and package
-`package.json` files. **(unconfirmed)** marks anything not verifiable from the repo.
+Release flow for the owner's app + browser session; never publish from a coding session. The first
+release (0.1.0) went out on 2026-11-23; see "First release" for what happened and what is still open.
 
 ## What the workflow does
 
 `release.yml` runs on every push to `main`. The job is skipped unless the repository is
 `mirastacklabs-ai/platformcosmo` and the repo variable `RELEASE_ENABLED` is `true`. It uses the
-`npm-publish` environment, Node 24, `pnpm install --frozen-lockfile`, `pnpm run ci`, a stub guard
-(`! grep -rl 'not implemented: owned by Track' packages/*/src`), then `changesets/action`:
+`npm-publish` environment (owner approval, `main` only), Node 24, `pnpm install --frozen-lockfile`,
+`scripts/ci-gate.sh` (full `pnpm run ci` only if code changed since the newest main commit green in CI,
+Browser and Visual regression; otherwise `pnpm build`), a stub guard, then `changesets/action`:
 
-- With pending changesets (`.changeset/*.md`, 39 today) it opens or updates a "chore: version packages" PR
-  (`pnpm run version-packages` = `changeset version`, `sync:versions`, `bundle:plugin`).
+- With pending changesets (`.changeset/*.md`) it pushes `changeset-release/main` and tries to open a
+  "chore: version packages" PR (`pnpm run version-packages` = `changeset version`, `sync:versions`,
+  `bundle:plugin`).
 - When that PR is merged and no changesets remain, it runs `pnpm changeset publish`, with
   `NPM_CONFIG_PROVENANCE=true`, `NODE_AUTH_TOKEN=${{ secrets.NPM_TOKEN }}` and `id-token: write`.
 
-## State found on GitHub (read-only check, 2026-11-22)
+## First release (2026-11-23)
 
-- Environments: only `github-pages`. **`npm-publish` does not exist.**
-- Variables: `CLOUDFLARE_ACCOUNT_ID`, `PAGES_ENABLED`. **`RELEASE_ENABLED` is not set.**
-- Secrets: none listed (no `NPM_TOKEN`, no `RELEASE_BOT_TOKEN`) (listing may need admin rights, unconfirmed).
+- Published: `platformcosmo` 0.1.0 (plugin and marketplace 0.1.0);
+  `@platformcosmo/{core,dc-pack,parts-auto,parts-base,parts-brick,pdf,themes}` 0.1.0;
+  `@platformcosmo/icons-{base,k8s,lucide,simple}` 0.0.1. All with SLSA provenance. Checked in a clean `node:24` container: `npm i platformcosmo@0.1.0`, `pcosmo --version`,
+  `init` + `build` of the starter and `dc-hall`.
+- Setup: npm org `@platformcosmo` (owner `aarvee`, 2FA); environment `npm-publish` (reviewer `aarvee11`,
+  `main` only); variable `RELEASE_ENABLED=true`; environment secret `NPM_TOKEN` (granular, read and write on
+  all packages, **Bypass 2FA**, expires 2026-11-30). A token without Bypass 2FA fails with `EOTP`.
+- New packages go through npm's automated review: a public `0.0.0-stage` placeholder first, the real
+  version shows as "Validating" and goes live by itself (about 4 minutes). No manual approval needed.
+- Approve a waiting release run:
+  `gh api -X POST repos/<repo>/actions/runs/<id>/pending_deployments -F "environment_ids[]=<env id>" -f state=approved`.
 
-## Packages (all `0.0.0`, `publishConfig: access public, provenance true`)
+Open gaps (fix before or during the next release):
+
+1. **Actions may not create PRs** in this repo, so changesets pushes `changeset-release/main` but fails to
+   open the PR. Open it by hand (`gh pr create --head changeset-release/main`), or allow it in Settings,
+   Actions, General.
+2. **Tags and GitHub releases are not pushed** (checkout uses `persist-credentials: false`). The 0.1.0
+   tags and releases were created by hand with `gh release create <pkg>@<version> --target <sha>`.
+3. **Trusted publishing (OIDC) not set up.** The packages exist now, so it can be. A trusted publisher
+   expires if no publish uses it within 2 days: add it for all 12 packages right before the next release,
+   then remove `NODE_AUTH_TOKEN` from `release.yml` and delete `NPM_TOKEN`. Check that
+   `pnpm changeset publish` authenticates through OIDC (npm CLI >= 11.5.1).
+4. `scripts/pc changeset status` fails locally: the container has no `git`.
+
+## Packages (`publishConfig: access public, provenance true`)
 
 `platformcosmo` (CLI, `bin: pcosmo`, unscoped), `@platformcosmo/core`, `dc-pack`, `icons-base`,
 `icons-k8s`, `icons-lucide`, `icons-simple`, `parts-auto`, `parts-base`, `parts-brick`, `pdf`, `themes`.

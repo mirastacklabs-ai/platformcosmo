@@ -10,7 +10,8 @@ a JSON spec; a deterministic engine does all layout and drawing. The SVG animate
 no JavaScript and works in `<img>`, inline and `<object>`.
 Default look: MIRASTACK LABS brand — Oswald + JetBrains Mono.
 
-**Status: pre-release (v1 feature-complete, not yet published to npm).**
+**Status: 0.1.0 on npm** ([`platformcosmo`](https://www.npmjs.com/package/platformcosmo) and
+[`@platformcosmo/*`](https://www.npmjs.com/org/platformcosmo), published with provenance).
 
 ## Quick start
 
@@ -64,6 +65,17 @@ You need [Claude Code](https://code.claude.com) and Node.js >= 22.12 on your `PA
    your machine and never redistributed. Azure requires accepting its terms.
 
 The CLI is also on the Bash `PATH` while the plugin is enabled: `pcosmo --help`.
+
+### CLI without Claude Code
+
+The same CLI is on npm (Node.js >= 22.12):
+
+```sh
+npx platformcosmo init my.cosmo.json
+npx platformcosmo build my.cosmo.json
+```
+
+or `npm i -D platformcosmo` and run `pcosmo`. The engine is `@platformcosmo/core`.
 
 ## Gallery and docs
 
