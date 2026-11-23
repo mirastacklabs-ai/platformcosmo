@@ -1,7 +1,9 @@
 /**
  * Byte identity of every 1.1 DC spec (assemblies.md 8.1): the fragment `buildScene` returns is
  * pinned by hash, taken before assembly mode existed, and calling `buildAssembly` (for any rack)
- * must not change a single byte of it. Rendered output (gallery + visual goldens) is pinned
+ * must not change a single byte of it. The two pins with mirrored rows (dc-hall, hall) were
+ * re-taken when the 1.1 drawing of a rack in a mirrored row became the half turn (rack.ts `turned`);
+ * rows without mirrored racks keep their original pins. Rendered output (gallery + visual goldens) is pinned
  * separately by `check:gallery` and `tests/visual`.
  */
 import { createHash } from "node:crypto";
@@ -103,9 +105,9 @@ const hash = (s: PlatformCosmoSpec): string =>
 const PINS: Record<string, [() => PlatformCosmoSpec, string]> = {
   "examples/dc-hall": [
     () => example("dc-hall.cosmo.json"),
-    "51a490284d24ae1856e2cce070e28a297585ac581548bf555c8c2dc58144802b",
+    "44fadcfe659ae7dd30177ed290dfac0d381d4a49557b421f57b1dbafe204b08d",
   ],
-  hall: [hall, "a4c97135920a8470165bcd6629a292687825f9a87a34b22e186cf8bd99b8b8aa"],
+  hall: [hall, "4c0b8562c824aa49c482824f046b148819782a3a17b5cce8ffb8b087648fe485"],
   everything: [everything, "0508819791aba119dd15df71482805f4f2989b00c3bec0849329020a59fc5e9e"],
   loaded: [loaded, "a5a03e7f98f490072be3f31b87367f841c6b95d2ccc4af8aad41b21440543ff3"],
   empty: [

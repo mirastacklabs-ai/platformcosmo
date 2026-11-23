@@ -608,6 +608,7 @@ export function buildDcScene(spec: PlatformCosmoSpec): DcSceneFragment {
         u: rack.u,
         pdu: rack.pdu,
         rearDoorHeatExchanger: rack.rearDoorHeatExchanger,
+        turned: it.mirror,
       });
       const state: SpecState = rack.state ?? DC_DEFAULTS.state;
       const built = def.build(params as unknown as Record<string, unknown>, {
