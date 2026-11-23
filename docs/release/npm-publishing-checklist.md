@@ -16,11 +16,19 @@ session. Derived from `.github/workflows/release.yml`, `.changeset/config.json`,
 - When that PR is merged and no changesets remain, it runs `pnpm changeset publish`, with
   `NPM_CONFIG_PROVENANCE=true`, `NODE_AUTH_TOKEN=${{ secrets.NPM_TOKEN }}` and `id-token: write`.
 
-## State found on GitHub (read-only check, 2026-11-22)
+## State (publishing session, 2026-11-23)
 
-- Environments: only `github-pages`. **`npm-publish` does not exist.**
-- Variables: `CLOUDFLARE_ACCOUNT_ID`, `PAGES_ENABLED`. **`RELEASE_ENABLED` is not set.**
-- Secrets: none listed (no `NPM_TOKEN`, no `RELEASE_BOT_TOKEN`) (listing may need admin rights, unconfirmed).
+- npm: org `@platformcosmo` exists, owner `aarvee` with 2FA. All 12 names (and unscoped `platformcosmo`)
+  were unclaimed on the registry (HTTP 404) before the first publish.
+- Environment `npm-publish` created: required reviewer `aarvee11`, deployments limited to `main`.
+- Variable `RELEASE_ENABLED=true`. `release.yml` also runs on `workflow_dispatch`.
+- `NPM_TOKEN` is an environment secret on `npm-publish` (owner-created, short-lived, bootstrap only).
+  No `RELEASE_BOT_TOKEN`: the owner closes and reopens the version PR once to start CI on it.
+- DCO is not a required check, so the unsigned bot commit on the version PR does not block a merge.
+- Local `scripts/pc changeset status` fails in the container (no `git` in the image); count the bumps
+  from `.changeset/*.md` instead, or read the version PR.
+- `publish:dry` passed for all 12 packages after a clean `scripts/pc install --frozen-lockfile` (a
+  stale `node_modules` fails the CLI build on the private `@platformcosmo/assets`, which tsup bundles).
 
 ## Packages (all `0.0.0`, `publishConfig: access public, provenance true`)
 
