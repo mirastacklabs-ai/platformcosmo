@@ -1343,19 +1343,72 @@ describe("review round", () => {
         expect(cx(led.world)).toBeLessThan(slotMid);
       } else {
         sawMirror = true;
-        // the 1.1 fragment reflects (x unchanged); the assembly turns, so both swap sides
+        // the 1.1 fragment turns the rack too (x flips with y), so the PDU sits on the same
+        // side as in the assembly; the device LED, built in the slot, still differs
         const rackObj = frag.objects.find((o) => o.id === rack)!;
         const old = [
           ...(rackObj.parts ?? []),
           ...(frag.objects.find((o) => o.id === `${rack}_front`)?.parts ?? []),
         ];
         const oldPdu = old.find((p) => p.id === "pdu-a")!;
-        expect(cx(oldPdu.box)).toBeLessThan(mid);
+        expect(cx(oldPdu.box)).toBeGreaterThan(mid);
         expect(cx(pdu.world)).toBeGreaterThan(mid);
         expect(cx(led.world)).toBeGreaterThan(slotMid);
       }
     }
     expect(sawMirror).toBe(true);
+  });
+
+  it("the 1.1 drawing of a mirrored rack is the assembly's rack at rest (frame boxes, door order)", () => {
+    const s = hall();
+    for (const r of s.racks ?? []) (r as unknown as Json)["pdu"] = "dual";
+    const frag = dcPack.buildScene(s);
+    const a = must(dcPack.buildAssembly!(s, "b1", frag, {}).assembly);
+    expect(a.frame.front).toBe("-y");
+    const near = frag.objects.find((o) => o.id === "b1_front")!.parts!;
+    const body = frag.objects.find((o) => o.id === "b1")!.parts!;
+    const parts = [...body, ...near];
+    const DOOR: Record<string, string> = {
+      "rear-door": "top",
+      "rear-door-b": "bottom",
+      "rear-door-l": "left",
+      "rear-door-r": "right",
+    };
+    const asm = (id: string): Box3 =>
+      (id.startsWith("rear-door")
+        ? find(a.root, `b1/frame/rear-door/${DOOR[id]}`)
+        : find(a.root, `b1/frame/${id}`))!.world;
+    const same = (p: Box3, q: Box3): void => {
+      for (const k of ["x", "y", "z"] as const) {
+        expect(p.origin[k]).toBeCloseTo(q.origin[k], 3);
+        expect(p.size[k]).toBeCloseTo(q.size[k], 3);
+      }
+    };
+    for (const id of [
+      "post-bl",
+      "post-br",
+      "post-fl",
+      "post-fr",
+      "pdu-a",
+      "pdu-b",
+      "rear-door",
+      "rear-door-b",
+      "rear-door-l",
+      "rear-door-r",
+    ]) {
+      same(parts.find((p) => p.id === id)!.box, asm(id));
+    }
+    // geometry decides the order: every PDU is painted before the rear-door part in front of it
+    const order = near.map((p) => p.id);
+    for (const pdu of ["pdu-a", "pdu-b"]) {
+      for (const door of ["rear-door-l", "rear-door-r"]) {
+        const d = near.find((p) => p.id === door)!.box;
+        const q = near.find((p) => p.id === pdu)!.box;
+        const overlapX = q.origin.x < d.origin.x + d.size.x && d.origin.x < q.origin.x + q.size.x;
+        if (overlapX)
+          expect(order.indexOf(pdu), `${pdu} before ${door}`).toBeLessThan(order.indexOf(door));
+      }
+    }
   });
 
   it("magnitudes in tiles: every slot drawer is owner front - slot back + gap, mirrored or not", () => {

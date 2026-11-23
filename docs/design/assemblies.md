@@ -549,22 +549,21 @@ with it.
   under a pixel at rack scale, so the rack at rest looks as in 1.1. Slot ids `frame` are reserved in assembly mode
   (`assembly/reserved-id`).
 - `front` = the rack's front side in world (mirrored rows: `−y`), so `drawer` slides devices
-  out of the front. A targeted rack in a mirrored row is turned half a turn, where the 1.1
-  drawing only reflected `y`: the rear posts swap sides, `pdu-a` moves to the other side and now
-  stands behind the right stile of the rear door, and the rear-door heat exchanger is narrowed to
-  hang between the posts (so it can slide out). Its rear faces the viewer, so the door is drawn in
-  front of the PDU behind it, by geometry; the 1.1 drawing, which also kept the unmirrored draw
-  order (rear door first), paints the PDU over the door. A targeted mirrored rack with a rear-door
-  heat exchanger therefore differs there from its 1.1 look, by design (the 1.1 bytes stay as they
-  are). A rack in a mirrored row is **turned half a turn** (a row facing the other
-  way), not reflected: asymmetric details (a single PDU, a device's LED side) change sides
-  relative to the 1.1 look, which reflected only `y`. The DC pack records which racks it
+  out of the front. A rack in a mirrored row is **turned half a turn** (a row facing the other
+  way), in the 1.1 drawing and in assembly mode alike: the rear posts swap sides, `pdu-a` stands
+  behind the right stile of the rear door, and the rear-door heat exchanger is narrowed to hang
+  between the posts (so it can slide out). Its rear faces the viewer, so the door is drawn in front
+  of the PDU behind it, by geometry. The rack component builds this turned frame itself (its
+  `turned` parameter, which `buildDcScene` sets for racks in mirrored rows), so a targeted rack at
+  rest looks as its untargeted 1.1 drawing, apart from antialiasing and the device LED side (the
+  slot devices are still only reflected in 1.1). Racks in unmirrored rows are byte-identical to
+  before. The DC pack records which racks it
   mirrored (`buildDcScene` keeps the flag beside the fragment, so the fragment's bytes do not
   change).
 - A **cover** (door, panel, lid) given `direction: "drawer"` leaves along its own outward normal,
   not the owner's front: the rear-door heat exchanger goes rear (`−front`), a cover on the front
   side goes front, so a door never slides through the devices. In assembly mode the rear-door
-  heat exchanger hangs between the rear posts (the 1.1 rack draws it over them as one solid
+  heat exchanger hangs between the rear posts (the 1.1 rack in an unmirrored row draws it over them as one solid
   object), so its slide rear passes no post.
 - Built-in program `drawers` (when `racks[].programs` has none): stage 1 doors (`frame/role:cover`,
   `drawer`), stage 2 every slot (`drawer`, `top-down`, stagger 0.1 s). Custom `programs` are

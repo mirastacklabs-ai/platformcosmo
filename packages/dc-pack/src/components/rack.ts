@@ -25,6 +25,11 @@ export interface RackParams {
   readonly u: number;
   readonly pdu: RackPdu;
   readonly rearDoorHeatExchanger: boolean;
+  /**
+   * The rack stands in a mirrored row (a row facing the other way). The scene reflects y; with
+   * the x flip made here that is the half turn the rack really makes, its rear toward the viewer.
+   */
+  readonly turned: boolean;
 }
 
 type Params = Record<string, unknown>;
@@ -37,7 +42,12 @@ export function readRackParams(p: Params): RackParams {
   const u = RACK_HEIGHTS_U.find((x) => x === p.u) ?? DC_DEFAULTS.rack.u;
   const pdu: RackPdu =
     p.pdu === "none" || p.pdu === "dual" || p.pdu === "single" ? p.pdu : DC_DEFAULTS.rack.pdu;
-  return { u, pdu, rearDoorHeatExchanger: p.rearDoorHeatExchanger === true };
+  return {
+    u,
+    pdu,
+    rearDoorHeatExchanger: p.rearDoorHeatExchanger === true,
+    turned: p.turned === true,
+  };
 }
 
 export const rackDef: DcComponentDef = {
@@ -48,37 +58,63 @@ export const rackDef: DcComponentDef = {
   footprintMm: { width: RACK_WIDTH_MM, depth: RACK_DEPTH_MM, height: Math.round(rackHeightMm(42)) },
   defaults: { ...DC_DEFAULTS.rack } as Params,
   build(params: Params): DcBuildResult {
-    const { u, pdu, rearDoorHeatExchanger } = readRackParams(params);
+    const { u, pdu, rearDoorHeatExchanger, turned } = readRackParams(params);
     const W = RACK_WIDTH_MM;
     const D = RACK_DEPTH_MM;
     const H = rackHeightMm(u);
     const post = 30;
     const k = new Kit(W, D, H);
 
+    // A turned rack is the half turn of the same frame: x flips with y, so the rear posts swap
+    // sides and `pdu-a` stands behind the right stile of the rear door. The door now faces the
+    // viewer and hangs between the posts (the assembly drawing's door), not over them.
+    const fx = (x: number, w: number): number => (turned ? W - x - w : x);
     // Back to front: plinth, rear, back posts, PDUs, front posts, top cap.
     k.part("base", "slab", "muted", 0, 0, 0, W, D, RACK_BASE_MM);
     const bodyH = H - RACK_BASE_MM - RACK_TOP_MM;
     if (rearDoorHeatExchanger) {
       // A thin frame (no panel), so devices stay visible from either side.
       const f = 30;
-      k.part("rear-door", "cube", "accent", 0, 0, RACK_BASE_MM + bodyH - f, W, 110, f);
-      k.part("rear-door-b", "cube", "accent", 0, 0, RACK_BASE_MM, W, 110, f);
-      k.part("rear-door-l", "cube", "accent", 0, 0, RACK_BASE_MM, f, 110, bodyH);
-      k.part("rear-door-r", "cube", "accent", W - f, 0, RACK_BASE_MM, f, 110, bodyH);
+      const inset = turned ? post : 0;
+      const bar = W - 2 * inset;
+      k.part("rear-door", "cube", "accent", inset, 0, RACK_BASE_MM + bodyH - f, bar, 110, f);
+      k.part("rear-door-b", "cube", "accent", inset, 0, RACK_BASE_MM, bar, 110, f);
+      k.part("rear-door-l", "cube", "accent", fx(inset, f), 0, RACK_BASE_MM, f, 110, bodyH);
+      k.part("rear-door-r", "cube", "accent", fx(W - f - inset, f), 0, RACK_BASE_MM, f, 110, bodyH);
     }
-    k.part("post-bl", "cube", "metal", 0, 0, RACK_BASE_MM, post, post, bodyH);
-    k.part("post-br", "cube", "metal", W - post, 0, RACK_BASE_MM, post, post, bodyH);
+    k.part("post-bl", "cube", "metal", fx(0, post), 0, RACK_BASE_MM, post, post, bodyH);
+    k.part("post-br", "cube", "metal", fx(W - post, post), 0, RACK_BASE_MM, post, post, bodyH);
     const pduH = u * U_MM * 0.8;
     if (pdu !== "none") {
-      k.part("pdu-a", "cube", "base", 40, 120, RACK_BASE_MM + 60, 40, 50, pduH);
-      k.part("pdu-a-led", "cube", "led", 48, 168, RACK_BASE_MM + 60 + pduH - 30, 8, 4, 8);
+      k.part("pdu-a", "cube", "base", fx(40, 40), 120, RACK_BASE_MM + 60, 40, 50, pduH);
+      k.part("pdu-a-led", "cube", "led", fx(48, 8), 168, RACK_BASE_MM + 60 + pduH - 30, 8, 4, 8);
     }
     if (pdu === "dual") {
-      k.part("pdu-b", "cube", "base", W - 80, 120, RACK_BASE_MM + 60, 40, 50, pduH);
-      k.part("pdu-b-led", "cube", "led", W - 72, 168, RACK_BASE_MM + 60 + pduH - 30, 8, 4, 8);
+      k.part("pdu-b", "cube", "base", fx(W - 80, 40), 120, RACK_BASE_MM + 60, 40, 50, pduH);
+      k.part(
+        "pdu-b-led",
+        "cube",
+        "led",
+        fx(W - 72, 8),
+        168,
+        RACK_BASE_MM + 60 + pduH - 30,
+        8,
+        4,
+        8,
+      );
     }
-    k.part("post-fl", "cube", "metal", 0, D - post, RACK_BASE_MM, post, post, bodyH);
-    k.part("post-fr", "cube", "metal", W - post, D - post, RACK_BASE_MM, post, post, bodyH);
+    k.part("post-fl", "cube", "metal", fx(0, post), D - post, RACK_BASE_MM, post, post, bodyH);
+    k.part(
+      "post-fr",
+      "cube",
+      "metal",
+      fx(W - post, post),
+      D - post,
+      RACK_BASE_MM,
+      post,
+      post,
+      bodyH,
+    );
     // Open top frame (rails, no panel) so the devices' top faces show from above.
     const rail = 40;
     k.part("top-b", "cube", "muted", 0, 0, H - RACK_TOP_MM, W, rail, RACK_TOP_MM);
@@ -96,8 +132,8 @@ export const rackDef: DcComponentDef = {
     );
     k.part("top", "cube", "muted", 0, D - rail, H - RACK_TOP_MM, W, rail, RACK_TOP_MM);
 
-    k.port("power-a", "power-a", 60, 140, H);
-    if (pdu === "dual") k.port("power-b", "power-b", W - 60, 140, H);
+    k.port("power-a", "power-a", turned ? W - 60 : 60, 140, H);
+    if (pdu === "dual") k.port("power-b", "power-b", turned ? 60 : W - 60, 140, H);
     k.port("net-0", "network", W / 2, D - 60, H);
     k.airflow();
     return k.done();
