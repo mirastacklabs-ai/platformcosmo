@@ -53,7 +53,7 @@ Copy one with `pcosmo examples copy <name>`.
 <table>
   <tr>
     <td width="50%" valign="top"><b>RAG pipeline</b><br><img src="examples/gallery/rag-pipeline.svg" alt="Animated RAG pipeline diagram"></td>
-    <td width="50%" valign="top"><b>GPU inference cluster</b><br><img src="examples/gallery/gpu-inference-cluster.svg" alt="Animated GPU inference cluster diagram"></td>
+    <td width="50%" valign="top"><b>GPU inference cluster</b> (dark theme)<br><img src="examples/gallery/gpu-inference-cluster.svg" alt="Animated GPU inference cluster diagram"></td>
   </tr>
   <tr>
     <td valign="top"><b>Kubernetes deployment</b><br><img src="examples/gallery/kubernetes-deployment.svg" alt="Animated Kubernetes deployment diagram"></td>
