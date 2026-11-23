@@ -33,9 +33,10 @@ Browser and Visual regression; otherwise `pnpm build`), a stub guard, then `chan
 
 Open gaps (fix before or during the next release):
 
-1. **Actions may not create PRs** in this repo, so changesets pushes `changeset-release/main` but fails to
-   open the PR. Open it by hand (`gh pr create --head changeset-release/main`), or allow it in Settings,
-   Actions, General.
+1. **Version PR and CI.** Actions may now create PRs (enabled 2026-11-23 for the organization and the
+   repo, Settings, Actions, General), so changesets opens the "chore: version packages" PR itself. Opened
+   with `GITHUB_TOKEN` it triggers no workflows, so its required checks never start: close and reopen the
+   PR yourself to run CI, or set `RELEASE_BOT_TOKEN` (see `release.yml`) so they start on their own.
 2. **Tags:** `changeset publish` tags only locally (checkout uses `persist-credentials: false`), and the
    action creates no releases (`createGithubReleases: false`). The workflow's last step creates the one
    GitHub release, `platformcosmo@<version>` with its CHANGELOG section, once that version is on npm. The
