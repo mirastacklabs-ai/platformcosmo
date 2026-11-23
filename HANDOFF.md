@@ -1,28 +1,39 @@
 # Handoff
 
-Start here. Read this file, `PROGRESS.md`, `DECISIONS.md` (D1–D85), `CLAUDE.md` (commands) and
-`docs/design/assemblies-tracks.md`. Last updated 2026-11-22 (end of session 3).
+Start here. Read this file, `PROGRESS.md`, `DECISIONS.md` (D1–D86), `CLAUDE.md` (commands) and
+`docs/design/assemblies-tracks.md`. Last updated 2026-11-23 (after #126, end of session 3).
 
 ## State of main
 
-- v1 is delivered; the assemblies tracks (Phases 1a → 3) are all merged (D-4b #124 is in final CI; this PR merges after it).
-  Session 3 merged #108–#124 except #125 (batch #118 carried #108–#113, #115, #116). Phase 2 is lifted (D-4a, #121).
+- v1 is delivered; the assemblies tracks (Phases 1a → 3) are all merged. Session 3 merged #108–#126
+  (batch #118 carried #108–#113, #115, #116). Phase 2 is lifted (D-4a, #121). #126 draws racks in
+  mirrored rows as a true half turn (D86; changed only the dc-hall and hall-to-heatsink bytes).
 - Owner scope: after the assemblies tracks, npm publishing in a separate app+browser session
   (`docs/release/npm-publishing-checklist.md`). Never publish from a coding session. The owner OK'd
   merging PRs.
+- Workspace is clean: 0 open PRs, branches `main` only (local and remote, `delete_branch_on_merge` on),
+  no extra worktrees, no containers.
+
+## Next session (Claude desktop app, with browser)
+
+1. npm publishing: follow `docs/release/npm-publishing-checklist.md` top to bottom. Known gaps: no
+   `npm-publish` environment, no `RELEASE_ENABLED` variable, `release.yml` authenticates with `NPM_TOKEN`
+   (plus provenance), not pure OIDC; npm name and `@platformcosmo` org availability unconfirmed.
+2. Then, only if the owner asks, the backlog below. Nothing in it blocks a release.
 
 ## Open PRs
 
-None (besides this one).
+None.
 
-## Next (backlog from the orchestrator's `followups.md`, not blocking)
+## Backlog (from the orchestrator's `followups.md`, not blocking)
 
 - Round parts (engine pistons, cylinders, rover, 2OU server) use clip-fallback: clip with the part's own
-  outline, not the footprint box (`render/assembly/dom.ts`). A WIP patch exists locally; judged out of scope.
-- Owner decision: 1.1 mirrored-row racks draw PDUs over the rear door (`rack.ts`); fixing it changes
-  every 1.1 DC example's bytes (documented in §8.1). A targeted rack therefore differs from an untargeted one.
-- Targeted rack does not match its 1.1 look at rest (A1 GPU node loses its front grille via clip-fallback;
-  ToR LED/port detail). Leader router has no 1.1-object obstacles.
+  outline, not the footprint box (`render/assembly/dom.ts`). A generic WIP patch is parked locally at
+  `.worktrees/orchestrator/archive/outline-clip-wip.patch`; out of scope until an example needs it
+  (clip-fallback works as designed: parts hide only while crossing, with a named diagnostic).
+- Slot devices in mirrored rows are still only y-reflected in 1.1 (LED side differs from assembly mode).
+- Targeted rack vs its 1.1 look at rest: A1 GPU node loses its front grille via clip-fallback; ToR
+  LED/port detail. Leader router has no 1.1-object obstacles.
 - Visuals: §19.4 t=12 label pile-up and "Rack R1" touching the edge; §19.4 t=4 crops "ToR"; fading "OCP NIC"
   label cut during §19.2 move 6.6–6.8 s; wall focus `w/wall` callout copies fly out of the zoom window;
   close-up levels draw no callout box; quarter-turn view groups use the main groups' windows.
@@ -95,6 +106,14 @@ Copy mirastacklabs.ai / infinitetokens.ai exactly; never re-typeset the logo.
 - Containers only (`scripts/pc`); install nothing on the host. A hook blocks host node/npm/npx.
 - Orchestrator (Opus) writes contracts, specs and reviews; Sonnet implements; Opus reviews every PR
   before merge; merge on green CI. Branch protection requires 9 checks (see `CONTRIBUTING.md`).
+- Owner wants fast turnaround and a clean workspace: only P0/P1 review findings block a merge (P2/P3 go
+  to followups), no out-of-scope work, batch approved PRs into one integration PR, and after every merge
+  remove its worktree and local branch in the same turn. At most 3 implementers + 1 reviewer; track
+  every agent in a ledger and stop finished ones.
+- Orchestrator scratch lives outside git in `.worktrees/orchestrator/` (local to the owner's Mac):
+  `brief-common.md` (rules pasted into every agent brief), `ci-lock.sh` (one full CI at a time:
+  `ci-lock.sh scripts/pc run ci > ci.log 2>&1`), `cleanup.sh` (removes merged worktrees/branches),
+  `ledger.md`, `followups.md`, `archive/`.
 - Ask before destructive or outward-facing actions outside what the owner asked for (other repos,
   deleting resources, publishing). Never publish to npm. Never create credentials; the permission
   system blocks it and the owner does it.
