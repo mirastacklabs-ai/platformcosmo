@@ -12,7 +12,8 @@ const groups = [
 
 # Gallery
 
-Every diagram here is rendered by `pcosmo build` from the spec shown below it. Copy one with
+Every diagram here is rendered by `pcosmo build` from the spec shown below it, in the site's light or dark theme
+(`--theme light` or `--theme dark`; provider examples show their committed render). Copy one with
 `pcosmo examples copy <name>` and edit it.
 
 <section v-for="g in groups" :key="g.id">
@@ -30,8 +31,22 @@ Every diagram here is rendered by `pcosmo build` from the spec shown below it. C
   <article v-for="item in data.filter((d) => d.group === g.id)" :key="item.name" class="gallery-item">
     <h3>{{ item.title }}</h3>
     <p>{{ item.description }}</p>
+    <template v-if="item.themed">
+      <img
+        class="pc-theme-light"
+        :src="withBase(`/gallery/${item.name}.light.svg`)"
+        :alt="item.title"
+        loading="lazy"
+      />
+      <img
+        class="pc-theme-dark"
+        :src="withBase(`/gallery/${item.name}.dark.svg`)"
+        :alt="item.title"
+        loading="lazy"
+      />
+    </template>
     <img
-      v-if="item.preview"
+      v-else-if="item.preview"
       :src="withBase(`/gallery/${item.name}.svg`)"
       :alt="item.title"
       loading="lazy"
@@ -54,5 +69,11 @@ Every diagram here is rendered by `pcosmo build` from the spec shown below it. C
 .gallery-item img {
   max-width: 100%;
   height: auto;
+  /* A committed render (provider examples) keeps its OS dark-mode block; browsers that let an image follow its
+     element's color-scheme (checked in Chromium) then follow the site toggle too. */
+  color-scheme: light;
+}
+.dark .gallery-item img {
+  color-scheme: dark;
 }
 </style>

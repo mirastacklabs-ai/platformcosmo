@@ -8,6 +8,8 @@ export interface GalleryItem {
   group: "launch" | "datacenter" | "document" | "provider";
   /** True when scripts/prepare.mjs rendered a preview. */
   preview: boolean;
+  /** True when scripts/prepare.mjs also rendered `<name>.light.svg` and `<name>.dark.svg` (follow the site theme). */
+  themed: boolean;
   spec: string;
 }
 
@@ -56,6 +58,9 @@ export default {
           description: meta?.description ?? "",
           group: groupOf(spec),
           preview: existsSync(here(`./public/gallery/${name}.svg`)),
+          themed:
+            existsSync(here(`./public/gallery/${name}.light.svg`)) &&
+            existsSync(here(`./public/gallery/${name}.dark.svg`)),
           // inline image data is long and unreadable; the copied example keeps it
           spec: text.replace(/(data:image\/[a-z+]+;base64,)[A-Za-z0-9+/=]+/g, "$1..."),
         } satisfies GalleryItem;

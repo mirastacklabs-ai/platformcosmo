@@ -658,13 +658,14 @@ body {
   border-radius: 2px;
   background: var(--pc-bg);
 }
-.pc-hero-dark {
+/* Diagram variants (hero, gallery): show the one that matches the site appearance, not the OS. */
+.pc-theme-dark {
   display: none !important;
 }
-.dark .pc-hero-dark {
+.dark .pc-theme-dark {
   display: block !important;
 }
-.dark .pc-hero-light {
+.dark .pc-theme-light {
   display: none !important;
 }
 
