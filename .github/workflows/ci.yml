@@ -14,12 +14,14 @@ concurrency:
 
 jobs:
   changes:
-    # Docs-only PRs skip the engine jobs (skipped jobs satisfy required checks; a workflow-level
-    # paths filter would not). Push, dispatch and every non-PR event always run everything.
+    # Skip the engine jobs when no code changed (PR: vs base; push: vs the last green main commit;
+    # dispatch always runs). Skipped jobs satisfy required checks; a workflow-level paths filter would not.
+    # Rules and reasoning: scripts/ci-gate.sh.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
+      actions: read
     outputs:
       engine: ${{ steps.diff.outputs.engine }}
     steps:
@@ -32,22 +34,9 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
-        run: |
-          engine=true
-          if [ "$EVENT" = "pull_request" ]; then
-            files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
-            engine=false
-            while IFS= read -r f; do
-              [ -n "$f" ] || continue
-              case "$f" in
-                plugin/*|packages/*|schema/*|examples/*|tests/*|docs/design/*) echo "engine file: $f"; engine=true ;;
-                docs/*|*.md|LICENSE*|NOTICE|scripts/deploy-docs.sh|.github/ISSUE_TEMPLATE/*) ;;
-                *) echo "engine file: $f"; engine=true ;;
-              esac
-            done <<< "$files"
-          fi
-          echo "engine=$engine" >> "$GITHUB_OUTPUT"
-          echo "engine=$engine"
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/ci-gate.sh ci.yml
 
   build:
     needs: changes
