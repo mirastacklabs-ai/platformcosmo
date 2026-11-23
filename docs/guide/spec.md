@@ -35,8 +35,12 @@ A spec is a JSON file (`*.cosmo.json`; YAML `*.cosmo.yaml` is accepted and conve
 | `steps[]`   | `caption`, `set` (state changes), `flows`, `metrics`, `duration`, `focus`                                       |
 | `legend`    | `"auto"` or a manual list                                                                                       |
 | Data center | `racks`, `equipment`, `rows`, `aisles`, `cables`, `facility`                                                    |
+| Assemblies  | `assemblies`, `images`, `figures`, `storyboards` (schema revision 1.2.0; see [Assemblies](./assemblies))        |
 
-A spec needs at least one of `nodes`, `racks` or `equipment`.
+A spec needs at least one of `nodes`, `racks`, `equipment`, `assemblies`, `storyboards` or `figures`.
+
+`images` are local files next to the spec or inline base64 data, never URLs. `figures` animate a document figure in
+its own drawn plane, and `storyboards` replay a document's own step pictures.
 
 ## Node types
 

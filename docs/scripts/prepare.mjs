@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath, URL } from "node:url";
+import { fileURLToPath, pathToFileURL, URL } from "node:url";
 
 const docs = fileURLToPath(new URL("../", import.meta.url));
 const root = `${docs}../`;
@@ -65,37 +65,71 @@ const total = readdirSync(target).filter(
 ).length;
 console.log(`gallery: ${total} previews (${total - fallback} committed, ${fallback} rendered now)`);
 
-// Home-page hero diagram: one example rendered in both built-in themes (the docs theme shows the one that
-// matches the active appearance). Needs the built CLI, like the gallery fallback above.
+// Light and dark variants for the site, so diagrams follow the VitePress appearance toggle. A light render
+// normally carries a `@media (prefers-color-scheme: dark)` block, and inside an <img> that query follows the
+// OS, not the site's toggle; the light variant is rendered without it (core `darkTheme: null`, through the
+// CLI's programmatic `run` with its render wrapped) and the dark variant with `--theme dark`. The page shows
+// the one that matches the active appearance (`.pc-theme-light` / `.pc-theme-dark` in brand.css).
+// Needs the built CLI; without it the gallery falls back to the single committed render.
+const cliIndex = `${root}packages/cli/dist/index.js`;
+const cli = existsSync(cliIndex) ? await import(pathToFileURL(cliIndex).href) : undefined;
+
+/** Renders `<name>.light.svg` and `<name>.dark.svg` into `outDir`; returns stderr on failure. */
+async function renderThemed(specFile, outDir, name, packsDir) {
+  for (const theme of ["light", "dark"]) {
+    const deps = cli.defaultDeps();
+    const render = deps.core.render;
+    deps.core = {
+      ...deps.core,
+      render: (spec, options) => render(spec, { ...options, darkTheme: null }),
+    };
+    const argv = ["build", specFile, "--theme", theme, "-o", outDir, "--name", `${name}.${theme}`];
+    if (packsDir) argv.push("--packs-dir", packsDir);
+    const r = await cli.run(argv, deps);
+    if (r.code !== 0) return `${theme}: exit ${r.code}\n${(r.stderr || "").trim()}`;
+  }
+  return undefined;
+}
+
+const noPacks = mkdtempSync(join(tmpdir(), "pcosmo-docs-packs-"));
+if (cli) {
+  // Gallery: every bundled-icon example (provider packs are user-installed, so those keep the committed
+  // render). Rendered with an empty packs dir, like the fallback above.
+  let themed = 0;
+  for (const f of readdirSync(`${root}examples`).filter((x) => x.endsWith(".cosmo.json"))) {
+    if (/"icon"\s*:\s*"(aws|azure|gcp|cncf):/.test(readFileSync(`${root}examples/${f}`, "utf8")))
+      continue;
+    const name = f.replace(/\.cosmo\.json$/, "");
+    const err = await renderThemed(`${root}examples/${f}`, target, name, noPacks);
+    if (err === undefined) themed++;
+    else {
+      for (const t of ["light", "dark"]) rmSync(`${target}/${name}.${t}.svg`, { force: true });
+      console.warn(`gallery: ${f} light/dark variants could not be rendered (${err})`);
+    }
+  }
+  console.log(`gallery: ${themed} examples rendered in light and dark`);
+} else {
+  console.warn(
+    "gallery: packages/cli/dist/index.js not built; previews keep the committed render (OS color scheme)",
+  );
+}
+
+// Home-page hero diagram: one example in both variants.
 const heroDir = `${docs}public/hero`;
 rmSync(heroDir, { recursive: true, force: true });
 mkdirSync(heroDir, { recursive: true });
-if (existsSync(bin)) {
-  for (const theme of ["light", "dark"]) {
-    const r = spawnSync(
-      process.execPath,
-      [
-        bin,
-        "build",
-        `${root}examples/gpu-inference-cluster.cosmo.json`,
-        "--theme",
-        theme,
-        "-o",
-        heroDir,
-        "--name",
-        `hero-${theme}`,
-      ],
-      { encoding: "utf8" },
-    );
-    if (r.status !== 0) {
-      throw new Error(
-        `hero (${theme}) could not be rendered (exit ${r.status})\n${(r.stderr || "").trim()}`,
-      );
-    }
-  }
+if (cli) {
+  const err = await renderThemed(
+    `${root}examples/gpu-inference-cluster.cosmo.json`,
+    heroDir,
+    "hero",
+    noPacks,
+  );
+  if (err !== undefined) throw new Error(`hero could not be rendered (${err})`);
   console.log("hero: rendered light and dark");
 } else {
   console.warn(
-    "hero: packages/cli/dist/bin.js not built; the home page hero diagram will be missing",
+    "hero: packages/cli/dist/index.js not built; the home page hero diagram will be missing",
   );
 }
+rmSync(noPacks, { recursive: true, force: true });

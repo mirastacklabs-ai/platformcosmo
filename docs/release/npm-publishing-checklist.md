@@ -15,7 +15,7 @@ Browser and Visual regression; otherwise `pnpm build`), a stub guard, then `chan
   "chore: version packages" PR (`pnpm run version-packages` = `changeset version`, `sync:versions`,
   `bundle:plugin`).
 - When that PR is merged and no changesets remain, it runs `pnpm changeset publish`, with
-  `NPM_CONFIG_PROVENANCE=true`, `NODE_AUTH_TOKEN=${{ secrets.NPM_TOKEN }}` and `id-token: write`.
+  `NPM_CONFIG_PROVENANCE=true`, <span v-pre>`NODE_AUTH_TOKEN=${{ secrets.NPM_TOKEN }}`</span> and `id-token: write`.
 
 ## First release (2026-11-23)
 
