@@ -318,9 +318,9 @@ in the ground layer, cables depth-sorted with objects, DC particles after object
 
 ## 16. Pre-launch checklist
 
-- [ ] npm org `@platformcosmo` created; `platformcosmo` package claimed
-- [ ] Repo `mirastacklabs-ai/platformcosmo` with branch protection, required CI and security features on
-- [ ] npm provenance publishing via GitHub Actions
+- [x] npm org `@platformcosmo` created; `platformcosmo` package claimed
+- [x] Repo `mirastacklabs-ai/platformcosmo` with branch protection, required CI and security features on
+- [x] npm provenance publishing via GitHub Actions
 - [ ] Trademark search for "PlatformCosmo"
 - [ ] Renew `platformbuilds.*` domains
 - [ ] Redirect README in the `platformcosmo` GitHub org

@@ -25,6 +25,10 @@ Resume point for the autonomous run: read this file and `DECISIONS.md`, then con
 | Assemblies Phase 2 server, rack, hall (D-4a lifts `phase2`)    | done                                                                                                                                                              | #84, #89, #92, #95, #104, #107, #113, #114, #117, #121, #126; batch #118 carried #108–#113, #115, #116                                                                         | opus (review), sonnet impl                            |
 | Assemblies Phase 3 storyboards, copies, documents, booklets    | storyboards #105, depth copies #106 and #119 (A1-2c), PDF #94, small follow-ups #120, D-3c skill #123, GIF fix #122, D-4b booklet and gallery #124 merged         | #94, #105, #106, #119, #120, #122, #123, #124                                                                                                                                  | opus (review), sonnet impl                            |
 
+First npm release 2026-11-23: `platformcosmo` 0.1.0 and the 11 `@platformcosmo/*` packages, with
+provenance (#128 closed, #129 CI gate, #130 version packages). See
+`docs/release/npm-publishing-checklist.md` ("First release").
+
 ## Evidence
 
 - main CI, Browser (Playwright + real Safari 27.2) and Visual regression green after each merge batch.
@@ -48,4 +52,4 @@ live on Cloudflare (no GitHub Pages deploy).
 
 ## Next
 
-See HANDOFF.md ("Next session"): the npm session (`docs/release/npm-publishing-checklist.md`).
+See HANDOFF.md ("Next session").
