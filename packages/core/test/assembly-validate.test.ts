@@ -1651,9 +1651,12 @@ describe("determinism and byte identity", () => {
         .map((f) => `templates/${f}`),
     ];
     expect(files.length).toBeGreaterThanOrEqual(15);
-    // the 1.2.0 gallery story (D-4a) is the one example with assembly content
-    const v11 = files.filter((f) => f !== "hall-to-heatsink.cosmo.json");
-    expect(v11.length).toBe(files.length - 1);
+    // the 1.2.0 gallery stories (D-4a, D-4b) are the examples with assembly content
+    const stories = ["hall-to-heatsink", "brick-rover", "rover-booklet"].map(
+      (n) => `${n}.cosmo.json`,
+    );
+    const v11 = files.filter((f) => !stories.includes(f));
+    expect(v11.length).toBe(files.length - stories.length);
     for (const f of v11) {
       const s = JSON.parse(readFileSync(new URL(f, root), "utf8")) as PlatformCosmoSpec;
       expect(hasAssemblyContent(s), f).toBe(false);

@@ -1,0 +1,259 @@
+{
+  "$schema": "https://platformcosmo.io/schema/v1.json",
+  "meta": {
+    "version": "1",
+    "title": "Brick rover",
+    "description": "A generic brick rover built in eight steps with a cab sub-build, then exploded and put back together."
+  },
+  "assemblies": [
+    {
+      "id": "rover",
+      "label": "Brick rover",
+      "units": "stud",
+      "fit": 5,
+      "parts": [
+        {
+          "id": "plate",
+          "shape": "brick:plate",
+          "at": [0, 0, 2],
+          "size": [6, 10, 1],
+          "color": "gray"
+        },
+        {
+          "id": "side",
+          "shape": "brick:brick",
+          "count": 2,
+          "at": [0, 2, 3],
+          "pitch": [5, 0, 0],
+          "size": [1, 6, 3],
+          "color": "blue"
+        },
+        {
+          "id": "rear-wall",
+          "shape": "brick:brick",
+          "at": [1, 0, 3],
+          "size": [4, 1, 3],
+          "color": "blue"
+        },
+        {
+          "id": "wheel-l",
+          "type": "wheel",
+          "shape": "brick:round",
+          "axis": "x",
+          "count": 2,
+          "at": [-1, 1, 0],
+          "pitch": [0, 6, 0],
+          "size": [1, 2, 5],
+          "color": "#222222"
+        },
+        {
+          "id": "wheel-r",
+          "type": "wheel",
+          "shape": "brick:round",
+          "axis": "x",
+          "count": 2,
+          "at": [6, 1, 0],
+          "pitch": [0, 6, 0],
+          "size": [1, 2, 5],
+          "color": "#222222"
+        },
+        {
+          "id": "tile",
+          "shape": "brick:tile",
+          "count": 3,
+          "at": [1, 2, 3],
+          "pitch": [0, 2, 0],
+          "size": [4, 2, 1],
+          "color": "gray"
+        },
+        {
+          "id": "lamp",
+          "shape": "brick:round",
+          "count": 2,
+          "at": [0, 9, 3],
+          "pitch": [5, 0, 0],
+          "size": [1, 1, 1],
+          "color": "yellow"
+        },
+        {
+          "id": "nose",
+          "shape": "brick:slope",
+          "rotate": 90,
+          "at": [1, 8, 3],
+          "size": [2, 4, 3],
+          "color": "red"
+        },
+        {
+          "id": "cab",
+          "at": [1, 2, 4],
+          "label": "Cab",
+          "parts": [
+            { "id": "base", "shape": "brick:plate", "size": [4, 4, 1], "color": "gray" },
+            {
+              "id": "wall",
+              "shape": "brick:brick",
+              "count": 2,
+              "at": [0, 0, 1],
+              "pitch": [3, 0, 0],
+              "size": [1, 4, 3],
+              "color": "red"
+            },
+            {
+              "id": "back",
+              "shape": "brick:brick",
+              "at": [1, 0, 1],
+              "size": [2, 1, 3],
+              "color": "red"
+            },
+            {
+              "id": "windshield",
+              "shape": "brick:tile",
+              "at": [1, 3, 1],
+              "size": [2, 1, 3],
+              "tone": "glass"
+            },
+            {
+              "id": "roof",
+              "shape": "brick:plate",
+              "at": [0, 0, 4],
+              "size": [4, 4, 1],
+              "color": "red"
+            },
+            {
+              "id": "roof-a",
+              "shape": "brick:tile",
+              "count": 2,
+              "at": [0, 0, 5],
+              "pitch": [2, 0, 0],
+              "size": [2, 2, 1],
+              "color": "#eeeeee"
+            },
+            {
+              "id": "roof-b",
+              "shape": "brick:tile",
+              "count": 2,
+              "at": [0, 2, 5],
+              "pitch": [2, 0, 0],
+              "size": [2, 2, 1],
+              "color": "#eeeeee"
+            }
+          ],
+          "programs": [
+            {
+              "id": "cab-build",
+              "kind": "build",
+              "steps": [
+                { "number": 1, "add": ["base"] },
+                { "number": 2, "add": ["wall-*", "back", "windshield"] },
+                { "number": 3, "add": ["roof", "roof-a-*", "roof-b-*"] }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "cargo",
+          "shape": "brick:brick",
+          "count": 2,
+          "at": [1, 6, 4],
+          "pitch": [2, 0, 0],
+          "size": [2, 2, 3],
+          "color": "orange"
+        },
+        {
+          "id": "rail",
+          "shape": "brick:tile",
+          "count": 2,
+          "at": [0, 2, 6],
+          "pitch": [5, 0, 0],
+          "size": [1, 6, 1],
+          "color": "gray"
+        },
+        {
+          "id": "lid",
+          "shape": "brick:tile",
+          "count": 2,
+          "at": [1, 6, 7],
+          "pitch": [2, 0, 0],
+          "size": [2, 2, 1],
+          "color": "orange"
+        },
+        {
+          "id": "antenna",
+          "shape": "brick:round",
+          "count": 3,
+          "at": [4, 7, 8],
+          "pitch": [0, 0, 3],
+          "size": [1, 1, 3],
+          "color": "#eeeeee"
+        }
+      ],
+      "programs": [
+        {
+          "id": "build",
+          "kind": "build",
+          "steps": [
+            { "number": 1, "caption": "Base plate", "add": ["plate"] },
+            { "number": 2, "caption": "Sides and rear wall", "add": ["side-*", "rear-wall"] },
+            { "number": 3, "caption": "Wheels", "add": ["wheel-*"], "from": "outside" },
+            { "number": 4, "caption": "Floor tiles and lamps", "add": ["tile-*", "lamp-*"] },
+            { "number": 5, "caption": "Nose", "add": ["nose"], "view": 90 },
+            {
+              "number": 6,
+              "caption": "Cab (sub-build)",
+              "add": ["cab"],
+              "subBuild": "cab",
+              "program": "cab-build",
+              "view": 0
+            },
+            {
+              "number": 7,
+              "caption": "Cargo and rails",
+              "add": ["cargo-*", "rail-*"],
+              "from": "callout"
+            },
+            { "number": 8, "caption": "Lids and antenna", "add": ["lid-*", "antenna-*"] }
+          ]
+        },
+        {
+          "id": "explode",
+          "stages": [
+            { "label": "Cab and antenna", "parts": ["cab", "antenna-*"], "direction": "up" },
+            { "label": "Wheels", "parts": ["type:wheel"], "direction": "out" },
+            {
+              "label": "Everything else",
+              "parts": ["*"],
+              "except": ["plate", "cab", "antenna-*", "type:wheel"],
+              "direction": "lift",
+              "labels": "hide"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "caption": "Steps 1-2",
+      "assembly": [{ "build": "rover", "program": "build", "advance": 2 }],
+      "duration": 4
+    },
+    { "caption": "Steps 3-4", "assembly": [{ "build": "rover", "advance": 2 }], "duration": 4 },
+    {
+      "caption": "Steps 5-6: nose and cab",
+      "assembly": [{ "build": "rover", "advance": 2 }],
+      "duration": 6
+    },
+    { "caption": "Steps 7-8", "assembly": [{ "build": "rover", "advance": 2 }], "duration": 4 },
+    {
+      "caption": "Exploded",
+      "assembly": [{ "explode": "rover", "program": "explode" }],
+      "focus": "rover",
+      "duration": 5
+    },
+    {
+      "caption": "Imploded",
+      "assembly": [{ "implode": "rover", "program": "explode" }],
+      "duration": 5
+    }
+  ]
+}

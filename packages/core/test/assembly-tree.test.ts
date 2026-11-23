@@ -981,6 +981,7 @@ describe("scene wiring (schema 1.2.0 only)", () => {
     for (const f of readdirSync(root).filter((x) => x.endsWith(".cosmo.json"))) {
       const s = JSON.parse(readFileSync(new URL(f, root), "utf8")) as PlatformCosmoSpec;
       if (s.racks || s.equipment || s.rows || s.facility) continue; // need the DC pack
+      if (s.assemblies || s.storyboards) continue; // 1.2.0 gallery stories
       const plain = buildScene(s, {});
       expect(plain.assemblies, f).toBeUndefined();
       const withEmpty = buildScene({ ...s, assemblies: [] } as unknown as PlatformCosmoSpec, {});

@@ -296,7 +296,8 @@ function notices() {
 // checks, label and image fixes, suggest heuristics, definePack; 5,968,158 for D-2b; 5,842,308 for
 // D-1 on top of D-2a; 5,382,188 with the brand fonts before those). The guard sits about 1.3%
 // above, so any growth needs a decision: raise it only with a PR note that lists what grew and why.
-const MAX_BUNDLE_BYTES = 6_220_000;
+// D-4b: +119 KB for the embedded rover examples (the booklet storyboard carries inline PNGs).
+const MAX_BUNDLE_BYTES = 6_350_000;
 if (Buffer.byteLength(out) > MAX_BUNDLE_BYTES) {
   console.error(
     `plugin/bin/pcosmo.mjs is ${Buffer.byteLength(out)} bytes, over the ${MAX_BUNDLE_BYTES} guard; check for an accidental dependency or asset.`,
