@@ -1,6 +1,6 @@
 {
   "name": "@platformcosmo/pdf",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "PlatformCosmo minimal hardened PDF parser: pages, image placements, image extraction and text (pre-alpha).",
   "license": "Apache-2.0",
   "type": "module",
