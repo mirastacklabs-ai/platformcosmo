@@ -1,7 +1,16 @@
 {
   "name": "@platformcosmo/themes",
   "version": "0.1.1",
-  "description": "PlatformCosmo themes package (pre-alpha).",
+  "description": "Built-in platformcosmo themes (light, dark, blueprint, mono) and validation for custom theme files.",
+  "keywords": [
+    "platformcosmo",
+    "architecture-diagram",
+    "isometric",
+    "svg",
+    "diagram",
+    "theme",
+    "dark-mode"
+  ],
   "license": "Apache-2.0",
   "type": "module",
   "repository": {

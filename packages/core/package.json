@@ -1,7 +1,19 @@
 {
   "name": "@platformcosmo/core",
   "version": "0.1.1",
-  "description": "PlatformCosmo core package (pre-alpha).",
+  "description": "Deterministic engine that validates a platformcosmo spec and renders animated isometric SVG, PNG, GIF and MP4 architecture diagrams. No DOM, no network.",
+  "keywords": [
+    "platformcosmo",
+    "architecture-diagram",
+    "isometric",
+    "svg",
+    "diagram",
+    "diagrams-as-code",
+    "svg-animation",
+    "renderer",
+    "cloud-architecture",
+    "data-center"
+  ],
   "license": "Apache-2.0",
   "type": "module",
   "repository": {

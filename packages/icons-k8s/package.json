@@ -1,7 +1,17 @@
 {
   "name": "@platformcosmo/icons-k8s",
   "version": "0.0.2",
-  "description": "PlatformCosmo icon pack: Kubernetes community icons (Apache-2.0 option).",
+  "description": "Kubernetes community icons (Apache-2.0 option) as a platformcosmo icon pack (k8s:*).",
+  "keywords": [
+    "platformcosmo",
+    "architecture-diagram",
+    "isometric",
+    "svg",
+    "diagram",
+    "icons",
+    "icon-pack",
+    "kubernetes"
+  ],
   "license": "Apache-2.0",
   "type": "module",
   "repository": {

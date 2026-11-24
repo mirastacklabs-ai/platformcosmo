@@ -1,7 +1,22 @@
 {
   "name": "platformcosmo",
   "version": "0.1.1",
-  "description": "PlatformCosmo cli package (pre-alpha).",
+  "description": "Prompt in, animated isometric architecture diagram out: a CLI that renders cloud, AI, platform and data-center specs as self-contained animated SVG, PNG, GIF and MP4.",
+  "keywords": [
+    "platformcosmo",
+    "architecture-diagram",
+    "isometric",
+    "svg",
+    "diagram",
+    "cli",
+    "diagrams-as-code",
+    "svg-animation",
+    "cloud-architecture",
+    "platform-engineering",
+    "data-center",
+    "kubernetes",
+    "claude-code"
+  ],
   "license": "Apache-2.0",
   "type": "module",
   "repository": {

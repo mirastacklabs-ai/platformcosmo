@@ -1,7 +1,16 @@
 {
   "name": "@platformcosmo/icons-base",
   "version": "0.0.2",
-  "description": "PlatformCosmo icons-base package (pre-alpha).",
+  "description": "platformcosmo base icon glyphs (cosmo:*): the default icons for servers, load balancers, databases, queues, LLMs, vector DBs, GPUs and more.",
+  "keywords": [
+    "platformcosmo",
+    "architecture-diagram",
+    "isometric",
+    "svg",
+    "diagram",
+    "icons",
+    "icon-pack"
+  ],
   "license": "Apache-2.0",
   "type": "module",
   "repository": {

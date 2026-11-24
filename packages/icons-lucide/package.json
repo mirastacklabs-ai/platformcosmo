@@ -1,7 +1,17 @@
 {
   "name": "@platformcosmo/icons-lucide",
   "version": "0.0.2",
-  "description": "PlatformCosmo icon pack: a curated subset of Lucide (ISC, plus MIT for Feather-derived icons).",
+  "description": "A curated subset of Lucide icons (ISC, plus MIT for Feather-derived icons) as a platformcosmo icon pack (lucide:*).",
+  "keywords": [
+    "platformcosmo",
+    "architecture-diagram",
+    "isometric",
+    "svg",
+    "diagram",
+    "icons",
+    "icon-pack",
+    "lucide"
+  ],
   "license": "(ISC AND MIT)",
   "type": "module",
   "repository": {

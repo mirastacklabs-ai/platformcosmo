@@ -1,7 +1,17 @@
 {
   "name": "@platformcosmo/parts-auto",
   "version": "0.1.1",
-  "description": "PlatformCosmo auto: part shapes: generic inline-4 engine parts in true millimetres (pre-alpha).",
+  "description": "auto: part shapes for platformcosmo assemblies: generic inline-4 engine parts in true millimetres for exploded and teardown views.",
+  "keywords": [
+    "platformcosmo",
+    "architecture-diagram",
+    "isometric",
+    "svg",
+    "diagram",
+    "assembly",
+    "exploded-view",
+    "engine"
+  ],
   "license": "Apache-2.0",
   "type": "module",
   "repository": {

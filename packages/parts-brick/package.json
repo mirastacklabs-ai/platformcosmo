@@ -1,7 +1,17 @@
 {
   "name": "@platformcosmo/parts-brick",
   "version": "0.1.1",
-  "description": "PlatformCosmo brick: part shapes: generic stud-grid bricks, plates, tiles, slopes and rounds in stud units (pre-alpha).",
+  "description": "brick: part shapes for platformcosmo assemblies: generic stud-grid bricks, plates, tiles, slopes and rounds for step-by-step build animations.",
+  "keywords": [
+    "platformcosmo",
+    "architecture-diagram",
+    "isometric",
+    "svg",
+    "diagram",
+    "assembly",
+    "build-animation",
+    "bricks"
+  ],
   "license": "Apache-2.0",
   "type": "module",
   "repository": {

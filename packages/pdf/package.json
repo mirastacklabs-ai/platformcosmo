@@ -1,7 +1,17 @@
 {
   "name": "@platformcosmo/pdf",
   "version": "0.1.1",
-  "description": "PlatformCosmo minimal hardened PDF parser: pages, image placements, image extraction and text (pre-alpha).",
+  "description": "Minimal hardened PDF parser for platformcosmo: pages, image placements, image extraction and text runs, with every hostile input bounded by a diagnostic.",
+  "keywords": [
+    "platformcosmo",
+    "architecture-diagram",
+    "isometric",
+    "svg",
+    "diagram",
+    "pdf",
+    "pdf-parser",
+    "pdf-images"
+  ],
   "license": "Apache-2.0",
   "type": "module",
   "repository": {
