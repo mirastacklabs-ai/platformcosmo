@@ -1,6 +1,6 @@
 {
   "name": "@platformcosmo/icons-simple",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "PlatformCosmo icon pack: Simple Icons filtered to icons with an explicit CC0-1.0, MIT or Apache-2.0 license.",
   "license": "(CC0-1.0 AND MIT AND Apache-2.0)",
   "type": "module",

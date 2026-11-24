@@ -1,6 +1,6 @@
 {
   "name": "@platformcosmo/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "PlatformCosmo core package (pre-alpha).",
   "license": "Apache-2.0",
   "type": "module",

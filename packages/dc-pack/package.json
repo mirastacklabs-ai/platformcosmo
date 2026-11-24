@@ -1,6 +1,6 @@
 {
   "name": "@platformcosmo/dc-pack",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "PlatformCosmo data-center pack: parametric racks, servers, power, cooling and cables (pre-alpha).",
   "license": "Apache-2.0",
   "type": "module",

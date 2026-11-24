@@ -1,5 +1,11 @@
 # @platformcosmo/pdf
 
+## 0.1.1
+
+### Patch Changes
+
+- 05b23b6: Add a README to every package, so the npm pages show what each package does, how to install and use it, and its license. No code changes.
+
 ## 0.1.0
 
 ### Minor Changes
