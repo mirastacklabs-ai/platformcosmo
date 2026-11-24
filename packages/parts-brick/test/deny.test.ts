@@ -140,13 +140,16 @@ test("palette is plain colour words with valid hex values", () => {
   expect(new Set(Object.values(palette)).size).toBe(paletteNames.length);
 });
 
-test("no brand names in the package sources, manifest, snapshot or changeset", () => {
+// The package's own published text. Changesets are deleted when a release consumes them, so their text is
+// checked where it ends up: CHANGELOG.md.
+test("no brand names in the package sources, manifest, snapshot, README or changelog", () => {
   const root = new URL("../", import.meta.url);
   const files = [
     ...readdirSync(new URL("src/", root)).map((f) => `src/${f}`),
     "package.json",
     "test/__snapshots__/contact-sheet.svg",
-    "../../.changeset/parts-brick-e3.md",
+    "README.md",
+    "CHANGELOG.md",
   ];
   for (const f of files) {
     const text = readFileSync(fileURLToPath(new URL(f, root)), "utf8");
