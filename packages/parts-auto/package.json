@@ -1,6 +1,6 @@
 {
   "name": "@platformcosmo/parts-auto",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "PlatformCosmo auto: part shapes: generic inline-4 engine parts in true millimetres (pre-alpha).",
   "license": "Apache-2.0",
   "type": "module",

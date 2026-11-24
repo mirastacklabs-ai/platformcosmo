@@ -1,5 +1,23 @@
 # platformcosmo
 
+## 0.1.1
+
+### Patch Changes
+
+- 05b23b6: Add a README to every package, so the npm pages show what each package does, how to install and use it, and its license. No code changes.
+- Updated dependencies [05b23b6]
+  - @platformcosmo/core@0.1.1
+  - @platformcosmo/dc-pack@0.1.1
+  - @platformcosmo/icons-base@0.0.2
+  - @platformcosmo/icons-k8s@0.0.2
+  - @platformcosmo/icons-lucide@0.0.2
+  - @platformcosmo/icons-simple@0.0.2
+  - @platformcosmo/parts-auto@0.1.1
+  - @platformcosmo/parts-base@0.1.1
+  - @platformcosmo/parts-brick@0.1.1
+  - @platformcosmo/pdf@0.1.1
+  - @platformcosmo/themes@0.1.1
+
 ## 0.1.0
 
 ### Minor Changes
