@@ -1,7 +1,17 @@
 {
   "name": "@platformcosmo/dc-pack",
   "version": "0.1.1",
-  "description": "PlatformCosmo data-center pack: parametric racks, servers, power, cooling and cables (pre-alpha).",
+  "description": "Data-center pack for platformcosmo: parametric racks, servers, power, cooling, cables and floor equipment drawn as isometric diagrams.",
+  "keywords": [
+    "platformcosmo",
+    "architecture-diagram",
+    "isometric",
+    "svg",
+    "diagram",
+    "data-center",
+    "rack",
+    "datacenter-diagram"
+  ],
   "license": "Apache-2.0",
   "type": "module",
   "repository": {
