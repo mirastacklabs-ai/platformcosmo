@@ -11,7 +11,8 @@ Start here. Read this file, `PROGRESS.md`, `DECISIONS.md` (D1–D86), `CLAUDE.md
 - Published to npm 2026-11-23: `platformcosmo` 0.1.0 (plugin and marketplace 0.1.0) and the 11
   `@platformcosmo/*` packages (icons-* 0.0.1, the rest 0.1.0), with provenance; one GitHub
   release, `platformcosmo@0.1.0` (per-package releases removed; `release.yml` now creates only the
-  CLI's). Release record and pipeline gaps: `docs/release/npm-publishing-checklist.md` ("First release").
+  CLI's). 0.1.1 (icons-* 0.0.2) on 2026-11-24: package READMEs, first publish through OIDC trusted
+  publishing. Release record and pipeline gaps: `docs/release/npm-publishing-checklist.md` ("First release").
 - CI gate (#129, D87): `scripts/ci-gate.sh` skips tests when no code changed since the last green
   main commit (docs, Markdown, `.changeset/`, `.github/`, version-only bumps are not code). Owner rule:
   never rerun tests on code that already passed. The owner OK'd merging PRs.
@@ -20,10 +21,9 @@ Start here. Read this file, `PROGRESS.md`, `DECISIONS.md` (D1–D86), `CLAUDE.md
 
 ## Next session (Claude desktop app, with browser)
 
-1. Before the next release (the `NPM_TOKEN` expires 2026-11-30): add trusted publishers for the 12
-   packages (they expire if unused for 2 days, so do it right before releasing), then remove
-   `NODE_AUTH_TOKEN` from `release.yml` and delete the secret. The two pipeline gaps are closed (#134,
-   Actions may open PRs); the version PR still needs a close and reopen to start CI (checklist, gap 1).
+1. Releases publish through npm trusted publishing (0.1.1, 2026-11-24; no npm token). The version PR
+   still needs a close and reopen to start CI (checklist, gap 1). Release runs queue one at a time, so a
+   stale run waiting for approval blocks the next: approve or reject it.
 2. Then, only if the owner asks, the backlog below. Nothing in it blocks a release.
 
 ## Open PRs

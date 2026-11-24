@@ -15,7 +15,8 @@ Browser and Visual regression; otherwise `pnpm build`), a stub guard, then `chan
   "chore: version packages" PR (`pnpm run version-packages` = `changeset version`, `sync:versions`,
   `bundle:plugin`).
 - When that PR is merged and no changesets remain, it runs `pnpm changeset publish`, with
-  `NPM_CONFIG_PROVENANCE=true`, <span v-pre>`NODE_AUTH_TOKEN=${{ secrets.NPM_TOKEN }}`</span> and `id-token: write`.
+  `NPM_CONFIG_PROVENANCE=true` and `id-token: write`; npm authenticates through OIDC trusted publishing
+  (no token). The last step then creates the `platformcosmo@<version>` GitHub release once npm lists it.
 
 ## First release (2026-11-23)
 
@@ -28,6 +29,11 @@ Browser and Visual regression; otherwise `pnpm build`), a stub guard, then `chan
   all packages, **Bypass 2FA**, expires 2026-11-30). A token without Bypass 2FA fails with `EOTP`.
 - New packages go through npm's automated review: a public `0.0.0-stage` placeholder first, the real
   version shows as "Validating" and goes live by itself (about 4 minutes). No manual approval needed.
+- 0.1.1 (2026-11-24, READMEs only): the first publish through OIDC trusted publishing (`_npmUser`
+  "GitHub Actions", provenance). Trusted publishers on all 12 packages: repository
+  `mirastacklabs-ai/platformcosmo`, workflow `release.yml`, environment `npm-publish`, "npm publish"
+  allowed. `release.yml` no longer passes a token; the `NPM_TOKEN` environment secret and the npm token
+  itself are no longer needed (delete and revoke them).
 - Approve a waiting release run:
   `gh api -X POST repos/<repo>/actions/runs/<id>/pending_deployments -F "environment_ids[]=<env id>" -f state=approved`.
 
@@ -41,10 +47,9 @@ Open gaps (fix before or during the next release):
    action creates no releases (`createGithubReleases: false`). The workflow's last step creates the one
    GitHub release, `platformcosmo@<version>` with its CHANGELOG section, once that version is on npm. The
    per-package 0.1.0 releases and tags were deleted on 2026-11-23; only `platformcosmo@0.1.0` remains.
-3. **Trusted publishing (OIDC) not set up.** The packages exist now, so it can be. A trusted publisher
-   expires if no publish uses it within 2 days: add it for all 12 packages right before the next release,
-   then remove `NODE_AUTH_TOKEN` from `release.yml` and delete `NPM_TOKEN`. Check that
-   `pnpm changeset publish` authenticates through OIDC (npm CLI >= 11.5.1).
+3. **Trusted publishing (OIDC): done in 0.1.1.** A new package's first version still needs a token (npm
+   adds trusted publishers only to existing packages); add its trusted publisher with "Allow npm publish"
+   ticked and publish within 2 days, or the pending connection lapses.
 4. `scripts/pc changeset status` fails locally: the container has no `git`.
 
 ## Packages (`publishConfig: access public, provenance true`)
