@@ -27,11 +27,11 @@ jobs:
       id-token: write
       actions: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
@@ -51,26 +51,28 @@ jobs:
         run: pnpm build # publish needs dist; tests already passed on identical code
       - name: Refuse to release while stage stubs remain
         run: "! grep -rl 'not implemented: owned by Track' packages/*/src"
-      - uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+      - id: changesets
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
-          version: pnpm run version-packages
-          publish: pnpm changeset publish
-          title: "chore: version packages"
-          commit: "chore: version packages"
+          version-script: pnpm run version-packages
+          publish-script: pnpm changeset publish
+          pr-title: "chore: version packages"
+          commit-message: "chore: version packages"
           github-token: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
-          createGithubReleases: false # one GitHub release, for the CLI only (next step)
+          create-github-releases: false # one GitHub release, for the CLI only (next step)
+          push-git-tags: false # v2 would otherwise push a tag per package; the next step tags the CLI
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true" # npm auth is OIDC trusted publishing (no token)
       # One GitHub release per CLI version (platformcosmo@<version>), none for the @platformcosmo/* packages.
       # Idempotent and independent of the changesets action's outputs: runs on every push and creates the
       # release only once that version is on npm, at the commit that set it, with its CHANGELOG section.
-      # npm holds a new version in validation for a few minutes, so when this run published it (changeset
-      # publish leaves a local tag) the step waits up to 15 minutes for it to appear.
+      # npm holds a new version in validation for a few minutes, so when this run published it (the
+      # action's published-packages output lists it) the step waits up to 15 minutes for it to appear.
       - name: GitHub release for the CLI
         env:
           GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          PUBLISHED: ${{ steps.changesets.outputs.published-packages }}
         run: |
           version=$(jq -r .version packages/cli/package.json)
           tag="platformcosmo@$version"
@@ -78,7 +80,10 @@ jobs:
             echo "$tag: release exists"; exit 0
           fi
           onnpm() { [ "$(npm view "platformcosmo@$version" version 2>/dev/null)" = "$version" ]; }
-          if ! onnpm && git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+          justpublished() {
+            printf '%s' "${PUBLISHED:-[]}" | jq -e --arg v "$version" 'any(.[]; .name == "platformcosmo" and .version == $v)' >/dev/null
+          }
+          if ! onnpm && justpublished; then
             for _ in $(seq 30); do onnpm && break; echo "$tag: waiting for npm"; sleep 30; done
           fi
           if ! onnpm; then

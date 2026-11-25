@@ -34,7 +34,7 @@ jobs:
     outputs:
       engine: ${{ steps.diff.outputs.engine }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -52,7 +52,7 @@ jobs:
     if: ${{ needs.changes.outputs.engine == 'true' && !inputs.safari_only }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: scripts/pc install --frozen-lockfile
@@ -73,7 +73,7 @@ jobs:
       - name: Browser check on the real CLI output
         if: always()
         run: BROWSER_OUT=tests/browser/out-real tests/browser/run.sh tests/browser/real
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: browser-check
@@ -89,13 +89,13 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.engine == 'true' && needs.browser-check.result != 'cancelled' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'browser')) }}
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: ${{ !inputs.safari_only }}
         with:
           name: browser-check
@@ -116,7 +116,7 @@ jobs:
         env:
           SAFARI_INPUTS: ${{ inputs.safari_only && 'real' || 'out/fixtures real' }}
         run: tests/browser/safari-ci.sh
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: safari-check

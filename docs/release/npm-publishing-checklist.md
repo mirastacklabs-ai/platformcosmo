@@ -43,8 +43,9 @@ Open gaps (fix before or during the next release):
    repo, Settings, Actions, General), so changesets opens the "chore: version packages" PR itself. Opened
    with `GITHUB_TOKEN` it triggers no workflows, so its required checks never start: close and reopen the
    PR yourself to run CI, or set `RELEASE_BOT_TOKEN` (see `release.yml`) so they start on their own.
-2. **Tags:** `changeset publish` tags only locally (checkout uses `persist-credentials: false`), and the
-   action creates no releases (`createGithubReleases: false`). The workflow's last step creates the one
+2. **Tags:** `changesets/action` v2 pushes no tags (`push-git-tags: false`) and creates no releases
+   (`create-github-releases: false`); its version commit goes through the GitHub API with
+   `github-token`, since checkout uses `persist-credentials: false`. The workflow's last step creates the one
    GitHub release, `platformcosmo@<version>` with its CHANGELOG section, once that version is on npm. The
    per-package 0.1.0 releases and tags were deleted on 2026-11-23; only `platformcosmo@0.1.0` remains.
 3. **Trusted publishing (OIDC): done in 0.1.1.** A new package's first version still needs a token (npm
