@@ -1,7 +1,7 @@
 # Handoff
 
 Start here. Read this file, `PROGRESS.md`, `DECISIONS.md` (D1–D86), `CLAUDE.md` (commands) and
-`docs/design/assemblies-tracks.md`. Last updated 2026-11-23 (after #126, end of session 3).
+`docs/design/assemblies-tracks.md`. Last updated 2026-11-25 (after 0.1.2).
 
 ## State of main
 
@@ -12,7 +12,9 @@ Start here. Read this file, `PROGRESS.md`, `DECISIONS.md` (D1–D86), `CLAUDE.md
   `@platformcosmo/*` packages (icons-* 0.0.1, the rest 0.1.0), with provenance; one GitHub
   release, `platformcosmo@0.1.0` (per-package releases removed; `release.yml` now creates only the
   CLI's). 0.1.1 (icons-* 0.0.2) on 2026-11-24: package READMEs, first publish through OIDC trusted
-  publishing. Release record and pipeline gaps: `docs/release/npm-publishing-checklist.md` ("First release").
+  publishing. 0.1.2 (icons-* 0.0.3) on 2026-11-25: npm descriptions and keywords, first release through
+  `changesets/action` v2 (#146). Release record and pipeline gaps: `docs/release/npm-publishing-checklist.md`
+  ("First release").
 - CI gate (#129, D87): `scripts/ci-gate.sh` skips tests when no code changed since the last green
   main commit (docs, Markdown, `.changeset/`, `.github/`, version-only bumps are not code). Owner rule:
   never rerun tests on code that already passed. The owner OK'd merging PRs.
@@ -21,9 +23,11 @@ Start here. Read this file, `PROGRESS.md`, `DECISIONS.md` (D1–D86), `CLAUDE.md
 
 ## Next session (Claude desktop app, with browser)
 
-1. Releases publish through npm trusted publishing (0.1.1, 2026-11-24; no npm token). The version PR
-   still needs a close and reopen to start CI (checklist, gap 1). Release runs queue one at a time, so a
-   stale run waiting for approval blocks the next: approve or reject it.
+1. Releases publish through npm trusted publishing (no npm token) with `changesets/action` v2. The
+   version PR still needs a close and reopen to start CI (checklist, gap 1). Release runs queue one at a
+   time, so a stale run waiting for approval blocks the next: approve or reject it. npm shows a new
+   version's metadata and tarballs a few minutes after publish: wait before an install smoke test.
+   Dependabot groups action updates into one PR and holds `@types/node` at 22.x (engines >=22.12).
 2. Then, only if the owner asks, the backlog below. Nothing in it blocks a release.
 
 ## Open PRs
