@@ -73,7 +73,7 @@ jobs:
       - name: Browser check on the real CLI output
         if: always()
         run: BROWSER_OUT=tests/browser/out-real tests/browser/run.sh tests/browser/real
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: browser-check
@@ -116,7 +116,7 @@ jobs:
         env:
           SAFARI_INPUTS: ${{ inputs.safari_only && 'real' || 'out/fixtures real' }}
         run: tests/browser/safari-ci.sh
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: safari-check
