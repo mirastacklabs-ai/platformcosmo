@@ -1,5 +1,11 @@
 # @platformcosmo/pdf
 
+## 0.1.2
+
+### Patch Changes
+
+- 6e752e5: Clear npm descriptions and search keywords for every package (the `icons-simple` description no longer claims MIT icons, which are excluded). No code changes.
+
 ## 0.1.1
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@platformcosmo/parts-auto",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "auto: part shapes for platformcosmo assemblies: generic inline-4 engine parts in true millimetres for exploded and teardown views.",
   "keywords": [
     "platformcosmo",

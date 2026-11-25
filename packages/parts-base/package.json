@@ -1,6 +1,6 @@
 {
   "name": "@platformcosmo/parts-base",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "hw: part shapes for platformcosmo assemblies: generic server internals (board, CPU, heat sink, DIMM, GPU card, NICs, drives, PSU, fans) in true millimetres.",
   "keywords": [
     "platformcosmo",

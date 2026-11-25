@@ -1,6 +1,6 @@
 {
   "name": "@platformcosmo/themes",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Built-in platformcosmo themes (light, dark, blueprint, mono) and validation for custom theme files.",
   "keywords": [
     "platformcosmo",

@@ -1,5 +1,23 @@
 # platformcosmo
 
+## 0.1.2
+
+### Patch Changes
+
+- 6e752e5: Clear npm descriptions and search keywords for every package (the `icons-simple` description no longer claims MIT icons, which are excluded). No code changes.
+- Updated dependencies [6e752e5]
+  - @platformcosmo/core@0.1.2
+  - @platformcosmo/dc-pack@0.1.2
+  - @platformcosmo/icons-base@0.0.3
+  - @platformcosmo/icons-k8s@0.0.3
+  - @platformcosmo/icons-lucide@0.0.3
+  - @platformcosmo/icons-simple@0.0.3
+  - @platformcosmo/parts-auto@0.1.2
+  - @platformcosmo/parts-base@0.1.2
+  - @platformcosmo/parts-brick@0.1.2
+  - @platformcosmo/pdf@0.1.2
+  - @platformcosmo/themes@0.1.2
+
 ## 0.1.1
 
 ### Patch Changes

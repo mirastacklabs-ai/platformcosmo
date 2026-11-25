@@ -1,6 +1,6 @@
 {
   "name": "@platformcosmo/core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Deterministic engine that validates a platformcosmo spec and renders animated isometric SVG, PNG, GIF and MP4 architecture diagrams. No DOM, no network.",
   "keywords": [
     "platformcosmo",
