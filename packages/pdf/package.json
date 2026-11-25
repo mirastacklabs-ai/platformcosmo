@@ -1,6 +1,6 @@
 {
   "name": "@platformcosmo/pdf",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Minimal hardened PDF parser for platformcosmo: pages, image placements, image extraction and text runs, with every hostile input bounded by a diagnostic.",
   "keywords": [
     "platformcosmo",

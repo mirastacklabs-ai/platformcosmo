@@ -1,6 +1,6 @@
 {
   "name": "@platformcosmo/parts-brick",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "brick: part shapes for platformcosmo assemblies: generic stud-grid bricks, plates, tiles, slopes and rounds for step-by-step build animations.",
   "keywords": [
     "platformcosmo",

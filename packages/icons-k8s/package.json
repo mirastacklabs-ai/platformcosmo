@@ -1,6 +1,6 @@
 {
   "name": "@platformcosmo/icons-k8s",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Kubernetes community icons (Apache-2.0 option) as a platformcosmo icon pack (k8s:*).",
   "keywords": [
     "platformcosmo",

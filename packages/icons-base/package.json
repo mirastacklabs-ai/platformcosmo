@@ -1,6 +1,6 @@
 {
   "name": "@platformcosmo/icons-base",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "platformcosmo base icon glyphs (cosmo:*): the default icons for servers, load balancers, databases, queues, LLMs, vector DBs, GPUs and more.",
   "keywords": [
     "platformcosmo",

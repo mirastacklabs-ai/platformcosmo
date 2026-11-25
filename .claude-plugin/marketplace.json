@@ -5,7 +5,7 @@
   "plugins": [
     {
       "name": "platformcosmo",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "source": "./plugin",
       "description": "Turn a prompt into an animated 2.5D isometric SVG architecture diagram."
     }
